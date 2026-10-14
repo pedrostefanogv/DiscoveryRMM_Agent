@@ -212,9 +212,13 @@ func main() {
 			UniqueID: "com.discovery.app",
 			OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
 				log.Printf("[single-instance] segunda abertura bloqueada. args=%v", data.Args)
-				app.ShowMainWindow()
-				// Clique num toast de resposta do chat com o agente já aberto:
-				// traz a janela e foca a aba de chat.
+				if shouldShowMainWindowOnSecondInstance(data.Args) {
+					app.ShowMainWindow()
+				} else {
+					log.Println("[single-instance] origem automática: mantendo a janela como está")
+				}
+				// Clique num toast de resposta do chat: traz a janela e foca a
+				// aba de chat.
 				app.HandleActivationArgs(data.Args)
 			},
 		},
@@ -308,6 +312,23 @@ func main() {
 	}
 }
 
+// shouldShowMainWindowOnSecondInstance decide se uma segunda abertura deve trazer
+// a janela para frente.
+//
+//   - clique num TOAST do chat: sempre traz (é ação do usuário). O toast pode
+//     chegar acompanhado de --startup-minimized herdado do processo original, e
+//     suprimir a janela aqui faria o clique "não fazer nada" visível;
+//   - relançamento AUTOMÁTICO (task de logon, atalho de startup, restart
+//     pós-update, watchdog da UI): NÃO traz — a interface já está viva e a janela
+//     saltava na frente do usuário a cada relançamento;
+//   - abertura manual (duplo clique no ícone): traz.
+func shouldShowMainWindowOnSecondInstance(args []string) bool {
+	if appkg.IsChatActivationArgs(args) {
+		return true
+	}
+	return !appkg.IsAutomaticStartupArgs(args)
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if v != "" {
@@ -318,11 +339,11 @@ func firstNonEmpty(values ...string) string {
 }
 
 // enforceStartupMinimized garante que origens automáticas (update-restart,
-// autostart, task-scheduler, startup-link) sempre iniciem minimizadas no tray.
-// Retorna a origem normalizada e o estado final de startMinimized.
+// autostart, task-scheduler, startup-link, watchdog) sempre iniciem minimizadas
+// no tray. Retorna a origem normalizada e o estado final de startMinimized.
 func enforceStartupMinimized(source string, minimized bool) (string, bool) {
 	switch source {
-	case "update-restart", "autostart", "task-scheduler", "startup-link":
+	case "update-restart", "autostart", "task-scheduler", "startup-link", appkg.StartupSourceWatchdog:
 		if !minimized {
 			log.Printf("[startup] origem '%s' sem --startup-minimized: forçando start minimizado no tray", source)
 			return source, true

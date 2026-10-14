@@ -474,6 +474,16 @@ func (a *App) HandleActivationArgs(args []string) {
 	a.pendingChatFocus.Store(true)
 }
 
+// IsChatActivationArgs informa se a linha de comando traz o payload de um toast
+// de chat — ou seja, a abertura veio de um CLIQUE DO USUÁRIO.
+//
+// Usado pelo single-instance: um clique em toast pode vir acompanhado das flags
+// do autostart (--startup-minimized), e nesse caso a janela PRECISA ser trazida
+// para frente — a origem automática não pode suprimir a ação do usuário.
+func IsChatActivationArgs(args []string) bool {
+	return chatActivationArgsMatch(args)
+}
+
 // chatActivationArgsMatch procura, entre os argumentos, o payload base64 do
 // toast de conclusão do chat. Argumentos que não decodificam são ignorados.
 func chatActivationArgsMatch(args []string) bool {

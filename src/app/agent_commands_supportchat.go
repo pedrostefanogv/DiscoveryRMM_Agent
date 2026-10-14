@@ -85,6 +85,12 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 	if !a.hasSupportChatUI() {
 		// Sem interface não há como o usuário confirmar: recusa explícita para o
 		// suporte não ficar esperando o convite expirar.
+		//
+		// ANTES de recusar, pede o relançamento da UI ao watchdog: a ausência de
+		// interface (usuário fechou o agent, UI travou, task de logon não rodou)
+		// é exatamente o caso que deixava a máquina muda para o suporte. A UI
+		// sobe minimizada no tray e o próximo convite já chega na tela.
+		a.requestUIWatchdogSpawn("chat_invite")
 		a.respondSupportChatInvite(invite.SessionID, false, "no_ui")
 		a.clearSupportChatIfCurrent(invite.SessionID)
 		return true, 1, "", "agent sem interface de usuario para confirmar o chat"
@@ -167,7 +173,6 @@ func (a *App) clearSupportChatIfCurrent(sessionID string) {
 		svc.ClearState()
 	}
 }
-
 
 func buildSupportChatInviteMessage(invite supportchat.Invite) string {
 	support := strings.TrimSpace(invite.SupportName)

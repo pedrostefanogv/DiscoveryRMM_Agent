@@ -29,6 +29,19 @@ import (
 // IPCPipeName é o caminho do named pipe do serviço.
 const IPCPipeName = `\\.\pipe\discovery-agent-ipc`
 
+// Liveness das UIs companion conectadas.
+//
+// A UI manda o snapshot de status a cada 5s (DefaultCompanionConfig). Se ela
+// TRAVAR, o processo continua vivo e o pipe continua aberto: sem um sweep no
+// lado do SERVIDOR, ClientCount() nunca cai e hasSupportChatUI() continua
+// dizendo que existe interface — o watchdog da UI nunca entraria no ramo
+// "travada". O teto é 12× a cadência normal; um falso positivo se cura sozinho
+// (o cliente reconecta).
+const (
+	ipcServerIdleSweepInterval = 15 * time.Second
+	ipcServerIdleTimeout       = 60 * time.Second
+)
+
 // ipcPipeSDDL concede acesso a SYSTEM e ao grupo Users builtin.
 const ipcPipeSDDL = "D:(A;;GA;;;SY)(A;;GA;;;BU)"
 
@@ -122,6 +135,25 @@ func DecodeIPCMessage(r *bufio.Reader) (IPCMessage, error) {
 type ipcClientConn struct {
 	reader  *bufio.Reader
 	writeMu sync.Mutex
+	// lastActivity (unix millis) alimenta o sweep de conexões travadas: uma UI
+	// congelada para de mandar o snapshot de status (o CompanionController manda
+	// a cada 5s) mas o pipe continua aberto do lado do sistema — sem este sinal
+	// o serviço seguia contando uma UI morta como conectada.
+	lastActivity atomic.Int64
+}
+
+// touch marca atividade do cliente (chamado a cada mensagem recebida).
+func (c *ipcClientConn) touch() {
+	c.lastActivity.Store(time.Now().UnixMilli())
+}
+
+// idleFor devolve há quanto tempo o cliente não manda nada.
+func (c *ipcClientConn) idleFor(now time.Time) time.Duration {
+	last := c.lastActivity.Load()
+	if last == 0 {
+		return 0
+	}
+	return now.Sub(time.UnixMilli(last))
 }
 
 // writeTo envia um frame para a conn com deadline, serializado por conn.
@@ -165,8 +197,49 @@ func StartIPCServer(onMessage func(net.Conn, IPCMessage)) *IPCServer {
 		OnMessage: onMessage,
 	}
 	go s.acceptLoop()
+	go s.idleSweepLoop()
 	log.Printf("[ipc] servidor ativo em %s (SDDL: %s)", IPCPipeName, ipcPipeSDDL)
 	return s
+}
+
+// idleSweepLoop fecha conexões que pararam de mandar mensagens (UI travada).
+//
+// Diferente do rxWatchdog do CLIENTE (que roda dentro da UI e por isso não roda
+// quando ela trava), este sweep é do SERVIDOR: é ele que derruba a contagem de
+// UIs conectadas e permite ao watchdog relançar a interface.
+func (s *IPCServer) idleSweepLoop() {
+	ticker := time.NewTicker(ipcServerIdleSweepInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if s.closed.Load() {
+			return
+		}
+		s.sweepIdleConns(time.Now())
+	}
+}
+
+// sweepIdleConns derruba as conexões sem mensagens há mais de
+// ipcServerIdleTimeout e devolve quantas caíram (separado do loop para ser
+// testável sem pipe real).
+func (s *IPCServer) sweepIdleConns(now time.Time) int {
+	s.mu.Lock()
+	var idle []net.Conn
+	for conn, client := range s.conns {
+		if client.idleFor(now) > ipcServerIdleTimeout {
+			idle = append(idle, conn)
+		}
+	}
+	for _, conn := range idle {
+		delete(s.conns, conn)
+	}
+	s.mu.Unlock()
+
+	for _, conn := range idle {
+		log.Printf("[ipc] UI sem mensagens há %s — tratando como travada e desconectando", ipcServerIdleTimeout)
+		conn.Close()
+	}
+	return len(idle)
 }
 
 // acceptLoop aceita clientes em loop até o servidor ser fechado.
@@ -197,6 +270,7 @@ func (s *IPCServer) handleConn(conn net.Conn) {
 	}()
 
 	client := &ipcClientConn{reader: bufio.NewReader(conn)}
+	client.touch()
 	s.mu.Lock()
 	s.conns[conn] = client
 	s.mu.Unlock()
@@ -209,6 +283,7 @@ func (s *IPCServer) handleConn(conn net.Conn) {
 		if err != nil {
 			return // EOF ou erro de parse — encerra a conexão
 		}
+		client.touch()
 		// hello é respondido DIRETAMENTE na conexão (o probe IsServicePresent
 		// espera hello_ack na mesma conexão antes de fechar).
 		if msg.Type == IPCMsgHello {

@@ -280,6 +280,12 @@ type App struct {
 	ipcServer *IPCServer
 	ipcClient *IPCClient
 
+	// uiWatchdog relança a UI companion quando ela desaparece (só no modo
+	// serviço). Fica em atomic.Pointer porque o loop do watchdog e o handler do
+	// convite de chat (goroutines distintas) podem tocá-lo ao mesmo tempo.
+	// Ver ui_watchdog.go.
+	uiWatchdog atomic.Pointer[uiWatchdog]
+
 	// Último snapshot de conectividade recebido do serviço via IPC
 	// (agente:status_snapshot). Em companion mode o agentConn local não roda,
 	// então o tray/status usam este snapshot para refletir o estado real do
@@ -1135,6 +1141,11 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 // ServiceStartup). No modo serviço, startup() já pula os itens de UI.
 func (a *App) RunCore(ctx context.Context) error {
 	a.startup(ctx)
+	// Watchdog da UI companion: só o serviço pode relançá-la — na UI
+	// standalone este próprio processo É a interface.
+	if a.RuntimeFlags.ServiceMode {
+		a.startUIWatchdog(a.Ctx())
+	}
 	return nil
 }
 
