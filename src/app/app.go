@@ -899,6 +899,15 @@ func NewApp(opts AppStartupOptions) *App {
 		}
 		return a.InventorySvc.KnownInstalledPackage(packageID)
 	})
+	// Automação de pacotes CUSTOM: consulta a detecção configurada no servidor
+	// (vínculo com o inventário local ou comando de detecção) para pular a
+	// instalação de um app já instalado. Sem evidência, não pula (fail-safe).
+	automation.SetCustomInstalledChecker(func(installationType, packageID string) (bool, bool) {
+		if a.InventorySvc == nil {
+			return false, false
+		}
+		return a.InventorySvc.KnownCustomPackageInstalled(installationType, packageID)
+	})
 	automation.SetWingetDecisionLogger(func(line string) {
 		a.Logs.Append("[automation][decision] " + line)
 	})

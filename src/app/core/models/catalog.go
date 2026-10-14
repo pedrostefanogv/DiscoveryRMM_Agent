@@ -31,6 +31,24 @@ type AppItem struct {
 	// SourceScope é o escopo da regra de aprovação que liberou o app
 	// (Global/Client/Site/Agent). Vazio quando o servidor não informa.
 	SourceScope string `json:"sourceScope"`
+
+	// ── Pacotes custom: tipo de comando e detecção (contrato §1.2) ──
+	// InstallCommandKind/UninstallCommandKind: 0 = comando único (cmd /C),
+	// 1 = script CMD/BAT, 2 = script PowerShell.
+	InstallCommandKind   int `json:"installCommandKind"`
+	UninstallCommandKind int `json:"uninstallCommandKind"`
+	// DetectionMode: 0 = nenhuma, 1 = vinculado a app do inventário,
+	// 2 = comando de detecção (PowerShell, exit 0 = instalado).
+	DetectionMode       int    `json:"detectionMode"`
+	InventorySoftwareID string `json:"inventorySoftwareId,omitempty"`
+	DetectionName       string `json:"detectionName,omitempty"`
+	DetectionPublisher  string `json:"detectionPublisher,omitempty"`
+	DetectionMinVersion string `json:"detectionMinVersion,omitempty"`
+	DetectionCommand    string `json:"detectionCommand,omitempty"`
+	// Installed é um campo de RUNTIME (não vem da API): indica que o app custom
+	// já foi detectado como instalado no host pela detecção configurada.
+	// Alimenta o badge "Já instalado" e o rótulo "Reinstalar" na loja.
+	Installed bool `json:"installed"`
 }
 
 // UpgradeItem represents a single package with a pending update.

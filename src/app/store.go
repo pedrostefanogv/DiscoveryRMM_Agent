@@ -46,7 +46,11 @@ func (a *App) getCatalogFromAppStore(ctx context.Context) (models.Catalog, error
 	if a == nil || a.AppStoreSvc == nil {
 		return models.Catalog{}, nil
 	}
-	return a.AppStoreSvc.GetCatalogFromAppStore(ctx)
+	catalog, err := a.AppStoreSvc.GetCatalogFromAppStore(ctx)
+	if err != nil {
+		return catalog, err
+	}
+	return a.markCustomInstalledInCatalog(ctx, catalog), nil
 }
 
 // refreshCatalogFromAppStore força um fetch novo da app-store antes de montar o
@@ -55,7 +59,22 @@ func (a *App) refreshCatalogFromAppStore(ctx context.Context) (models.Catalog, e
 	if a == nil || a.AppStoreSvc == nil {
 		return models.Catalog{}, nil
 	}
-	return a.AppStoreSvc.RefreshCatalogFromAppStore(ctx)
+	catalog, err := a.AppStoreSvc.RefreshCatalogFromAppStore(ctx)
+	if err != nil {
+		return catalog, err
+	}
+	return a.markCustomInstalledInCatalog(ctx, catalog), nil
+}
+
+// markCustomInstalledInCatalog preenche AppItem.Installed dos pacotes custom com
+// detecção por inventário usando UMA coleta do inventário local por montagem do
+// catálogo (contrato §4.6). Nunca falha a listagem da loja: sem inventário, os
+// itens apenas ficam com Installed=false.
+func (a *App) markCustomInstalledInCatalog(ctx context.Context, catalog models.Catalog) models.Catalog {
+	if a == nil || a.InventorySvc == nil {
+		return catalog
+	}
+	return a.InventorySvc.MarkCatalogInstalled(ctx, catalog)
 }
 
 // findAllowedPackage valida se um pacote está autorizado para o agent.

@@ -446,6 +446,17 @@ func (s *Service) buildCatalogFromPolicy(ctx context.Context, forceRefresh bool)
 			// escopo da regra de aprovação (Global/Client/Site/Agent).
 			InstallationType: strings.TrimSpace(item.InstallationType),
 			SourceScope:      strings.TrimSpace(item.SourceScope),
+			// Pacotes custom: tipo de comando e configuração de detecção
+			// (contrato §1.2). Installed é preenchido fora daqui, por quem
+			// tem acesso ao inventário local (inventory.MarkCatalogInstalled).
+			InstallCommandKind:   item.InstallCommandKind,
+			UninstallCommandKind: item.UninstallCommandKind,
+			DetectionMode:        item.DetectionMode,
+			InventorySoftwareID:  strings.TrimSpace(item.InventorySoftwareID),
+			DetectionName:        strings.TrimSpace(item.DetectionName),
+			DetectionPublisher:   strings.TrimSpace(item.DetectionPublisher),
+			DetectionMinVersion:  strings.TrimSpace(item.DetectionMinVersion),
+			DetectionCommand:     strings.TrimSpace(item.DetectionCommand),
 		}
 		if appItem.SilentCommand == "" {
 			appItem.SilentCommand = appItem.SilentWithProgress

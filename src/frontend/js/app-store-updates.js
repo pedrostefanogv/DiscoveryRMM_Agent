@@ -266,7 +266,7 @@ function renderCards() {
       iconImgHtml = '<img src="' + escapeHtmlAttr(pkg.icon) + '" alt="' + escapeHtmlAttr(pkg.name || pkg.id) + '" class="app-icon" />';
     }
 
-    var action = getContextAction(pkg.id);
+    var action = getContextAction(pkg.id, pkg);
     var actionClass = action.action === 'uninstall' ? 'btn danger' : 'btn primary';
     // Botões só com ícone: o rótulo vira title/aria-label (acessibilidade).
     var actionButton = '<button class="' + actionClass + '" data-action="' + escapeHtmlAttr(action.action) + '" data-id="' + escapeHtmlAttr(pkg.id) + '" title="' + escapeHtmlAttr(action.label) + '" aria-label="' + escapeHtmlAttr(action.label) + '">' + storeActionIcon(action.action) + '</button>';
@@ -277,6 +277,7 @@ function renderCards() {
     }
     var detailButton = '<button class="btn subtle store-detail-btn" data-detail-id="' + escapeHtmlAttr(pkg.id) + '" title="' + escapeHtmlAttr(translate('store.viewDetails')) + '" aria-label="' + escapeHtmlAttr(translate('store.viewDetailsOf', { name: pkg.name || pkg.id })) + '">ⓘ</button>';
     var originBadge = storeOriginBadgeHtml(pkg);
+    var installedBadge = storeInstalledBadgeHtml(pkg);
 
     return '<article class="card store-card" data-detail-id="' + escapeHtmlAttr(packageID) + '">' +
       '<div class="store-card-top">' +
@@ -291,6 +292,7 @@ function renderCards() {
       '<p class="desc">' + highlightStoreText(shortDescription, searchTerms) + '</p>' +
       '<div class="card-actions">' +
         '<span class="card-info">' + escapeHtml(packageID) + ' &middot; v' + escapeHtml(version) + '</span>' +
+        installedBadge +
         actionButton +
       '</div>' +
     '</article>';
@@ -411,7 +413,34 @@ function storeActionIcon(action) {
     '</svg>';
 }
 
-function getContextAction(packageId) {
+// ---------------------------------------------------------------------------
+// Estado "já instalado" de pacotes custom (detecção configurada no servidor)
+// ---------------------------------------------------------------------------
+
+// packageIsInstalled: o catálogo traz `installed` (runtime) para itens custom
+// cuja detecção por inventário encontrou o app neste computador.
+function packageIsInstalled(pkg) {
+  return !!(pkg && pkg.installed);
+}
+
+// storeInstalledBadgeHtml mostra o badge "Já instalado" nos cards e no modal.
+function storeInstalledBadgeHtml(pkg) {
+  if (!packageIsInstalled(pkg)) return '';
+  var label = translate('store.installedBadge');
+  return '<span class="store-installed-badge" data-installed="true" title="' +
+    escapeHtmlAttr(translate('store.installedBadgeTooltip')) + '">' +
+    escapeHtml(label) +
+    '</span>';
+}
+
+// storeInstallActionLabel troca o rótulo do botão para "Reinstalar" quando o
+// app já está instalado. A ação continua sendo `install` — reinstalar é decisão
+// do usuário, nada é pulado automaticamente.
+function storeInstallActionLabel(pkg) {
+  return packageIsInstalled(pkg) ? translate('action.reinstall') : translate('action.install');
+}
+
+function getContextAction(packageId, pkg) {
   var key = String(packageId || '').toLowerCase();
   var action = state.packageActions[key];
   // upgrade tem precedência sobre uninstall no mapa do agente (updates
@@ -419,7 +448,7 @@ function getContextAction(packageId) {
   // o card mostra "Atualizar" em vez de "Remover".
   if (action === 'upgrade') return { action: 'upgrade', label: translate('action.update') };
   if (action === 'uninstall') return { action: 'uninstall', label: translate('action.remove') };
-  return { action: 'install', label: translate('action.install') };
+  return { action: 'install', label: storeInstallActionLabel(pkg) };
 }
 
 function populateCategories() {
@@ -615,6 +644,8 @@ function openAppDetailModal(pkg) {
   var actionBtn = document.getElementById('appDetailActionBtn');
 
   if (titleEl) titleEl.textContent = pkg.name || pkg.id;
+  var detailInstalledBadgeEl = document.getElementById('appDetailInstalledBadge');
+  if (detailInstalledBadgeEl) detailInstalledBadgeEl.innerHTML = storeInstalledBadgeHtml(pkg);
   var originBadgeEl = document.getElementById('appDetailOriginBadge');
   if (originBadgeEl) originBadgeEl.innerHTML = storeOriginBadgeHtml(pkg);
   if (metaEl) metaEl.textContent = translate('store.appMeta', { publisher: (pkg.publisher || translate('common.unknown')), version: (pkg.version || translate('common.notAvailable')), id: pkg.id });
@@ -626,7 +657,7 @@ function openAppDetailModal(pkg) {
     : escapeHtml(pkg.description || translate('store.noDescription'));
 
   if (actionBtn) {
-    var action = getContextAction(pkg.id);
+    var action = getContextAction(pkg.id, pkg);
     actionBtn.textContent = action.label;
     actionBtn.className = action.action === 'uninstall' ? 'btn danger' : 'btn primary';
     actionBtn.dataset.action = action.action;

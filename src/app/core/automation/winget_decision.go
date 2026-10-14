@@ -54,13 +54,21 @@ func ShouldSkipPackageActionBeforePrompt(ctx context.Context, packages PackageMa
 // winget indisponível ou ação que não é de pacote) devolve Skip=false e a
 // execução segue normalmente.
 func ShouldSkipPackageActionBeforeExecution(ctx context.Context, packages PackageManager, task AutomationTask) wingetActionDecision {
+	if strings.TrimSpace(task.PackageID) == "" {
+		return wingetActionDecision{}
+	}
+
+	// Pacote CUSTOM (cadastro manual no servidor): a decisão de pular depende
+	// da detecção configurada no servidor (vínculo com o inventário ou comando
+	// de detecção), não do winget — o Id do custom não existe no winget.
+	if task.InstallationType == InstallationCustom {
+		return decideCustomPackageAction(task)
+	}
+
 	if packages == nil {
 		return wingetActionDecision{}
 	}
 	packageID := strings.TrimSpace(task.PackageID)
-	if packageID == "" {
-		return wingetActionDecision{}
-	}
 
 	switch task.ActionType {
 	case ActionInstallPackage:
@@ -80,6 +88,42 @@ func ShouldSkipPackageActionBeforeExecution(ctx context.Context, packages Packag
 		}
 	default:
 		return wingetActionDecision{}
+	}
+}
+
+// decideCustomPackageAction decide se uma ação de pacote CUSTOM (InstallPackage/
+// UpdateOrInstallPackage) não tem nada a fazer porque o app já está instalado
+// segundo a detecção configurada no servidor.
+//
+// O checker é injetado pelo App (mesmo padrão do SetInstalledPackageChecker) e
+// só devolve installed=true com evidência positiva (vínculo com o inventário ou
+// comando de detecção com exit 0). Sem evidência (known=false) ou quando o
+// pacote não está instalado, NÃO pula — fail-safe: a decisão fica com o usuário
+// e a instalação segue.
+func decideCustomPackageAction(task AutomationTask) wingetActionDecision {
+	switch task.ActionType {
+	case ActionInstallPackage, ActionUpdateOrInstallPackage:
+	default:
+		// Remove/atualização de custom não têm detecção de "nada a fazer".
+		return wingetActionDecision{}
+	}
+
+	packageID := strings.TrimSpace(task.PackageID)
+	if packageID == "" || customInstalledChecker == nil {
+		return wingetActionDecision{}
+	}
+
+	known, installed := customInstalledChecker(string(task.InstallationType), packageID)
+	if !known || !installed {
+		return wingetActionDecision{}
+	}
+
+	logWingetDecision("custom: %s ja instalado pela deteccao do servidor — skip benigno", packageID)
+	return wingetActionDecision{
+		Skip:      true,
+		Benign:    true,
+		Reason:    fmt.Sprintf("app custom %s ja instalado (deteccao do servidor) — nada a fazer", packageID),
+		DecidedBy: decidedByCustomDetection,
 	}
 }
 
@@ -104,6 +148,9 @@ type wingetActionDecision struct {
 const (
 	decidedByWinget = "winget"
 	decidedByCache  = "inventory-cache"
+	// decidedByCustomDetection: a decisão veio da detecção configurada no
+	// servidor para o pacote custom (inventário local ou comando de detecção).
+	decidedByCustomDetection = "custom-detection"
 )
 
 // decideWingetAction decide se a operação winget deve executar, combinando:
@@ -247,6 +294,20 @@ var installedPackageChecker func(packageID string) (known bool, installed bool)
 // SetInstalledPackageChecker registra o verificador de pacote instalado.
 func SetInstalledPackageChecker(checker func(packageID string) (known bool, installed bool)) {
 	installedPackageChecker = checker
+}
+
+// customInstalledChecker é injetado pelo App (inventory.Service) e informa se
+// um pacote CUSTOM está instalado segundo a detecção configurada no servidor
+// (DetectionMode: vínculo com o inventário local ou comando de detecção).
+// Recebe (installationType, packageId) porque o checker do inventário é
+// compartilhado entre tipos de pacote.
+// Retorna (known, installed): known=false quando não há detecção configurada ou
+// não foi possível avaliar — nesse caso a ação NÃO deve ser pulada (fail-safe).
+var customInstalledChecker func(installationType, packageID string) (known bool, installed bool)
+
+// SetCustomInstalledChecker registra o verificador de pacote custom instalado.
+func SetCustomInstalledChecker(checker func(installationType, packageID string) (known bool, installed bool)) {
+	customInstalledChecker = checker
 }
 
 // wingetDecisionLogger é injetado pelo App para registrar decisões relevantes

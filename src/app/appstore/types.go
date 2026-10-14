@@ -56,7 +56,44 @@ type Item struct {
 	InstallerTypesByArch map[string]string `json:"installerTypesByArch"`
 	AutoUpdateEnabled    bool              `json:"autoUpdateEnabled"`
 	SourceScope          string            `json:"sourceScope"`
+
+	// ── Pacotes custom: tipo de comando e detecção (contrato §1.2) ──
+	// InstallCommandKind/UninstallCommandKind dizem como o texto do comando
+	// deve ser executado: Command (0) = cmd /C; CmdScript (1) = texto gravado
+	// num .cmd; PowerShellScript (2) = texto gravado num .ps1.
+	InstallCommandKind   int `json:"installCommandKind"`
+	UninstallCommandKind int `json:"uninstallCommandKind"`
+	// DetectionMode: None (0) = sem detecção; InventoryLink (1) = casar com o
+	// inventário local por nome/fabricante/versão mínima; Command (2) =
+	// executar DetectionCommand (exit 0 = já instalado).
+	DetectionMode int `json:"detectionMode"`
+	// InventorySoftwareID é o softwareId (Guid) do catálogo de inventário do
+	// servidor. Snapshot informativo — o agent casa pelo nome/fabricante.
+	InventorySoftwareID string `json:"inventorySoftwareId"`
+	// DetectionName é o nome do app no inventário (obrigatório no modo
+	// InventoryLink) e DetectionPublisher o fabricante (opcional).
+	DetectionName      string `json:"detectionName"`
+	DetectionPublisher string `json:"detectionPublisher"`
+	// DetectionMinVersion exige versão instalada >= este valor (opcional).
+	DetectionMinVersion string `json:"detectionMinVersion"`
+	// DetectionCommand é o PowerShell de detecção (exit 0 = instalado).
+	DetectionCommand string `json:"detectionCommand"`
 }
+
+// AppCommandKind espelha AppCommandKind da API (contrato §1.1): como o texto
+// do comando de instalação/desinstalação de um pacote custom é executado.
+const (
+	CommandKindCommand          = 0
+	CommandKindCmdScript        = 1
+	CommandKindPowerShellScript = 2
+)
+
+// AppDetectionMode espelha AppDetectionMode da API (contrato §1.1).
+const (
+	DetectionModeNone          = 0
+	DetectionModeInventoryLink = 1
+	DetectionModeCommand       = 2
+)
 
 // Response representa o envelope do endpoint /api/v1/agent-auth/me/app-store.
 // Suporta paginação CQRS por cursor — quando nextCursor não está vazio,

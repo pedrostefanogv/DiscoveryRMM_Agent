@@ -427,7 +427,9 @@ func (s *Service) Uninstall(id string) (string, error) {
 		}
 		runCtx, cancel := context.WithTimeout(runCtx, customInstallCommandTimeout)
 		defer cancel()
-		out, err = s.runCustomShellCommand(runCtx, uninstallCommand, "")
+		// O tipo do comando de remoção é independente do de instalação
+		// (UninstallCommandKind), permitindo .cmd/.ps1 também na remoção.
+		out, err = s.runCustomShellCommandKind(runCtx, uninstallCommand, "", allowed.UninstallCommandKind)
 	default:
 		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
 	}
@@ -566,7 +568,9 @@ func (s *Service) UninstallFromSource(installationType, packageID string) (strin
 			err = fmt.Errorf("app custom %q sem comando de desinstalação registrado no servidor", packageID)
 			break
 		}
-		out, err = s.runCustomShellCommand(s.ctx(), uninstallCommand, "")
+		// Remoção remota de app custom: mesma semântica de tipo de comando
+		// (UninstallCommandKind) usada pelo botão da loja.
+		out, err = s.runCustomShellCommandKind(s.ctx(), uninstallCommand, "", allowed.UninstallCommandKind)
 	default:
 		err = fmt.Errorf("installationType %q não suportado para desinstalação remota", installationType)
 	}
@@ -1079,18 +1083,50 @@ func (s *Service) runCustomInstallCommand(ctx context.Context, allowed appstore.
 	}
 
 	command = applyCustomCommandPlaceholders(command, installerPath, workDir)
-	return s.runCustomShellCommand(runCtx, command, workDir)
+	return s.runCustomShellCommandKind(runCtx, command, workDir, allowed.InstallCommandKind)
 }
 
 // runCustomShellCommand executa um comando de texto livre de pacote custom via
-// cmd /C, com janela oculta e timeout. Comando vazio é rejeitado.
+// cmd /C, com janela oculta e timeout (compatibilidade: equivale ao tipo
+// Command). Comando vazio é rejeitado.
 func (s *Service) runCustomShellCommand(ctx context.Context, command, workDir string) (string, error) {
+	return s.runCustomShellCommandKind(ctx, command, workDir, appstore.CommandKindCommand)
+}
+
+// runCustomShellCommandKind respeita o tipo de comando configurado no servidor
+// (contrato §1.3): Command (0) → `cmd /C`; CmdScript (1) → o texto é gravado num
+// `.cmd` no workdir e executado; PowerShellScript (2) → gravado num `.ps1` e
+// executado com `powershell -NoProfile -ExecutionPolicy Bypass -File`.
+//
+// Placeholders já vêm substituídos pelo chamador. Timeout, cmd.Dir, janela
+// oculta e CombinedOutput permanecem iguais aos do modo comando.
+func (s *Service) runCustomShellCommandKind(ctx context.Context, command, workDir string, kind int) (string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return "", fmt.Errorf("comando custom vazio")
 	}
 
-	cmd := exec.CommandContext(ctx, "cmd", "/C", command)
+	spec, err := buildCustomCommandSpec(kind, command, workDir)
+	if err != nil {
+		return "", err
+	}
+
+	if spec.scriptBody != "" {
+		if err := os.WriteFile(spec.scriptPath, []byte(spec.scriptBody), 0o600); err != nil {
+			return "", fmt.Errorf("falha ao gravar script custom em %s: %w", spec.scriptPath, err)
+		}
+		s.customDetectionLogf("script custom (%s) gravado em %s", spec.label, spec.scriptPath)
+		// Sem workdir o script vai para o %TEMP% do sistema e nenhuma limpeza
+		// posterior o remove — desinstalação/upgrade remoto deixavam .cmd/.ps1
+		// acumulando ali. Com workdir (instalação) o arquivo fica junto do
+		// instalador na pasta temporária, que é limpa depois; esse
+		// comportamento é coberto por teste e permanece.
+		if strings.TrimSpace(workDir) == "" {
+			defer func(path string) { _ = os.Remove(path) }(spec.scriptPath)
+		}
+	}
+
+	cmd := exec.CommandContext(ctx, spec.argv[0], spec.argv[1:]...)
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
@@ -1107,6 +1143,65 @@ func (s *Service) runCustomShellCommand(ctx context.Context, command, workDir st
 		return text, fmt.Errorf("erro executando comando custom: %w", err)
 	}
 	return text, nil
+}
+
+// customCommandSpec descreve como um comando/script custom será executado:
+// argv pronto para exec.CommandContext e, nos modos de script, o corpo a gravar.
+type customCommandSpec struct {
+	argv       []string
+	scriptPath string
+	scriptBody string
+	label      string
+}
+
+// buildCustomCommandSpec monta a invocação do comando custom conforme o tipo.
+// Função pura (além de resolver o caminho do arquivo de script) para permitir
+// teste sem executar nada.
+func buildCustomCommandSpec(kind int, command, workDir string) (customCommandSpec, error) {
+	switch kind {
+	case appstore.CommandKindCmdScript:
+		path := filepath.Join(customScriptDir(workDir), "discovery-custom-install.cmd")
+		// O caminho vai SEM aspas no argv: o exec do Go já cita o argumento
+		// quando ele contém espaços (o temp do Windows costuma ter o nome do
+		// usuário). Aspas manuais viravam parte do nome e o cmd /C falhava com
+		// "'\"C:\...\x.cmd\"' não é reconhecido como um comando interno".
+		return customCommandSpec{
+			argv:       []string{"cmd", "/C", path},
+			scriptPath: path,
+			scriptBody: command,
+			label:      "cmd",
+		}, nil
+	case appstore.CommandKindPowerShellScript:
+		path := filepath.Join(customScriptDir(workDir), "discovery-custom-install.ps1")
+		return customCommandSpec{
+			argv:       []string{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path},
+			scriptPath: path,
+			scriptBody: command,
+			label:      "powershell",
+		}, nil
+	case appstore.CommandKindCommand:
+		return customCommandSpec{
+			argv:  []string{"cmd", "/C", command},
+			label: "comando",
+		}, nil
+	default:
+		// Tipo desconhecido (servidor mais novo): mantém o comportamento
+		// retrocompatível de comando único em vez de falhar a instalação.
+		return customCommandSpec{
+			argv:  []string{"cmd", "/C", command},
+			label: "comando",
+		}, nil
+	}
+}
+
+// customScriptDir escolhe onde gravar o arquivo de script: a pasta de trabalho
+// (que costuma conter o instalador baixado e é limpa depois) ou o temp do
+// sistema quando não há workdir.
+func customScriptDir(workDir string) string {
+	if dir := strings.TrimSpace(workDir); dir != "" {
+		return dir
+	}
+	return os.TempDir()
 }
 
 // applyCustomCommandPlaceholders troca os marcadores do comando pelos caminhos

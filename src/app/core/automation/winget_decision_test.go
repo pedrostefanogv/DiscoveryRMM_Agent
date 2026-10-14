@@ -3,6 +3,7 @@ package automation
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -39,9 +40,11 @@ const stubWingetUpgradable = "Google Chrome  Google.Chrome.EXE  153.0  154.0\n"
 func resetDecisionHooks(t *testing.T) {
 	t.Helper()
 	SetInstalledPackageChecker(nil)
+	SetCustomInstalledChecker(nil)
 	SetWingetDecisionLogger(nil)
 	t.Cleanup(func() {
 		SetInstalledPackageChecker(nil)
+		SetCustomInstalledChecker(nil)
 		SetWingetDecisionLogger(nil)
 	})
 }
@@ -276,5 +279,91 @@ func TestShouldSkipPackageActionBeforePrompt_NoPackageOrManager(t *testing.T) {
 	}
 	if ShouldSkipPackageActionBeforePrompt(context.Background(), nil, AutomationTask{PackageID: "brave.brave", ActionType: ActionInstallPackage}) {
 		t.Fatal("sem package manager não há decisão")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pacotes CUSTOM: a decisão usa a detecção configurada no servidor (checker
+// injetado pelo App), não o winget.
+// ---------------------------------------------------------------------------
+
+func TestShouldSkipPackageAction_CustomInstalledSkips(t *testing.T) {
+	resetDecisionHooks(t)
+	SetCustomInstalledChecker(func(installationType, packageID string) (bool, bool) {
+		if installationType != string(InstallationCustom) {
+			t.Fatalf("installationType=%q, esperado %q", installationType, InstallationCustom)
+		}
+		if packageID != "minha-app-custom" {
+			t.Fatalf("packageID=%q inesperado", packageID)
+		}
+		return true, true
+	})
+
+	// Sem package manager (custom não depende do winget) a decisão ainda vale.
+	task := AutomationTask{
+		TaskID:           "t-custom",
+		PackageID:        "minha-app-custom",
+		ActionType:       ActionInstallPackage,
+		InstallationType: InstallationCustom,
+	}
+	d := ShouldSkipPackageActionBeforeExecution(context.Background(), nil, task)
+	if !d.Skip || !d.Benign {
+		t.Fatalf("esperava skip benigno para custom ja instalado, got %+v", d)
+	}
+	if d.DecidedBy != decidedByCustomDetection {
+		t.Fatalf("decidedBy=%q, esperado %q", d.DecidedBy, decidedByCustomDetection)
+	}
+	if !strings.Contains(d.Reason, "ja instalado") {
+		t.Fatalf("motivo deveria explicar o skip, veio %q", d.Reason)
+	}
+	if !ShouldSkipPackageActionBeforePrompt(context.Background(), nil, task) {
+		t.Fatal("o prompt tambem deveria ser pulado")
+	}
+}
+
+func TestShouldSkipPackageAction_CustomFailSafeWithoutEvidence(t *testing.T) {
+	resetDecisionHooks(t)
+	base := AutomationTask{
+		TaskID:           "t-custom",
+		PackageID:        "minha-app-custom",
+		ActionType:       ActionInstallPackage,
+		InstallationType: InstallationCustom,
+	}
+
+	// Sem checker injetado.
+	if d := ShouldSkipPackageActionBeforeExecution(context.Background(), nil, base); d.Skip {
+		t.Fatalf("sem checker nao pode pular, got %+v", d)
+	}
+
+	// Checker sem evidência (known=false): não pula.
+	SetCustomInstalledChecker(func(string, string) (bool, bool) { return false, false })
+	if d := ShouldSkipPackageActionBeforeExecution(context.Background(), nil, base); d.Skip {
+		t.Fatalf("sem evidencia nao pode pular, got %+v", d)
+	}
+
+	// Lista conhecida e pacote ausente: não pula.
+	SetCustomInstalledChecker(func(string, string) (bool, bool) { return true, false })
+	if d := ShouldSkipPackageActionBeforeExecution(context.Background(), nil, base); d.Skip {
+		t.Fatalf("custom nao instalado nao pode pular, got %+v", d)
+	}
+
+	// Remoção de custom nunca é pulada por detecção.
+	SetCustomInstalledChecker(func(string, string) (bool, bool) { return true, true })
+	removeTask := base
+	removeTask.ActionType = ActionRemovePackage
+	if d := ShouldSkipPackageActionBeforeExecution(context.Background(), nil, removeTask); d.Skip {
+		t.Fatalf("remocao de custom nao usa deteccao de instalado, got %+v", d)
+	}
+}
+
+// Tarefa de winget com InstallationType Custom vazio continua no caminho winget.
+func TestShouldSkipPackageAction_WingetTaskUnaffectedByCustomChecker(t *testing.T) {
+	resetDecisionHooks(t)
+	SetCustomInstalledChecker(func(string, string) (bool, bool) { return true, true })
+	mgr := &stubPackageManager{installedOut: "Outro  Outro.Pacote  1.0\n"}
+
+	task := AutomationTask{TaskID: "t-winget", PackageID: "brave.brave", ActionType: ActionInstallPackage}
+	if d := ShouldSkipPackageActionBeforeExecution(context.Background(), mgr, task); d.Skip {
+		t.Fatalf("tarefa winget nao pode usar o checker custom, got %+v", d)
 	}
 }

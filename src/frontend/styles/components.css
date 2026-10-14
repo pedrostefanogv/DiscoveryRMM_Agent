@@ -716,6 +716,30 @@
 .store-origin-badge.store-origin-chocolatey { --origin-fg: var(--origin-choco); }
 .store-origin-badge.store-origin-custom     { --origin-fg: var(--origin-custom); }
 
+/* ----- Badge "Já instalado" (detecção configurada no servidor) -----
+   Aparece no card e no modal de um pacote custom cuja detecção encontrou o app
+   no inventário deste computador. Cor neutra-esverdeada para não competir com
+   o badge de origem. */
+.store-installed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: default;
+  margin-left: 6px;
+  color: var(--success, #2e9e5b);
+  background: color-mix(in srgb, var(--success, #2e9e5b) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success, #2e9e5b) 28%, transparent);
+}
+
+.app-detail-installed-slot .store-installed-badge { margin-top: -4px; }
+
 .store-card .store-card-icon-slot {
   margin-bottom: 0;
   min-width: 48px;
