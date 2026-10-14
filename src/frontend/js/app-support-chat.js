@@ -118,6 +118,45 @@
   }
 
   /**
+   * Tipos de imagem que o WebView2 RENDERIZA (miniatura e visor).
+   *
+   * `image/*` não serve como critério: `image/tiff` e `image/heic` estão na
+   * família `image/` mas não renderizam aqui — o anexo cairia no mesmo vazio do
+   * PDF (tela sem conteúdo, só o nome). Todo o resto BAIXA/salva em disco, que é
+   * o caminho útil. A mesma regra existe no console web
+   * (DiscoveryRMM_Site/src/utils/chatAttachment.ts).
+   */
+  var RENDERABLE_IMAGE_TYPES = [
+    "image/png", "image/jpeg", "image/jpg", "image/pjpeg", "image/x-png",
+    "image/gif", "image/apng", "image/webp", "image/bmp",
+    "image/x-icon", "image/vnd.microsoft.icon", "image/avif", "image/svg+xml"
+  ];
+
+  var IMAGE_EXTENSIONS = [
+    ".png", ".jpg", ".jpeg", ".jfif", ".gif", ".apng", ".webp",
+    ".bmp", ".ico", ".avif", ".svg"
+  ];
+
+  // Sem tipo confiável (o picker do Windows devolve "" / octet-stream quando não
+  // reconhece a extensão), a extensão do nome decide — igual ao console web.
+  function isRenderableImage(contentType, fileName) {
+    var type = String(contentType || "").toLowerCase();
+    var semi = type.indexOf(";");
+    if (semi >= 0) type = type.substring(0, semi);
+    type = type.trim();
+
+    if (RENDERABLE_IMAGE_TYPES.indexOf(type) >= 0) return true;
+    if (type && type !== "application/octet-stream") return false;
+
+    var name = String(fileName || "").toLowerCase();
+    for (var i = 0; i < IMAGE_EXTENSIONS.length; i++) {
+      var ext = IMAGE_EXTENSIONS[i];
+      if (name.length > ext.length && name.slice(-ext.length) === ext) return true;
+    }
+    return false;
+  }
+
+  /**
    * A conversa ACABOU (e a janela segue aberta só em LEITURA)?
    *
    * `ended` é o estado explícito do serviço, mas o estado local também é
@@ -307,7 +346,7 @@
     wrap.className = "sc-attachments";
 
     attachments.forEach(function (attachment) {
-      var isImage = String(attachment.contentType || "").toLowerCase().indexOf("image/") === 0;
+      var isImage = isRenderableImage(attachment.contentType, attachment.fileName);
 
       var chip = document.createElement("button");
       chip.type = "button";
@@ -491,7 +530,7 @@
     wrap.className = "sc-comment-attachments";
 
     attachments.forEach(function (attachment) {
-      var isImage = String(attachment.contentType || "").toLowerCase().indexOf("image/") === 0;
+      var isImage = isRenderableImage(attachment.contentType, attachment.fileName);
 
       var chip = document.createElement("button");
       chip.type = "button";
@@ -978,14 +1017,15 @@
         }
 
         var contentType = String(blob.type || attachment.contentType || "").toLowerCase();
-        var url = URL.createObjectURL(blob);
 
-        if (contentType.indexOf("image/") === 0) {
-          showAttachmentViewer(url, attachment.fileName || "imagem", true);
+        if (isRenderableImage(contentType, attachment.fileName)) {
+          showAttachmentViewer(URL.createObjectURL(blob), attachment.fileName || "imagem", true);
           return;
         }
 
-        triggerDownload(url, attachment.fileName || "anexo");
+        // Todo o resto BAIXA com o nome original: PDF, log, zip, csv, executável,
+        // anexo sem tipo e também formatos de imagem que o WebView2 não renderiza.
+        triggerDownload(URL.createObjectURL(blob), attachment.fileName || "anexo");
       })
       .catch(function (err) { showBanner("Falha ao baixar o anexo: " + describe(err)); });
   }
@@ -1020,6 +1060,22 @@
     if (els.viewerImage) {
       els.viewerImage.src = url;
       els.viewerImage.alt = fileName || "anexo";
+      // Rede de segurança: um arquivo que passa por imagem mas não renderiza
+      // (corrompido) deixaria o visor VAZIO, sem caminho para o arquivo. Entrega
+      // o download e fecha o visor em vez de travar aqui.
+      els.viewerImage.onerror = function () {
+        var downloadUrl = state.viewerUrl;
+        if (!downloadUrl) return;
+        // A URL passa a ser do download (revogada pelo teto de 30s), não do visor.
+        state.viewerOwnsUrl = false;
+        // Se a URL veio do cache de miniaturas, ela é lixo (não renderiza):
+        // some com a entrada para o chip não repetir o mesmo caminho.
+        Object.keys(thumbnailUrls).forEach(function (id) {
+          if (thumbnailUrls[id] === downloadUrl) delete thumbnailUrls[id];
+        });
+        closeAttachmentViewer();
+        triggerDownload(downloadUrl, fileName || "anexo");
+      };
     }
     if (els.viewer) els.viewer.hidden = false;
   }
@@ -1032,7 +1088,12 @@
     }
     state.viewerUrl = null;
     state.viewerOwnsUrl = false;
-    if (els.viewerImage) els.viewerImage.removeAttribute("src");
+    if (els.viewerImage) {
+      // Limpa o handler ANTES de tirar o src: remover o src dispara "error" em
+      // alguns motores e o fallback de download entraria em loop.
+      els.viewerImage.onerror = null;
+      els.viewerImage.removeAttribute("src");
+    }
     if (els.viewer) els.viewer.hidden = true;
   }
 

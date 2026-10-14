@@ -168,6 +168,32 @@ func TestChatWindow_ConversaEncerradaNaoAnunciaReconexao(t *testing.T) {
 	}
 }
 
+// REQUISITO: "imagem" na janela do chat é o que o WebView2 RENDERIZA, não
+// `image/*`. image/tiff, image/heic e afins estão na família `image/` mas não
+// renderizam — cairiam no visor VAZIO (mesmo sintoma do PDF dentro de <img>).
+// Todo o resto (PDF, log, csv, zip, exe, anexo sem tipo) BAIXA.
+func TestChatWindow_ImagemRenderizavelNaoEhImageQualquer(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+
+	if !strings.Contains(jsText, "function isRenderableImage(") {
+		t.Fatal("app-support-chat.js deve decidir imagem por tipo RENDERIZÁVEL (isRenderableImage)")
+	}
+	if strings.Contains(jsText, `indexOf("image/") === 0`) {
+		t.Fatal("o critério antigo (`image/*`) voltou: TIFF/HEIC cairiam no visor vazio; use isRenderableImage")
+	}
+	if !strings.Contains(jsText, "RENDERABLE_IMAGE_TYPES") || !strings.Contains(jsText, "IMAGE_EXTENSIONS") {
+		t.Fatal("a lista de tipos renderizáveis e o fallback por extensão (sem MIME) precisam existir")
+	}
+	if !strings.Contains(jsText, `triggerDownload(`) {
+		t.Fatal("os tipos não renderizáveis precisam BAIXAR (triggerDownload)")
+	}
+}
+
 // BUG CORRIGIDO: o anexo/imagem enviado pelo suporte não aparecia na janela do
 // chat. Além de o envelope do NATS não trazer os anexos, o merge do frontend
 // mantinha a cópia antiga (sem anexo) quando o snapshot canônico chegava — e o
