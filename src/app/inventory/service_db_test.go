@@ -1,6 +1,9 @@
 package inventory
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 type typedNilInventoryDB struct{}
 
@@ -10,6 +13,10 @@ func (d *typedNilInventoryDB) ShouldSyncInventory(agentID string, hardwareBody, 
 
 func (d *typedNilInventoryDB) SaveInventorySnapshot(agentID string, hardwareBody, softwareBody []byte) error {
 	return nil
+}
+
+func (d *typedNilInventoryDB) GetLatestInventory(agentID string) ([]byte, []byte, time.Time, error) {
+	return nil, nil, time.Time{}, nil
 }
 
 func (d *typedNilInventoryDB) UpdateLastSyncTime(key, status string) error {

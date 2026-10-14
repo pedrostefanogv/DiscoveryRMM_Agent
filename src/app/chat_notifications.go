@@ -326,14 +326,19 @@ func (a *App) sendChatNotification(kind chatNotifyKind, content string) {
 	if a.QuitRequested.Load() {
 		return
 	}
+	var state chatWindowState
 	if a.mainWindow == nil {
-		// Sem janela não há como saber o que está em tela; não notifica.
-		return
-	}
-	state := chatWindowState{
-		Visible:   a.mainWindow.IsVisible(),
-		Minimised: a.mainWindow.IsMinimised(),
-		Focused:   a.mainWindow.IsFocused(),
+		// Janela ainda não criada (autostart no tray + criação preguiçosa da UI):
+		// nada está em tela, então a notificação nativa DEVE sair — antes o
+		// early-return aqui suprimia silenciosamente o toast de resposta do chat
+		// quando não havia janela principal.
+		state = chatWindowState{Visible: false, Minimised: true, Focused: false}
+	} else {
+		state = chatWindowState{
+			Visible:   a.mainWindow.IsVisible(),
+			Minimised: a.mainWindow.IsMinimised(),
+			Focused:   a.mainWindow.IsFocused(),
+		}
 	}
 	// Falha nunca carrega o texto bruto do erro: o detalhe fica no chat. A
 	// pergunta respeita a mesma preferência de privacidade da resposta.

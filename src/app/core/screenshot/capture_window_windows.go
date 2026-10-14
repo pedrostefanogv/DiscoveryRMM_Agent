@@ -146,11 +146,25 @@ type printWorkerClient struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
+	// idle encerra o processo auxiliar após printWorkerIdleTimeout sem
+	// requisições. Sem isso o worker ficava vivo até o encerramento do agente:
+	// um discovery-agent.exe INTEIRO (~20-30 MB) parado só porque em algum
+	// momento alguém tirou um print de janela (chat IA / suporte).
+	idle *time.Timer
 }
+
+// printWorkerIdleTimeout é o tempo sem requisições antes de encerrar o worker.
+// Reinicia no próximo pedido, com custo de um spawn (~50-100 ms) que só ocorre
+// quando há uma nova captura de janela.
+const printWorkerIdleTimeout = 5 * time.Minute
 
 var printWorker printWorkerClient
 
 func (p *printWorkerClient) stopLocked() {
+	if p.idle != nil {
+		p.idle.Stop()
+		p.idle = nil
+	}
 	if p.stdin != nil {
 		_ = p.stdin.Close()
 	}
@@ -168,6 +182,7 @@ func (p *printWorkerClient) stopLocked() {
 
 func (p *printWorkerClient) ensureStartedLocked() error {
 	if p.cmd != nil && p.stdin != nil && p.stdout != nil {
+		p.touchIdleLocked()
 		return nil
 	}
 	cmd, stdinPipe, stdoutPipe, err := startPrintServerProcess()
@@ -177,7 +192,25 @@ func (p *printWorkerClient) ensureStartedLocked() error {
 	p.cmd = cmd
 	p.stdin = stdinPipe
 	p.stdout = bufio.NewReader(stdoutPipe)
+	p.touchIdleLocked()
 	return nil
+}
+
+// touchIdleLocked (re)agenda o encerramento do worker por ociosidade.
+// O callback revalida o estado sob o mutex: se o worker já foi encerrado
+// (p.cmd == nil) não faz nada; se foi reiniciado, o timer atual é o novo.
+func (p *printWorkerClient) touchIdleLocked() {
+	if p.idle != nil {
+		p.idle.Stop()
+	}
+	p.idle = time.AfterFunc(printWorkerIdleTimeout, func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.cmd == nil {
+			return
+		}
+		p.stopLocked()
+	})
 }
 
 // capture pede uma captura ao worker persistente. Em timeout/erro o worker é

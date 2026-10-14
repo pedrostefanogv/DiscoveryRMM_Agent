@@ -331,6 +331,14 @@ func (s *Service) GetConfig() Config {
 const (
 	maxHistoryMessages = 80
 	trimHistoryTo      = 60
+
+	// Teto de BYTES do histórico. O limite por mensagens não protege memória:
+	// uma mensagem de tool result pode carregar uma imagem em data URL base64 de
+	// até ~5,6 MB (capture_screenshot), então 80 mensagens podiam reter centenas
+	// de MB no processo da UI. Ao passar de maxHistoryBytes o histórico é cortado
+	// para trimHistoryBytesTo, sempre do mais antigo para o mais novo.
+	maxHistoryBytes    = 8 << 20
+	trimHistoryBytesTo = 4 << 20
 )
 
 func appendHistoryLocked(s *Service, m Message) {
@@ -338,6 +346,50 @@ func appendHistoryLocked(s *Service, m Message) {
 	if len(s.history) > maxHistoryMessages {
 		s.history = s.history[len(s.history)-trimHistoryTo:]
 	}
+	trimHistoryByBytesLocked(s)
+}
+
+// historySizeLocked soma os bytes relevantes do histórico (conteúdo e
+// argumentos de tool calls).
+func historySizeLocked(history []Message) int {
+	total := 0
+	for _, m := range history {
+		total += messageSize(m)
+	}
+	return total
+}
+
+func messageSize(m Message) int {
+	total := len(m.Content) + len(m.ToolCallID)
+	for _, tc := range m.ToolCalls {
+		total += len(tc.ID) + len(tc.Type) + len(tc.Function.Name) + len(tc.Function.Arguments)
+	}
+	return total
+}
+
+// trimHistoryByBytesLocked corta do início até o histórico caber em
+// trimHistoryBytesTo, preservando sempre ao menos a última mensagem.
+// Chamado apenas nos mesmos pontos seguros do trim por quantidade (antes e
+// depois de um turno), nunca no meio do loop multi-round.
+func trimHistoryByBytesLocked(s *Service) {
+	if len(s.history) <= 1 {
+		return
+	}
+	remaining := historySizeLocked(s.history)
+	if remaining <= maxHistoryBytes {
+		return
+	}
+	drop := 0
+	for drop < len(s.history)-1 && remaining > trimHistoryBytesTo {
+		remaining -= messageSize(s.history[drop])
+		drop++
+	}
+	if drop == 0 {
+		return
+	}
+	trimmed := make([]Message, len(s.history)-drop)
+	copy(trimmed, s.history[drop:])
+	s.history = trimmed
 }
 
 // ClearHistory resets the conversation.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"discovery/app/core/models"
 	"discovery/app/debug"
@@ -15,6 +16,8 @@ type mockSyncDB struct {
 	savedHardware  []byte
 	savedSoftware  []byte
 	shouldSyncCall int
+	latestCall     int
+	latestMissing  bool
 }
 
 func (m *mockSyncDB) ShouldSyncInventory(agentID string, hardwareBody, softwareBody []byte) (bool, string, error) {
@@ -28,6 +31,14 @@ func (m *mockSyncDB) SaveInventorySnapshot(agentID string, hardwareBody, softwar
 	m.savedHardware = hardwareBody
 	m.savedSoftware = softwareBody
 	return nil
+}
+
+func (m *mockSyncDB) GetLatestInventory(agentID string) ([]byte, []byte, time.Time, error) {
+	m.latestCall++
+	if m.latestMissing {
+		return nil, nil, time.Time{}, nil
+	}
+	return []byte("hw"), []byte("sw"), time.Now(), nil
 }
 
 func (m *mockSyncDB) UpdateLastSyncTime(key, status string) error {

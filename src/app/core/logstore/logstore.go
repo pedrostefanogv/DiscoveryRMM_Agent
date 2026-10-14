@@ -43,15 +43,24 @@ const (
 
 // Defaults de retenção, teto de tamanho e batching.
 const (
-	DefaultRetention   = 7 * 24 * time.Hour
-	DefaultMaxBytes    = int64(128 << 20) // 128 MB
-	DefaultFlushEvery  = 250 * time.Millisecond
-	DefaultBatchSize   = 200
-	DefaultQueueSize   = 4096
-	DefaultMaintenance = 24 * time.Hour
-	maxMessageBytes    = 64 << 10
-	schemaVersion      = 1
-	metaLastPurge      = "last_purge_ms"
+	DefaultRetention  = 7 * 24 * time.Hour
+	DefaultMaxBytes   = int64(128 << 20) // 128 MB
+	DefaultFlushEvery = 250 * time.Millisecond
+	DefaultBatchSize  = 200
+	DefaultQueueSize  = 4096
+	// DefaultMaxQueuedBytes limita a MEMÓRIA em fila (não só a quantidade):
+	// 4096 registros de até 64 KB davam um teto teórico de ~256 MB. Com o teto
+	// por bytes (16 MB) uma rajada de mensagens minúsculas continua sendo
+	// absorvida normalmente (4096 × 1 KB = 4 MB) e só o caso patológico (linhas
+	// gigantes) é descartado — com o contador Dropped já existente.
+	DefaultMaxQueuedBytes = int64(16 << 20)
+	DefaultMaintenance    = 24 * time.Hour
+	// maxMessageBytes trunca cada mensagem antes de enfileirar. 16 KB (antes
+	// 64 KB) mantém logs de diagnóstico úteis sem permitir que uma única linha
+	// patológica domine a memória da fila.
+	maxMessageBytes = 16 << 10
+	schemaVersion   = 1
+	metaLastPurge   = "last_purge_ms"
 )
 
 // Options configura a abertura de um Store.
@@ -73,6 +82,10 @@ type Options struct {
 	BatchSize int
 	// QueueSize é a capacidade do canal de escrita (default 4096).
 	QueueSize int
+	// MaxQueuedBytes é o teto de memória da fila em bytes (default 16 MB).
+	// Protege o processo de uma rajada de linhas grandes enquanto o writer
+	// drena; ao estourar, o registro é descartado e contado em Dropped.
+	MaxQueuedBytes int64
 	// MaintenanceInterval é o período da purga periódica. Valores <= 0 usam o
 	// default de 24 h (a purga no startup também é responsabilidade do
 	// chamador, além desta periódica).
@@ -144,7 +157,9 @@ type Store struct {
 	dropped  uint64
 	written  uint64
 	enqueued atomic.Int64
-	lastErr  atomic.Value // string
+	// queuedBytes é a memória aproximada em fila (ver DefaultMaxQueuedBytes).
+	queuedBytes atomic.Int64
+	lastErr     atomic.Value // string
 }
 
 // Open abre (criando se necessário) o banco e inicia o writer.
@@ -212,6 +227,9 @@ func withDefaults(opts Options) Options {
 	}
 	if opts.QueueSize <= 0 {
 		opts.QueueSize = DefaultQueueSize
+	}
+	if opts.MaxQueuedBytes <= 0 {
+		opts.MaxQueuedBytes = DefaultMaxQueuedBytes
 	}
 	if opts.MaintenanceInterval == 0 {
 		opts.MaintenanceInterval = DefaultMaintenance
@@ -481,12 +499,42 @@ func (s *Store) enqueue(r record) {
 	if s.closed {
 		return
 	}
+
+	size := recordSize(r)
+	// Teto por BYTES da fila: uma rajada de linhas grandes não pode transformar
+	// a fila de logs no maior consumidor de memória do processo. Rajadas de
+	// linhas pequenas continuam sendo absorvidas normalmente.
+	if max := s.opts.MaxQueuedBytes; max > 0 && s.queuedBytes.Load()+int64(size) > max {
+		atomic.AddUint64(&s.dropped, 1)
+		return
+	}
+
 	select {
 	case s.ch <- r:
 		s.enqueued.Add(1)
+		s.queuedBytes.Add(int64(size))
 	default:
 		atomic.AddUint64(&s.dropped, 1)
 	}
+}
+
+// recordSize estima os bytes relevantes de um registro na fila (strings de
+// log e de chat). Slices/mapas das entradas de chat não são somados: os campos
+// de texto já dominam o consumo.
+func recordSize(r record) int {
+	size := len(r.message) + len(r.level) + len(r.rev) + len(r.tsISO) + len(r.session)
+	size += len(r.entry.UserMsg) + len(r.entry.Assistant) + len(r.entry.Error)
+	size += len(r.entry.Endpoint) + len(r.entry.SessionID) + len(r.entry.Type)
+	for _, s := range r.entry.ToolCalls {
+		size += len(s)
+	}
+	for _, s := range r.entry.ToolArgs {
+		size += len(s)
+	}
+	for _, s := range r.entry.ToolResults {
+		size += len(s)
+	}
+	return size
 }
 
 func (s *Store) runWriter() {
@@ -512,6 +560,7 @@ func (s *Store) runWriter() {
 		for {
 			select {
 			case r := <-s.ch:
+				s.queuedBytes.Add(-int64(recordSize(r)))
 				batch = append(batch, r)
 			default:
 				return
@@ -521,6 +570,7 @@ func (s *Store) runWriter() {
 	for {
 		select {
 		case r := <-s.ch:
+			s.queuedBytes.Add(-int64(recordSize(r)))
 			batch = append(batch, r)
 			if len(batch) >= s.opts.BatchSize {
 				flush()

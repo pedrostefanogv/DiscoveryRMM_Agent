@@ -31,12 +31,14 @@ import (
 	"discovery/app/core/inventory"
 	"discovery/app/core/logstore"
 	"discovery/app/core/mcp"
+	"discovery/app/core/memlimit"
 	"discovery/app/core/models"
 	"discovery/app/core/platform"
 	"discovery/app/core/printer"
 	"discovery/app/core/processutil"
 	"discovery/app/core/remotedebug"
 	"discovery/app/core/remotesession"
+	"discovery/app/core/runtimediag"
 	"discovery/app/core/safego"
 	"discovery/app/core/screenshot"
 	"discovery/app/core/selfupdate"
@@ -242,12 +244,24 @@ type App struct {
 	// pendentes ao fechar o SQLite após o timeout.
 	startupPhasePending atomic.Int32
 
+	// idleRelease controla a liberação de caches/memória após um período
+	// CONTÍNUO de ociosidade (IdleReleaseDelay). Não roda a cada micro-ociosidade:
+	// um timer é agendado ao entrar em idle e cancelado na primeira atividade.
+	idleReleaseMu    sync.Mutex
+	idleReleaseTimer *time.Timer
+
 	// ── Wails v3 ──
 	// Referências explícitas à aplicação/janela do Wails v3.
 	// Substituem o acesso implícito via ctx do v2.
 	app        *application.App
 	mainWindow application.Window
 	systemTray *application.SystemTray
+
+	// windowMu serializa a criação preguiçosa da janela principal
+	// (EnsureMainWindow): tray, segunda instância e clique em toast podem pedir a
+	// janela quase ao mesmo tempo. Ver window_lazy.go.
+	windowMu      sync.Mutex
+	windowFactory func() application.Window
 
 	// ── Notificação nativa da resposta do chat (Wails v3 notifications) ──
 	// nativeNotifications é o serviço nativo do Wails v3 (registrado em
@@ -1187,13 +1201,25 @@ func (a *App) SetMainWindow(window application.Window) {
 //
 //wails:ignore
 func (a *App) ShowMainWindow() {
-	if a.mainWindow == nil {
+	// Criação preguiçosa: em autostart no tray a janela não existe até agora,
+	// e é justamente aqui (clique no tray, segunda instância, clique em toast)
+	// que ela passa a ser necessária. Sem isso o clique "não faria nada".
+	win := a.mainWindow
+	if win == nil {
+		created, err := a.ensureMainWindow()
+		if err != nil {
+			log.Printf("[window] falha ao criar janela principal sob demanda: %v", err)
+			return
+		}
+		win = created
+	}
+	if win == nil {
 		return
 	}
-	a.mainWindow.UnMinimise()
-	a.mainWindow.Show()
-	a.mainWindow.SetAlwaysOnTop(true)
-	a.mainWindow.SetAlwaysOnTop(false)
+	win.UnMinimise()
+	win.Show()
+	win.SetAlwaysOnTop(true)
+	win.SetAlwaysOnTop(false)
 	a.FitWindowToWorkArea()
 }
 
@@ -1513,6 +1539,19 @@ func (a *App) startup(ctx context.Context) {
 	a.cancel = cancel
 
 	captureStdLog(a.Logs.Buffer)
+
+	// Diagnóstico de memória do runtime (heap/sys/GC/goroutines). O agente não
+	// tinha NENHUMA instrumentação de heap; sem isso não há como acompanhar o
+	// consumo em campo nem validar as otimizações de RAM. Uma linha a cada 30
+	// minutos (e uma imediata) é irrelevante em custo.
+	a.safeGo(func() {
+		runtimediag.Log(ctx, runtimeDiagInterval, func(line string) {
+			a.Logs.Append(line)
+			if a.RuntimeFlags.DebugMode {
+				log.Println(line)
+			}
+		})
+	})
 
 	// Diagnóstico de elevação/integridade — importante para o controle remoto
 	// (SendInput via UIPI) e gerenciamento de serviços (SCM). Colocado após
@@ -1836,6 +1875,44 @@ func (a *App) runStagedStartup(ctx context.Context) {
 
 		const cleanupInterval = 6 * time.Hour
 		const cleanupBatchSize = 500
+
+		// runCleanup roda a limpeza de outboxes e a poda do histórico de
+		// inventário. Executa UMA vez já no boot (máquinas antigas podem ter
+		// centenas de MB acumulados) e depois a cada 6 h.
+		runCleanup := func() {
+			if a.CoreAgent.DB == nil {
+				return
+			}
+			n1, err1 := a.CoreAgent.DB.CleanupExpiredCommandResultOutbox(time.Now(), cleanupBatchSize)
+			n2, err2 := a.CoreAgent.DB.CleanupExpiredP2PTelemetryOutbox(time.Now(), cleanupBatchSize)
+			if err1 != nil {
+				log.Printf("[outbox][cleanup] erro command_result: %v", err1)
+			}
+			if err2 != nil {
+				log.Printf("[outbox][cleanup] erro p2p_telemetry: %v", err2)
+			}
+			if n1 > 0 || n2 > 0 {
+				log.Printf("[outbox][cleanup] expirados removidos: command_result=%d p2p_telemetry=%d", n1, n2)
+			}
+
+			// Inventário: retenção por idade preservando as K mais recentes por
+			// agent_id. O histórico crescia ~840 KB a CADA sync (inclusive no
+			// caminho "SYNC IGNORADO") e não tinha nenhuma poda — 40 MB na máquina
+			// de referência.
+			if removed, err := a.CoreAgent.DB.CleanOldInventoryKeepingLatest(
+				inventoryHistoryRetentionDays, inventoryHistoryKeepLatest,
+			); err != nil {
+				log.Printf("[inventory][cleanup] erro na poda do histórico: %v", err)
+			} else if removed > 0 {
+				log.Printf("[inventory][cleanup] snapshots removidos: %d", removed)
+				if err := a.CoreAgent.DB.ShrinkMemory(); err != nil {
+					log.Printf("[inventory][cleanup] shrink_memory: %v", err)
+				}
+			}
+		}
+
+		runCleanup()
+
 		ticker := time.NewTicker(cleanupInterval)
 		defer ticker.Stop()
 		for {
@@ -1843,20 +1920,7 @@ func (a *App) runStagedStartup(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if a.CoreAgent.DB == nil {
-					continue
-				}
-				n1, err1 := a.CoreAgent.DB.CleanupExpiredCommandResultOutbox(time.Now(), cleanupBatchSize)
-				n2, err2 := a.CoreAgent.DB.CleanupExpiredP2PTelemetryOutbox(time.Now(), cleanupBatchSize)
-				if err1 != nil {
-					log.Printf("[outbox][cleanup] erro command_result: %v", err1)
-				}
-				if err2 != nil {
-					log.Printf("[outbox][cleanup] erro p2p_telemetry: %v", err2)
-				}
-				if n1 > 0 || n2 > 0 {
-					log.Printf("[outbox][cleanup] expirados removidos: command_result=%d p2p_telemetry=%d", n1, n2)
-				}
+				runCleanup()
 			}
 		}
 	})
@@ -2112,6 +2176,12 @@ func (a *App) ensureOsqueryInstalled() {
 }
 
 func (a *App) hideWindowOnStartup() {
+	// Com a criação preguiçosa da janela (autostart no tray) não há janela para
+	// esconder: o WebView2 sequer foi inicializado. Nada a fazer.
+	if a.mainWindow == nil {
+		log.Println("[startup] janela principal adiada (autostart no tray): WebView2 só inicia na primeira abertura")
+		return
+	}
 	// B4: safeGo em vez de goroutine crua — recovery de panic no watcher do tray.
 	a.safeGo(func() {
 		ticker := time.NewTicker(200 * time.Millisecond)
@@ -2358,6 +2428,16 @@ func (a *App) clearMemoryCaches() {
 
 	a.InvCache.Reset()
 
+	// Devolve o page cache do SQLite que ficou quente com as leituras grandes
+	// (ex.: a política efetiva da app-store, ~4,7 MB comprimidos). Sem isto o
+	// cache de páginas continuava segurando os dados mesmo com os caches de
+	// aplicação esvaziados.
+	if a.CoreAgent.DB != nil {
+		if err := a.CoreAgent.DB.ShrinkMemory(); err != nil {
+			log.Printf("[tray] shrink_memory na limpeza de caches: %v", err)
+		}
+	}
+
 	log.Println("[tray] caches em memória limpos para economizar recursos")
 }
 
@@ -2432,13 +2512,92 @@ func (a *App) applyIdleMode(idle bool) bool {
 	}
 
 	if idle {
+		// Reduz o working set imediatamente (barato) e agenda a liberação
+		// profunda (caches + devolução de páginas ao SO) para depois de um
+		// período contínuo de ociosidade.
 		if trimErr := processutil.TrimCurrentProcessWorkingSet(); trimErr != nil {
 			a.Logs.Append("[efficiency] erro ao reduzir memoria: " + trimErr.Error())
 		}
+		a.scheduleIdleRelease()
+	} else {
+		a.cancelIdleRelease()
 	}
 
 	a.updateTrayIdleState(idle, supported)
 	return supported
+}
+
+// idleReleaseDelay é o tempo CONTÍNUO de ociosidade (nenhuma operação ativa)
+// antes de liberar caches e devolver memória ao SO. Curto demais causaria
+// liberação/reconstrução a cada pausa entre comandos; longo demais não ajudaria
+// a máquina em repouso — que é justamente o caso da maioria dos agentes.
+const idleReleaseDelay = 5 * time.Minute
+
+// runtimeDiagInterval é o período do log de memória do runtime.
+const runtimeDiagInterval = 30 * time.Minute
+
+// inventoryHistoryRetentionDays / inventoryHistoryKeepLatest controlam a poda do
+// histórico de inventário: remove snapshots com mais de N dias preservando
+// sempre os K mais recentes de cada agent_id (a linha mais recente é a base do
+// delta sync do próximo ciclo).
+const (
+	inventoryHistoryRetentionDays = 7
+	inventoryHistoryKeepLatest    = 3
+)
+
+// scheduleIdleRelease agenda a liberação profunda de memória. Idempotente:
+// agendar duas vezes não cria dois timers.
+func (a *App) scheduleIdleRelease() {
+	a.idleReleaseMu.Lock()
+	defer a.idleReleaseMu.Unlock()
+	if a.idleReleaseTimer != nil {
+		return
+	}
+	a.idleReleaseTimer = time.AfterFunc(idleReleaseDelay, func() {
+		a.idleReleaseMu.Lock()
+		a.idleReleaseTimer = nil
+		a.idleReleaseMu.Unlock()
+
+		// Confirma que continua ocioso (pode ter começado um comando no meio).
+		a.ActivityMu.Lock()
+		stillIdle := a.ActiveOps == 0 && a.LastIdle
+		a.ActivityMu.Unlock()
+		if !stillIdle {
+			return
+		}
+		a.releaseIdleMemory()
+	})
+}
+
+// cancelIdleRelease cancela a liberação agendada (voltou a haver atividade).
+func (a *App) cancelIdleRelease() {
+	a.idleReleaseMu.Lock()
+	if a.idleReleaseTimer != nil {
+		a.idleReleaseTimer.Stop()
+		a.idleReleaseTimer = nil
+	}
+	a.idleReleaseMu.Unlock()
+}
+
+// releaseIdleMemory solta o que é caro manter em repouso: caches em memória
+// (inclui a política efetiva da app-store, que chega a dezenas de MB com 27k
+// itens), o page cache do SQLite e as páginas livres do heap de volta ao SO.
+//
+// NÃO usa clearMemoryCaches() de propósito: aquela versão (usada no
+// close-to-tray da UI) também zera o InvCache, o que no serviço poderia forçar
+// uma nova coleta de inventário (PowerShell/WMI) logo após uma janela de
+// ociosidade. O snapshot de inventário é pequeno (~840 KB) e não compensa.
+func (a *App) releaseIdleMemory() {
+	a.AgentInfo.Invalidate()
+	a.AppStorePolicy.Invalidate()
+	if a.CoreAgent.DB != nil {
+		if err := a.CoreAgent.DB.ShrinkMemory(); err != nil {
+			log.Printf("[efficiency] shrink_memory na ociosidade: %v", err)
+		}
+	}
+	// Rate-limited (no máximo 1x/10min) — nunca chamado em rajada.
+	memlimit.Relax()
+	log.Println("[efficiency] caches liberados e memória devolvida ao SO (ociosidade)")
 }
 
 func (a *App) GetServiceHealth() map[string]interface{} {

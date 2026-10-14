@@ -66,6 +66,10 @@ type InventoryCache interface {
 type DB interface {
 	ShouldSyncInventory(agentID string, hardwareBody, softwareBody []byte) (bool, string, error)
 	SaveInventorySnapshot(agentID string, hardwareBody, softwareBody []byte) error
+	// GetLatestInventory lê o snapshot mais recente do agente. Usado no caminho
+	// "SYNC IGNORADO" para confirmar que já existe uma linha idêntica antes de
+	// regravar ~840 KB de payload sem mudança (otimização de RAM/disco).
+	GetLatestInventory(agentID string) (hardwareJSON, softwareJSON []byte, collectedAt time.Time, err error)
 	UpdateLastSyncTime(key, status string) error
 }
 

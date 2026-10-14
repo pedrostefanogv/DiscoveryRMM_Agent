@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/core/runtimediag"
 	"discovery/app/debughttp"
 )
 
@@ -90,6 +91,17 @@ func (a *App) startDebugHTTPInternal(bindAddr string, port int) error {
 	// /api/chat-events — SSE streaming para eventos de chat no navegador
 	mux.HandleFunc("/api/chat-events", func(w http.ResponseWriter, r *http.Request) {
 		a.serveChatEventsSSE(w, r)
+	})
+
+	// /api/internal/runtime-memory — fotografia de memória do runtime Go
+	// (heap/GC/goroutines). Fecha a lacuna de observabilidade do agente: não
+	// havia NENHUMA instrumentação de heap. Só existe enquanto o servidor de
+	// debug está ativo (modo debug), então não amplia a superfície normal.
+	mux.HandleFunc("/api/internal/runtime-memory", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(runtimediag.Take()); err != nil {
+			log.Printf("[debug-http] falha ao serializar memória do runtime: %v", err)
+		}
 	})
 
 	// /api/* — REST bridge mirroring Wails bindings

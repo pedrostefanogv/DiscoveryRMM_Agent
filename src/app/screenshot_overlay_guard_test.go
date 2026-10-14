@@ -72,7 +72,11 @@ func TestOpenScreenshotOverlayConcorrenteNaoTrava(t *testing.T) {
 		if err == nil {
 			t.Fatalf("pedido %d: esperava erro (App sem janela), obteve nil", i)
 		}
-		if !strings.Contains(err.Error(), "janela principal indisponivel") {
+		// App de teste não tem janela principal NEM aplicação Wails: a falha
+		// precisa ser imediata e determinística. A mensagem mudou quando o overlay
+		// passou a tolerar a janela principal ausente (criação preguiçosa da UI no
+		// autostart no tray) — o erro passou a vir da checagem da aplicação Wails.
+		if !strings.Contains(err.Error(), "indisponivel") {
 			t.Fatalf("pedido %d: erro inesperado: %v", i, err)
 		}
 	}

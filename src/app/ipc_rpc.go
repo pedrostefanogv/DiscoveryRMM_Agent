@@ -7,6 +7,8 @@ package app
 import (
 	"context"
 	"encoding/json"
+
+	"discovery/app/core/runtimediag"
 )
 
 // handleIPCRequest processa um request RPC da UI (lado do serviço).
@@ -130,6 +132,8 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCKnowledgeImage(payload)
 	case "knowledge:refresh":
 		return a.ipcRPCKnowledgeRefresh()
+	case "diag:runtime":
+		return a.ipcRPCRuntimeDiag()
 	default:
 		return map[string]any{"ok": false, "error": "método desconhecido: " + method}
 	}
@@ -153,6 +157,13 @@ func (a *App) ipcRPCPendingCounts() map[string]any {
 		data["pendingP2PTelemetry"] = n
 	}
 	return out
+}
+
+// ipcRPCRuntimeDiag expõe a fotografia de memória do runtime Go do processo que
+// atende o RPC (o SERVIÇO, no modo companion). É o canal de medição em campo das
+// otimizações de RAM: sem ele não havia como ver heap/GC do processo real.
+func (a *App) ipcRPCRuntimeDiag() map[string]any {
+	return map[string]any{"ok": true, "data": runtimediag.Take()}
 }
 
 // ipcRPCConfigGet devolve a configuração do agente (parseada do cache raw).

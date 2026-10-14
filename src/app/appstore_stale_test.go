@@ -50,13 +50,34 @@ func TestLoadEffectiveAppStorePolicyServesStaleWhenFetchFails(t *testing.T) {
 		t.Fatalf("FetchedAt stale preservado: esperava %q, recebeu %q", stalePolicy.FetchedAt, policy.FetchedAt)
 	}
 
-	// A entrada stale deve continuar no SQLite (não apagada pela leitura).
+	// A entrada stale deve continuar LEGÍVEL no SQLite (não pode ser destruída
+	// pela leitura). Com a migração para o formato comprimido, o dado pode estar
+	// em app_store_effective_v2 — o que importa é o fallback sobreviver.
 	if _, ok, _ := readStaleForTest(db); !ok {
 		t.Fatal("entrada stale não deve ser apagada pelo fallback")
 	}
+
+	// Prova de que a migração preservou o fallback: uma segunda leitura, agora
+	// sem cache de memória, continua servindo os 2 itens stale sem tocar a rede.
+	app.AppStorePolicy.Invalidate()
+	policyAfterMigration, err := app.loadEffectiveAppStorePolicy(context.Background(), false)
+	if err != nil {
+		t.Fatalf("fallback stale falhou após a migração do cache: %v", err)
+	}
+	if len(policyAfterMigration.Items) != 2 {
+		t.Fatalf("esperava 2 itens do cache stale após a migração, recebeu %d", len(policyAfterMigration.Items))
+	}
 }
 
+// readStaleForTest procura a política stale nos dois formatos de cache: v2
+// (gzip, formato atual) e v1 (JSON texto, legado em migração).
 func readStaleForTest(db *database.DB) ([]byte, bool, error) {
+	if data, err := db.CacheGetBytesStale("app_store_effective_v2"); err != nil {
+		return nil, false, err
+	} else if len(data) > 0 {
+		return data, true, nil
+	}
+
 	data, err := db.CacheGetStale("app_store_effective")
 	if err != nil || len(data) == 0 {
 		return nil, false, err

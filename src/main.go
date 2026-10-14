@@ -17,6 +17,7 @@ import (
 
 	appkg "discovery/app"
 	"discovery/app/core/logger"
+	"discovery/app/core/memlimit"
 	"discovery/app/core/platform"
 	"discovery/app/core/screenshot"
 )
@@ -119,6 +120,16 @@ func main() {
 		return
 	}
 
+	// Teto suave de memória do runtime Go para a UI (default 160 MiB; override
+	// por DISCOVERY_MEMORY_LIMIT_MB, 0 desabilita). Aplica-se SÓ ao processo da
+	// interface: todos os modos auxiliares (worker de sessão remota, dispatcher
+	// do terminal, servidor/worker de PrintWindow) retornam acima, antes daqui —
+	// o worker de sessão remota aloca frames BGRA inteiros (até 66 MB em 4K HDR)
+	// e um teto apertado ali viraria GC thrash durante o streaming de tela.
+	if mib := memlimit.Apply(160); mib > 0 {
+		logger.Info("teto de memoria do runtime aplicado", "mib", mib)
+	}
+
 	if startupDebugMode {
 		log.Println("[startup] modo debug detectado: inicializando com servidor HTTP de debug (transitorio)")
 	}
@@ -191,6 +202,21 @@ func main() {
 		// o ícone padrão do sistema na barra de título.
 		Icon: appIconICO,
 		Windows: application.WindowsOptions{
+			// Não encerra o app quando a última janela é fechada/escondida: no
+			// autostart no tray a janela só é criada sob demanda (pode não existir
+			// nenhuma janela no boot) e o botão "Sair" do tray usa app.Quit()
+			// explicitamente. Sem esta flag o Wails postaria quit ao remover a
+			// última janela do mapa.
+			DisableQuitOnLastWindowClosed: true,
+			// Args do WebView2 para conter a memória do Chromium embutido (a
+			// interface é uma única página local, sem abas). Cada arg é reversível
+			// e independente: se algum quebrar o frontend, basta removê-lo da lista.
+			AdditionalBrowserArgs: []string{
+				"--renderer-process-limit=1",
+				"--js-flags=--max-old-space-size=256",
+				"--disable-background-networking",
+			},
+			DisabledFeatures: []string{"msEdgeSidebarV2", "msEdgeAutofill"},
 			// ── WebView2 User Data Folder fixo ──
 			// Sem isso, o Wails usa %APPDATA%\discovery-agent.exe\EBWebView.
 			// Quando a UI é lançada elevada/SYSTEM (Task Scheduler, restart pós-
@@ -238,74 +264,97 @@ func main() {
 		}
 	}
 
-	window := appInstance.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:     "Discovery",
-		Width:     appkg.WindowWidth,
-		Height:    appkg.WindowHeight,
-		MinWidth:  appkg.WindowMinWidth,
-		MinHeight: appkg.WindowMinHeight,
-		Frameless: startupFrameless,
-		Hidden:    startupMinimized,
-		// No v3 o drag de janela frameless é feito via CSS `--wails-draggable`.
-		// O frontend já usa essa propriedade (CSSDragProperty do v2).
-	})
-
-	// Close-to-tray: intercepta o fechamento da janela.
-	// Se o app deve esconder em vez de fechar, cancela o evento (impede o
-	// hook interno de marcar a janela como "unconditionallyClose").
-	window.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
-		if !app.ShouldHideOnClose() {
-			return
-		}
-		if !app.IsTrayReady() {
-			log.Println("[tray] close solicitado antes do tray ficar pronto; encerrando app para evitar estado sem menu")
-			return
-		}
-		app.ClearMemoryCaches()
-		window.Hide()
-		event.Cancel()
-	})
-
-	// ── Ajuste de janela para área visível (DPI scaling) ──
-	// Em telas com escala 125%/150% a janela padrão pode ultrapassar a área
-	// de trabalho, escondendo o chrome (min/max/close). O clamp é aplicado:
-	//   - no primeiro show da janela (WindowShow);
-	//   - a cada resize (WindowDidResize) — cobre maximizar/restaurar;
-	//   - quando o DPI muda (WindowDPIChanged) — cobre arrastar entre
-	//     monitores com escalas diferentes.
-	// A lógica é idempotente: se a janela já cabe na WorkArea, nada é feito.
+	// ── Fábrica da janela principal (criação preguiçosa) ──
 	//
-	// Debounce: WindowDidResize dispara dezenas de vezes durante um resize
-	// interativo. SetSize/SetPosition usam InvokeSync (dispatch para a main
-	// thread + wait), então aplicar o clamp a cada evento "brigaria" com o
-	// arraste do usuário. O debounce de 150ms aplica o clamp só quando o
-	// resize estabiliza.
-	var fitDebounce *time.Timer
-	var fitMu sync.Mutex
-	scheduleFit := func() {
-		fitMu.Lock()
-		defer fitMu.Unlock()
-		if fitDebounce != nil {
-			fitDebounce.Stop()
+	// A janela NÃO é criada aqui no boot quando a execução é automática
+	// (autostart/task/restart de update com --startup-minimized): no Wails v3 a
+	// janela oculta ainda inicializa o WebView2 e navega, custando os processos
+	// do WebView2 (~230 MB medidos) sem nunca aparecer para o usuário. A fábrica
+	// abaixo é executada na primeira necessidade (clique no tray, toast, segunda
+	// instância) ou imediatamente quando a abertura é manual/por toast.
+	app.SetWindowFactory(func() application.Window {
+		window := appInstance.Window.NewWithOptions(application.WebviewWindowOptions{
+			Title:     "Discovery",
+			Width:     appkg.WindowWidth,
+			Height:    appkg.WindowHeight,
+			MinWidth:  appkg.WindowMinWidth,
+			MinHeight: appkg.WindowMinHeight,
+			Frameless: startupFrameless,
+			// Sempre visível: a fábrica só roda quando a janela é realmente
+			// necessária (clique no tray/toast/segunda instância) ou em abertura
+			// manual. No autostart no tray ela nem é chamada.
+			Hidden: false,
+			// No v3 o drag de janela frameless é feito via CSS `--wails-draggable`.
+			// O frontend já usa essa propriedade (CSSDragProperty do v2).
+		})
+
+		// Close-to-tray: intercepta o fechamento da janela.
+		// Se o app deve esconder em vez de fechar, cancela o evento (impede o
+		// hook interno de marcar a janela como "unconditionallyClose").
+		window.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
+			if !app.ShouldHideOnClose() {
+				return
+			}
+			if !app.IsTrayReady() {
+				log.Println("[tray] close solicitado antes do tray ficar pronto; encerrando app para evitar estado sem menu")
+				// Com DisableQuitOnLastWindowClosed o fechamento da última janela não
+				// encerra mais o app implicitamente — sem esta chamada o processo
+				// ficaria vivo sem tray, sem janela e sem forma de sair.
+				go app.QuitApp()
+				return
+			}
+			app.ClearMemoryCaches()
+			window.Hide()
+			event.Cancel()
+		})
+
+		// ── Ajuste de janela para área visível (DPI scaling) ──
+		// Em telas com escala 125%/150% a janela padrão pode ultrapassar a área
+		// de trabalho, escondendo o chrome (min/max/close). O clamp é aplicado:
+		//   - no primeiro show da janela (WindowShow);
+		//   - a cada resize (WindowDidResize) — cobre maximizar/restaurar;
+		//   - quando o DPI muda (WindowDPIChanged) — cobre arrastar entre
+		//     monitores com escalas diferentes.
+		// A lógica é idempotente: se a janela já cabe na WorkArea, nada é feito.
+		//
+		// Debounce: WindowDidResize dispara dezenas de vezes durante um resize
+		// interativo. SetSize/SetPosition usam InvokeSync (dispatch para a main
+		// thread + wait), então aplicar o clamp a cada evento "brigaria" com o
+		// arraste do usuário. O debounce de 150ms aplica o clamp só quando o
+		// resize estabiliza.
+		var fitDebounce *time.Timer
+		var fitMu sync.Mutex
+		scheduleFit := func() {
+			fitMu.Lock()
+			defer fitMu.Unlock()
+			if fitDebounce != nil {
+				fitDebounce.Stop()
+			}
+			fitDebounce = time.AfterFunc(150*time.Millisecond, func() {
+				if window.IsMaximised() || window.IsFullscreen() {
+					return
+				}
+				app.FitWindowToWorkArea()
+			})
 		}
-		fitDebounce = time.AfterFunc(150*time.Millisecond, func() {
+		fitHook := func(event *application.WindowEvent) {
 			if window.IsMaximised() || window.IsFullscreen() {
 				return
 			}
-			app.FitWindowToWorkArea()
-		})
-	}
-	fitHook := func(event *application.WindowEvent) {
-		if window.IsMaximised() || window.IsFullscreen() {
-			return
+			scheduleFit()
 		}
-		scheduleFit()
-	}
-	window.RegisterHook(events.Common.WindowShow, fitHook)
-	window.RegisterHook(events.Common.WindowDidResize, fitHook)
-	window.RegisterHook(events.Common.WindowDPIChanged, fitHook)
+		window.RegisterHook(events.Common.WindowShow, fitHook)
+		window.RegisterHook(events.Common.WindowDidResize, fitHook)
+		window.RegisterHook(events.Common.WindowDPIChanged, fitHook)
 
-	app.SetMainWindow(window)
+		return window
+	})
+
+	if startupMinimized && !appkg.IsChatActivationArgs(os.Args[1:]) {
+		log.Println("[startup] janela principal adiada (autostart no tray): WebView2 nao sera inicializado ate a primeira abertura")
+	} else if err := app.EnsureMainWindow(); err != nil {
+		log.Fatalf("[startup] falha ao criar janela principal: %v", err)
+	}
 
 	if err := appInstance.Run(); err != nil {
 		log.Fatal(err)

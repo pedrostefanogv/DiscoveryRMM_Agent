@@ -332,9 +332,7 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 			s.logf("[agent-sync] erro ao verificar diff: " + err.Error())
 		} else if !shouldSync {
 			s.logf(fmt.Sprintf("[agent-sync] SYNC IGNORADO: %s", reason))
-			if err := s.db.SaveInventorySnapshot(cfg.AgentID, hardwareBody, softwareBody); err != nil {
-				s.logf("[agent-sync] aviso: falha ao salvar snapshot local: " + err.Error())
-			}
+			saveSnapshotIfMissing(s.db, cfg.AgentID, hardwareBody, softwareBody, s.logf)
 			return
 		} else {
 			s.logf(fmt.Sprintf("[agent-sync] SYNC NECESSARIO: %s", reason))
@@ -399,6 +397,31 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 		}
 	}
 }
+
+// saveSnapshotIfMissing regrava o snapshot local APENAS quando o snapshot
+// anterior não pode ser lido.
+//
+// Otimização de RAM/disco: no caminho "SYNC IGNORADO" o ShouldSyncInventory já
+// provou que o payload é IGUAL ao último snapshot salvo — é exatamente a razão
+// do skip. Regravar ~840 KB de hardware+software idênticos só inflava o
+// discovery.db (páginas + page cache do SQLite) sem agregar nada ao delta sync.
+// Sem snapshot anterior (ou ilegível), grava normalmente.
+func saveSnapshotIfMissing(db DB, agentID string, hardwareBody, softwareBody []byte, logf func(string)) {
+	if db == nil {
+		return
+	}
+	hw, sw, _, err := db.GetLatestInventory(agentID)
+	if err == nil && len(hw) > 0 && len(sw) > 0 {
+		return
+	}
+	if err != nil && logf != nil {
+		logf("[agent-sync] aviso: snapshot anterior indisponivel; regravando: " + err.Error())
+	}
+	if err := db.SaveInventorySnapshot(agentID, hardwareBody, softwareBody); err != nil && logf != nil {
+		logf("[agent-sync] aviso: falha ao salvar snapshot local: " + err.Error())
+	}
+}
+
 func (s *Service) SyncNetworkConnections(ctx context.Context) error {
 	if err := s.requireProvisionedInventory(); err != nil {
 		return err

@@ -1,6 +1,8 @@
 package appstore
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,11 +10,13 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"discovery/app/core/database"
+	"discovery/app/core/memlimit"
 	"discovery/app/core/models"
 	"discovery/app/core/tlsutil"
 	"discovery/app/netutil"
@@ -20,6 +24,17 @@ import (
 
 const (
 	CacheKey = "app_store_effective"
+	// CacheKeyCompressed é a chave do cache persistido comprimido (gzip).
+	//
+	// Motivação (otimização de RAM): a política efetiva em JSON puro ocupava
+	// ~31,6 MB num ÚNICO value TEXT — com 27.374 itens — e era lida inteira para
+	// a memória (string + cópia []byte + objeto decodificado ≈ 95 MB de pico),
+	// enchendo o page cache do SQLite. Com gzip o mesmo payload cai para poucos
+	// MB no arquivo e o pico de leitura cai na mesma proporção.
+	//
+	// A chave antiga (CacheKey) continua sendo lida como fallback de
+	// compatibilidade e é removida após a migração bem-sucedida para v2.
+	CacheKeyCompressed = "app_store_effective_v2"
 	// MemoryCacheTTL define por quanto tempo a política fica válida em memória.
 	// 30 minutos evita sobrecarregar o servidor com fetches frequentes; o cache
 	// persistido em SQLite cobre o período entre expirações e reinícios.
@@ -27,6 +42,19 @@ const (
 	// SQLiteCacheTTL define por quanto tempo a política persistida no SQLite
 	// permanece válida (7 dias). Após expirar, um novo fetch é feito.
 	SQLiteCacheTTL = 7 * 24 * time.Hour
+
+	// appStorePageSize é o pageSize pedido ao endpoint me/app-store. O servidor
+	// pagina de fato quando recebe paged=true (teto de 5000 do lado da API).
+	//
+	// Antes o servidor ignorava pageSize e devolvia os 27 mil itens numa única
+	// resposta de ~30 MB; o agent bufferizava o corpo inteiro (io.ReadAll) para
+	// depois decodificar — ~60 MB de pico só nessa etapa. Em páginas de 2000 o
+	// pico do corpo cai para poucos MB por requisição.
+	appStorePageSize = 2000
+	// maxAppStorePages é o teto de segurança do loop de paginação
+	// (60 × 2000 = 120 mil itens). Com os 27 mil do catálogo winget atual são
+	// ~14 requisições.
+	maxAppStorePages = 60
 )
 
 // DebugConfig é uma visão mínima da configuração de debug usada pela app-store.
@@ -156,7 +184,7 @@ func (s *Service) FetchByInstallationType(ctx context.Context, installationType 
 	var allItems []Item
 	cursor := ""
 	pageCount := 0
-	maxPages := 20 // safety limit
+	maxPages := maxAppStorePages // safety limit
 
 	for {
 		pageCount++
@@ -200,8 +228,11 @@ func (s *Service) FetchPage(ctx context.Context, installationType InstallationTy
 	if cursor != "" {
 		query.Set("cursor", cursor)
 	}
-	// Informa à API o pageSize esperado pelo agent
-	query.Set("pageSize", "200")
+	// Pede paginação explícita: o servidor só fatia a resposta quando recebe
+	// paged=true (agents antigos, que não enviam o flag, continuam recebendo a
+	// coleção completa numa página — sem quebrar o limite de 20 páginas deles).
+	query.Set("paged", "true")
+	query.Set("pageSize", strconv.Itoa(appStorePageSize))
 	parsed.RawQuery = query.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
@@ -309,8 +340,13 @@ func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (E
 }
 
 // readPersistedPolicy lê a política persistida no SQLite sem verificar TTL e
-// sem deletar a entrada (CacheGetStale). found=false quando não há DB, a
-// entrada não existe ou o JSON é inválido.
+// sem deletar a entrada (CacheGetStale/CacheGetBytesStale). found=false quando
+// não há DB, a entrada não existe ou o JSON é inválido.
+//
+// Ordem: v2 comprimido (gzip) → v1 legado (JSON texto). O v1 é migrado para v2
+// na primeira leitura bem-sucedida: é o que libera os ~31 MB de páginas do
+// arquivo nas máquinas que já têm o cache antigo (funciona offline, sem
+// depender de um fetch novo).
 func (s *Service) readPersistedPolicy() (EffectivePolicy, bool) {
 	if s.db == nil {
 		return EffectivePolicy{}, false
@@ -319,6 +355,11 @@ func (s *Service) readPersistedPolicy() (EffectivePolicy, bool) {
 	if db == nil {
 		return EffectivePolicy{}, false
 	}
+
+	if persisted, ok := s.readCompressedPolicy(db); ok {
+		return persisted, true
+	}
+
 	data, err := db.CacheGetStale(CacheKey)
 	if err != nil || len(data) == 0 {
 		return EffectivePolicy{}, false
@@ -330,7 +371,59 @@ func (s *Service) readPersistedPolicy() (EffectivePolicy, bool) {
 	if len(persisted.Items) == 0 {
 		return EffectivePolicy{}, false
 	}
+
+	// Migração best-effort para o formato comprimido. Só remove a chave antiga
+	// (que ocupa ~31 MB no arquivo) depois de gravar a nova com sucesso.
+	if err := s.persistCompressedPolicy(db, persisted); err == nil {
+		if delErr := db.CacheDelete(CacheKey); delErr != nil {
+			s.logf(fmt.Sprintf("aviso: falha ao remover cache legado da app-store: %v", delErr))
+		} else {
+			s.logf("app-store: cache persistido migrado para o formato comprimido (v2)")
+		}
+	} else {
+		s.logf(fmt.Sprintf("aviso: falha ao migrar cache da app-store para v2: %v", err))
+	}
+
 	return persisted, true
+}
+
+// readCompressedPolicy lê e decodifica o cache v2 (gzip + JSON) sem
+// materializar o JSON inteiro: o decoder consome o stream e só o objeto
+// decodificado fica na memória.
+func (s *Service) readCompressedPolicy(db *database.DB) (EffectivePolicy, bool) {
+	data, err := db.CacheGetBytesStale(CacheKeyCompressed)
+	if err != nil || len(data) == 0 {
+		return EffectivePolicy{}, false
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return EffectivePolicy{}, false
+	}
+	var persisted EffectivePolicy
+	decodeErr := json.NewDecoder(gz).Decode(&persisted)
+	_ = gz.Close()
+	if decodeErr != nil || len(persisted.Items) == 0 {
+		return EffectivePolicy{}, false
+	}
+	return persisted, true
+}
+
+// persistCompressedPolicy grava a política efetiva comprimida (gzip) no cache
+// do SQLite. O S TTL é o mesmo do formato antigo (SQLiteCacheTTL).
+func (s *Service) persistCompressedPolicy(db *database.DB, policy EffectivePolicy) error {
+	if db == nil {
+		return fmt.Errorf("database indisponivel")
+	}
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if err := json.NewEncoder(gz).Encode(policy); err != nil {
+		_ = gz.Close()
+		return fmt.Errorf("gzip encode: %w", err)
+	}
+	if err := gz.Close(); err != nil {
+		return fmt.Errorf("gzip close: %w", err)
+	}
+	return db.CacheSetBytes(CacheKeyCompressed, buf.Bytes(), SQLiteCacheTTL)
 }
 
 // persistedPolicyFresh avalia o frescor da política persistida pelo próprio
@@ -393,10 +486,15 @@ func (s *Service) fetchEffectivePolicy(ctx context.Context) (EffectivePolicy, er
 	}
 	s.cache.Set(policy)
 	if s.db != nil && s.db() != nil {
-		if err := s.db().CacheSetJSON(CacheKey, policy, SQLiteCacheTTL); err != nil {
+		if err := s.persistCompressedPolicy(s.db(), policy); err != nil {
 			s.logf(fmt.Sprintf("aviso: falha ao salvar cache da app-store: %v", err))
 		}
 	}
+
+	// Após (re)construir a política inteira — dezenas de MB transitórios no
+	// caso de 27k itens — devolve as páginas livres ao SO. Rate-limited: nunca
+	// acontece duas vezes em menos de 10 minutos, então não engasga cliques.
+	memlimit.Relax()
 
 	s.logf(fmt.Sprintf("app-store efetiva carregada: %d item(ns)", len(policy.Items)))
 	return policy, nil

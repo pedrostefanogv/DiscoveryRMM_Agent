@@ -253,6 +253,81 @@ func (db *DB) CleanOldInventory(days int) error {
 	return err
 }
 
+// CleanOldInventoryKeepingLatest remove snapshots de inventário mais antigos
+// que N dias, preservando sempre os "keep" mais recentes de CADA agent_id.
+//
+// A variante sem "keep" (CleanOldInventory) não é usada em lugar nenhum: o
+// histórico do banco local crescia indefinidamente (~840 KB por snapshot, 49
+// linhas = 40 MB na máquina de referência). O keep é obrigatório porque
+// ShouldSyncInventory usa a linha mais recente como base de comparação — uma
+// máquina offline por mais de N dias perderia a base do delta.
+func (db *DB) CleanOldInventoryKeepingLatest(days, keep int) (int64, error) {
+	if err := db.ensureAvailable(); err != nil {
+		return 0, err
+	}
+	if days <= 0 {
+		return 0, fmt.Errorf("dias inválidos para retenção de inventário: %d", days)
+	}
+	if keep < 1 {
+		keep = 1
+	}
+	cutoff := time.Now().AddDate(0, 0, -days).Unix()
+	res, err := db.conn.Exec(`
+		DELETE FROM inventory_history
+		WHERE collected_at < ?
+		  AND id NOT IN (
+			SELECT id FROM inventory_history ih2
+			WHERE ih2.agent_id = inventory_history.agent_id
+			ORDER BY ih2.collected_at DESC, ih2.id DESC
+			LIMIT ?
+		  )`, cutoff, keep)
+	if err != nil {
+		return 0, err
+	}
+	removed, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return removed, nil
+}
+
+// CacheSetBytes armazena um valor binário (BLOB) no cache com TTL opcional.
+// Usado por payloads grandes e comprimidos (ex.: política efetiva da app-store,
+// que em JSON puro ocupava ~31 MB num único value TEXT).
+func (db *DB) CacheSetBytes(key string, value []byte, ttl time.Duration) error {
+	if err := db.ensureAvailable(); err != nil {
+		return err
+	}
+	var expiresAt sql.NullInt64
+	if ttl > 0 {
+		expiresAt.Valid = true
+		expiresAt.Int64 = time.Now().Add(ttl).Unix()
+	}
+	_, err := db.conn.Exec(
+		"INSERT OR REPLACE INTO cache (key, value, expires_at) VALUES (?, ?, ?)",
+		key, value, expiresAt,
+	)
+	return err
+}
+
+// CacheGetBytesStale recupera um BLOB do cache IGNORANDO a expiração (mesma
+// semântica stale-on-error de CacheGetStale). Retorna (nil, nil) quando a chave
+// não existe.
+func (db *DB) CacheGetBytesStale(key string) ([]byte, error) {
+	if err := db.ensureAvailable(); err != nil {
+		return nil, err
+	}
+	var value []byte
+	err := db.conn.QueryRow("SELECT value FROM cache WHERE key = ?", key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
 // GetLastSyncTime retorna quando foi o último sync bem-sucedido para uma chave
 func (db *DB) GetLastSyncTime(key string) (time.Time, error) {
 	if err := db.ensureAvailable(); err != nil {

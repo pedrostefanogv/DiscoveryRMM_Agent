@@ -179,16 +179,20 @@ func Open(dataDir string) (*DB, error) {
 	// journal_size_limit limita o WAL a 4 MB depois de cada checkpoint — sem
 	// ele o arquivo cresce indefinidamente em máquina com dois processos
 	// (serviço SYSTEM + UI companion) mantendo o mesmo discovery.db aberto.
+	//
+	// cache_size: o teto de page cache fica no DSN (e não num Exec avulso) para
+	// valer em TODA conexão do pool e sobreviver à reciclagem de conexão. Era
+	// -64000 (64 MB) num banco de cache que chega a 74 MB: o page cache enchia
+	// de verdade e inflava o RSS do serviço. 8 MB cobrem com folga o working set
+	// real (poucas linhas grandes lidas por vez) sem segurar dezenas de MB.
 	dsn := "file:" + dbPath + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)" +
-		"&_pragma=synchronous(NORMAL)&_pragma=journal_size_limit(4194304)"
+		"&_pragma=synchronous(NORMAL)&_pragma=journal_size_limit(4194304)&_pragma=cache_size(-8000)"
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao abrir database: %w", err)
 	}
 
-	// Configurações de performance
-	conn.SetMaxOpenConns(1)               // SQLite funciona melhor com single connection
-	conn.Exec("PRAGMA cache_size=-64000") // 64MB cache
+	conn.SetMaxOpenConns(1) // SQLite funciona melhor com single connection
 
 	db := &DB{conn: conn}
 	if err := db.initialize(); err != nil {
@@ -554,6 +558,53 @@ func (db *DB) Optimize() error {
 	return nil
 }
 
+// ShrinkMemory devolve ao SO as páginas do page cache do SQLite que não estão
+// em uso. Barato e idempotente; usado após leituras grandes (ex.: a política
+// efetiva da app-store) e nas janelas de ociosidade — sem ele o page cache
+// continua segurando os dados quentes mesmo depois de a leitura terminar.
+func (db *DB) ShrinkMemory() error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	if _, err := db.conn.Exec("PRAGMA shrink_memory"); err != nil {
+		return fmt.Errorf("shrink_memory: %w", err)
+	}
+	return nil
+}
+
+// CompactIfBloated roda VACUUM quando a fração de páginas livres do arquivo
+// passa de minFreeRatio (ex.: 0.25 = 25%). A poda de tabelas (histórico de
+// inventário) devolve páginas à freelist, mas sem VACUUM o arquivo permanece no
+// tamanho do pico histórico — e o trabalho de page cache com ele.
+//
+// É uma operação cara e por isso só roda com folga grande de páginas livres;
+// erro nunca é fatal para o chamador.
+func (db *DB) CompactIfBloated(minFreeRatio float64) (bool, error) {
+	if db == nil || db.conn == nil {
+		return false, nil
+	}
+	if minFreeRatio <= 0 || minFreeRatio >= 1 {
+		minFreeRatio = 0.25
+	}
+	var pageCount, freelist int
+	if err := db.conn.QueryRow("PRAGMA page_count").Scan(&pageCount); err != nil {
+		return false, fmt.Errorf("page_count: %w", err)
+	}
+	if pageCount <= 0 {
+		return false, nil
+	}
+	if err := db.conn.QueryRow("PRAGMA freelist_count").Scan(&freelist); err != nil {
+		return false, fmt.Errorf("freelist_count: %w", err)
+	}
+	if float64(freelist)/float64(pageCount) < minFreeRatio {
+		return false, nil
+	}
+	if _, err := db.conn.Exec("VACUUM"); err != nil {
+		return false, fmt.Errorf("vacuum: %w", err)
+	}
+	return true, nil
+}
+
 // StartMaintenance inicia checkpoint/optimize periódicos. Idempotente: uma
 // segunda chamada é ignorada. Close encerra o ticker e aguarda a goroutine.
 func (db *DB) StartMaintenance(interval time.Duration) {
@@ -583,6 +634,16 @@ func (db *DB) StartMaintenance(interval time.Duration) {
 				}
 				if err := db.Optimize(); err != nil {
 					log.Printf("[database] optimize periódico: %v", err)
+				}
+				// Devolve o page cache e compacta o arquivo quando a poda de
+				// tabelas (histórico de inventário) deixou muitas páginas livres.
+				if err := db.ShrinkMemory(); err != nil {
+					log.Printf("[database] shrink_memory periódico: %v", err)
+				}
+				if compacted, err := db.CompactIfBloated(0.25); err != nil {
+					log.Printf("[database] compactação periódica: %v", err)
+				} else if compacted {
+					log.Printf("[database] VACUUM executado (arquivo com folga de páginas livres)")
 				}
 			case <-stop:
 				return

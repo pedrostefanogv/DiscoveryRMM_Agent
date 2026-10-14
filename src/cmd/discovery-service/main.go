@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	appkg "discovery/app"
+	"discovery/app/core/memlimit"
 )
 
 // hasStartupArg replica a detecção de flags do main.go da UI (case-insensitive,
@@ -71,6 +72,16 @@ func main() {
 	if hasStartupArg("--terminal-dispatcher") || hasStartupArg("/terminal-dispatcher") || hasStartupArg("-terminal-dispatcher") {
 		appkg.TerminalRunDispatcher()
 		return
+	}
+
+	// Teto suave de memória do runtime Go (default 192 MiB; override por
+	// DISCOVERY_MEMORY_LIMIT_MB, 0 desabilita). Só para o processo do SERVIÇO/
+	// core: os modos auxiliares acima (worker de sessão remota, dispatcher do
+	// terminal) retornam antes de chegar aqui de propósito — o worker de sessão
+	// remota aloca frames BGRA inteiros (33 MB em 4K, 66 MB em 4K HDR) no pool de
+	// captura, e um teto suave apertado ali viraria GC thrash durante o streaming.
+	if mib := memlimit.Apply(192); mib > 0 {
+		log.Printf("[startup] teto de memória do runtime: %d MiB", mib)
 	}
 
 	appkg.RunServiceMode()

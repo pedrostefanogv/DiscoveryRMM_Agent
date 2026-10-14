@@ -15,10 +15,19 @@ import (
 	"discovery/app/core/logstore"
 )
 
+// Limites do buffer em memória. O limite por LINHAS já existia; o limite por
+// BYTES é novo e evita o pior caso de 5000 linhas × 8 KB (~40 MB) num processo
+// de longa duração — 4 MB cobrem com folga o uso real do terminal embutido.
+const (
+	maxBufferLines = 5000
+	maxBufferBytes = 4 << 20
+)
+
 // Buffer stores command output lines for the embedded terminal view.
 type Buffer struct {
 	mu          sync.RWMutex
 	lines       []string
+	bytes       int
 	file        *os.File
 	store       *logstore.Store
 	nextSubID   uint64
@@ -78,8 +87,27 @@ func (l *Buffer) appendLineLocked(line string, persistStore bool) string {
 		line = line[:maxLineBytes] + "... (truncado)"
 	}
 	l.lines = append(l.lines, line)
-	if len(l.lines) > 5000 {
-		l.lines = l.lines[len(l.lines)-5000:]
+	l.bytes += len(line)
+	// Descarta do início até respeitar os dois limites. O corte é feito numa
+	// cópia (e não num reslice) para não manter referências às linhas antigas
+	// no array compartilhado.
+	drop := 0
+	for len(l.lines)-drop > maxBufferLines || (l.bytes > maxBufferBytes && len(l.lines)-drop > 1) {
+		l.bytes -= len(l.lines[drop])
+		drop++
+	}
+	if drop > 0 {
+		// Reslice é O(1) — copiar a cada append no teto seria O(n) por linha de
+		// log (5000 ponteiros copiados por linha). O array antigo, porém,
+		// continuaria referenciando as linhas descartadas (retenção), então a
+		// cópia roda de forma AMORTIZADA, só quando o slack passa de metade da
+		// capacidade: ~1 cópia a cada maxBufferLines/2 appends.
+		l.lines = l.lines[drop:]
+		if cap(l.lines) >= 2*len(l.lines)+64 {
+			compacted := make([]string, len(l.lines))
+			copy(compacted, l.lines)
+			l.lines = compacted
+		}
 	}
 	if l.file != nil {
 		// Assinatura de revisão: toda linha persistida declara qual versão do
@@ -197,6 +225,7 @@ func (l *Buffer) Clear() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.lines = nil
+	l.bytes = 0
 }
 
 // EnableFilePersistence habilita a persistência em arquivo.

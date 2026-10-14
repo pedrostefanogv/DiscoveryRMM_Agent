@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -113,8 +115,12 @@ func (p *p2pLibP2PProvider) Start(
 ) error {
 	p.clientID = normalizeClientID(self.ClientID)
 
-	// ConnManager: mantém entre 20–60 conexões ativas; excedente é podado.
-	cm, err := connmgr.NewConnManager(20, 60, connmgr.WithGracePeriod(2*time.Minute))
+	// ConnManager: limites do p2pConnManagerLimits (default 8–24; override por
+	// DISCOVERY_P2P_MAX_CONNS). Cada conexão ativa sustenta buffers de transporte
+	// (TCP/yamux/noise), goroutines e entradas no peerstore — os 20–60 anteriores
+	// mantinham dezenas de conexões paradas em repouso, consumindo RAM sem uso.
+	connLow, connHigh := p2pConnManagerLimits()
+	cm, err := connmgr.NewConnManager(connLow, connHigh, connmgr.WithGracePeriod(2*time.Minute))
 	if err != nil {
 		return fmt.Errorf("connmgr: %w", err)
 	}
@@ -287,6 +293,37 @@ func (p *p2pLibP2PProvider) Start(
 		onTrace(fmt.Sprintf("libp2p host iniciado: peerID=%s", h.ID()))
 	}
 	return nil
+}
+
+// p2pConnManagerLimits devolve os limites (low, high) do ConnManager do libp2p.
+//
+// Otimização de memória: os valores anteriores (20–60) sustentavam dezenas de
+// conexões em repouso numa malha grande; cada conexão carrega buffers de
+// transporte, yamux/noise e estado no peerstore. 8–24 cobrem o caso real (poucos
+// peers por transferência) e continuam podando o excedente com grace period.
+//
+// Override: DISCOVERY_P2P_MAX_CONNS define o teto (4..200); o mínimo fica em 1/3.
+func p2pConnManagerLimits() (int, int) {
+	const (
+		defaultLow  = 8
+		defaultHigh = 24
+	)
+	raw := strings.TrimSpace(os.Getenv("DISCOVERY_P2P_MAX_CONNS"))
+	if raw == "" {
+		return defaultLow, defaultHigh
+	}
+	high, err := strconv.Atoi(raw)
+	if err != nil || high < 4 {
+		return defaultLow, defaultHigh
+	}
+	if high > 200 {
+		high = 200
+	}
+	low := high / 3
+	if low < 2 {
+		low = 2
+	}
+	return low, high
 }
 
 // libp2pMDNSNotifee handles peers discovered by libp2p's mDNS service.

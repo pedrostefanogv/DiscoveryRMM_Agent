@@ -1291,9 +1291,12 @@ func (a *App) buildScreenshotOverlay(reason string, byLLM bool, sessionAuthorize
 		}
 	}()
 
-	if a.mainWindow == nil {
-		return nil, fmt.Errorf("janela principal indisponivel para o overlay")
-	}
+	// Com a criação preguiçosa da janela principal (autostart no tray) o agente
+	// pode legitimamente não ter janela: não há nada a esconder no print, então o
+	// overlay segue normalmente. Antes este caso era recusado com erro — e
+	// hideAgentWindowForCapture() já trata janela ausente como no-op.
+	// Em modo serviço a.app é nil e ensureScreenshotOverlayWindow devolve erro
+	// próprio (mesmo desfecho de antes, com mensagem mais específica).
 	// A janela DEDICADA do overlay é criada (uma única vez) ANTES da captura: a
 	// página carrega enquanto o desktop é congelado, então o primeiro pedido não
 	// paga o custo da janela no caminho crítico. Ela é independente da janela
