@@ -1895,18 +1895,35 @@ func (a *App) runStagedStartup(ctx context.Context) {
 				log.Printf("[outbox][cleanup] expirados removidos: command_result=%d p2p_telemetry=%d", n1, n2)
 			}
 
-			// Inventário: retenção por idade preservando as K mais recentes por
-			// agent_id. O histórico crescia ~840 KB a CADA sync (inclusive no
-			// caminho "SYNC IGNORADO") e não tinha nenhuma poda — 40 MB na máquina
-			// de referência.
-			if removed, err := a.CoreAgent.DB.CleanOldInventoryKeepingLatest(
+			// Inventário: o histórico crescia ~840 KB a CADA sync e não tinha
+			// nenhuma poda (40 MB na máquina de referência). A poda por CONTAGEM é
+			// a que morde de verdade (a idade sozinha deixava tudo, porque todas as
+			// linhas eram recentes); a por idade fica como segundo limite.
+			removed := int64(0)
+			if n, err := a.CoreAgent.DB.PruneInventoryHistory(inventoryHistoryKeepLatest); err != nil {
+				log.Printf("[inventory][cleanup] erro na poda por contagem: %v", err)
+			} else {
+				removed += n
+			}
+			if n, err := a.CoreAgent.DB.CleanOldInventoryKeepingLatest(
 				inventoryHistoryRetentionDays, inventoryHistoryKeepLatest,
 			); err != nil {
-				log.Printf("[inventory][cleanup] erro na poda do histórico: %v", err)
-			} else if removed > 0 {
+				log.Printf("[inventory][cleanup] erro na poda por idade: %v", err)
+			} else {
+				removed += n
+			}
+			if removed > 0 {
 				log.Printf("[inventory][cleanup] snapshots removidos: %d", removed)
 				if err := a.CoreAgent.DB.ShrinkMemory(); err != nil {
 					log.Printf("[inventory][cleanup] shrink_memory: %v", err)
+				}
+				// Devolve o espaço ao arquivo na hora: a poda inicial pode remover
+				// dezenas de MB (medido: 42 MB de histórico) e sem VACUUM o arquivo
+				// ficaria no tamanho do pico até a manutenção periódica de 30 min.
+				if compacted, err := a.CoreAgent.DB.CompactIfBloated(0.25); err != nil {
+					log.Printf("[inventory][cleanup] compactação: %v", err)
+				} else if compacted {
+					log.Println("[inventory][cleanup] VACUUM executado após a poda")
 				}
 			}
 		}
@@ -2537,12 +2554,13 @@ const idleReleaseDelay = 5 * time.Minute
 const runtimeDiagInterval = 30 * time.Minute
 
 // inventoryHistoryRetentionDays / inventoryHistoryKeepLatest controlam a poda do
-// histórico de inventário: remove snapshots com mais de N dias preservando
-// sempre os K mais recentes de cada agent_id (a linha mais recente é a base do
-// delta sync do próximo ciclo).
+// histórico de inventário: mantém apenas as K linhas mais recentes de cada
+// agent_id (a mais recente é a base do delta sync) e, como segundo limite,
+// remove o que passar de N dias. O K é pequeno de propósito: cada linha tem
+// ~840 KB e o histórico chegou a 42 MB em 20 h antes desta poda.
 const (
 	inventoryHistoryRetentionDays = 7
-	inventoryHistoryKeepLatest    = 3
+	inventoryHistoryKeepLatest    = 5
 )
 
 // scheduleIdleRelease agenda a liberação profunda de memória. Idempotente:

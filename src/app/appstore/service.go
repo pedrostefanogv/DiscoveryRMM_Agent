@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"discovery/app/core/database"
@@ -35,6 +38,12 @@ const (
 	// A chave antiga (CacheKey) continua sendo lida como fallback de
 	// compatibilidade e é removida após a migração bem-sucedida para v2.
 	CacheKeyCompressed = "app_store_effective_v2"
+	// CacheKeyMeta guarda um registro MINÚSCULO (hash + fetchedAt + bytes) do
+	// cache comprimido. É o que permite decidir o frescor sem regunzipar e
+	// re-parsear os 27k itens: o TTL de 30 min do cache de memória re-lia o blob
+	// do disco a cada ciclo, re-alocando ~200 MB (medido) sem nenhum ganho — o
+	// dado local só muda quando este processo (ou um companheiro) grava.
+	CacheKeyMeta = "app_store_effective_meta"
 	// MemoryCacheTTL define por quanto tempo a política fica válida em memória.
 	// 30 minutos evita sobrecarregar o servidor com fetches frequentes; o cache
 	// persistido em SQLite cobre o período entre expirações e reinícios.
@@ -100,6 +109,16 @@ type Service struct {
 	// LoadEffectivePolicy ao mesmo tempo. Sem serialização, cada uma faria
 	// seu próprio download (stampede), sobrecarregando o servidor API.
 	fetchMu sync.Mutex
+
+	// persistedHash identifica a revisão do cache persistido que está residente
+	// em memória (ver CacheKeyMeta).
+	persistedHashMu sync.Mutex
+	persistedHash   string
+
+	// legacySwept garante que a remoção do cache v1 legado (JSON puro, ~30 MB
+	// numa única linha) aconteça UMA vez por processo — um DELETE a cada leitura
+	// geraria escrita de WAL desnecessária.
+	legacySwept atomic.Bool
 }
 
 // New cria um AppStoreService.
@@ -339,6 +358,40 @@ func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (E
 	return policy, nil
 }
 
+// setResidentHash registra qual revisão do cache persistido está residente.
+func (s *Service) setResidentHash(h string) {
+	s.persistedHashMu.Lock()
+	s.persistedHash = h
+	s.persistedHashMu.Unlock()
+}
+
+func (s *Service) residentHash() string {
+	s.persistedHashMu.Lock()
+	defer s.persistedHashMu.Unlock()
+	return s.persistedHash
+}
+
+// persistedMeta é o registro minúsculo do cache comprimido (ver CacheKeyMeta).
+type persistedMeta struct {
+	Hash      string `json:"hash"`
+	FetchedAt string `json:"fetchedAt,omitempty"`
+	Bytes     int    `json:"bytes,omitempty"`
+	Items     int    `json:"items,omitempty"`
+}
+
+// readPersistedMeta lê o registro de meta (poucas centenas de bytes).
+func (s *Service) readPersistedMeta(db *database.DB) (persistedMeta, bool) {
+	data, err := db.CacheGetStale(CacheKeyMeta)
+	if err != nil || len(data) == 0 {
+		return persistedMeta{}, false
+	}
+	var meta persistedMeta
+	if err := json.Unmarshal(data, &meta); err != nil || meta.Hash == "" {
+		return persistedMeta{}, false
+	}
+	return meta, true
+}
+
 // readPersistedPolicy lê a política persistida no SQLite sem verificar TTL e
 // sem deletar a entrada (CacheGetStale/CacheGetBytesStale). found=false quando
 // não há DB, a entrada não existe ou o JSON é inválido.
@@ -356,7 +409,26 @@ func (s *Service) readPersistedPolicy() (EffectivePolicy, bool) {
 		return EffectivePolicy{}, false
 	}
 
+	// Caminho rápido: se a revisão residente é a MESMA que está no disco,
+	// basta renovar a validade — sem regunzipar e re-parsear os 27k itens.
+	// Era isso que fazia o TTL de 30 min virar um pico de ~200 MB alocados a
+	// cada ciclo, com heap real de 5 MB entre os picos.
+	meta, metaOK := s.readPersistedMeta(db)
+	if metaOK && meta.Hash == s.residentHash() {
+		if cached, ok := s.cache.Get(0); ok {
+			s.cache.Touch()
+			return cached, true
+		}
+	}
+
 	if persisted, ok := s.readCompressedPolicy(db); ok {
+		if metaOK {
+			s.setResidentHash(meta.Hash)
+		}
+		// O v1 legado não é mais usado para nada: removê-lo aqui libera ~30 MB
+		// do arquivo já na primeira leitura após o upgrade, sem esperar por um
+		// fetch novo. É idempotente e roda no máximo uma vez por processo.
+		s.sweepLegacyV1(db)
 		return persisted, true
 	}
 
@@ -385,6 +457,17 @@ func (s *Service) readPersistedPolicy() (EffectivePolicy, bool) {
 	}
 
 	return persisted, true
+}
+
+// sweepLegacyV1 remove o cache persistido no formato antigo (JSON texto puro,
+// ~30 MB numa única linha). Best-effort e uma vez por processo.
+func (s *Service) sweepLegacyV1(db *database.DB) {
+	if db == nil || !s.legacySwept.CompareAndSwap(false, true) {
+		return
+	}
+	if err := db.CacheDelete(CacheKey); err != nil {
+		s.logf(fmt.Sprintf("aviso: falha ao remover cache legado da app-store: %v", err))
+	}
 }
 
 // readCompressedPolicy lê e decodifica o cache v2 (gzip + JSON) sem
@@ -423,7 +506,28 @@ func (s *Service) persistCompressedPolicy(db *database.DB, policy EffectivePolic
 	if err := gz.Close(); err != nil {
 		return fmt.Errorf("gzip close: %w", err)
 	}
-	return db.CacheSetBytes(CacheKeyCompressed, buf.Bytes(), SQLiteCacheTTL)
+
+	if err := db.CacheSetBytes(CacheKeyCompressed, buf.Bytes(), SQLiteCacheTTL); err != nil {
+		return err
+	}
+
+	// Meta minúsculo: é a chave do caminho rápido de frescor (sem parse).
+	sum := sha256.Sum256(buf.Bytes())
+	hash := hex.EncodeToString(sum[:])
+	meta, err := json.Marshal(persistedMeta{
+		Hash:      hash,
+		FetchedAt: policy.FetchedAt,
+		Bytes:     buf.Len(),
+		Items:     len(policy.Items),
+	})
+	if err != nil {
+		return fmt.Errorf("meta encode: %w", err)
+	}
+	if err := db.CacheSet(CacheKeyMeta, meta, SQLiteCacheTTL); err != nil {
+		return err
+	}
+	s.setResidentHash(hash)
+	return nil
 }
 
 // persistedPolicyFresh avalia o frescor da política persistida pelo próprio
@@ -486,8 +590,15 @@ func (s *Service) fetchEffectivePolicy(ctx context.Context) (EffectivePolicy, er
 	}
 	s.cache.Set(policy)
 	if s.db != nil && s.db() != nil {
-		if err := s.persistCompressedPolicy(s.db(), policy); err != nil {
+		db := s.db()
+		if err := s.persistCompressedPolicy(db, policy); err != nil {
 			s.logf(fmt.Sprintf("aviso: falha ao salvar cache da app-store: %v", err))
+		} else {
+			// O legado v1 (JSON puro, ~30 MB numa linha) precisa morrer TAMBÉM
+			// neste caminho: antes só a migração de leitura o apagava, e como o
+			// fetch de post-bootstrap grava o v2 primeiro, a chave antiga ficava
+			// para sempre (medido: DB 74 → 77 MB; cache 31,7 → 36,5 MB).
+			s.sweepLegacyV1(db)
 		}
 	}
 

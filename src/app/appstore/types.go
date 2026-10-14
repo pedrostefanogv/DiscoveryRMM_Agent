@@ -120,30 +120,35 @@ type PolicyCache struct {
 	loaded   bool
 }
 
-// Get devolve a política em cache quando ainda dentro de maxAge.
+// Get devolve a política em cache quando ainda dentro de maxAge (maxAge <= 0
+// ignora a validade).
 //
-// Quando expirada, o dado é LIBERADO (não apenas invalidado): antes o
-// EffectivePolicy parseado — ~30 MB no caso das instalações com 27k itens de
-// app-store — continuava referenciado pelo cache para sempre, mesmo marcado
-// como expirado. Liberar aqui é o que permite o heap encolher de verdade
-// depois do primeiro ciclo de expiração (a política é reconstruída sob demanda
-// a partir do cache persistido comprimido).
+// O dado NÃO é liberado no vencimento: re-ler e re-parsear a política
+// persistida (27k itens) custava ~200 MB de alocações por ciclo, contra ~35 MB
+// residentes. A liberação passou a ser explícita e por ociosidade —
+// Invalidate() em clearMemoryCaches (close-to-tray) e em releaseIdleMemory
+// (5 min sem atividade). Isso mantém o pico de RSS baixo, que é o que importa
+// numa máquina modesta.
 func (c *PolicyCache) Get(maxAge time.Duration) (EffectivePolicy, bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.loaded {
-		c.mu.Unlock()
 		return EffectivePolicy{}, false
 	}
 	if maxAge > 0 && time.Since(c.loadedAt) > maxAge {
-		c.policy = EffectivePolicy{}
-		c.loadedAt = time.Time{}
-		c.loaded = false
-		c.mu.Unlock()
 		return EffectivePolicy{}, false
 	}
-	policy := c.policy
+	return c.policy, true
+}
+
+// Touch renova a validade da política residente sem liberar o dado (usado pelo
+// caminho rápido de frescor quando a revisão do disco é a mesma já carregada).
+func (c *PolicyCache) Touch() {
+	c.mu.Lock()
+	if c.loaded {
+		c.loadedAt = time.Now()
+	}
 	c.mu.Unlock()
-	return policy, true
 }
 
 func (c *PolicyCache) get(maxAge time.Duration) (EffectivePolicy, bool) {

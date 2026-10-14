@@ -143,21 +143,43 @@ func TestLoadEffectivePolicyUsesFreshCompressedCacheWithoutNetwork(t *testing.T)
 	}
 }
 
-func TestPolicyCacheReleasesExpiredPolicy(t *testing.T) {
+func TestPolicyCacheExpiresWithoutLosingData(t *testing.T) {
 	cache := &PolicyCache{}
 	cache.Set(buildTestPolicy(10))
+
+	// Expirado deixa de ser servido...
 	if _, ok := cache.Get(time.Nanosecond); ok {
-		// Pode passar se a resolução do relógio não marcou expiração; força.
 		time.Sleep(2 * time.Millisecond)
 		if _, ok := cache.Get(time.Nanosecond); ok {
 			t.Fatal("cache deveria estar expirado")
 		}
 	}
-	if cache.loaded {
-		t.Fatal("cache deveria ter sido liberado após a expiração")
+	// ...mas o dado continua residente: re-ler/re-parsear os 27k itens custava
+	// ~200 MB de alocações por ciclo, muito mais caro que os ~35 MB retidos.
+	if !cache.loaded || len(cache.policy.Items) != 10 {
+		t.Fatalf("dado deveria permanecer residente após expirar (loaded=%v itens=%d)", cache.loaded, len(cache.policy.Items))
 	}
-	if len(cache.policy.Items) != 0 {
-		t.Fatal("itens deveriam ter sido liberados (evita reter ~30 MB indefinidamente)")
+
+	// A liberação é explícita (ociosidade/close-to-tray).
+	cache.Invalidate()
+	if cache.loaded || len(cache.policy.Items) != 0 {
+		t.Fatal("Invalidate deveria liberar o dado")
+	}
+}
+
+func TestPolicyCacheTouchRenewsValidity(t *testing.T) {
+	cache := &PolicyCache{}
+	cache.Set(buildTestPolicy(3))
+	cache.mu.Lock()
+	cache.loadedAt = time.Now().Add(-2 * time.Hour)
+	cache.mu.Unlock()
+
+	if _, ok := cache.Get(30 * time.Minute); ok {
+		t.Fatal("política antiga não deveria ser servida antes do Touch")
+	}
+	cache.Touch()
+	if _, ok := cache.Get(30 * time.Minute); !ok {
+		t.Fatal("Touch deveria renovar a validade")
 	}
 }
 

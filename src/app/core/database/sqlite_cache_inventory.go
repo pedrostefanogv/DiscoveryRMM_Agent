@@ -291,6 +291,35 @@ func (db *DB) CleanOldInventoryKeepingLatest(days, keep int) (int64, error) {
 	return removed, nil
 }
 
+// PruneInventoryHistory mantém apenas as K linhas mais recentes de CADA
+// agent_id, independentemente da idade.
+//
+// Por que a idade sozinha não basta: o histórico recebe um snapshot a cada sync
+// cujo diff acusa mudança (medido na máquina de referência: ~52 linhas em 20 h,
+// ~840 KB cada). Com retenção apenas por idade (7 dias) o teto prático vira
+// centenas de MB antes da primeira poda — o oposto do objetivo. A tabela só é
+// usada como base do delta sync (ShouldSyncInventory lê a linha mais recente),
+// então poucas linhas bastam.
+func (db *DB) PruneInventoryHistory(keepPerAgent int) (int64, error) {
+	if err := db.ensureAvailable(); err != nil {
+		return 0, err
+	}
+	if keepPerAgent < 1 {
+		keepPerAgent = 1
+	}
+	res, err := db.conn.Exec(
+		"DELETE FROM inventory_history "+
+			"WHERE id NOT IN ("+
+			"SELECT id FROM inventory_history ih2 "+
+			"WHERE ih2.agent_id = inventory_history.agent_id "+
+			"ORDER BY ih2.collected_at DESC, ih2.id DESC LIMIT ?)",
+		keepPerAgent)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // CacheSetBytes armazena um valor binário (BLOB) no cache com TTL opcional.
 // Usado por payloads grandes e comprimidos (ex.: política efetiva da app-store,
 // que em JSON puro ocupava ~31 MB num único value TEXT).

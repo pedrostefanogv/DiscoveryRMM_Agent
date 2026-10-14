@@ -2,6 +2,7 @@ package database
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +164,100 @@ func TestShrinkMemoryIsNoOpSafe(t *testing.T) {
 	}
 }
 
+func TestPruneInventoryHistoryKeepsNewestPerAgentByCount(t *testing.T) {
+	db, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	insert := func(agent string, minute int) {
+		// Todas RECENTES de propósito: a poda por idade não removeria nenhuma
+		// (foi exatamente o caso real — 52 linhas em 20 h, todas < 7 dias).
+		ts := time.Now().Add(-time.Duration(minute) * time.Minute).Unix()
+		tag := fmt.Sprintf("%s-%02d", agent, minute)
+		if _, err := db.conn.Exec(
+			"INSERT INTO inventory_history (agent_id, collected_at, hardware_json, software_json) VALUES (?, ?, ?, ?)",
+			agent, ts, tag, tag,
+		); err != nil {
+			t.Fatalf("insert %s: %v", tag, err)
+		}
+	}
+
+	// agent-a: 12 linhas (minuto 0 = mais nova); agent-b: 7 linhas.
+	for i := 0; i < 12; i++ {
+		insert("agent-a", i)
+	}
+	for i := 0; i < 7; i++ {
+		insert("agent-b", i)
+	}
+
+	removed, err := db.PruneInventoryHistory(5)
+	if err != nil {
+		t.Fatalf("PruneInventoryHistory: %v", err)
+	}
+	if removed != 9 {
+		t.Fatalf("removed = %d, want 9 (7 do agent-a + 2 do agent-b)", removed)
+	}
+
+	rows, err := db.conn.Query("SELECT agent_id, COUNT(*) FROM inventory_history GROUP BY agent_id ORDER BY agent_id")
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	defer rows.Close()
+	got := map[string]int{}
+	for rows.Next() {
+		var agent string
+		var n int
+		if err := rows.Scan(&agent, &n); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got[agent] = n
+	}
+	if got["agent-a"] != 5 || got["agent-b"] != 5 {
+		t.Fatalf("linhas por agente = %v, want agent-a=5 agent-b=5", got)
+	}
+
+	// A linha mais recente de cada agente precisa sobreviver (base do delta sync).
+	for _, agent := range []string{"agent-a", "agent-b"} {
+		var hw string
+		if err := db.conn.QueryRow(
+			"SELECT hardware_json FROM inventory_history WHERE agent_id = ? ORDER BY collected_at DESC, id DESC LIMIT 1", agent,
+		).Scan(&hw); err != nil {
+			t.Fatalf("latest %s: %v", agent, err)
+		}
+		if hw != agent+"-00" {
+			t.Fatalf("latest de %s = %q, want %s-00", agent, hw, agent)
+		}
+	}
+}
+
+func TestPruneInventoryHistoryClampsKeep(t *testing.T) {
+	db, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	for i := 0; i < 3; i++ {
+		if _, err := db.conn.Exec(
+			"INSERT INTO inventory_history (agent_id, collected_at, hardware_json, software_json) VALUES (?, ?, ?, ?)",
+			"a", time.Now().Unix()+int64(i), "hw", "sw",
+		); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	if _, err := db.PruneInventoryHistory(0); err != nil {
+		t.Fatalf("PruneInventoryHistory(0): %v", err)
+	}
+	var n int
+	if err := db.conn.QueryRow("SELECT COUNT(*) FROM inventory_history").Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("keep=0 deveria virar 1, restaram %d", n)
+	}
+}
 func pageCount(t *testing.T, db *DB) int {
 	t.Helper()
 	var n int
