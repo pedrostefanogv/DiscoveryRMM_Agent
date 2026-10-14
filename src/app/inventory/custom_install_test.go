@@ -3,12 +3,15 @@ package inventory
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"discovery/app/appstore"
 )
 
 func TestApplyCustomCommandPlaceholders(t *testing.T) {
@@ -24,6 +27,57 @@ func TestApplyCustomCommandPlaceholders(t *testing.T) {
 
 	if same := applyCustomCommandPlaceholders(command, "", ""); same != command {
 		t.Fatalf("sem arquivo baixado o comando deveria ficar intacto, veio %q", same)
+	}
+}
+
+// Pacote custom sem instalador publicado e comando que depende do placeholder:
+// o erro precisa dizer a causa real, em vez do "{{installer}} não é reconhecido
+// como um comando..." devolvido pelo shell.
+func TestRunCustomInstallCommandSemInstaladorExplicaACausa(t *testing.T) {
+	svc := &Service{}
+
+	_, err := svc.runCustomInstallCommand(context.Background(),
+		appstore.Item{InstallCommand: `{{installer}} /S`, FileURL: ""}, "sem-arquivo")
+	if err == nil {
+		t.Fatal("esperava erro para comando com placeholder e sem instalador publicado")
+	}
+	if !strings.Contains(err.Error(), "nenhum instalador foi publicado") {
+		t.Fatalf("mensagem inesperada: %v", err)
+	}
+
+	// Comando sem placeholder não é bloqueado pela ausência de arquivo (ex.:
+	// choco/winget): segue para a execução, que pode falhar por outro motivo
+	// dependendo do SO — o que não pode acontecer é o bloqueio do placeholder.
+	_, err = svc.runCustomInstallCommand(context.Background(),
+		appstore.Item{InstallCommand: "echo sem-placeholder", FileURL: ""}, "sem-arquivo")
+	if err != nil && strings.Contains(err.Error(), "nenhum instalador foi publicado") {
+		t.Fatalf("comando sem placeholder não deveria ser bloqueado: %v", err)
+	}
+}
+
+func TestCommandReferencesInstaller(t *testing.T) {
+	positive := []string{
+		`{{installer}} /S`,
+		`msiexec /i "{{installer}}" /qn`,
+		`{{installerDir}}\setup.exe`,
+		`%INSTALLER% /quiet`,
+		`copy "{{installerDir}}\conf" "%ProgramData%\app"`,
+	}
+	for _, command := range positive {
+		if !commandReferencesInstaller(command) {
+			t.Fatalf("%q deveria ser reconhecido como dependente do instalador", command)
+		}
+	}
+
+	negative := []string{
+		`choco install foxit -y`,
+		`{{Installer}} /S`, // caixa diferente não é substituída pelo agent
+		`echo pronto`,
+	}
+	for _, command := range negative {
+		if commandReferencesInstaller(command) {
+			t.Fatalf("%q não deveria ser reconhecido como dependente do instalador", command)
+		}
 	}
 }
 

@@ -1020,6 +1020,14 @@ func (s *Service) runCustomInstallCommand(ctx context.Context, allowed appstore.
 	defer cancel()
 
 	var installerPath, workDir string
+	if strings.TrimSpace(allowed.FileURL) == "" && commandReferencesInstaller(command) {
+		// Sem instalador publicado o placeholder nunca é resolvido e o shell falha
+		// com "{{installer}} não é reconhecido como um comando..." — mensagem que
+		// escondia a causa real (pacote sem arquivo publicado no servidor).
+		return "", fmt.Errorf(
+			"app custom %q usa {{installer}}/{{installerDir}} no comando, mas nenhum instalador foi publicado para este pacote no servidor",
+			packageID)
+	}
 	if strings.TrimSpace(allowed.FileURL) != "" {
 		downloaded := ""
 		fromP2P := false
@@ -1202,6 +1210,19 @@ func customScriptDir(workDir string) string {
 		return dir
 	}
 	return os.TempDir()
+}
+
+// commandReferencesInstaller informa se o comando depende dos placeholders do
+// instalador. Usa os MESMOS tokens (case-sensitive) de
+// applyCustomCommandPlaceholders: tokens com caixa diferente não são
+// substituídos lá e continuam caindo no erro genérico do shell.
+func commandReferencesInstaller(command string) bool {
+	for _, placeholder := range []string{"{{installer}}", "{{installerDir}}", "%INSTALLER%", "%INSTALLER_DIR%"} {
+		if strings.Contains(command, placeholder) {
+			return true
+		}
+	}
+	return false
 }
 
 // applyCustomCommandPlaceholders troca os marcadores do comando pelos caminhos
