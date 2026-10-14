@@ -4,7 +4,8 @@
 // Janela independente do chat de suporte (chat vinculado ao chamado).
 //
 // Regras do recurso refletidas aqui:
-//   - a janela só fecha quando o chat termina (o X pede confirmação);
+//   - a janela é um PAINEL fixo, sem X e sem maximizar: quem fecha é o botão
+//     "Encerrar" (com confirmação) — fechar a janela é encerrar o chat;
 //   - NENHUM histórico de conversas antigas é exibido: só a sessão ativa;
 //   - anexos/prints seguem a allowlist pré-autorizada do servidor;
 //   - tempo real via NATS (eventos supportchat:*), sem polling.
@@ -116,6 +117,21 @@
     return "sem conversa";
   }
 
+  /**
+   * A conversa ACABOU (e a janela segue aberta só em LEITURA)?
+   *
+   * `ended` é o estado explícito do serviço, mas o estado local também é
+   * limpo depois do fim — e aí a janela volta para "none" carregando as
+   * mensagens que o frontend já tinha. Sem esta derivação ela caía no ramo "sem
+   * conexão" e mostrava "Reconectando ao servidor… / Sem conexão em tempo real.
+   * As mensagens serão reenviadas quando a conexão voltar." — aviso sem sentido
+   * numa conversa terminada, porque não há mais nada a reenviar.
+   */
+  function isConversationOver() {
+    return state.status === "ended" ||
+      (state.status === "none" && state.messages.length > 0);
+  }
+
   function render() {
     var label = statusLabel(state.status);
     els.statusChip.textContent = label;
@@ -124,14 +140,11 @@
       state.status === "active" ? "sc-dot--online" :
       state.status === "waiting" ? "sc-dot--waiting" : "sc-dot--offline");
 
-    if (!state.connected) {
-      els.subtitle.textContent = "Reconectando ao servidor…";
-      els.banner.hidden = false;
-      els.banner.textContent = "Sem conexão em tempo real. As mensagens serão reenviadas quando a conexão voltar.";
-    } else if (state.status === "waiting") {
-      els.subtitle.textContent = "Aguardando o suporte iniciar a conversa";
-      els.banner.hidden = true;
-    } else if (state.status === "ended") {
+    // Conversa terminada vem ANTES do aviso de conexão: o fim é o que está
+    // acontecendo, e reconectar não muda mais nada.
+    var over = isConversationOver();
+
+    if (over) {
       // Quem encerrou fica registrado na mensagem de sistema; a janela NÃO é
       // fechada sozinha para o usuário continuar lendo o que já foi conversado.
       var reason = "";
@@ -139,6 +152,13 @@
         if (isSystemMessage(message) && message.body) reason = message.body;
       });
       els.subtitle.textContent = reason || "Conversa encerrada";
+      els.banner.hidden = true;
+    } else if (!state.connected) {
+      els.subtitle.textContent = "Reconectando ao servidor…";
+      els.banner.hidden = false;
+      els.banner.textContent = "Sem conexão em tempo real. As mensagens serão reenviadas quando a conexão voltar.";
+    } else if (state.status === "waiting") {
+      els.subtitle.textContent = "Aguardando o suporte iniciar a conversa";
       els.banner.hidden = true;
     } else {
       els.subtitle.textContent = "Conversa em andamento";
@@ -153,11 +173,17 @@
 
     var canSend = state.status === "active" && !state.sending;
     els.send.disabled = !canSend;
-    els.input.disabled = state.status === "ended";
+    // Conversa terminada também trava o campo: não há para quem escrever.
+    els.input.disabled = over;
     els.attach.disabled = !canSend;
     if (els.shot) els.shot.disabled = !canSend || state.capturePending;
-    els.end.disabled = state.status === "none";
-    els.end.textContent = state.status === "waiting" ? "Recusar" : "Encerrar";
+
+    // Encerrar é o ÚNICO caminho de fechamento (a janela não tem mais o X), por
+    // isso o botão fica sempre acionável — inclusive depois de a conversa já ter
+    // terminado (pelo suporte, por exemplo), quando ele vira "Fechar".
+    els.end.disabled = false;
+    els.end.textContent = state.status === "waiting" ? "Recusar" : (over ? "Fechar" : "Encerrar");
+    els.end.title = over ? "Fechar a janela do chat" : "Encerrar o chat";
   }
 
   function formatTime(raw) {
@@ -1028,7 +1054,9 @@
       return;
     }
 
-    if (state.status === "ended" || state.status === "none") {
+    // Sem sessão (janela órfã) ou conversa já terminada — inclusive pelo
+    // suporte: não há o que confirmar, o botão apenas fecha a janela.
+    if (state.status === "none" || isConversationOver()) {
       finishClose();
       return;
     }
@@ -1053,7 +1081,7 @@
     if (els.confirmTitle) els.confirmTitle.textContent = "Encerrar o chat?";
     if (els.confirmText) {
       els.confirmText.textContent =
-        "A janela só fecha quando a conversa termina. Ao encerrar, o suporte é avisado e o histórico fica disponível no chamado.";
+        "Encerrar fecha esta janela e avisa o suporte. O histórico da conversa fica disponível no chamado.";
     }
     if (els.confirmOk) els.confirmOk.textContent = "Encerrar chat";
     if (els.confirmCancel) els.confirmCancel.textContent = "Continuar conversando";
@@ -1065,6 +1093,10 @@
 
     call("SupportChatConfirmClose")
       .catch(function (err) {
+        // A janela não tem botão de fechar: se o binding falhar, travar o estado
+        // em "closing" deixaria o usuário preso numa janela que não fecha por
+        // nenhum caminho. Libera nova tentativa.
+        state.closing = false;
         showBanner("Falha ao encerrar: " + describe(err));
       });
   }
@@ -1180,8 +1212,10 @@
     wireEvents();
     wireRealtime();
 
-    // O X da janela é interceptado no Go (WindowClosing) e vira supportchat:confirm_close;
-    // este handler cobre o fechamento por teclado/atalho do sistema.
+    // A janela não tem botão de fechar: o caminho normal de saída é o botão
+    // "Encerrar". Um fechamento do SISTEMA (Alt+F4) continua sendo interceptado
+    // no Go (WindowClosing) e vira supportchat:confirm_close; este handler só
+    // cobre o fechamento que não passa pelo hook.
     window.addEventListener("beforeunload", function () {
       if (!state.closing) {
         // Melhor esforço: encerra a sessão sem bloquear o fechamento.

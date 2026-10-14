@@ -4,6 +4,18 @@
 var kbActivePages = [];
 var kbActivePageId = null; // null = home (artigo principal)
 
+// Token incrementado a cada render do detalhe: descarta respostas atrasadas da
+// hidratação de imagens quando o usuário troca de artigo/página.
+var kbRenderToken = 0;
+// Cache em memória (id do anexo -> data URL) para não repetir a chamada ao Go
+// a cada re-render da mesma imagem na sessão.
+var kbImageDataUrlCache = new Map();
+// Teto por entrada do cache acima: o Go devolve data URL de qualquer tamanho,
+// mas manter as grandes na sessão inteira inflaria o renderer (base64 ~+33%).
+var kbImageJsCacheMaxChars = 3 * 1024 * 1024;
+// Chamadas em voo por id: várias cópias da mesma imagem na página geram UM RPC.
+var kbImageInflight = new Map();
+
 function showKBList() {
   if (kbListViewEl) kbListViewEl.classList.remove("hidden");
   if (kbDetailViewEl) kbDetailViewEl.classList.add("hidden");
@@ -105,6 +117,8 @@ function renderKnowledgeArticleDetail(article) {
     !kbDetailContentEl
   )
     return;
+  // Novo render invalida hidratações de imagem em voo do render anterior.
+  kbRenderToken++;
   if (!article) {
     kbDetailTitleEl.textContent = "";
     kbDetailMetaEl.textContent = "";
@@ -132,6 +146,114 @@ function renderKnowledgeArticleDetail(article) {
 
   renderKbPagesNav(article.title);
   syncColorMode();
+  // As imagens privadas ([alt](kbimage:<id>)) precisam dos bytes vindos do Go:
+  // o <img> é renderizado sem src e hidratado aqui.
+  hydrateKnowledgeImages(kbDetailContentEl);
+}
+
+// hydrateKnowledgeImages busca a data URL das imagens privadas da KB via binding
+// (o webview não carrega o token do agente). Usa o token do render para descartar
+// respostas atrasadas e um Map em memória para não repetir a chamada.
+function hydrateKnowledgeImages(container) {
+  if (!container) return;
+  var imgs = container.querySelectorAll("img[data-kb-image-id]");
+  if (!imgs.length) return;
+
+  var api = null;
+  try {
+    api = appApi();
+  } catch (_) {
+    api = null;
+  }
+  var bindingFn =
+    api && typeof api.GetKnowledgeImageDataUrl === "function"
+      ? api.GetKnowledgeImageDataUrl.bind(api)
+      : null;
+
+  if (!bindingFn) {
+    // Binding ausente (ex.: binário antigo sem bindings regenerados). Não falha
+    // silenciosamente: loga para diagnóstico e marca as imagens como indisponíveis.
+    try {
+      console.warn(
+        "[knowledge] GetKnowledgeImageDataUrl indisponivel nos bindings. " +
+          "Binário desatualizado? Use `wails3 generate bindings` e rebuild.",
+      );
+    } catch (_) {
+      /* console indisponível */
+    }
+    for (var k = 0; k < imgs.length; k++) markKbImageError(imgs[k]);
+    return;
+  }
+
+  var renderToken = kbRenderToken;
+  for (var i = 0; i < imgs.length; i++) {
+    (function (img) {
+      var id = String(img.getAttribute("data-kb-image-id") || "").trim();
+      if (!id) return;
+      // Data URL corrompida não pode ficar "carregando" para sempre: o erro do
+      // <img> cai no mesmo fallback visual das falhas de download.
+      img.addEventListener(
+        "error",
+        function () {
+          markKbImageError(img);
+        },
+        { once: true },
+      );
+      var cached = kbImageDataUrlCache.get(id);
+      if (cached) {
+        img.classList.remove("kb-inline-image-pending");
+        img.src = cached;
+        return;
+      }
+      // Placeholder (altura + spinner) enquanto o Go busca os bytes.
+      img.classList.add("kb-inline-image-pending");
+      // Dedupe in-flight: o Map só é preenchido no .then, então N cópias do
+      // mesmo id na página disparariam N chamadas IPC sem isto.
+      var pending = kbImageInflight.get(id);
+      if (!pending) {
+        pending = bindingFn(id).finally(function () {
+          kbImageInflight.delete(id);
+        });
+        kbImageInflight.set(id, pending);
+      }
+      pending
+        .then(function (dataUrl) {
+          if (renderToken !== kbRenderToken) return; // resposta atrasada
+          var value = String(dataUrl || "").trim();
+          if (!value) {
+            markKbImageError(img);
+            return;
+          }
+          if (value.length <= kbImageJsCacheMaxChars) {
+            kbImageDataUrlCache.set(id, value);
+          }
+          img.classList.remove("kb-inline-image-pending");
+          img.src = value;
+        })
+        .catch(function (err) {
+          if (renderToken !== kbRenderToken) return;
+          try {
+            console.warn(
+              "[knowledge] falha ao carregar imagem da KB " + id + ":",
+              err,
+            );
+          } catch (_) {
+            /* console indisponível */
+          }
+          markKbImageError(img);
+        });
+    })(imgs[i]);
+  }
+}
+
+// markKbImageError remove o placeholder e sinaliza a imagem indisponível (sem
+// src, o alt continua visível).
+function markKbImageError(img) {
+  if (!img) return;
+  img.classList.remove("kb-inline-image-pending");
+  img.classList.add("kb-inline-image-error");
+  img.setAttribute("title", "Imagem indisponível");
+  img.removeAttribute("src");
 }
 
 function renderKnowledgeArticles(items) {

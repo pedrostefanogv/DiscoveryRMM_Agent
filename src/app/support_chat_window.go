@@ -19,11 +19,78 @@ import (
 // ativa no startup) e é INDEPENDENTE da interface principal do agent. Fechá-la
 // encerra o chat — mas só após a confirmação do usuário (modal na própria
 // janela), porque o requisito é que ela só feche quando o chat terminar.
+//
+// Ela é um PAINEL FIXO: as opções de criação (supportChatWindowOptions) tiram o
+// botão de fechar e o maximizar e travam o tamanho. Fechamento por atalho do
+// sistema (Alt+F4) continua caindo no hook WindowClosing abaixo.
 
 const (
 	supportChatWindowName = "support-chat"
 	supportChatCallWait   = 30 * time.Second
+	// Tamanho FIXO do painel do chat (ver supportChatWindowOptions).
+	supportChatWindowWidth  = 520
+	supportChatWindowHeight = 680
 )
+
+// supportChatWindowOptions monta as opções da janela do chat.
+//
+// A janela é um PAINEL, não uma janela comum:
+//
+//   - SEM botão de fechar: fechar a janela é ENCERRAR a conversa, e o único
+//     caminho para isso é o botão "Encerrar" (que pede confirmação e fecha a
+//     janela). Antes existiam dois caminhos — o X e o botão — e o X fechava a
+//     conversa sem o usuário ver o botão equivalente;
+//   - SEM maximizar e SEM redimensionar: tamanho travado em width x height, para
+//     o chat não tomar a tela inteira enquanto o usuário trabalha;
+//   - MaxWidth/MaxHeight iguais ao tamanho inicial: nenhum caminho (duplo clique
+//     no título, atalho do sistema) pode ampliá-la além disso.
+func supportChatWindowOptions(width, height int) application.WebviewWindowOptions {
+	return application.WebviewWindowOptions{
+		Name:   supportChatWindowName,
+		Title:  "Chat com o suporte",
+		Width:  width,
+		Height: height,
+
+		MinWidth:  width,
+		MinHeight: height,
+		MaxWidth:  width,
+		MaxHeight: height,
+
+		DisableResize:         true,
+		CloseButtonState:      application.ButtonHidden,
+		MaximiseButtonState:   application.ButtonDisabled,
+		FullscreenButtonState: application.ButtonDisabled,
+
+		URL: "/chat-window.html",
+	}
+}
+
+// supportChatWindowSize devolve o tamanho do painel já limitado à área de
+// trabalho da tela (em DIP), preservando a proporção desejada.
+//
+// Sem este limite a janela FIXA ficava maior que a área visível em tela pequena
+// ou com escala de DPI alta (ex.: 1080p a 150% → ~1280x688 lógicos): como ela
+// não pode ser redimensionada nem maximizada, o rodapé (campo de texto e
+// "Enviar") ficava fora da tela e o usuário não tinha como alcançá-lo.
+func supportChatWindowSize(screen *application.Screen) (int, int) {
+	width, height := supportChatWindowWidth, supportChatWindowHeight
+	if screen == nil {
+		return width, height
+	}
+
+	work := screen.WorkArea
+	if work.Width <= 0 || work.Height <= 0 {
+		return width, height
+	}
+
+	if maxWidth := work.Width - 2*windowFitMargin; maxWidth > 0 && width > maxWidth {
+		width = maxWidth
+	}
+	if maxHeight := work.Height - 2*windowFitMargin; maxHeight > 0 && height > maxHeight {
+		height = maxHeight
+	}
+	return width, height
+}
 
 // openSupportChatWindow abre (ou foca) a janela do chat.
 //
@@ -46,15 +113,21 @@ func (a *App) openSupportChatWindow() {
 		return
 	}
 
-	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:      supportChatWindowName,
-		Title:     "Chat com o suporte",
-		Width:     520,
-		Height:    680,
-		MinWidth:  380,
-		MinHeight: 420,
-		URL:       "/chat-window.html",
-	})
+	// Tela onde a janela vai nascer: a mesma da janela principal (é ali que o
+	// usuário está trabalhando) e, sem ela, a primária. Sem ScreenManager
+	// (startup) o tamanho sai no valor nominal.
+	var screen *application.Screen
+	if a.mainWindow != nil {
+		if s, err := a.mainWindow.GetScreen(); err == nil && s != nil {
+			screen = s
+		}
+	}
+	if screen == nil && app.Screen != nil {
+		screen = app.Screen.GetPrimary()
+	}
+	width, height := supportChatWindowSize(screen)
+
+	win := app.Window.NewWithOptions(supportChatWindowOptions(width, height))
 	// Portão por janela: o hook consulta ESTA janela e não um estado global que
 	// sobrevive ao fechamento anterior.
 	allowClose := &atomic.Bool{}

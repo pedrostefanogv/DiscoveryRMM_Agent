@@ -132,6 +132,42 @@ func TestChatWindow_TecnicoEComentariosDoChamado(t *testing.T) {
 	}
 }
 
+// REQUISITO: depois que a conversa TERMINA (inclusive quando quem encerrou foi
+// o suporte) a janela não pode mais anunciar "sem conexão em tempo real": não há
+// nada a reenviar. O estado do serviço é limpo no fim e a janela fica aberta em
+// leitura, então o frontend precisa derivar "conversa encerrada" das mensagens
+// que já estão na tela — era aí que o aviso de reconexão reaparecia.
+//
+// REQUISITO: com o X removido da janela, o botão de encerramento é o ÚNICO
+// caminho de fechamento — ele não pode ficar desabilitado e, numa conversa já
+// terminada, passa a fechar a janela.
+func TestChatWindow_ConversaEncerradaNaoAnunciaReconexao(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+
+	if !strings.Contains(jsText, "function isConversationOver(") {
+		t.Fatal("app-support-chat.js deve derivar o estado 'conversa encerrada' (isConversationOver)")
+	}
+
+	// A ordem importa: o ramo do fim precisa vencer o aviso de conexão.
+	overIdx := strings.Index(jsText, "if (over) {")
+	offlineIdx := strings.Index(jsText, "} else if (!state.connected) {")
+	if overIdx < 0 || offlineIdx < 0 || overIdx > offlineIdx {
+		t.Fatal("render() deve avaliar a conversa encerrada ANTES do aviso de conexão em tempo real")
+	}
+
+	if !strings.Contains(jsText, `over ? "Fechar" : "Encerrar"`) {
+		t.Fatal("o botão deve virar 'Fechar' quando a conversa já terminou")
+	}
+	if !strings.Contains(jsText, "els.end.disabled = false;") {
+		t.Fatal("o botão de encerramento é o único caminho de fechamento e não pode ficar desabilitado")
+	}
+}
+
 // BUG CORRIGIDO: o anexo/imagem enviado pelo suporte não aparecia na janela do
 // chat. Além de o envelope do NATS não trazer os anexos, o merge do frontend
 // mantinha a cópia antiga (sem anexo) quando o snapshot canônico chegava — e o

@@ -85,6 +85,47 @@
   border-radius: 6px;
 }
 
+/* ---- Imagens privadas da Base de Conhecimento (data URL vinda do Go) ---- */
+.md-content img.kb-inline-image {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: zoom-in;
+}
+
+/* Placeholder enquanto o Go busca os bytes: reserva altura e mostra um spinner
+   simples (SVG de fundo + pulso) para o layout não "pular" ao carregar. */
+.md-content img.kb-inline-image-pending {
+  min-width: 96px;
+  min-height: 96px;
+  background-color: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%23888888' stroke-width='3' stroke-dasharray='58 24' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  animation: kb-inline-image-pulse 1.1s ease-in-out infinite;
+}
+
+.md-content img.kb-inline-image-error {
+  display: inline-block;
+  min-width: 96px;
+  min-height: 48px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background-color: color-mix(in srgb, var(--surface-2) 40%, transparent);
+  cursor: not-allowed;
+}
+
+@keyframes kb-inline-image-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 /* ---- Headings ---- */
 .md-content h1,
 .md-content h2,

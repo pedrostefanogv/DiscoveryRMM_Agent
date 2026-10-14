@@ -150,6 +150,7 @@ func TestHandleIPCRequest_SupportKnowledgeMethodsRegistered(t *testing.T) {
 		"knowledge:articles",
 		"knowledge:article",
 		"knowledge:pages",
+		"knowledge:image",
 		"knowledge:refresh",
 	}
 	a := &App{}

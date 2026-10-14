@@ -857,6 +857,18 @@ export function GetKnowledgeBaseArticlesWithStatus() {
 }
 
 /**
+ * GetKnowledgeImageDataUrl devolve a imagem privada de um artigo da Base de
+ * Conhecimento como data URL (o webview não carrega o token do agente). Em modo
+ * companion o serviço faz o download e devolve {"dataUrl": ...} por IPC — mesmo
+ * desenho de DownloadTicketAttachment.
+ * @param {string} attachmentID
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetKnowledgeImageDataUrl(attachmentID) {
+    return $Call.ByID(3147073048, attachmentID);
+}
+
+/**
  * GetLocalMemories retorna as memorias/anotacoes locais persistidas.
  * Esta API é exposta via Wails e MCP.
  * Em modo companion, consulta o serviço via IPC (DB único — decisão D3).

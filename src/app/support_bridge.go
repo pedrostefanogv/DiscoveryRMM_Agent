@@ -550,3 +550,27 @@ func (a *App) GetKnowledgeArticlePages(articleID string) ([]KnowledgePage, error
 		return a.SupportSvc.GetKnowledgeArticlePages(articleID)
 	})
 }
+
+// GetKnowledgeImageDataUrl devolve a imagem privada de um artigo da Base de
+// Conhecimento como data URL (o webview não carrega o token do agente). Em modo
+// companion o serviço faz o download e devolve {"dataUrl": ...} por IPC — mesmo
+// desenho de DownloadTicketAttachment.
+func (a *App) GetKnowledgeImageDataUrl(attachmentID string) (string, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return "", err
+	}
+	type payload struct {
+		DataURL string `json:"dataUrl"`
+	}
+	res, err := supportReadOrLocal(a, "knowledge:image", map[string]any{"attachmentId": attachmentID}, func() (payload, error) {
+		dataURL, loadErr := a.SupportSvc.GetKnowledgeImageDataUrl(attachmentID)
+		if loadErr != nil {
+			return payload{}, loadErr
+		}
+		return payload{DataURL: dataURL}, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return res.DataURL, nil
+}

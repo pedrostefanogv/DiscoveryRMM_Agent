@@ -126,6 +126,8 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCKnowledgeArticle(payload)
 	case "knowledge:pages":
 		return a.ipcRPCKnowledgePages(payload)
+	case "knowledge:image":
+		return a.ipcRPCKnowledgeImage(payload)
 	case "knowledge:refresh":
 		return a.ipcRPCKnowledgeRefresh()
 	default:

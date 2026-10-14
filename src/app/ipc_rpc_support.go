@@ -437,6 +437,17 @@ func (a *App) ipcRPCKnowledgePages(payload map[string]any) map[string]any {
 	return a.ipcRPCSupportCall(func() (any, error) { return a.SupportSvc.GetKnowledgeArticlePages(articleID) })
 }
 
+func (a *App) ipcRPCKnowledgeImage(payload map[string]any) map[string]any {
+	if err := a.requireSupportSvc(); err != nil {
+		return ipcRPCError(err)
+	}
+	dataURL, err := a.SupportSvc.GetKnowledgeImageDataUrl(ipcRPCString(payload, "attachmentId"))
+	if err != nil {
+		return ipcRPCError(err)
+	}
+	return ipcRPCResult(map[string]any{"dataUrl": dataURL})
+}
+
 func (a *App) ipcRPCKnowledgeRefresh() map[string]any {
 	if err := a.requireSupportSvc(); err != nil {
 		return ipcRPCError(err)

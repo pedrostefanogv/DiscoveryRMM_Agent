@@ -1832,6 +1832,45 @@ function normalizeKbScope(scope) {
 
 function renderInlineMarkdown(text) {
   var html = escapeHtml(text || "");
+  // Imagens: ![alt](kbimage:<guid>) são privadas da KB e o Go devolve os bytes
+  // como data URL depois (o webview não carrega o token do agente); a classe e o
+  // data-kb-image-id permitem a hidratação em app-knowledge.js. Já
+  // ![alt](http...) vira <img> normal. Roda ANTES das regras de
+  // código/negrito/itálico/links para o alt não receber tags HTML.
+  //
+  // O alt capturado JÁ veio escapado pelo escapeHtml acima — NÃO usar
+  // escapeHtmlAttr nele (duplicaria &/< e corromperia o texto); só os valores
+  // derivados do atributo (id/src) passam por escapeHtmlAttr.
+  var kbImageGuidRe =
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function (m, alt, rawUrl) {
+    var url = String(rawUrl || "").trim();
+    if (url.slice(0, 8).toLowerCase() === "kbimage:") {
+      var id = url.slice(8).trim();
+      if (!kbImageGuidRe.test(id)) return m; // id inválido: mantém o token literal
+      return (
+        '<img class="kb-inline-image" data-kb-image-id="' +
+        escapeHtmlAttr(id) +
+        '" alt="' +
+        alt +
+        '">'
+      );
+    }
+    if (/^https?:\/\//i.test(url)) {
+      // A url JÁ veio escapada pelo escapeHtml do topo da função. Aplicar
+      // escapeHtmlAttr de novo transformaria "&amp;" em "&amp;amp;" e o browser
+      // decodificaria para o literal "&amp;" — quebrando query string
+      // (ex.: ?x=1&y=2 chegaria como amp;y=2). Só o alt/id novos são escapados.
+      return (
+        '<img class="md-inline-image" src="' +
+        url +
+        '" alt="' +
+        alt +
+        '" loading="lazy">'
+      );
+    }
+    return m;
+  });
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");

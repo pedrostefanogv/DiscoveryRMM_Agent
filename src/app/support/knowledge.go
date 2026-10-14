@@ -1,12 +1,14 @@
 package support
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,7 +38,19 @@ const (
 	// e teto de páginas por carga (50 × 200 = 10k artigos) contra loop/runaway.
 	knowledgeListPageSize = 200
 	knowledgeMaxPages     = 50
+	// knowledgeImageTimeout: download de uma imagem privada da KB. Usa client
+	// próprio (o kbHTTP() compartilhado tem timeout curto de 15s, pensado para
+	// JSON pequeno).
+	knowledgeImageTimeout = 60 * time.Second
+	// knowledgeImageMaxCacheBytes: só imagens pequenas entram no cache SQLite —
+	// a data URL em base64 cresce ~33% e binários grandes inchariam o banco.
+	// Imagens maiores continuam funcionando, só não são cacheadas.
+	knowledgeImageMaxCacheBytes = 2 << 20
 )
+
+// knowledgeMarkdownImageRe casa qualquer imagem Markdown (![alt](url)) — usado
+// para limpar o resumo, que não deve virar a própria URL da imagem.
+var knowledgeMarkdownImageRe = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
 
 // kbHTTPClient é reutilizado entre requisições (reuso de conexões TLS em vez
 // de um client novo por chamada, que multiplicava handshakes no N+1 antigo).
@@ -154,6 +168,10 @@ func buildSummary(content string) string {
 	if strings.TrimSpace(content) == "" {
 		return ""
 	}
+	// Remove tokens de imagem Markdown antes de escolher/truncar a linha: sem
+	// isso uma linha só com ![alt](kbimage:<id>) virava o resumo (a própria
+	// referência da imagem em vez do texto do artigo).
+	content = knowledgeMarkdownImageRe.ReplaceAllString(content, "")
 	lines := strings.Split(content, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(strings.TrimLeft(line, "#*-0123456789. "))
@@ -414,6 +432,14 @@ func (s *Service) cleanupOldKnowledgeScope(scope string) {
 				if err := purger.CacheDeletePrefix(prefix + previous + ":"); err != nil {
 					log.Printf("[support] aviso: falha ao limpar cache %s<escopo>: %v", prefix, err)
 				}
+			}
+			// Imagens da KB são cacheadas por GUID do anexo (knowledge:image:<id>),
+			// SEM escopo na chave — não há como filtrá-las por escopo. A troca de
+			// escopo (transferência/reprovisionamento) as descarta por inteiro:
+			// anexos do cliente/site anterior não valem mais aqui. Fica FORA do
+			// RefreshKnowledgeBase para as imagens não sumirem a cada refresh.
+			if err := purger.CacheDeletePrefix("knowledge:image:"); err != nil {
+				log.Printf("[support] aviso: falha ao limpar cache de imagens da knowledge base: %v", err)
 			}
 			s.supportLogf("escopo de knowledge mudou; caches antigos removidos")
 		}
@@ -1161,4 +1187,94 @@ func (s *Service) GetKnowledgeArticlePages(articleID string) ([]KnowledgePage, e
 		return nil, err
 	}
 	return s.fetchKnowledgePages(info, articleID)
+}
+
+// GetKnowledgeImageDataUrl baixa (ou lê do cache) uma imagem privada de artigo
+// da base de conhecimento e devolve uma data URL pronta para o <img> do webview.
+//
+// O webview NÃO carrega o token do agente, então os bytes vêm pelo Go — mesmo
+// padrão de DownloadTicketAttachment. Cache SQLite por GUID do anexo, com TTL
+// longo (knowledgeBackupTTL): a imagem precisa continuar visível offline.
+func (s *Service) GetKnowledgeImageDataUrl(attachmentID string) (string, error) {
+	// Mesmo gate das demais leituras da KB: feature desligada não busca imagem.
+	if !s.featureEnabled(s.knowledgeEnabled()) {
+		return "", fmt.Errorf("base de conhecimento desabilitada pela configuração do agente")
+	}
+
+	attachmentID = strings.TrimSpace(attachmentID)
+	if !guidPattern.MatchString(attachmentID) {
+		return "", fmt.Errorf("identificador de imagem inválido")
+	}
+	cacheKey := "knowledge:image:" + strings.ToLower(attachmentID)
+
+	// Cache primeiro (inclusive offline): evita um GET autenticado por <img> a
+	// cada re-render da página do artigo.
+	if s.db != nil {
+		var cached string
+		if found, err := s.db.CacheGetJSON(cacheKey, &cached); err == nil && found && strings.TrimSpace(cached) != "" {
+			return cached, nil
+		}
+	}
+
+	cfg := s.debugConfig()
+	if strings.TrimSpace(cfg.ApiServer) == "" || strings.TrimSpace(cfg.AuthToken) == "" {
+		return "", fmt.Errorf("configuração de servidor API incompleta: preencha apiServer e token no Debug")
+	}
+	target := apiScheme(cfg) + "://" + strings.TrimSpace(cfg.ApiServer) +
+		"/api/v1/agent-auth/knowledge/images/" + url.PathEscape(attachmentID)
+
+	ctx := s.ctxOrBackground()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return "", err
+	}
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return "", err
+	}
+
+	resp, err := tlsutil.NewHTTPClient(knowledgeImageTimeout).Do(req)
+	if err != nil {
+		return "", s.transportError("baixar imagem da base de conhecimento", err)
+	}
+	defer resp.Body.Close()
+
+	// 404 (anexo não é imagem visível) / 503 (storage desconfigurado) viram erro
+	// e NÃO são cacheados — cachear o vazio esconderia a imagem para sempre.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, knowledgeMaxBodyBytes))
+		return "", fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	// Teto de leitura anti-OOM (o servidor não deveria devolver imagem gigante).
+	data, err := io.ReadAll(io.LimitReader(resp.Body, knowledgeMaxBodyBytes))
+	if err != nil {
+		return "", err
+	}
+	// Só imagem entra: um 200 vindo de página de erro do proxy (text/html) ou
+	// um corpo vazio geraria data URL inválida e, abaixo, ficaria 180 dias no
+	// cache como "imagem" quebrada sem caminho de recuperação.
+	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	if idx := strings.IndexByte(contentType, ';'); idx > 0 {
+		contentType = strings.TrimSpace(contentType[:idx])
+	}
+	if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
+		return "", fmt.Errorf("resposta não é imagem (Content-Type %q)", contentType)
+	}
+	if len(data) == 0 {
+		return "", fmt.Errorf("imagem vazia na resposta")
+	}
+
+	dataURL := "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
+
+	s.markReachable()
+
+	// Só imagens pequenas entram no SQLite (data URL base64 ~33% maior); imagens
+	// grandes funcionam normalmente, apenas são baixadas de novo no próximo uso.
+	if s.db != nil && len(data) <= knowledgeImageMaxCacheBytes {
+		if err := s.db.CacheSetJSON(cacheKey, dataURL, knowledgeBackupTTL); err != nil {
+			log.Printf("[support] aviso: falha ao salvar cache de imagem da knowledge base: %v", err)
+		}
+	}
+
+	return dataURL, nil
 }
