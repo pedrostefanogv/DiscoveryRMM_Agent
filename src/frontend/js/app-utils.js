@@ -1830,6 +1830,26 @@ function normalizeKbScope(scope) {
   return scope || "-";
 }
 
+// kbImageSizeStyleAttr converte o tamanho gravado no título do token
+// ("w=50%" / "w=420") em style inline. O Markdown não tem atributo de largura e
+// HTML cru não é renderizado pelo viewer; o valor é validado (1–100% ou
+// 1–4000px) para não permitir CSS arbitrário vindo do conteúdo.
+function kbImageSizeStyleAttr(title) {
+  var raw = String(title || "").trim();
+  if (!raw) return "";
+  if (/^w=/i.test(raw)) raw = raw.slice(2).trim();
+
+  var isPercent = raw.charAt(raw.length - 1) === "%";
+  var digits = isPercent ? raw.slice(0, -1) : raw;
+  if (!/^\d{1,4}$/.test(digits)) return "";
+
+  var amount = parseInt(digits, 10);
+  if (isPercent) {
+    return amount >= 1 && amount <= 100 ? "width:" + amount + "%" : "";
+  }
+  return amount >= 1 && amount <= 4000 ? "width:" + amount + "px" : "";
+}
+
 function renderInlineMarkdown(text) {
   var html = escapeHtml(text || "");
   // Imagens: ![alt](kbimage:<guid>) são privadas da KB e o Go devolve os bytes
@@ -1845,15 +1865,40 @@ function renderInlineMarkdown(text) {
     /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
   html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function (m, alt, rawUrl) {
     var url = String(rawUrl || "").trim();
+
+    // Título opcional do Markdown (tamanho): kbimage:<id> "w=50%". O texto JÁ
+    // passou por escapeHtml no topo da função, então as aspas chegam como
+    // &quot; (duplas) ou &#039; (simples) — sem tratar as entidades o título
+    // ficaria colado no id e o token cairia na regra de link.
+    var title = "";
+    var titleMatch = url.match(
+      /\s+(?:&quot;([\s\S]*?)&quot;|&#039;([\s\S]*?)&#039;)\s*$/,
+    );
+    if (titleMatch) {
+      title = String(
+        titleMatch[1] !== undefined ? titleMatch[1] : titleMatch[2] || "",
+      );
+      url = url.slice(0, titleMatch.index).trim();
+    }
+    var sizeStyle = kbImageSizeStyleAttr(title);
+    var styleAttr = sizeStyle ? ' style="' + sizeStyle + '"' : "";
+
     if (url.slice(0, 8).toLowerCase() === "kbimage:") {
       var id = url.slice(8).trim();
-      if (!kbImageGuidRe.test(id)) return m; // id inválido: mantém o token literal
+      if (!kbImageGuidRe.test(id)) {
+        // Token inválido (editado à mão): mostra literalmente em vez de virar um
+        // link "#" sem sentido. Os colchetes viram entidades para a regra de
+        // links logo abaixo não capturar o texto.
+        return "!&#91;" + alt + "&#93;(kbimage:" + id + ")";
+      }
       return (
         '<img class="kb-inline-image" data-kb-image-id="' +
         escapeHtmlAttr(id) +
         '" alt="' +
         alt +
-        '">'
+        '"' +
+        styleAttr +
+        ">"
       );
     }
     if (/^https?:\/\//i.test(url)) {
@@ -1866,7 +1911,9 @@ function renderInlineMarkdown(text) {
         url +
         '" alt="' +
         alt +
-        '" loading="lazy">'
+        '"' +
+        styleAttr +
+        ' loading="lazy">'
       );
     }
     return m;
