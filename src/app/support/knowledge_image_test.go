@@ -58,7 +58,7 @@ func TestGetKnowledgeImageDataUrl_SendsAgentAuthHeaders(t *testing.T) {
 		auth = r.Header.Get("Authorization")
 		agentID = r.Header.Get("X-Agent-ID")
 		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write([]byte("png"))
+		_, _ = w.Write(kbImagePNGBytes())
 	}))
 	defer srv.Close()
 
@@ -149,7 +149,7 @@ func TestGetKnowledgeImageDataUrl_503ReturnsErrorAndDoesNotCache(t *testing.T) {
 func TestGetKnowledgeImageDataUrl_CacheKeyIsLowercase(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write([]byte("png"))
+		_, _ = w.Write(kbImagePNGBytes())
 	}))
 	defer srv.Close()
 
@@ -199,9 +199,16 @@ func TestGetKnowledgeImageDataUrl_CacheHitNoHTTP(t *testing.T) {
 	}
 }
 
+// kbImagePNGBytes devolve um payload com assinatura PNG válida: o download exige
+// magic bytes (ver looksLikeKnowledgeImage), então "png" cru é rejeitado.
+func kbImagePNGBytes(extra ...byte) []byte {
+	base := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 'I', 'H', 'D', 'R'}
+	return append(base, extra...)
+}
+
 // miss: baixa do endpoint autenticado e grava a data URL no cache (imagem pequena).
 func TestGetKnowledgeImageDataUrl_MissFetchesAndCaches(t *testing.T) {
-	payload := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a}
+	payload := kbImagePNGBytes(0x01, 0x02)
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -286,7 +293,7 @@ func TestGetKnowledgeImageDataUrl_InvalidGuidNoHTTP(t *testing.T) {
 
 // Binário acima do teto (2 MB) ainda é exibido, mas não entra no cache SQLite.
 func TestGetKnowledgeImageDataUrl_LargeBinaryNotCached(t *testing.T) {
-	payload := bytes.Repeat([]byte{0xAB}, knowledgeImageMaxCacheBytes+1)
+	payload := kbImagePNGBytes(bytes.Repeat([]byte{0xAB}, knowledgeImageMaxCacheBytes)...)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(payload)
@@ -309,6 +316,64 @@ func TestGetKnowledgeImageDataUrl_LargeBinaryNotCached(t *testing.T) {
 	var stored string
 	if found, _ := db.CacheGetJSON("knowledge:image:"+kbImageID1, &stored); found {
 		t.Fatal("binário acima do teto não pode ser cacheado")
+	}
+}
+
+// 200 com Content-Type de imagem mas corpo sem assinatura válida (proxy/erro):
+// não pode virar data URL nem envenenar o cache de 180 dias.
+func TestGetKnowledgeImageDataUrl_NonImageBytesAreRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("<html>pagina de erro do proxy</html>"))
+	}))
+	defer srv.Close()
+
+	db := newMemCacheDB()
+	svc := NewService(Options{DB: db, DebugConfig: func() debug.Config {
+		return kbImageTestConfig(strings.TrimPrefix(srv.URL, "http://"))
+	}})
+
+	if _, err := svc.GetKnowledgeImageDataUrl(kbImageID1); err == nil {
+		t.Fatal("corpo sem assinatura de imagem deveria devolver erro")
+	}
+	var stored string
+	if found, _ := db.CacheGetJSON("knowledge:image:"+kbImageID1, &stored); found {
+		t.Fatal("corpo inválido não pode ser cacheado")
+	}
+}
+
+// Content-Type fora do contrato (image/svg+xml) é recusado mesmo com assinatura.
+func TestGetKnowledgeImageDataUrl_UnsupportedTypeIsRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		_, _ = w.Write(kbImagePNGBytes())
+	}))
+	defer srv.Close()
+
+	svc := NewService(Options{DB: newMemCacheDB(), DebugConfig: func() debug.Config {
+		return kbImageTestConfig(strings.TrimPrefix(srv.URL, "http://"))
+	}})
+
+	if _, err := svc.GetKnowledgeImageDataUrl(kbImageID1); err == nil {
+		t.Fatal("image/svg+xml deveria ser recusado (contrato é jpeg/png/webp/gif)")
+	}
+}
+
+// Corpo acima do teto de leitura: erro explícito (não truncar em silêncio).
+func TestGetKnowledgeImageDataUrl_OversizedBodyIsRejected(t *testing.T) {
+	oversized := kbImagePNGBytes(bytes.Repeat([]byte{0xAB}, knowledgeMaxBodyBytes+1)...)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(oversized)
+	}))
+	defer srv.Close()
+
+	svc := NewService(Options{DB: newMemCacheDB(), DebugConfig: func() debug.Config {
+		return kbImageTestConfig(strings.TrimPrefix(srv.URL, "http://"))
+	}})
+
+	if _, err := svc.GetKnowledgeImageDataUrl(kbImageID1); err == nil {
+		t.Fatal("corpo acima do teto deveria devolver erro (não truncar)")
 	}
 }
 

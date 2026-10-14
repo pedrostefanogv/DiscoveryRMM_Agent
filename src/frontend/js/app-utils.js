@@ -1852,6 +1852,17 @@ function kbImageSizeStyleAttr(title) {
 
 function renderInlineMarkdown(text) {
   var html = escapeHtml(text || "");
+  // NUL não deve existir no texto (é o sentinela dos code spans).
+  html = html.replace(/\u0000/g, "");
+
+  // Code spans PRIMEIRO: dentro de crases o conteúdo é literal. Sem isso um
+  // exemplo do próprio token (![alt](kbimage:...)) virava <img> real e ainda
+  // disparava o RPC de hidratação (ou um fetch externo, no caso de URL http).
+  var codeSpans = [];
+  html = html.replace(/`([^`]+)`/g, function (_m, code) {
+    codeSpans.push(code);
+    return "\u0000kbcode" + (codeSpans.length - 1) + "\u0000";
+  });
   // Imagens: ![alt](kbimage:<guid>) são privadas da KB e o Go devolve os bytes
   // como data URL depois (o webview não carrega o token do agente); a classe e o
   // data-kb-image-id permitem a hidratação em app-knowledge.js. Já
@@ -1882,6 +1893,9 @@ function renderInlineMarkdown(text) {
     }
     var sizeStyle = kbImageSizeStyleAttr(title);
     var styleAttr = sizeStyle ? ' style="' + sizeStyle + '"' : "";
+    // O alt é escrito num atributo ANTES das regras de negrito/itálico: escapar
+    // * e _ como entidades impede que "a*b*c" vire tags dentro do atributo.
+    alt = String(alt || "").replace(/\*/g, "&#42;").replace(/_/g, "&#95;");
 
     if (url.slice(0, 8).toLowerCase() === "kbimage:") {
       var id = url.slice(8).trim();
@@ -1889,7 +1903,10 @@ function renderInlineMarkdown(text) {
         // Token inválido (editado à mão): mostra literalmente em vez de virar um
         // link "#" sem sentido. Os colchetes viram entidades para a regra de
         // links logo abaixo não capturar o texto.
-        return "!&#91;" + alt + "&#93;(kbimage:" + id + ")";
+        // Escapa também os colchetes do "id" para a regra de links não capturar
+        // um trecho do token malformado (ex.: kbimage:[x](http://…)).
+        var safeId = id.replace(/\[/g, "&#91;").replace(/\]/g, "&#93;");
+        return "!&#91;" + alt + "&#93;(kbimage:" + safeId + ")";
       }
       return (
         '<img class="kb-inline-image" data-kb-image-id="' +
@@ -1918,7 +1935,6 @@ function renderInlineMarkdown(text) {
     }
     return m;
   });
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (_m, label, rawUrl) {
@@ -1935,6 +1951,12 @@ function renderInlineMarkdown(text) {
       "</a>"
     );
   });
+
+  // Restaura os code spans capturados no topo (conteúdo literal, sem regras).
+  html = html.replace(/\u0000kbcode(\d+)\u0000/g, function (_m, idx) {
+    return "<code>" + (codeSpans[Number(idx)] || "") + "</code>";
+  });
+
   return html;
 }
 

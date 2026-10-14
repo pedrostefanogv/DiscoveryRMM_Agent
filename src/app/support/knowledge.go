@@ -1,6 +1,7 @@
 package support
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -1195,6 +1196,41 @@ func (s *Service) GetKnowledgeArticlePages(articleID string) ([]KnowledgePage, e
 // O webview NÃO carrega o token do agente, então os bytes vêm pelo Go — mesmo
 // padrão de DownloadTicketAttachment. Cache SQLite por GUID do anexo, com TTL
 // longo (knowledgeBackupTTL): a imagem precisa continuar visível offline.
+// knowledgeImageContentTypes: mesmos tipos aceitos no upload (contrato da API).
+// SVG fica de fora (vetor é executável no navegador e o contrato não o prevê).
+var knowledgeImageContentTypes = map[string]struct{}{
+	"image/jpeg": {},
+	"image/png":  {},
+	"image/webp": {},
+	"image/gif":  {},
+}
+
+func isKnowledgeImageContentType(contentType string) bool {
+	_, ok := knowledgeImageContentTypes[contentType]
+	return ok
+}
+
+// looksLikeKnowledgeImage valida a assinatura (magic bytes) do corpo. Sem isso um
+// 200 com Content-Type de imagem e corpo arbitrário era cacheado por 180 dias.
+func looksLikeKnowledgeImage(data []byte) bool {
+	if len(data) < 12 {
+		return false
+	}
+
+	switch {
+	case bytes.HasPrefix(data, []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}):
+		return true
+	case bytes.HasPrefix(data, []byte{0xFF, 0xD8, 0xFF}):
+		return true
+	case bytes.HasPrefix(data, []byte("GIF87a")), bytes.HasPrefix(data, []byte("GIF89a")):
+		return true
+	case bytes.HasPrefix(data, []byte("RIFF")) && string(data[8:12]) == "WEBP":
+		return true
+	}
+
+	return false
+}
+
 func (s *Service) GetKnowledgeImageDataUrl(attachmentID string) (string, error) {
 	// Mesmo gate das demais leituras da KB: feature desligada não busca imagem.
 	if !s.featureEnabled(s.knowledgeEnabled()) {
@@ -1245,23 +1281,34 @@ func (s *Service) GetKnowledgeImageDataUrl(attachmentID string) (string, error) 
 		return "", fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
-	// Teto de leitura anti-OOM (o servidor não deveria devolver imagem gigante).
-	data, err := io.ReadAll(io.LimitReader(resp.Body, knowledgeMaxBodyBytes))
+	// Teto de leitura anti-OOM com DETECÇÃO de truncamento: io.LimitReader corta
+	// em silêncio e a data URL sairia corrompida (e, abaixo, o cache de 180 dias
+	// guardaria lixo). Lê teto+1 para saber que estourou.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, knowledgeMaxBodyBytes+1))
 	if err != nil {
 		return "", err
 	}
-	// Só imagem entra: um 200 vindo de página de erro do proxy (text/html) ou
-	// um corpo vazio geraria data URL inválida e, abaixo, ficaria 180 dias no
-	// cache como "imagem" quebrada sem caminho de recuperação.
+	if len(data) > knowledgeMaxBodyBytes {
+		return "", fmt.Errorf("imagem maior que o teto de leitura (%d bytes)", knowledgeMaxBodyBytes)
+	}
+
+	// Só imagem entra, e do contrato (jpeg/png/webp/gif): um 200 vindo de página
+	// de erro do proxy (text/html) ou um corpo vazio geraria data URL inválida e,
+	// abaixo, ficaria 180 dias no cache como "imagem" quebrada sem recuperação.
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	if idx := strings.IndexByte(contentType, ';'); idx > 0 {
 		contentType = strings.TrimSpace(contentType[:idx])
 	}
-	if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
-		return "", fmt.Errorf("resposta não é imagem (Content-Type %q)", contentType)
+	contentType = strings.ToLower(contentType)
+	if !isKnowledgeImageContentType(contentType) {
+		return "", fmt.Errorf("resposta não é imagem suportada (Content-Type %q)", contentType)
 	}
 	if len(data) == 0 {
 		return "", fmt.Errorf("imagem vazia na resposta")
+	}
+	// O header pode mentir (proxy/erro com 200): confere a assinatura do arquivo.
+	if !looksLikeKnowledgeImage(data) {
+		return "", fmt.Errorf("resposta não tem assinatura de imagem suportada (%d bytes)", len(data))
 	}
 
 	dataURL := "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
