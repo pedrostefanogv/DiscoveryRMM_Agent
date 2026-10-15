@@ -100,18 +100,21 @@ func (a *App) ensureCompanionNats() error {
 	// nats.ProxyPath ("invalid websocket connection" sem isso). A normalização
 	// usa agentconn.NormalizeClientEndpoint, igual ao worker. Timeout por
 	// scheme: 3s nativo (failover rápido), 8s ws/wss.
+	// WSS primeiro (decisão 2026-10-14): o NATS do produto vive atrás do
+	// nginx/Cloudflare e a 4222 bruta só custa timeout; o nativo fica de fallback
+	// para instalações em LAN.
 	var candidates []string
-	if nat := strings.TrimSpace(cfg.NatsServer); nat != "" {
-		candidates = append(candidates, nat)
-	}
 	if wss := strings.TrimSpace(cfg.NatsWsServer); wss != "" {
 		candidates = append(candidates, wss)
 	}
 	if host := extractAPIHost(cfg.ApiServer); host != "" {
-		candidates = append(candidates, "nats://"+host+":4222")
+		candidates = append(candidates, "wss://"+host+"/nats/")
+	}
+	if nat := strings.TrimSpace(cfg.NatsServer); nat != "" {
+		candidates = append(candidates, nat)
 	}
 	if host := extractAPIHost(cfg.ApiServer); host != "" {
-		candidates = append(candidates, "wss://"+host+"/nats/")
+		candidates = append(candidates, "nats://"+host+":4222")
 	}
 
 	type natsAttempt struct {

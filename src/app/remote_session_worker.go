@@ -259,13 +259,13 @@ func readStopOrCommandLine(br *bufio.Reader) (string, error) {
 }
 
 // connectWorkerNATS conecta ao NATS de streaming seguindo a MESMA política do
-// core (agentconn runSession): NATIVO primeiro, websocket como fallback.
+// core (agentconn runSession): WEBSOCKET PRIMEIRO, nativo como fallback.
 //
 // Ordem dos candidatos (dedupe preserva a primeira ocorrência):
-//  1. natsServer configurado (nativo)
-//  2. natsWsServer configurado (websocket)
-//  3. nats://host:4222 derivado da API (nativo)
-//  4. wss://host:443/nats/ derivado da API (websocket)
+//  1. natsWsServer configurado (websocket)
+//  2. wss://host:443/nats/ derivado da API (websocket)
+//  3. natsServer configurado (nativo)
+//  4. nats://host:4222 derivado da API (nativo)
 //
 // FIX 2026-09-16 (acesso remoto não conecta nas estações): os candidatos iam
 // crus ao nats.Connect. Duas falhas encadeadas deixavam o worker sem stream
@@ -287,17 +287,17 @@ func readStopOrCommandLine(br *bufio.Reader) (string, error) {
 // (drenado pelo serviço para o agent-service.log).
 func connectWorkerNATS(cfg WorkerDebugConfig, agentID, token string) (*nats.Conn, error) {
 	var candidates []string
-	if nat := trimSpace(cfg.NatsServer); nat != "" {
-		candidates = append(candidates, nat)
-	}
 	if wss := trimSpace(cfg.NatsWsServer); wss != "" {
 		candidates = append(candidates, wss)
 	}
 	if host := extractAPIHost(cfg.ApiServer); host != "" {
-		candidates = append(candidates, "nats://"+host+":4222")
+		candidates = append(candidates, "wss://"+host+"/nats/")
+	}
+	if nat := trimSpace(cfg.NatsServer); nat != "" {
+		candidates = append(candidates, nat)
 	}
 	if host := extractAPIHost(cfg.ApiServer); host != "" {
-		candidates = append(candidates, "wss://"+host+"/nats/")
+		candidates = append(candidates, "nats://"+host+":4222")
 	}
 
 	type attempt struct {

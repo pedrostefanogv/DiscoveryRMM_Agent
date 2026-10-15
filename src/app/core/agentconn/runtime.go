@@ -901,10 +901,13 @@ func hasCanonicalNATSContext(cfg Config) bool {
 }
 
 func (r *Runtime) runSession(ctx context.Context, cfg Config) error {
-	// Ordem de fallback:
-	//   1. NATS nativo (nats://)
-	//   2. NATS sobre WebSocket (ws/wss)
-	//   3. Fallbacks derivados de apiServer (nats://:4222 e wss://:443/nats/)
+	// Ordem de fallback (WSS PRIMEIRO — decisão do produto 2026-10-14):
+	//   1. NATS sobre WebSocket (ws/wss) — é o transporte exposto atrás do
+	//      nginx/Cloudflare; a porta 4222 bruta normalmente está bloqueada e
+	//      custava ~3-8s de timeout em toda sessão/reconexão.
+	//   2. WSS derivado do apiServer (wss://host:443/nats/)
+	//   3. NATS nativo (nats://) — fallback para instalações em LAN
+	//   4. NATS nativo derivado do apiServer (nats://host:4222)
 	var attempts []func() error
 	var labels []string
 	seen := map[string]struct{}{}
@@ -933,18 +936,21 @@ func (r *Runtime) runSession(ctx context.Context, cfg Config) error {
 		})
 	}
 
-	addNATSAttempt(cfg.NatsServer, "nats")
 	addNATSAttempt(cfg.NatsWsServer, "nats-ws/wss")
+
+	if apiHost != "" {
+		if fallbackWSS, err := buildExternalNATSWSSURL(apiHost); err == nil {
+			addNATSAttempt(fallbackWSS, "nats-wss (api-fallback)")
+			r.logf("[transport][nats-wss] fallback via apiServer: %s", fallbackWSS)
+		}
+	}
+
+	addNATSAttempt(cfg.NatsServer, "nats")
 
 	if apiHost != "" {
 		fallbackNats := "nats://" + net.JoinHostPort(apiHost, "4222")
 		addNATSAttempt(fallbackNats, "nats (api-fallback)")
 		r.logf("[transport][nats] fallback via apiServer: %s", fallbackNats)
-
-		if fallbackWSS, err := buildExternalNATSWSSURL(apiHost); err == nil {
-			addNATSAttempt(fallbackWSS, "nats-wss (api-fallback)")
-			r.logf("[transport][nats-wss] fallback via apiServer: %s", fallbackWSS)
-		}
 	}
 
 	if len(attempts) == 0 {
