@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"os"
 	"strings"
 	"time"
 
+	"discovery/app/core/agentconn"
 	"discovery/app/netutil"
 
 	"github.com/nats-io/nats.go"
@@ -150,9 +153,120 @@ func (p *natsPublisher) Close() error {
 	return nil
 }
 
-// BuildPublishers cria a lista de publishers (NATS + NATS-WSS) com fallback.
+// Timeouts de dial por família de transporte. Espelham a política já validada
+// do worker de remote session (connectWorkerNATS): o nativo tem timeout curto
+// porque, quando a porta 4222 está dropada/inalcançável, o dial TRAVA até
+// estourar — e cada segundo aqui sai direto da grace do viewer.
+const (
+	remoteDebugNativeDialTimeout = 3 * time.Second
+	remoteDebugWSDialTimeout     = 8 * time.Second // TLS + handshake do proxy
+)
+
+// remoteDebugCandidate é um endpoint candidato já normalizado.
+type remoteDebugCandidate struct {
+	raw       string
+	url       string
+	proxyPath string
+}
+
+// remoteDebugEndpointCandidates monta a lista ORDENADA de transportes do remote
+// debug.
+//
+// FIX 2026-10-14 (debug remoto nunca conecta quando a 4222 é inalcançável):
+// os candidatos vinham APENAS de cfg.NatsServer, cfg.NatsWsServer e do
+// stream.natsWssUrl. Em deployments em que o NATS só é exposto por WebSocket na
+// 443 (proxy reverso/Tunnel — ex. discovery.pstefano.com.br), o servidor manda
+// NatsWsServer vazio e NÃO inclui natsWsUrl no payload do comando remotedebug
+// (esse campo só vai para o viewer, na resposta HTTP). O único candidato que
+// sobrava era nats://host:4222 → timeout → "nenhum transporte remoto
+// disponivel": a sessão morria antes de assinar .remote-debug.control e o
+// console exibia "O agente não respondeu ao canal de controle".
+//
+// Agora os endpoints também derivam do ApiServer — mesma política do worker de
+// remote session e do agentconn (wss://<host>/nats/ e nats://<host>:4222) — e
+// todos passam por agentconn.NormalizeClientEndpoint, que fixa porta explícita
+// (o nats.go não aplica porta padrão em ws/wss → "dial tcp host:0") e devolve o
+// ProxyPath (o dialer ignora o path da URL → o handshake cairia no "/" do site).
+//
+// Ordem: WSS primeiro. O primeiro transporte que conecta vira o primário da
+// sessão, então não se paga o timeout do nativo quando já existe WSS funcional.
+func remoteDebugEndpointCandidates(cfg Config, stream StreamConfig) []remoteDebugCandidate {
+	apiHost := endpointHost(cfg.ApiServer)
+
+	raw := make([]string, 0, 5)
+	if wss := strings.TrimSpace(stream.NatsWssURL); wss != "" {
+		raw = append(raw, wss)
+	}
+	if wss := strings.TrimSpace(cfg.NatsWsServer); wss != "" {
+		raw = append(raw, wss)
+	}
+	if apiHost != "" {
+		raw = append(raw, "wss://"+apiHost+"/nats/")
+	}
+	if srv := strings.TrimSpace(cfg.NatsServer); srv != "" {
+		raw = append(raw, srv)
+	}
+	if apiHost != "" {
+		raw = append(raw, "nats://"+apiHost+":4222")
+	}
+
+	candidates := make([]remoteDebugCandidate, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for _, r := range raw {
+		ep, err := agentconn.NormalizeClientEndpoint(r)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[remote-debug] endpoint NATS ignorado (%q): %v\n", r, err)
+			continue
+		}
+		if _, dup := seen[ep.URL]; dup {
+			continue
+		}
+		seen[ep.URL] = struct{}{}
+		candidates = append(candidates, remoteDebugCandidate{raw: r, url: ep.URL, proxyPath: ep.ProxyPath})
+	}
+	return candidates
+}
+
+// endpointHost extrai apenas o host de um valor que pode chegar como "host",
+// "host:porta" ou "https://host/path" — o campo do admin aceita as três formas.
+func endpointHost(value string) string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return ""
+	}
+	if idx := strings.Index(v, "://"); idx >= 0 {
+		v = v[idx+3:]
+	}
+	if idx := strings.IndexAny(v, "/?#"); idx >= 0 {
+		v = v[:idx]
+	}
+	if host, _, err := net.SplitHostPort(v); err == nil {
+		v = host
+	}
+	return strings.Trim(strings.TrimSpace(v), "[]")
+}
+
+func remoteDebugTransportLabel(url string) string {
+	if strings.HasPrefix(url, "ws://") || strings.HasPrefix(url, "wss://") {
+		return "nats-wss"
+	}
+	return "nats"
+}
+
+func remoteDebugDialTimeout(url string) time.Duration {
+	if strings.HasPrefix(url, "nats://") {
+		return remoteDebugNativeDialTimeout
+	}
+	return remoteDebugWSDialTimeout
+}
+
+// BuildPublishers cria o publisher de uma sessão de remote debug.
+//
+// Usa o primeiro transporte que conectar como primário: a sessão precisa subir
+// dentro da grace do viewer (era exatamente aí que falhava) e o natsPublisher
+// já restabelece a conexão sozinho (MaxReconnects=-1), então gastar 3-8s com
+// transportes secundários só atrasaria o start.
 func BuildPublishers(cfg Config, stream StreamConfig, token string, clientID, siteID string) ([]Publisher, error) {
-	var publishers []Publisher
 	subject := ResolveSubject(strings.TrimSpace(stream.NatsSubject), clientID, siteID, strings.TrimSpace(cfg.AgentID))
 	if subject == "" {
 		return nil, fmt.Errorf("subject NATS ausente no comando de remote debug")
@@ -161,22 +275,28 @@ func BuildPublishers(cfg Config, stream StreamConfig, token string, clientID, si
 		return nil, fmt.Errorf("subject NATS inválido para remote debug: esperado sufixo .remote-debug.log, recebido=%q", subject)
 	}
 
-	if p, err := newNATSPublisher(strings.TrimSpace(cfg.NatsServer), token, subject, "nats"); err == nil {
-		publishers = append(publishers, p)
-	}
-
-	wss := strings.TrimSpace(stream.NatsWssURL)
-	if wss == "" {
-		wss = strings.TrimSpace(cfg.NatsWsServer)
-	}
-	if p, err := newNATSPublisher(wss, token, subject, "nats-wss"); err == nil {
-		publishers = append(publishers, p)
-	}
-
-	if len(publishers) == 0 {
+	candidates := remoteDebugEndpointCandidates(cfg, stream)
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("nenhum transporte remoto disponivel")
 	}
-	return publishers, nil
+
+	var lastErr error
+	for _, c := range candidates {
+		fmt.Fprintf(os.Stderr, "[remote-debug] tentando NATS %s (timeout %s)\n", c.url, remoteDebugDialTimeout(c.url))
+		p, err := newNATSPublisher(c.raw, token, subject, remoteDebugTransportLabel(c.url))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[remote-debug] NATS falhou (%s): %v\n", c.url, err)
+			lastErr = err
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "[remote-debug] nats conectado: %s\n", c.url)
+		return []Publisher{p}, nil
+	}
+
+	if lastErr != nil {
+		return nil, fmt.Errorf("nenhum transporte remoto disponivel: %w", lastErr)
+	}
+	return nil, fmt.Errorf("nenhum transporte remoto disponivel")
 }
 
 func newNATSPublisher(server, token, subject, name string) (Publisher, error) {
@@ -191,11 +311,19 @@ func newNATSPublisher(server, token, subject, name string) (Publisher, error) {
 		return nil, err
 	}
 
-	nc, err := nats.Connect(server,
+	// Porta explícita + ProxyPath: sem isso o candidato wss falha de forma
+	// instantânea e silenciosa (dial "host:0" / "invalid websocket connection")
+	// — mesma correção já aplicada ao worker de remote session.
+	ep, err := agentconn.NormalizeClientEndpoint(server)
+	if err != nil {
+		return nil, err
+	}
+
+	opts := []nats.Option{
 		nats.Name("discovery-remote-debug"),
 		nats.Token(normalizedToken),
-		nats.Timeout(5*time.Second),
-		nats.ReconnectWait(2*time.Second),
+		nats.Timeout(remoteDebugDialTimeout(ep.URL)),
+		nats.ReconnectWait(2 * time.Second),
 		// Reconexão ilimitada, como a sessão principal do agenteconn. Com
 		// MaxReconnects(1) um blip de rede fechava a conexão em definitivo: o
 		// manager aposentava este transporte (activeIndex avança de forma
@@ -204,7 +332,12 @@ func newNATSPublisher(server, token, subject, name string) (Publisher, error) {
 		// os logs saem quando a conexão volta; se o buffer estourar, o Publish
 		// devolve erro e o fallback para o próximo transporte acontece.
 		nats.MaxReconnects(-1),
-	)
+	}
+	if ep.ProxyPath != "" {
+		opts = append(opts, nats.ProxyPath(ep.ProxyPath))
+	}
+
+	nc, err := nats.Connect(ep.URL, opts...)
 	if err != nil {
 		return nil, err
 	}

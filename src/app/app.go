@@ -689,6 +689,9 @@ func NewApp(opts AppStartupOptions) *App {
 				AgentID:      cfg.AgentID,
 				NatsServer:   cfg.NatsServer,
 				NatsWsServer: cfg.NatsWsServer,
+				// Permite derivar wss://<host>/nats/ e nats://<host>:4222 quando
+				// NatsWsServer vem vazio (ver BuildPublishers).
+				ApiServer: cfg.ApiServer,
 			}
 		},
 		GetAgentConfig: func() remotedebug.AgentConfig {

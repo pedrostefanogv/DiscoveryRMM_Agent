@@ -146,3 +146,86 @@ func TestNewNATSPublisher_RejectsIncompleteConfig(t *testing.T) {
 		})
 	}
 }
+
+// TestRemoteDebugEndpointCandidates_DerivesFromApiServer cobre o FIX de
+// 2026-10-14: com NatsWsServer vazio (o caso real de um deployment que só expõe
+// o NATS por WebSocket na 443), os candidatos precisam ser derivados do
+// ApiServer — com o wss PRIMEIRO, porta explícita e ProxyPath.
+func TestRemoteDebugEndpointCandidates_DerivesFromApiServer(t *testing.T) {
+	cands := remoteDebugEndpointCandidates(
+		Config{
+			AgentID:    "d2719a7d-43bb-4e7e-bbe6-18dce7bf1db7",
+			NatsServer: "nats://discovery.pstefano.com.br:4222",
+			ApiServer:  "discovery.pstefano.com.br",
+		},
+		StreamConfig{NatsSubject: testDebugSubject},
+	)
+
+	urls := make([]string, 0, len(cands))
+	for _, c := range cands {
+		urls = append(urls, c.url)
+	}
+	want := []string{
+		"wss://discovery.pstefano.com.br:443/nats/",
+		"nats://discovery.pstefano.com.br:4222",
+	}
+	if len(urls) != len(want) {
+		t.Fatalf("candidatos = %v, esperado %v", urls, want)
+	}
+	for i := range want {
+		if urls[i] != want[i] {
+			t.Fatalf("candidato[%d] = %q, esperado %q (todos: %v)", i, urls[i], want[i], urls)
+		}
+	}
+	if cands[0].proxyPath != "/nats/" {
+		t.Fatalf("ProxyPath do wss = %q, esperado /nats/", cands[0].proxyPath)
+	}
+}
+
+// TestRemoteDebugEndpointCandidates_NoDuplicates garante que WSS explícito do
+// comando/config não é duplicado com o derivado do ApiServer, e que o host
+// aceita as três formas (host, host:porta, URL com path).
+func TestRemoteDebugEndpointCandidates_NoDuplicates(t *testing.T) {
+	cands := remoteDebugEndpointCandidates(
+		Config{
+			ApiServer:    "https://discovery.pstefano.com.br/api/",
+			NatsWsServer: "wss://discovery.pstefano.com.br/nats/",
+		},
+		StreamConfig{NatsSubject: testDebugSubject, NatsWssURL: "wss://discovery.pstefano.com.br:443/nats/"},
+	)
+
+	seen := map[string]int{}
+	for _, c := range cands {
+		seen[c.url]++
+	}
+	for url, n := range seen {
+		if n != 1 {
+			t.Fatalf("candidato duplicado %q (%d vezes): %+v", url, n, cands)
+		}
+	}
+	if len(cands) != 2 {
+		t.Fatalf("esperava 2 candidatos (wss + nativo derivado), got %d: %+v", len(cands), cands)
+	}
+	if cands[0].url != "wss://discovery.pstefano.com.br:443/nats/" || cands[0].proxyPath != "/nats/" {
+		t.Fatalf("primeiro candidato = %+v", cands[0])
+	}
+	if cands[1].url != "nats://discovery.pstefano.com.br:4222" {
+		t.Fatalf("segundo candidato = %+v", cands[1])
+	}
+}
+
+// TestEndpointHost cobre as formas aceitas no campo do admin.
+func TestEndpointHost(t *testing.T) {
+	cases := map[string]string{
+		"discovery.pstefano.com.br":              "discovery.pstefano.com.br",
+		"https://discovery.pstefano.com.br/api/": "discovery.pstefano.com.br",
+		"host:4222":                              "host",
+		"  ":                                     "",
+		"":                                       "",
+	}
+	for in, want := range cases {
+		if got := endpointHost(in); got != want {
+			t.Fatalf("endpointHost(%q) = %q, esperado %q", in, got, want)
+		}
+	}
+}

@@ -8,4 +8,10 @@ type Config struct {
 	AgentID      string
 	NatsServer   string
 	NatsWsServer string
+	// ApiServer é o servidor da API (host, com ou sem esquema/path — ex.
+	// "discovery.pstefano.com.br" ou "https://host/api/"). É a ÚNICA fonte
+	// confiável para derivar os endpoints NATS quando a config/comando não os
+	// trazem: em deployments em que o broker só é exposto por WebSocket na 443,
+	// NatsWsServer chega vazio e o comando remotedebug não carrega natsWsUrl.
+	ApiServer string
 }
