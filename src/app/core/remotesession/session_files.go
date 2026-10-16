@@ -71,9 +71,13 @@ func (sf *SessionFiles) Start(ctx context.Context) error {
 	// Notifica o viewer que a sessão está pronta (subscribe ativo). O viewer
 	// aguarda files.ready antes de enviar o primeiro list — evita a race em
 	// que o list chega antes do subscribe e é perdido (NATS core sem replay).
+	// "drives" permite ao viewer oferecer a troca de disco (C:, D:, ...).
+	// Fica null/ausente quando a sessão tem rootPath em subpasta (sandbox
+	// restrito, sem troca de volume).
 	_ = sf.natsStream.PublishFilesReady(sf.sessionID, map[string]any{
 		"rootPath": sf.server.RootPath(),
 		"status":   "ready",
+		"drives":   sf.server.AllowedDrives(),
 	})
 
 	select {

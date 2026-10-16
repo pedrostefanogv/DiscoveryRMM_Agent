@@ -27,6 +27,10 @@ type FileInfo struct {
 	IsLink bool `json:"isLink,omitempty"`
 	// LinkTarget é o alvo do link quando legível (pode ser vazio).
 	LinkTarget string `json:"linkTarget,omitempty"`
+	// IsHidden indica que o item tem o atributo HIDDEN do Windows. A UI usa
+	// isso para esmaecer a linha/ícone (sem esconder a entrada — o operador
+	// precisa ver que ela existe).
+	IsHidden bool `json:"isHidden,omitempty"`
 }
 
 // FileSessionRequest representa uma requisicao de arquivo versionada (v1).
@@ -55,6 +59,10 @@ type FileSessionResponse struct {
 	Size        int64      `json:"size,omitempty"`
 	ChunkIndex  int        `json:"chunkIndex,omitempty"`
 	TotalChunks int        `json:"totalChunks,omitempty"`
+	// Drives é preenchido na ação "drives" (e no files.ready) com as unidades
+	// lógicas disponíveis no host. Fica vazio quando a sessão tem sandbox
+	// restrito a um diretório (sem permissão de trocar de volume).
+	Drives []DriveInfo `json:"drives,omitempty"`
 }
 
 // FileRequest representa uma requisicao de arquivo legada (list/get/put/delete).
@@ -78,6 +86,12 @@ type FileResponse struct {
 type Server struct {
 	basePath string // diretorio raiz permitido
 
+	// allowOtherVolumes libera a navegação para outras unidades lógicas
+	// (ex.: rootPath "C:\" e o operador abre "D:\"). Fica DESLIGADO por
+	// padrão quando o root é um subdiretório — nesse caso o sandbox continua
+	// restrito à árvore do rootPath.
+	allowOtherVolumes bool
+
 	// M29: auditoria de operações mutantes (put/delete/rename/mkdir/move/copy/
 	// unzip) — injetada pela SessionFiles; log local + evento ao servidor quando
 	// habilitado (DISCOVERY_FILES_AUDIT, default on).
@@ -89,8 +103,33 @@ type Server struct {
 }
 
 // NewServer cria um novo servidor de arquivos.
+//
+// Quando basePath é a raiz de um volume ("C:\") a sessão nasce com
+// AllowOtherVolumes ligado: o operador pode trocar de disco (D:, E:, ...)
+// como no Explorer. Para um sandbox em subpasta a navegação continua
+// restrita à árvore de basePath.
 func NewServer(basePath string) *Server {
-	return &Server{basePath: filepath.Clean(basePath)}
+	clean := normalizeVolumeRootPath(basePath)
+	return &Server{basePath: clean, allowOtherVolumes: isVolumeRootPath(clean)}
+}
+
+// SetAllowOtherVolumes liga/desliga a navegação para outras unidades lógicas.
+func (s *Server) SetAllowOtherVolumes(allow bool) {
+	s.allowOtherVolumes = allow
+}
+
+// AllowOtherVolumes informa se a troca de disco está habilitada.
+func (s *Server) AllowOtherVolumes() bool {
+	return s.allowOtherVolumes
+}
+
+// AllowedDrives devolve as unidades oferecíveis ao viewer. Retorna nil quando
+// a sessão é restrita a uma subpasta (sem troca de disco).
+func (s *Server) AllowedDrives() []DriveInfo {
+	if !s.allowOtherVolumes {
+		return nil
+	}
+	return ListDrives()
 }
 
 // SetProgressCallback define o callback de progresso para operações longas.
@@ -155,6 +194,8 @@ func (s *Server) dispatch(action, path, newPath string, data []byte, chunkIndex 
 		resp = s.handleCopy(path, newPath)
 	case "stat":
 		resp = s.handleStat(path)
+	case "drives":
+		resp = s.handleDrives()
 	case "zip":
 		resp = s.handleZipMany(path, newPath, paths)
 	case "unzip":
@@ -183,6 +224,8 @@ const (
 	// junctions como os.ModeSymlink (depende da tag de reparse), então a detecção
 	// confiável é via atributos nativos do Windows em info.Sys().
 	fileAttributeReparsePoint = 0x400
+	// FILE_ATTRIBUTE_HIDDEN (0x2) — pastas/arquivos ocultos do Explorer.
+	fileAttributeHidden = 0x2
 )
 
 // isReparsePoint informa se a entrada tem o atributo REPARSE_POINT do Windows
@@ -194,6 +237,27 @@ func isReparsePoint(info os.FileInfo) bool {
 		return false
 	}
 	return attrs.FileAttributes&fileAttributeReparsePoint != 0
+}
+
+// isHiddenAttribute informa se a entrada tem o atributo HIDDEN do Windows.
+// Retorna false quando o SO não expõe os atributos (defensivo).
+func isHiddenAttribute(info os.FileInfo) bool {
+	attrs, ok := info.Sys().(*syscall.Win32FileAttributeData)
+	if !ok || attrs == nil {
+		return false
+	}
+	return attrs.FileAttributes&fileAttributeHidden != 0
+}
+
+// handleDrives devolve as unidades lógicas oferecíveis ao viewer. Quando o
+// sandbox é uma subpasta (allowOtherVolumes=false) retorna lista vazia — a UI
+// esconde o seletor de disco nesse caso.
+func (s *Server) handleDrives() FileSessionResponse {
+	drives := s.AllowedDrives()
+	if drives == nil {
+		drives = []DriveInfo{}
+	}
+	return FileSessionResponse{Version: 1, Success: true, Entries: []FileInfo{}, Drives: drives}
 }
 
 func (s *Server) handleList(path string) FileSessionResponse {
@@ -217,6 +281,9 @@ func (s *Server) handleList(path string) FileSessionResponse {
 		isDir := entry.IsDir()
 		isLink := false
 		linkTarget := ""
+		// Atributo do próprio item (Lstat). Para reparse points mantém o OR com
+		// o alvo: o Explorer mostra o link como oculto quando o link OU o alvo é.
+		isHidden := isHiddenAttribute(info)
 		// Junctions e symlinks (reparse points) chegam com IsDir()=false mesmo
 		// apontando para pastas (ex.: C:\Users\All Users, "Arquivos de Programas",
 		// "Menu Iniciar"). Detecta via atributo REPARSE_POINT do Windows (o Go
@@ -232,6 +299,7 @@ func (s *Server) handleList(path string) FileSessionResponse {
 				}
 				// Tamanho/data do alvo (o Lstat do link retorna 0).
 				info = resolved
+				isHidden = isHidden || isHiddenAttribute(info)
 			}
 		}
 		files = append(files, FileInfo{
@@ -242,6 +310,7 @@ func (s *Server) handleList(path string) FileSessionResponse {
 			ModTime:    info.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
 			IsLink:     isLink,
 			LinkTarget: linkTarget,
+			IsHidden:   isHidden,
 		})
 	}
 
@@ -893,7 +962,7 @@ func (s *Server) safePath(rel string) (string, error) {
 		return s.basePath, nil
 	}
 
-	clean := filepath.Clean(strings.TrimSpace(rel))
+	clean := normalizeVolumeRootPath(rel)
 
 	// Se o caminho é absoluto, usa diretamente (sem Join com basePath).
 	// Senão, resolve contra basePath. (Join com absoluto produziria "C:\C:\...").
@@ -913,8 +982,70 @@ func (s *Server) safePath(rel string) (string, error) {
 		return full, nil
 	}
 
+	// Volume diferente: liberado somente quando a sessão permite trocar de disco
+	// (rootPath é raiz de volume) e full está numa unidade lógica existente.
+	// Caminhos UNC (\\host\share) continuam bloqueados.
+	if s.allowOtherVolumes && isAllowedVolumePath(full) {
+		return full, nil
+	}
+
 	// Volume diferente ou erro — bloqueia
 	return s.basePath, fmt.Errorf("caminho fora do sandbox: %s", rel)
+}
+
+// normalizeVolumeRootPath normaliza uma raiz de unidade para "X:\\".
+//
+// Necessário porque filepath.Clean("C:") devolve "C:." (unidade sem caminho),
+// e filepath.IsAbs("C:") é false — sem isso "C:" cairia dentro do volume base
+// como "C:\C:." em vez de apontar para a raiz da unidade.
+func normalizeVolumeRootPath(p string) string {
+	trimmed := strings.TrimSpace(p)
+	vol := filepath.VolumeName(trimmed)
+	if isDriveLetterVolume(vol) {
+		rest := strings.TrimLeft(trimmed[len(vol):], "\\/")
+		if rest == "" || rest == "." {
+			return vol + string(filepath.Separator)
+		}
+	}
+	return filepath.Clean(trimmed)
+}
+
+// isVolumeRootPath informa se p é a raiz de um volume ("C:\" ou "D:\").
+// Espera um caminho já normalizado por normalizeVolumeRootPath.
+func isVolumeRootPath(p string) bool {
+	vol := filepath.VolumeName(p)
+	if !isDriveLetterVolume(vol) {
+		return false
+	}
+	clean := filepath.Clean(p)
+	return clean == vol || clean == vol+string(filepath.Separator)
+}
+
+// isDriveLetterVolume aceita apenas volumes com letra de unidade ("C:") —
+// descarta UNC (\\host\share) e nomes especiais.
+func isDriveLetterVolume(vol string) bool {
+	if len(vol) != 2 || vol[1] != ':' {
+		return false
+	}
+	c := vol[0]
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+}
+
+// isAllowedVolumePath informa se full está numa unidade lógica com letra
+// (C:, D:, ...) acessível. Além do volume base, é o único destino aceito
+// quando AllowOtherVolumes está ligado — descarta UNC e caminhos relativos.
+func isAllowedVolumePath(full string) bool {
+	if !filepath.IsAbs(full) {
+		return false
+	}
+	vol := filepath.VolumeName(full)
+	if !isDriveLetterVolume(vol) {
+		return false
+	}
+	if _, err := os.Stat(vol + string(filepath.Separator)); err != nil {
+		return false
+	}
+	return true
 }
 
 func (s *Server) okResponse(files []FileInfo, data []byte, size int64, chunkIndex, totalChunks int) FileSessionResponse {
