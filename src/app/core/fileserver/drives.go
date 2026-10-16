@@ -38,6 +38,14 @@ var (
 	procGetVolumeInformationWDrives = modKernel32Drives.NewProc("GetVolumeInformationW")
 )
 
+// nameForRoot converte "C:\\" em "C:" (letra da unidade para exibição).
+func nameForRoot(root string) string {
+	if len(root) >= 2 && (root[len(root)-1] == '\\' || root[len(root)-1] == '/') {
+		return root[:len(root)-1]
+	}
+	return root
+}
+
 // driveTypeName mapeia DRIVE_* do Windows para um rótulo estável usado no JSON.
 func driveTypeName(t uintptr) string {
 	switch int(t) {
@@ -101,6 +109,16 @@ func ListDrives() []DriveInfo {
 			continue
 		}
 		driveType, _, _ := procGetDriveTypeWDrives.Call(uintptr(unsafe.Pointer(rootPtr)))
+		typeName := driveTypeName(driveType)
+
+		// Unidade de rede desconectada pode segurar GetDiskFreeSpaceEx/
+		// GetVolumeInformation por segundos (timeout SMB) — inclusive no
+		// files.ready. Não consultamos: a unidade segue navegável e o erro
+		// real aparece no list/get, sem travar a sessão.
+		if typeName == "network" {
+			drives = append(drives, DriveInfo{Name: nameForRoot(root), Root: root, Type: typeName, Ready: true})
+			continue
+		}
 
 		var freeAvailable, totalBytes, totalFree int64
 		fr, _, _ := procGetDiskFreeSpaceExWDrives.Call(
@@ -133,17 +151,12 @@ func ListDrives() []DriveInfo {
 			}
 		}
 
-		name := root
-		if len(name) >= 2 && (name[len(name)-1] == '\\' || name[len(name)-1] == '/') {
-			name = name[:len(name)-1]
-		}
-
 		info := DriveInfo{
-			Name:       name,
+			Name:       nameForRoot(root),
 			Root:       root,
 			Label:      label,
 			FileSystem: fileSystem,
-			Type:       driveTypeName(driveType),
+			Type:       typeName,
 			Ready:      ready,
 		}
 		if ready {

@@ -11,6 +11,35 @@ import (
 
 // ── Troca de disco (múltiplos volumes) e itens ocultos ─────────────────────
 
+// TestDriveHelpers cobre os mapeamentos simples usados na lista de unidades.
+func TestDriveHelpers(t *testing.T) {
+	nameCases := map[string]string{
+		"C:\\": "C:",
+		"D:/":  "D:",
+		"D:":   "D:",
+		"":     "",
+	}
+	for input, want := range nameCases {
+		if got := nameForRoot(input); got != want {
+			t.Fatalf("nameForRoot(%q) = %q, want %q", input, got, want)
+		}
+	}
+
+	typeCases := map[uintptr]string{
+		drvTypeRemovable: "removable",
+		drvTypeFixed:     "fixed",
+		drvTypeRemote:    "network",
+		drvTypeCDROM:     "cdrom",
+		drvTypeRAMDisk:   "ramdisk",
+		999:              "unknown",
+	}
+	for input, want := range typeCases {
+		if got := driveTypeName(input); got != want {
+			t.Fatalf("driveTypeName(%d) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 // TestNewServer_NormalizesVolumeRoot garante que "C:" (drive-relative) vira
 // "C:\\" — sem isso RootPath/Join não apontam para a raiz da unidade.
 func TestNewServer_NormalizesVolumeRoot(t *testing.T) {

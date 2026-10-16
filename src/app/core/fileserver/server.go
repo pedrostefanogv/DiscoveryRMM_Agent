@@ -1032,8 +1032,12 @@ func isDriveLetterVolume(vol string) bool {
 }
 
 // isAllowedVolumePath informa se full está numa unidade lógica com letra
-// (C:, D:, ...) acessível. Além do volume base, é o único destino aceito
-// quando AllowOtherVolumes está ligado — descarta UNC e caminhos relativos.
+// (C:, D:, ...). Além do volume base, é o único destino aceito quando
+// AllowOtherVolumes está ligado — descarta UNC e caminhos relativos.
+//
+// A validação usa a enumeração de letras do sistema (GetLogicalDriveStringsW,
+// barata) em vez de os.Stat na raiz: tocar a raiz de uma unidade de rede
+// desconectada pode bloquear por timeout SMB em cada requisição.
 func isAllowedVolumePath(full string) bool {
 	if !filepath.IsAbs(full) {
 		return false
@@ -1042,10 +1046,12 @@ func isAllowedVolumePath(full string) bool {
 	if !isDriveLetterVolume(vol) {
 		return false
 	}
-	if _, err := os.Stat(vol + string(filepath.Separator)); err != nil {
-		return false
+	for _, root := range logicalDriveRoots() {
+		if strings.EqualFold(strings.TrimRight(root, "\\/"), vol) {
+			return true
+		}
 	}
-	return true
+	return false
 }
 
 func (s *Server) okResponse(files []FileInfo, data []byte, size int64, chunkIndex, totalChunks int) FileSessionResponse {
