@@ -40,7 +40,23 @@ type Policy struct {
 	// padrão). É PERSISTIDA no arquivo da política — sobrevive a reinício e
 	// atualização do agente — e nasce DESLIGADA (nil/false = pergunta sempre).
 	AllowSessionCapture *bool `json:"allowSessionCapture,omitempty"`
+	// CopyOnConfirm copia a captura para a área de transferência ao confirmar a
+	// seleção no overlay. Opt-in: o padrão é não mexer no clipboard do usuário.
+	CopyOnConfirm *bool `json:"copyOnConfirm,omitempty"`
+	// GalleryEnabled liga a galeria local ("Discovery Capturas"). Default true.
+	GalleryEnabled *bool `json:"galleryEnabled,omitempty"`
+	// GalleryMaxItems limita quantos itens a galeria mantém. Default 50,
+	// clampado em 1..500.
+	GalleryMaxItems int `json:"galleryMaxItems,omitempty"`
 }
+
+const (
+	// DefaultGalleryMaxItems é o teto padrão de itens da galeria.
+	DefaultGalleryMaxItems = 50
+	// MinGalleryMaxItems/MaxGalleryMaxItems delimitam o ajuste permitido na UI.
+	MinGalleryMaxItems = 1
+	MaxGalleryMaxItems = 500
+)
 
 // DefaultPolicy devolve a política padrão do produto: sem bloqueios, tela
 // inteira permitida, janela do agente oculta durante a captura, formato
@@ -52,6 +68,8 @@ func DefaultPolicy() Policy {
 	hideWindow := true
 	allowAi := true
 	allowAlways := false
+	copyOnConfirm := false
+	galleryEnabled := true
 	return Policy{
 		BlockedProcesses:     []string{},
 		AllowFullScreen:      &full,
@@ -62,6 +80,9 @@ func DefaultPolicy() Policy {
 		ImageFormat:          FormatAuto,
 		AllowAiCapture:       &allowAi,
 		AllowSessionCapture:  &allowAlways,
+		CopyOnConfirm:        &copyOnConfirm,
+		GalleryEnabled:       &galleryEnabled,
+		GalleryMaxItems:      DefaultGalleryMaxItems,
 	}
 }
 
@@ -110,6 +131,38 @@ func (p Policy) HideWindowOnCapture() bool {
 		return true
 	}
 	return *p.HideAgentWindow
+}
+
+// CopyOnConfirmEnabled indica se a captura deve ir para a área de
+// transferência ao confirmar. Default false (opt-in).
+func (p Policy) CopyOnConfirmEnabled() bool {
+	if p.CopyOnConfirm == nil {
+		return false
+	}
+	return *p.CopyOnConfirm
+}
+
+// GalleryAllowed indica se a galeria local está habilitada. Default true.
+func (p Policy) GalleryAllowed() bool {
+	if p.GalleryEnabled == nil {
+		return true
+	}
+	return *p.GalleryEnabled
+}
+
+// GalleryItemLimit devolve o limite de itens da galeria normalizado (1..500).
+func (p Policy) GalleryItemLimit() int {
+	limit := p.GalleryMaxItems
+	if limit <= 0 {
+		return DefaultGalleryMaxItems
+	}
+	if limit < MinGalleryMaxItems {
+		return MinGalleryMaxItems
+	}
+	if limit > MaxGalleryMaxItems {
+		return MaxGalleryMaxItems
+	}
+	return limit
 }
 
 // LimitMax devolve o teto de capturas normalizado.
@@ -193,10 +246,15 @@ func (p Policy) Normalize() Policy {
 	requireWindow := out.WindowRequired()
 	hideWindow := out.HideWindowOnCapture()
 	allowAi := out.AiCaptureAllowed()
+	copyOnConfirm := out.CopyOnConfirmEnabled()
+	galleryEnabled := out.GalleryAllowed()
 	out.AllowFullScreen = &full
 	out.RequireWindow = &requireWindow
 	out.HideAgentWindow = &hideWindow
 	out.AllowAiCapture = &allowAi
+	out.CopyOnConfirm = &copyOnConfirm
+	out.GalleryEnabled = &galleryEnabled
+	out.GalleryMaxItems = out.GalleryItemLimit()
 	out.MaxCapturesPerWindow = out.LimitMax()
 	out.WindowMinutes = int(out.LimitWindow().Minutes())
 	out.ImageFormat = NormalizeFormat(out.ImageFormat)

@@ -196,6 +196,27 @@ func (h *NatsStreamHandler) PublishTermStats(sessionID string, data any) error {
 	return nil
 }
 
+// PublishTermCwd publica o diretório corrente REPORTADO pelo shell da sessão
+// (subject .term.cwd, agent->viewer — contrato aditivo). Payload:
+// {"cwd":..,"shellKind":..,"atMs":..}. Erros são devolvidos para o
+// SessionTerminal contabilizar em publishErrors.
+//
+// A linha do subject precisa ser adicionada à ACL de publicação do viewer em
+// DiscoveryRMM_API/docs/NATS_SUBJECTS_ACL.md (fora do escopo desta mudança).
+func (h *NatsStreamHandler) PublishTermCwd(sessionID string, data any) error {
+	payload, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[remote-session-nats] PublishTermCwd marshal erro: %v\n", err)
+		return err
+	}
+	subject := h.publishSubject(sessionID, "term.cwd")
+	if err := h.nc.Publish(subject, payload); err != nil {
+		log.Printf("[remote-session-nats] PublishTermCwd erro: subject=%s err=%v\n", subject, err)
+		return err
+	}
+	return nil
+}
+
 // PublishRecordingTerm envia frames de terminal para gravacao.
 func (h *NatsStreamHandler) PublishRecordingTerm(sessionID string, data []byte) error {
 	subject := h.publishSubject(sessionID, "recording.term")

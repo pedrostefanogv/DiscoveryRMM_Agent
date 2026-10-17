@@ -264,6 +264,7 @@ func TestLoadPersistedConfig_StripsUTF8BOM(t *testing.T) {
 
 	svc := NewService(Options{})
 	svc.LoadPersistedConfig()
+	defer svc.StopWatcher()
 
 	cfg := svc.GetConfig()
 	if cfg.Scheme != "https" {
@@ -341,18 +342,18 @@ func TestApplyRuntimeConnectionConfig_DerivesNativeNATSServerFromAPIServer(t *te
 }
 
 func TestApplyRemoteConnectionSecurity_UpdatesConfigAndReloads(t *testing.T) {
-	oldWriteFile := osWriteFile
+	oldAtomicWrite := atomicWriteFile
 	oldMkdirAll := osMkdirAll
 	oldExecutable := osExecutable
 	oldUserHomeDir := osUserHomeDir
 	defer func() {
-		osWriteFile = oldWriteFile
+		atomicWriteFile = oldAtomicWrite
 		osMkdirAll = oldMkdirAll
 		osExecutable = oldExecutable
 		osUserHomeDir = oldUserHomeDir
 	}()
 
-	osWriteFile = func(string, []byte, os.FileMode) error { return nil }
+	atomicWriteFile = func(string, []byte, func(string) error) error { return nil }
 	osMkdirAll = func(string, os.FileMode) error { return nil }
 	osExecutable = func() (string, error) { return "", errors.New("sem executavel") }
 	osUserHomeDir = func() (string, error) { return "", errors.New("sem home") }
@@ -415,18 +416,18 @@ func TestP2PWingetInstallEnabledDefaultsTrue(t *testing.T) {
 }
 
 func TestApplyP2PWingetInstallEnabledRemote_AppliesAndPersists(t *testing.T) {
-	oldWriteFile := osWriteFile
+	oldAtomicWrite := atomicWriteFile
 	oldMkdirAll := osMkdirAll
 	oldExecutable := osExecutable
 	oldUserHomeDir := osUserHomeDir
 	defer func() {
-		osWriteFile = oldWriteFile
+		atomicWriteFile = oldAtomicWrite
 		osMkdirAll = oldMkdirAll
 		osExecutable = oldExecutable
 		osUserHomeDir = oldUserHomeDir
 	}()
 
-	osWriteFile = func(string, []byte, os.FileMode) error { return nil }
+	atomicWriteFile = func(string, []byte, func(string) error) error { return nil }
 	osMkdirAll = func(string, os.FileMode) error { return nil }
 	osExecutable = func() (string, error) { return "", errors.New("sem executavel") }
 	osUserHomeDir = func() (string, error) { return "", errors.New("sem home") }

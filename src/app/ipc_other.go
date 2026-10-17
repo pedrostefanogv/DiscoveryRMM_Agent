@@ -3,6 +3,7 @@
 package app
 
 import (
+	"context"
 	"net"
 	"time"
 )
@@ -49,3 +50,25 @@ func probeServiceHello(time.Duration) (IPCServiceHelloAck, bool) { return IPCSer
 
 // IsServiceProtocolCompatible é um stub não-Windows.
 func IsServiceProtocolCompatible(int) bool { return true }
+
+// ipcActiveSessionProvider é o stub não-Windows (sessão interativa do Windows).
+var ipcActiveSessionProvider = func() ipcAuthIdentity { return ipcAuthIdentity{} }
+
+// currentNotificationTarget é um stub não-Windows.
+func (*IPCServer) currentNotificationTarget() (ipcAuthIdentity, bool) {
+	return ipcAuthIdentity{}, false
+}
+
+// authorizeRPC é um stub não-Windows.
+func (*IPCServer) authorizeRPC(net.Conn, IPCMessage) (context.Context, error) {
+	return context.Background(), nil
+}
+
+// recordRequestResult é um stub não-Windows.
+func (*IPCServer) recordRequestResult(net.Conn, string, map[string]any) {}
+
+// authorizeRemoteSessionMessage é um stub não-Windows.
+func (*IPCServer) authorizeRemoteSessionMessage(net.Conn, map[string]any) error { return nil }
+
+// authorizeNotificationRespond é um stub não-Windows.
+func (*IPCServer) authorizeNotificationRespond(net.Conn, map[string]any) bool { return true }

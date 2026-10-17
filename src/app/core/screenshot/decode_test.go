@@ -3,9 +3,12 @@ package screenshot
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
+	"strings"
 	"testing"
 )
 
@@ -64,5 +67,73 @@ func TestDecodeDataURLToImageRoundTrip(t *testing.T) {
 	}
 	if _, err := DecodeDataURLToImage("data:image/png;base64,@@invalido@@"); err == nil {
 		t.Fatal("base64 invalido deveria ser rejeitado")
+	}
+}
+
+// buildPNGHeaderOnly monta o cabeçalho de um PNG (assinatura + IHDR) com as
+// dimensões pedidas e sem IDAT: suficiente para image.DecodeConfig ler o
+// tamanho sem que a decodificação precise alocar a imagem inteira.
+func buildPNGHeaderOnly(width, height uint32) []byte {
+	ihdr := make([]byte, 13)
+	binary.BigEndian.PutUint32(ihdr[0:4], width)
+	binary.BigEndian.PutUint32(ihdr[4:8], height)
+	ihdr[8] = 8  // bit depth
+	ihdr[9] = 6  // RGBA
+	// compressão/filtro/interlace = 0
+
+	chunk := func(kind string, data []byte) []byte {
+		out := make([]byte, 0, 12+len(data))
+		length := make([]byte, 4)
+		binary.BigEndian.PutUint32(length, uint32(len(data)))
+		out = append(out, length...)
+		out = append(out, kind...)
+		out = append(out, data...)
+		crc := crc32.NewIEEE()
+		_, _ = crc.Write([]byte(kind))
+		_, _ = crc.Write(data)
+		sum := make([]byte, 4)
+		binary.BigEndian.PutUint32(sum, crc.Sum32())
+		return append(out, sum...)
+	}
+
+	var png []byte
+	png = append(png, 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A)
+	png = append(png, chunk("IHDR", ihdr)...)
+	return append(png, chunk("IEND", nil)...)
+}
+
+func TestDecodeDataURLImageBytesRejectsHugeDimensions(t *testing.T) {
+	// 100k x 100k pixels = 10 bilhões de pixels: o cabeçalho é barato, a
+	// decodificação seria gigabytes (decompression bomb).
+	bomb := buildPNGHeaderOnly(100_000, 100_000)
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(bomb)
+
+	_, _, err := DecodeDataURLImageBytes(dataURL)
+
+	if err == nil {
+		t.Fatal("imagem com dimensoes absurdas deveria ser recusada antes de decodificar")
+	}
+	if !strings.Contains(err.Error(), "pixels") {
+		t.Fatalf("erro = %q, want mensagem sobre pixels", err.Error())
+	}
+}
+
+func TestDecodeDataURLImageBytesAcceptsNormalImage(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 32, 24))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	raw, decoded, err := DecodeDataURLImageBytes(dataURL)
+	if err != nil {
+		t.Fatalf("imagem normal recusada: %v", err)
+	}
+	if !bytes.Equal(raw, buf.Bytes()) {
+		t.Fatal("o binario original precisa ser devolvido intacto (hash de evidencia)")
+	}
+	if decoded == nil || decoded.Bounds().Dx() != 32 || decoded.Bounds().Dy() != 24 {
+		t.Fatalf("dimensoes decodificadas = %v", decoded.Bounds())
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc"
 )
 
 const (
@@ -75,6 +76,9 @@ func (u *Updater) removeMarkOfTheWeb(exePath string) {
 
 // LaunchInstallerElevated lanca o instalador com elevação UAC via ShellExecuteEx("runas").
 // Retorna o PID e handle do processo criado para verificação de startup e watchdog.
+//
+// NUNCA deve ser usado no modo serviço (sessão 0): lá o lançamento é feito por
+// CreateProcess — ver decideInstallerLaunchMode/isServiceModeProcess.
 // Exportado para que o callback PSADT no pacote app possa chamar a elevação UAC
 // diretamente de dentro da sessão PSADT.
 func LaunchInstallerElevated(exePath string, args string) (pid uint32, processHandle windows.Handle, err error) {
@@ -108,12 +112,27 @@ func LaunchInstallerElevated(exePath string, args string) (pid uint32, processHa
 	return pid, processHandle, nil
 }
 
-// launchInstaller lanca o instalador NSIS com elevação admin e verifica que
-// o processo iniciou corretamente. O fluxo completo:
+// isServiceModeProcess reporta se o processo atual roda no contexto de serviço:
+// flag explícita (Updater.ServiceMode), SCM (svc.IsWindowsService) ou linha de
+// comando --service (execução manual do binário do serviço, sem SCM).
+func isServiceModeProcess(u *Updater) bool {
+	if u != nil && u.ServiceMode {
+		return true
+	}
+	if inService, err := svc.IsWindowsService(); err == nil && inService {
+		return true
+	}
+	return hasServiceModeArg(os.Args[1:])
+}
+
+// launchInstaller lanca o instalador NSIS conforme o contexto de execução e
+// verifica que o processo iniciou corretamente. O fluxo completo:
 //  1. Remove Mark of the Web (Zone.Identifier ADS) para evitar bloqueio SmartScreen.
-//  2. ShellExecuteEx("runas") com SEE_MASK_NOCLOSEPROCESS para obter handle.
+//  2. Decide o caminho por decideInstallerLaunchMode: CreateProcess quando já
+//     elevado/SYSTEM (inclusive modo serviço, sem UAC) ou ShellExecuteEx("runas")
+//     quando a UI comum precisa pedir elevação ao usuário.
 //  3. Verifica que o processo ainda está rodando após 3s (não morreu imediatamente).
-//  4. Se falhou na verificação, retry uma vez com CreateProcess (se já elevado).
+//  4. Se falhou na verificação, retry conforme o modo (nunca runas em serviço).
 //  5. Se o processo iniciou, dispara goroutine de watchdog para capturar exit code.
 func (u *Updater) launchInstaller(exePath string) error {
 	exePath, err := validateExecutablePath(exePath)
@@ -133,15 +152,27 @@ func (u *Updater) launchInstaller(exePath string) error {
 	// KILL_ON_JOB_CLOSE, um instalador que permaneça como filho no mesmo job
 	// seria morto junto com a fila do job.
 	//
-	// Se o processo atual já é elevado, lançamos o instalador via CreateProcess
-	// com CREATE_BREAKAWAY_FROM_JOB + DETACHED_PROCESS — criando-o como processo
-	// independente, fora do job object e da árvore de processos do agente.
-	// CreateProcess NÃO eleva privilégios, então para agente não-elevado o
-	// caminho é ShellExecuteEx("runas"); nesse caso a sobrevivência é garantida
-	// pela remoção do /T no taskkill do NSIS (não mata a árvore de processos).
-	if isProcessElevated() {
-		u.logf("[selfupdate] processo atual elevado — lançando via CreateProcess (breakaway) para independência")
-		if err := u.launchInstallerCreateProcess(exePath, "agente elevado — tentando instalador independente"); err != nil {
+	// O caminho é decidido por decideInstallerLaunchMode (função pura, testada):
+	//   - modo serviço (sessão 0/SYSTEM): SEMPRE CreateProcess, NUNCA runas;
+	//   - processo elevado: CreateProcess com CREATE_BREAKAWAY_FROM_JOB +
+	//     DETACHED_PROCESS (instalador independente, fora do job do agente);
+	//   - UI não elevada: ShellExecuteEx("runas") para pedir o UAC ao usuário.
+	serviceMode := isServiceModeProcess(u)
+	switch decideInstallerLaunchMode(serviceMode, isProcessElevated()) {
+	case installerLaunchCreateProcess:
+		contexto := "agente elevado — instalador independente"
+		if serviceMode {
+			contexto = "modo serviço (SYSTEM) — instalador via CreateProcess, sem runas"
+			u.logf("[selfupdate] modo serviço: lançando instalador via CreateProcess (SYSTEM), sem UAC")
+		} else {
+			u.logf("[selfupdate] processo atual elevado — lançando via CreateProcess (breakaway) para independência")
+		}
+		if err := u.launchInstallerCreateProcess(exePath, contexto); err != nil {
+			if serviceMode {
+				// Sessão 0 não tem desktop: runas não é uma opção (nem como
+				// último recurso). Devolve erro claro para o retry do updater.
+				return fmt.Errorf("self-update em modo serviço: CreateProcess falhou e ShellExecuteEx(runas) não é permitido na sessão 0: %w", err)
+			}
 			// Agente já elevado: ShellExecuteEx(runas) é redundante (não eleva) e
 			// colocaria o instalador de volta na árvore do agente. Preferimos
 			// tentar ShellExecuteEx(runas) apenas como último recurso.
@@ -149,16 +180,26 @@ func (u *Updater) launchInstaller(exePath string) error {
 			return u.launchInstallerShellExecute(exePath)
 		}
 		return nil
+	case installerLaunchShellElevated:
+		// ── ShellExecuteEx("runas") com SEE_MASK_NOCLOSEPROCESS (UI não-elevada) ──
+		return u.launchInstallerShellExecute(exePath)
+	default:
+		// Modo serviço sem token elevado: CreateProcess falharia com Access
+		// Denied ao escrever em Program Files e runas não existe na sessão 0.
+		return fmt.Errorf("self-update em modo serviço sem privilégio SYSTEM: CreateProcess exige token elevado e ShellExecuteEx(runas) nunca é usado na sessão 0")
 	}
-
-	// ── ShellExecuteEx("runas") com SEE_MASK_NOCLOSEPROCESS (agente não-elevado) ──
-	return u.launchInstallerShellExecute(exePath)
 }
 
 // launchInstallerShellExecute lanca o instalador via ShellExecuteEx("runas")
 // com verificação de startup e fallback. Usado quando o agente NÃO é elevado,
 // ou como último recurso quando o CreateProcess independente falha.
 func (u *Updater) launchInstallerShellExecute(exePath string) error {
+	// Defesa em profundidade: nenhum caminho de fallback pode chamar runas no
+	// modo serviço (sessão 0 não tem desktop/UAC).
+	if isServiceModeProcess(u) {
+		return fmt.Errorf("ShellExecuteEx(runas) bloqueado: processo em modo serviço (sessão 0) — instalador deve ser criado por CreateProcess como SYSTEM")
+	}
+
 	// ── ShellExecuteEx("runas") com SEE_MASK_NOCLOSEPROCESS ──
 	pid, hProcess, elevateErr := LaunchInstallerElevated(exePath, "/S /UPDATE")
 	if elevateErr != nil {
@@ -251,6 +292,12 @@ func waitForProcess(hProcess windows.Handle, timeout time.Duration) (uint32, err
 //   - Se o processo atual já está elevado (SYSTEM/admin), usa CreateProcess direto.
 //   - Caso contrário, tenta ShellExecuteEx("runas") uma segunda vez.
 func (u *Updater) launchInstallerFallback(exePath string, previousErr error) error {
+	// Modo serviço: nunca tenta runas, em nenhuma circunstância.
+	if isServiceModeProcess(u) {
+		u.logf("[selfupdate] modo serviço: fallback usa CreateProcess (runas é proibido na sessão 0)")
+		return u.launchInstallerCreateProcess(exePath, "fallback em modo serviço: "+previousErr.Error())
+	}
+
 	// Erro de elevação requerida: CreateProcess sem elevação falharia com
 	// Access Denied ao escrever em Program Files. Tenta runas de novo.
 	if isElevationRequiredError(previousErr) {
@@ -287,6 +334,11 @@ func (u *Updater) finishLaunchInstaller(exePath string, pid uint32, hProcess win
 	if !u.verifyInstallerStarted(pid, hProcess) {
 		windows.CloseHandle(hProcess)
 		u.logf("[selfupdate] instalador PID=%d nao sobreviveu ao startup — tentando CreateProcess fallback", pid)
+		if isServiceModeProcess(u) {
+			// Em modo serviço o fallback seria CreateProcess do MESMO binário
+			// que acabou de morrer no startup; não há runas para tentar.
+			return fmt.Errorf("instalador PID=%d terminou durante startup em modo serviço (sem fallback runas): %s", pid, exePath)
+		}
 		// Só vale a pena o fallback via CreateProcess se o agente já é elevado;
 		// caso contrário, CreateProcess sem elevação falharia com Access Denied
 		// ao escrever em Program Files. Retorna o erro para acionar retry.

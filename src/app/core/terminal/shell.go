@@ -5,6 +5,7 @@ package terminal
 import (
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"unicode/utf16"
@@ -18,13 +19,92 @@ const (
 	ShellPowerShell ShellKind = "powershell"
 	ShellBash       ShellKind = "bash"
 	ShellWSL        ShellKind = "wsl"
+	ShellZsh        ShellKind = "zsh"
 )
+
+// zshKnownPaths são instalações conhecidas de zsh fora do PATH (Git for
+// Windows, MSYS2 e Cygwin). O zsh só é oferecido quando um destes arquivos —
+// ou um zsh do PATH — existe de fato.
+var zshKnownPaths = []string{
+	`C:\Program Files\Git\usr\bin\zsh.exe`,
+	`C:\Program Files\Git\bin\zsh.exe`,
+	`C:\msys64\usr\bin\zsh.exe`,
+	`C:\cygwin64\bin\zsh.exe`,
+}
+
+// zshResolver agrupa as operações de descoberta do zsh para que os testes
+// injetem PATH/FS falsos sem tocar o host.
+type zshResolver struct {
+	lookPath func(string) (string, error)
+	stat     func(string) (os.FileInfo, error)
+}
+
+// defaultZshResolver é a implementação real (PATH + locais conhecidos).
+var defaultZshResolver = zshResolver{lookPath: exec.LookPath, stat: os.Stat}
+
+// find devolve o caminho do zsh quando ele existe no PATH ou nos locais
+// conhecidos. Procura primeiro no PATH (zsh.exe e zsh) e só depois nos caminhos
+// fixos, aceitando apenas arquivo (nunca diretório).
+func (r zshResolver) find() (string, bool) {
+	for _, nome := range []string{"zsh.exe", "zsh"} {
+		if p, err := r.lookPath(nome); err == nil && strings.TrimSpace(p) != "" {
+			return p, true
+		}
+	}
+	for _, caminho := range zshKnownPaths {
+		info, err := r.stat(caminho)
+		if err == nil && info != nil && !info.IsDir() {
+			return caminho, true
+		}
+	}
+	return "", false
+}
+
+// ZshExecutable devolve o caminho do zsh instalado ("" + false se ausente).
+func ZshExecutable() (string, bool) {
+	return defaultZshResolver.find()
+}
+
+// IsZshAvailable informa se o shell zsh pode ser oferecido ao viewer.
+func IsZshAvailable() bool {
+	_, ok := ZshExecutable()
+	return ok
+}
+
+// AvailableShellKinds devolve os shells oferecidos ao viewer: os básicos
+// (powershell/cmd), zsh quando o executável existe e wsl:<distro> por distro.
+// Sem zsh instalado ele não aparece na lista.
+func AvailableShellKinds() []string {
+	return availableShellKinds(IsZshAvailable, IsWSLAvailable)
+}
+
+// availableShellKinds é a versão injetável de AvailableShellKinds (testes).
+func availableShellKinds(zshDisponivel func() bool, wsl func() (bool, []string)) []string {
+	shells := []string{string(ShellPowerShell), string(ShellCmd)}
+	if zshDisponivel != nil && zshDisponivel() {
+		shells = append(shells, string(ShellZsh))
+	}
+	if wsl != nil {
+		if available, distros := wsl(); available {
+			for _, distro := range distros {
+				shells = append(shells, "wsl:"+distro)
+			}
+		}
+	}
+	return shells
+}
 
 // ResolveShell resolve o shell efetivo para uso, garantindo que o binário
 // exista. Em máquinas sem PowerShell (ex.: Windows PE, Core/Server minimal),
 // o pedido de powershell é rebaixado para cmd.exe. Retorna o ShellKind e o
 // caminho do executável resolvido (ou "" se nenhum shell estiver disponível).
 func ResolveShell(shell ShellKind) (ShellKind, string) {
+	return resolveShellWith(shell, defaultZshResolver)
+}
+
+// resolveShellWith é a versão injetável de ResolveShell: o resolvedor de zsh
+// permite testar a descoberta (PATH/FS) sem depender do host.
+func resolveShellWith(shell ShellKind, zsh zshResolver) (ShellKind, string) {
 	switch shell {
 	case ShellPowerShell:
 		// PowerShell 7+ (pwsh) quando instalado; o Windows PowerShell 5.1
@@ -45,6 +125,13 @@ func ResolveShell(shell ShellKind) (ShellKind, string) {
 			return shell, p
 		}
 		return shell, ""
+	case ShellZsh:
+		// Sem executável o zsh NÃO é oferecido: devolve caminho vazio (mesma
+		// política do WSL) em vez de rebaixar para cmd.
+		if p, ok := zsh.find(); ok {
+			return ShellZsh, p
+		}
+		return ShellZsh, ""
 	case ShellCmd, "":
 		if p, err := exec.LookPath("cmd.exe"); err == nil {
 			return ShellCmd, p

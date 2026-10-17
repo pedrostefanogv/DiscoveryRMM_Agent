@@ -673,6 +673,10 @@ type completionRes struct {
 	Page              int               `json:"page"`
 	PageSize          int               `json:"pageSize"`
 	HasMore           bool              `json:"hasMore"`
+	// Cwd é o diretório corrente usado na consulta (campo ADITIVO do contrato
+	// D): vem do shell via OSC 633 ou do fallback de terminal_cwd.go. Permite ao
+	// viewer mostrar/diagnosticar em que pasta a completação foi resolvida.
+	Cwd string `json:"cwd"`
 }
 
 type tabExpansionResult struct {
@@ -686,13 +690,15 @@ type completionCacheEntry struct {
 	index  int
 }
 
-// completionSupported decide se o backend/shell suportam a consulta.
+// completionSupported decide se o backend/shell suportam a consulta. Delega ao
+// registry de providers (completion_provider.go): PowerShell/cmd/POSIX em
+// ConPTY. É também a fonte do term.ready.supportsCompletionQuery.
 func completionSupported(shellKind terminal.ShellKind, backend string) bool {
-	return isPowerShellShellKind(string(shellKind)) && backend == "conpty"
+	return defaultCompletionRegistry.Supported(shellKind, backend)
 }
 
 // isPowerShellShellKind reconhece powershell/pwsh (Windows PowerShell 5.1 e
-// PowerShell 7+); WSL/bash/cmd nao suportam TabExpansion2.
+// PowerShell 7+). cmd/POSIX têm providers próprios (não usam TabExpansion2).
 func isPowerShellShellKind(kind string) bool {
 	k := strings.ToLower(strings.TrimSpace(kind))
 	return k == "powershell" || k == "pwsh"
@@ -735,24 +741,25 @@ try {
 }
 `
 
-// runTabExpansion executa a consulta num processo auxiliar. Nunca no runspace
-// do usuario; timeout curto e truncamento no limite de itens.
-func runTabExpansion(input string, cursor int) (tabExpansionResult, error) {
-	// O viewer (ConPTY) envia a linha do xterm INCLUINDO o prompt. Remove o
-	// prefixo antes de consultar o TabExpansion2 e devolve o ReplacementIndex
-	// na coordenada da linha ORIGINAL (o viewer aplica sobre ela).
-	queryInput, queryCursor, prefixRunes := sanitizeCompletionInput(input, cursor)
+// runTabExpansionQuery executa a consulta num processo auxiliar. Nunca no
+// runspace do usuario; o timeout e a remocao do prefixo de prompt ficam no
+// registry (completion_provider.go), que chama este provider.
+func runTabExpansionQuery(ctx context.Context, input string, cursor int) (tabExpansionResult, error) {
 	kind, exe := terminal.ResolveShell(terminal.ShellPowerShell)
 	if kind != terminal.ShellPowerShell || exe == "" {
 		return tabExpansionResult{}, fmt.Errorf("powershell/pwsh nao disponivel")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), completionProcessTimeout)
-	defer cancel()
 
 	cmd := exec.CommandContext(ctx, exe, "-NoProfile", "-NonInteractive", "-Command", tabExpansionScript)
+	// TabExpansion2 resolve caminhos relativos contra o cwd DESTE processo. Sem
+	// isso, a completação de PowerShell usaria o cwd do agent e não o reportado
+	// pelo shell da sessão (contexto montado em completionEntry).
+	if dir := completionCwdFromContext(ctx); dir != "" {
+		cmd.Dir = dir
+	}
 	cmd.Env = append(os.Environ(),
-		"DSH_COMPLETION_INPUT="+base64.StdEncoding.EncodeToString([]byte(queryInput)),
-		"DSH_COMPLETION_CURSOR="+strconv.Itoa(queryCursor),
+		"DSH_COMPLETION_INPUT="+base64.StdEncoding.EncodeToString([]byte(input)),
+		"DSH_COMPLETION_CURSOR="+strconv.Itoa(cursor),
 	)
 	out, err := cmd.Output()
 	if ctx.Err() != nil {
@@ -785,8 +792,7 @@ func runTabExpansion(input string, cursor int) (tabExpansionResult, error) {
 		matches = matches[:completionMaxItems]
 	}
 	return tabExpansionResult{
-		// +prefixRunes: o viewer aplica replacementIndex sobre a linha original.
-		ReplacementIndex:  parsed.ReplacementIndex + prefixRunes,
+		ReplacementIndex:  parsed.ReplacementIndex,
 		ReplacementLength: parsed.ReplacementLength,
 		Matches:           matches,
 	}, nil
@@ -857,6 +863,15 @@ type SessionTerminal struct {
 	// hello/resize chegar antes do payload existir, ele é publicado assim que
 	// o manager o guardar — senão o viewer ficaria sem shells/dimensões.
 	readyRequested bool
+
+	// cwd guarda o diretório reportado pelo shell (OSC 633) e o fallback
+	// heurístico de cd/Set-Location — ver terminal_cwd.go.
+	cwd termCwdState
+
+	// sessionCompletions é o registry da sessão: os providers cmd/POSIX
+	// resolvem o diretório corrente pelo cwd reportado, não pelo cwd do
+	// processo do agent. Imutável após a construção (NewSessionTerminal).
+	sessionCompletions *completionRegistry
 
 	// outMu serializa as publicações em term.out (coalescer, replay, erro,
 	// exit). Sem ele o replay do handshake poderia intercalar com frames live e
@@ -985,8 +1000,10 @@ func (st *SessionTerminal) publishStats(stats *termStats) {
 }
 
 // buildTermReadyPayload monta o term.ready com os campos de capacidade
-// (contrato A, aditivo). No legacy nao ha VT nem resize real.
-func buildTermReadyPayload(availableShells []string, consoleID string, cols, rows int, shellKind, shellPath, backend string) map[string]any {
+// (contrato A, aditivo). No legacy nao ha VT nem resize real. cwd é o
+// diretório corrente efetivo da sessão (reportado pelo shell ou fallback) —
+// campo aditivo para o viewer saber onde a completação vai resolver.
+func buildTermReadyPayload(availableShells []string, consoleID string, cols, rows int, shellKind, shellPath, backend, cwd string) map[string]any {
 	supportsVt := backend == "conpty"
 	// O backend legacy redimensiona o console real (AttachConsole +
 	// SetConsoleScreenBufferSize), então também anuncia suporte a resize (R6).
@@ -1004,6 +1021,7 @@ func buildTermReadyPayload(availableShells []string, consoleID string, cols, row
 		"supportsResize":          supportsResize,
 		"supportsCompletionQuery": completionSupported(terminal.ShellKind(shellKind), backend),
 		"encoding":                "utf-8",
+		"cwd":                     cwd,
 	}
 }
 
@@ -1021,11 +1039,11 @@ func (st *SessionTerminal) handleCompletionReq(data []byte) {
 func (st *SessionTerminal) buildCompletionResponse(data []byte) []byte {
 	var req completionReq
 	if err := json.Unmarshal(data, &req); err != nil {
-		return completionJSON(completionRes{
+		return completionJSON(st.withCompletionCwd(completionRes{
 			ReqID: req.ReqID,
 			Ok:    false,
 			Error: "payload de completion invalido: " + err.Error(),
-		})
+		}))
 	}
 
 	st.mu.RLock()
@@ -1033,11 +1051,11 @@ func (st *SessionTerminal) buildCompletionResponse(data []byte) []byte {
 	backend := st.termBackend
 	st.mu.RUnlock()
 	if !completionSupported(terminal.ShellKind(shellKind), backend) {
-		return completionJSON(completionRes{
+		return completionJSON(st.withCompletionCwd(completionRes{
 			ReqID: req.ReqID,
 			Ok:    false,
 			Error: "completion nao suportado pelo shell/backend em uso",
-		})
+		}))
 	}
 
 	if req.Forward != nil {
@@ -1046,16 +1064,26 @@ func (st *SessionTerminal) buildCompletionResponse(data []byte) []byte {
 
 	entry, err := st.completionEntry(req.Input, req.Cursor)
 	if err != nil {
-		return completionJSON(completionRes{ReqID: req.ReqID, Ok: false, Error: err.Error()})
+		return completionJSON(st.withCompletionCwd(completionRes{ReqID: req.ReqID, Ok: false, Error: err.Error()}))
 	}
-	return completionJSON(paginateCompletion(req, entry.result))
+	return completionJSON(st.withCompletionCwd(paginateCompletion(req, entry.result)))
+}
+
+// withCompletionCwd preenche o campo aditivo cwd da resposta com o diretório
+// corrente efetivo da sessão (reportado pelo shell → heurístico → processo).
+func (st *SessionTerminal) withCompletionCwd(res completionRes) completionRes {
+	res.Cwd = st.completionWorkingDir()
+	return res
 }
 
 // completionEntry devolve (criando se necessário) a entrada de cache de
-// TabExpansion2 para (input,cursor) — reaproveitada pela lista (Ctrl+Espaço) e
-// pelo ciclo (Tab/Shift+Tab), evitando spawnar o processo auxiliar de novo (R7).
+// completação para (input,cursor) — reaproveitada pela lista (Ctrl+Espaço) e
+// pelo ciclo (Tab/Shift+Tab), evitando consultar o provider de novo (R7).
 func (st *SessionTerminal) completionEntry(input string, cursor int) (*completionCacheEntry, error) {
-	key := completionCacheKey(input, cursor)
+	// O cwd faz parte da chave: depois de um "cd" o mesmo input/cursor resolve
+	// em outra pasta e reaproveitar o cache devolveria itens do diretório antigo.
+	cwd := st.completionWorkingDir()
+	key := completionCacheKey(input, cursor) + "\x00" + cwd
 
 	st.completionMu.Lock()
 	entry := st.completionCache[key]
@@ -1064,7 +1092,19 @@ func (st *SessionTerminal) completionEntry(input string, cursor int) (*completio
 		return entry, nil
 	}
 
-	result, err := runTabExpansion(input, cursor)
+	st.mu.RLock()
+	shellKind := st.termShellKind
+	backend := st.termBackend
+	st.mu.RUnlock()
+
+	registry := st.sessionCompletions
+	if registry == nil {
+		registry = defaultCompletionRegistry
+	}
+	// O cwd segue no contexto até o provider PowerShell (processo auxiliar) e,
+	// nos providers cmd/POSIX, pela closure de Cwd do registry da sessão.
+	ctx := withCompletionCwd(context.Background(), cwd)
+	result, err := registry.Complete(ctx, terminal.ShellKind(shellKind), backend, input, cursor)
 	if err != nil {
 		return nil, err
 	}
@@ -1083,12 +1123,12 @@ func (st *SessionTerminal) completionEntry(input string, cursor int) (*completio
 func (st *SessionTerminal) buildCompletionCycle(req completionReq, forward bool) []byte {
 	entry, err := st.completionEntry(req.Input, req.Cursor)
 	if err != nil {
-		return completionJSON(completionRes{ReqID: req.ReqID, Ok: false, Error: err.Error()})
+		return completionJSON(st.withCompletionCwd(completionRes{ReqID: req.ReqID, Ok: false, Error: err.Error()}))
 	}
 
 	n := len(entry.result.Matches)
 	if n == 0 {
-		return completionJSON(completionRes{ReqID: req.ReqID, Ok: true, PageSize: 1})
+		return completionJSON(st.withCompletionCwd(completionRes{ReqID: req.ReqID, Ok: true, PageSize: 1}))
 	}
 
 	st.completionMu.Lock()
@@ -1102,7 +1142,7 @@ func (st *SessionTerminal) buildCompletionCycle(req completionReq, forward bool)
 	idx := entry.index
 	st.completionMu.Unlock()
 
-	return completionJSON(completionRes{
+	return completionJSON(st.withCompletionCwd(completionRes{
 		ReqID:             req.ReqID,
 		Ok:                true,
 		ReplacementIndex:  entry.result.ReplacementIndex,
@@ -1112,7 +1152,7 @@ func (st *SessionTerminal) buildCompletionCycle(req completionReq, forward bool)
 		Page:              idx,
 		PageSize:          1,
 		HasMore:           n > 1,
-	})
+	}))
 }
 
 // paginateCompletion fatia o resultado pela page/pageSize do pedido.
@@ -1129,7 +1169,13 @@ func paginateCompletion(req completionReq, result tabExpansionResult) completion
 		page = 0
 	}
 	total := len(result.Matches)
-	start := page * pageSize
+	// page vem do viewer: page*pageSize pode ESTOURAR int e virar um índice
+	// negativo (panic de slice, derrubando o processo do agent). Comparar por
+	// divisão evita a multiplicação; page 0 continua sempre válido.
+	start := total
+	if page <= total/pageSize {
+		start = page * pageSize
+	}
 	if start > total {
 		start = total
 	}
@@ -1201,6 +1247,12 @@ func NewSessionTerminal(sessionID string, natsStream *NatsStreamHandler, recordi
 			enabled:    true,
 		}
 	}
+
+	// Completação da sessão: cmd/POSIX listam o cwd REPORTADO pelo shell (não o
+	// do processo do agent). A closure lê o estado a cada consulta.
+	st.sessionCompletions = newSessionCompletionRegistry(func() (string, error) {
+		return st.completionWorkingDir(), nil
+	})
 
 	return st
 }
@@ -1339,8 +1391,22 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 	}, termOutputCoalesceMs*time.Millisecond)
 	coalescer.stats = stats
 
+	// Novo console = novo cwd: nada do console anterior vale (inclusive o path
+	// reportado, que era de outro processo de shell).
+	st.resetCwdState()
+
+	// Integração de shell: o prompt reporta o cwd por OSC 633. O scanner
+	// REMOVE a sequência do fluxo (o viewer não pode renderizar ESC ] 633 como
+	// lixo) e atualiza o estado da sessão, mesmo fragmentada entre chunks.
+	scanner := &osc633Scanner{}
 	shell, err := terminal.NewShellInteractive(shellKind, cols, rows, func(output string) {
-		coalescer.Write(output)
+		clean, cwds := scanner.Scan(output)
+		for _, c := range cwds {
+			st.applyReportedCwd(c)
+		}
+		if clean != "" {
+			coalescer.Write(clean)
+		}
 	})
 	if err != nil {
 		return nil, fmt.Errorf("criar shell %s: %w", shellKind, err)
@@ -1351,6 +1417,16 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 	st.termShellKind = string(shell.ShellKind())
 	st.termBackend = terminal.ShellBackendName(shell)
 	st.stats = stats
+
+	// Injeção da integração: UMA vez por sessão, depois do spawn do ConPTY. O
+	// init limpa a tela para o comando ecoado não ficar no scrollback. Para o
+	// cmd (sem hook de prompt) o builder devolve "" — o fallback heurístico de
+	// terminal_cwd.go assume.
+	if init := buildShellIntegrationInit(shell.ShellKind(), st.termBackend); init != "" {
+		if werr := shell.WriteStdin(init + "\r"); werr != nil {
+			log.Printf("[session-terminal] init de integracao de shell falhou: %v", werr)
+		}
+	}
 
 	// Monitor de exit do shell — notifica viewer e encerra a sessão
 	go func() {
@@ -1537,6 +1613,9 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 			return
 		}
 		stats.inputBytes.Add(int64(len(decoded)))
+		// Fallback de cwd: aprende cd/Set-Location digitados (cmd não reporta
+		// prompt e, antes do 1º prompt, nenhum shell reportou nada ainda).
+		st.noteTerminalInput(string(decoded))
 		if err := shell.WriteStdin(string(decoded)); err != nil {
 			// Fila de input cheia / shell fechado: nunca descartar em silêncio.
 			stats.inputRejected.Add(1)

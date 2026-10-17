@@ -19,6 +19,19 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return map[string]any{"ok": false, "error": "app indisponível"}
 	}
 	method, _ := payload["method"].(string)
+	// Gate de autenticação no dispatch: método mutante só executa com o
+	// context autenticado anexado por IPCServer.authorizeRPC (canal admin +
+	// token validado). Chamadas diretas/internas sem esse contexto são
+	// recusadas — nenhum caminho executa mutação sem autenticação.
+	if ipcMethodRequiresAdmin(method) {
+		if _, ok := ipcAuthFromContext(ctx); !ok {
+			return map[string]any{
+				"ok":    false,
+				"error": "unauthorized",
+				"code":  "ipc_unauthorized",
+			}
+		}
+	}
 	delete(payload, "method")
 	switch method {
 	case "p2p:peers":
@@ -31,6 +44,8 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCPendingCounts()
 	case "config:get":
 		return a.ipcRPCConfigGet()
+	case "config:set":
+		return a.ipcRPCConfigSet(payload)
 	case "debug:get":
 		return a.ipcRPCDebugGet()
 	case "debug:set":

@@ -2,6 +2,7 @@ package debug
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"strings"
@@ -29,7 +31,17 @@ import (
 
 const debugConfigFile = "debug_config.json"
 
+// defaultConfigWatcherInterval é o período do polling de alteração externa do
+// debug_config.json (2s). ReadDirectoryChangesW seria mais reativo, mas exige
+// handle/IOCP e não compensa para um arquivo lido sob demanda — polling basta.
+const defaultConfigWatcherInterval = 2 * time.Second
+
 var guidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// IsValidAgentID informa se o valor é um GUID válido (aceito como agentId).
+func IsValidAgentID(agentID string) bool {
+	return guidPattern.MatchString(strings.TrimSpace(agentID))
+}
 
 // AgentConn abstracts the agent connection runtime.
 type AgentConn interface {
@@ -66,6 +78,16 @@ type Options struct {
 	// ("debug:config_updated") — sem isso, a cópia em memória da UI fica
 	// stale até ser reiniciada. Pode ser nil.
 	OnConfigChanged func(Config)
+	// ConfigPaths permite injetar os caminhos candidatos do debug_config.json
+	// (testes/watcher). Nil usa debugConfigPathCandidates().
+	ConfigPaths func() []string
+	// WatcherInterval é o período do polling de alteração externa. Zero usa
+	// defaultConfigWatcherInterval (2s).
+	WatcherInterval time.Duration
+	// HardenFileACL aplica a DACL restritiva no arquivo de config. Nil usa
+	// platform.HardenSecretFileACL. Injetável para testes (evita icacls em
+	// diretórios temporários).
+	HardenFileACL func(string) error
 }
 
 // Service owns runtime debug configuration and related workflows.
@@ -83,6 +105,23 @@ type Service struct {
 	version            string
 	hardwareIdentity   func() hardwareid.Info
 	onConfigChanged    func(Config)
+
+	// persistMu serializa as gravações do arquivo de config: o serviço é o
+	// dono único e duas gravações concorrentes não podem intercalar temp/rename.
+	persistMu sync.Mutex
+
+	configPathsFn func() []string
+	hardenACL     func(string) error
+
+	// ── Watcher de alteração externa (polling mtime+hash) ──
+	watchMu       sync.Mutex
+	watchInterval time.Duration
+	watchStarted  bool
+	watchCancel   context.CancelFunc
+	watchDone     chan struct{}
+	watchBaseline bool
+	signatures    map[string]string
+	externalHook  func(Config)
 }
 
 // NewService builds a debug service with its dependencies.
@@ -92,6 +131,10 @@ func NewService(opts Options) *Service {
 		logf = func(string) {}
 	}
 	tlsutil.SetConfigAllowInsecureTLS(false)
+	hardenACL := opts.HardenFileACL
+	if hardenACL == nil {
+		hardenACL = platform.HardenSecretFileACL
+	}
 	return &Service{
 		logf:               logf,
 		agentConn:          opts.AgentConn,
@@ -103,6 +146,9 @@ func NewService(opts Options) *Service {
 		version:            strings.TrimSpace(opts.Version),
 		hardwareIdentity:   opts.HardwareIdentity,
 		onConfigChanged:    opts.OnConfigChanged,
+		configPathsFn:      opts.ConfigPaths,
+		watchInterval:      opts.WatcherInterval,
+		hardenACL:          hardenACL,
 	}
 }
 
@@ -129,26 +175,23 @@ func (s *Service) applyAllowInsecureTLS(allow bool) {
 }
 
 // LoadPersistedConfig loads debug configuration from disk if available.
+//
+// A leitura continua aceitando o JSON plano legado de debug_config.json. Ao
+// iniciar, também liga o watcher de alteração externa: o serviço é o dono
+// único da config persistida, mas um arquivo editado por fora (ex.: suporte
+// via editor) é adotado sem exigir restart.
 func (s *Service) LoadPersistedConfig() {
-	for _, path := range debugConfigPathCandidates() {
+	s.StartWatcher()
+	for _, path := range s.configPaths() {
 		data, err := osReadFile(path)
 		if err != nil {
 			continue
 		}
-		data = trimJSONBOM(data)
-
-		var cfg Config
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			s.logf("[debug] falha ao ler configuração persistida: " + err.Error())
+		cfg, err := parsePersistedConfigData(data)
+		if err != nil {
+			s.logf("[debug] configuração persistida ignorada: " + err.Error())
 			return
 		}
-
-		if !isValidDebugScheme(cfg.Scheme) {
-			s.logf("[debug] configuração persistida ignorada: scheme inválido")
-			return
-		}
-		normalizeSecurityConfig(&cfg)
-		cfg.normalizeApiScheme()
 
 		s.mu.Lock()
 		s.config = cfg
@@ -159,7 +202,30 @@ func (s *Service) LoadPersistedConfig() {
 	}
 }
 
+// parsePersistedConfigData valida um JSON de debug_config.json antes de adotar
+// (leitura inicial e watcher usam a MESMA validação — JSON inválido nunca
+// substitui o último estado válido em memória).
+func parsePersistedConfigData(data []byte) (Config, error) {
+	data = trimJSONBOM(data)
+
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return Config{}, fmt.Errorf("json inválido: %w", err)
+	}
+	if !isValidDebugScheme(cfg.Scheme) {
+		return Config{}, fmt.Errorf("scheme inválido: %q", cfg.Scheme)
+	}
+	normalizeSecurityConfig(&cfg)
+	cfg.normalizeApiScheme()
+	return cfg, nil
+}
+
 // PersistConfig persists debug configuration to disk.
+//
+// Gravação atômica: o JSON é escrito em um arquivo temporário no MESMO
+// diretório (Flush+Sync) e renomeado por cima do debug_config.json. Em
+// qualquer erro o arquivo antigo permanece intacto — nunca truncamos o
+// original. As gravações são serializadas por persistMu (mutex de processo).
 func (s *Service) PersistConfig(cfg Config) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -167,23 +233,17 @@ func (s *Service) PersistConfig(cfg Config) error {
 	}
 
 	var errs []string
-	for _, path := range debugConfigPathCandidates() {
+	for _, path := range s.configPaths() {
 		dir := filepath.Dir(path)
 		if err := osMkdirAll(dir, 0o755); err != nil {
 			errs = append(errs, dir+": "+err.Error())
 			continue
 		}
-		if err := osWriteFile(path, data, 0o600); err != nil {
+		if err := s.writeConfigFileAtomic(path, data); err != nil {
 			errs = append(errs, path+": "+err.Error())
 			continue
 		}
-		// A3: endurece a DACL do arquivo quando o processo é elevado — o
-		// 0o600 é no-op no Windows e o arquivo herda Users:(M) do diretório.
-		if platform.IsElevated() {
-			if aclErr := platform.HardenSecretFileACL(path); aclErr != nil {
-				s.logf("[debug] aviso: nao foi possivel restringir ACL de " + path + ": " + aclErr.Error())
-			}
-		}
+		s.notePersistedSignature(path, data)
 		s.logf("[debug] configuração salva em " + path)
 		return nil
 	}
@@ -192,6 +252,270 @@ func (s *Service) PersistConfig(cfg Config) error {
 		return fmt.Errorf("nenhum caminho válido para salvar configuração de debug")
 	}
 	return fmt.Errorf("falha ao salvar configuração de debug: %s", strings.Join(errs, " | "))
+}
+
+// writeConfigFileAtomic serializa a gravação e delega ao writer atômico.
+// A DACL é endurecida no ARQUIVO TEMPORÁRIO, antes do rename: a janela em que
+// o arquivo final existe com a ACL herdada (Users:(M)) fica fechada. Falha de
+// ACL é apenas logada — a escrita em si continua (decisão: o serviço é o dono
+// único da config; um host com política restritiva não pode impedir salvar).
+func (s *Service) writeConfigFileAtomic(path string, data []byte) error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+
+	return atomicWriteFile(path, data, func(tmpPath string) error {
+		if s.hardenACL == nil {
+			return nil
+		}
+		if aclErr := s.hardenACL(tmpPath); aclErr != nil {
+			s.logf("[debug] aviso: nao foi possivel restringir ACL de " + tmpPath + ": " + aclErr.Error())
+		}
+		return nil
+	})
+}
+
+// writeFileAtomic grava data em <dir>/<tmp> e renomeia atomicamente para path.
+// O callback beforeRename roda com o temporário já fechado/sincronizado (é o
+// ponto para aplicar ACL sem expor o arquivo final). Em erro, o temporário é
+// removido e path não é tocado.
+func writeFileAtomic(path string, data []byte, beforeRename func(string) error) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	tmp, err := osCreateTemp(dir, "."+base+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("criar temporário: %w", err)
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = osRemove(tmpPath)
+		}
+	}()
+
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("ajustar modo do temporário: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("gravar temporário: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sincronizar temporário: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("fechar temporário: %w", err)
+	}
+	if beforeRename != nil {
+		if err := beforeRename(tmpPath); err != nil {
+			return err
+		}
+	}
+	if err := osRename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename atômico: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+func (s *Service) configPaths() []string {
+	if s != nil && s.configPathsFn != nil {
+		return s.configPathsFn()
+	}
+	return debugConfigPathCandidates()
+}
+
+// notePersistedSignature registra a assinatura do arquivo que ACABAMOS de
+// gravar, para o watcher não tratar a escrita do próprio serviço como
+// alteração externa.
+func (s *Service) notePersistedSignature(path string, data []byte) {
+	sig := ""
+	if st, err := os.Stat(path); err == nil {
+		sum := sha256.Sum256(data)
+		sig = fmt.Sprintf("%d:%x", st.ModTime().UnixNano(), sum)
+	}
+	s.watchMu.Lock()
+	if s.signatures == nil {
+		s.signatures = make(map[string]string)
+	}
+	s.signatures[path] = sig
+	s.watchMu.Unlock()
+}
+
+// SetExternalConfigApplyHook registra o callback opcional chamado quando uma
+// alteração EXTERNA válida é adotada (o App usa esse ponto para reaplicar
+// efeitos: invalidar caches, recarregar o agentConn, notificar as UIs). Sem
+// hook, o watcher apenas atualiza o estado do serviço. Nil-safe.
+func (s *Service) SetExternalConfigApplyHook(hook func(Config)) {
+	if s == nil {
+		return
+	}
+	s.watchMu.Lock()
+	s.externalHook = hook
+	s.watchMu.Unlock()
+}
+
+// StartWatcher liga o polling de alteração externa (idempotente).
+func (s *Service) StartWatcher() {
+	if s == nil {
+		return
+	}
+	s.watchMu.Lock()
+	if s.watchStarted {
+		s.watchMu.Unlock()
+		return
+	}
+	interval := s.watchInterval
+	if interval <= 0 {
+		interval = defaultConfigWatcherInterval
+	}
+	s.watchStarted = true
+	s.seedSignaturesLocked()
+	ctx, cancel := context.WithCancel(context.Background())
+	s.watchCancel = cancel
+	done := make(chan struct{})
+	s.watchDone = done
+	s.watchMu.Unlock()
+
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.pollExternalConfigChange()
+			}
+		}
+	}()
+	s.logf(fmt.Sprintf("[debug] watcher de config ativo (intervalo=%s)", interval))
+}
+
+// StopWatcher encerra o polling e espera a goroutine sair (usado em testes e
+// no shutdown).
+func (s *Service) StopWatcher() {
+	if s == nil {
+		return
+	}
+	s.watchMu.Lock()
+	if !s.watchStarted {
+		s.watchMu.Unlock()
+		return
+	}
+	cancel := s.watchCancel
+	done := s.watchDone
+	s.watchStarted = false
+	s.watchCancel = nil
+	s.watchDone = nil
+	s.watchBaseline = false
+	s.watchMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
+}
+
+// seedSignaturesLocked tira a foto inicial de mtime+hash de cada candidato.
+// Chamado com watchMu preso.
+func (s *Service) seedSignaturesLocked() {
+	if s.signatures == nil {
+		s.signatures = make(map[string]string)
+	}
+	for _, path := range s.configPaths() {
+		sig := ""
+		if computed, ok := configFileSignature(path); ok {
+			sig = computed
+		}
+		s.signatures[path] = sig
+	}
+	s.watchBaseline = true
+}
+
+// pollExternalConfigChange compara mtime+hash do arquivo atual com a última
+// assinatura conhecida. Mudou → recarrega com validação; JSON inválido mantém
+// a config em memória (último válido).
+func (s *Service) pollExternalConfigChange() {
+	path, sig, ok := s.currentConfigSignature()
+	if !ok {
+		return
+	}
+
+	s.watchMu.Lock()
+	prev, seen := s.signatures[path]
+	s.signatures[path] = sig
+	baseline := s.watchBaseline
+	s.watchMu.Unlock()
+
+	if !baseline {
+		return
+	}
+	if seen && prev == sig {
+		return
+	}
+	if sig == "" {
+		return
+	}
+
+	data, err := osReadFile(path)
+	if err != nil {
+		s.logf("[debug] watcher: falha ao ler " + path + ": " + err.Error())
+		return
+	}
+	cfg, err := parsePersistedConfigData(data)
+	if err != nil {
+		s.logf("[debug] watcher: JSON externo inválido em " + path + " — mantendo config em memória: " + err.Error())
+		return
+	}
+	s.adoptExternalConfig(path, cfg)
+}
+
+func (s *Service) adoptExternalConfig(path string, cfg Config) {
+	if reflect.DeepEqual(s.GetConfig(), cfg) {
+		return
+	}
+	s.mu.Lock()
+	s.config = cfg
+	s.mu.Unlock()
+	tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
+	s.logf("[debug] configuração recarregada após alteração externa em " + path)
+
+	s.watchMu.Lock()
+	hook := s.externalHook
+	s.watchMu.Unlock()
+	if hook != nil {
+		hook(cfg)
+	}
+}
+
+func (s *Service) currentConfigSignature() (string, string, bool) {
+	for _, path := range s.configPaths() {
+		if sig, ok := configFileSignature(path); ok {
+			return path, sig, true
+		}
+	}
+	return "", "", false
+}
+
+// configFileSignature devolve "<mtimeNanos>:<sha256>" do arquivo. O hash
+// protege contra mtime grosseiro no Windows (dois writes no mesmo tick).
+func configFileSignature(path string) (string, bool) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return "", false
+	}
+	data, err := osReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%d:%x", st.ModTime().UnixNano(), sum), true
 }
 
 // GetConfig returns the current debug configuration.
@@ -910,9 +1234,16 @@ func debugConfigPathCandidates() []string {
 // os wrappers to simplify tests.
 var (
 	osReadFile    = os.ReadFile
-	osWriteFile   = os.WriteFile
 	osMkdirAll    = os.MkdirAll
 	osExecutable  = os.Executable
 	osUserHomeDir = os.UserHomeDir
 	osGetenv      = os.Getenv
+
+	osCreateTemp = os.CreateTemp
+	osRename     = os.Rename
+	osRemove     = os.Remove
+
+	// atomicWriteFile é o writer atômico injetável (testes simulam falha de
+	// escrita/rename sem tocar no arquivo original).
+	atomicWriteFile = writeFileAtomic
 )

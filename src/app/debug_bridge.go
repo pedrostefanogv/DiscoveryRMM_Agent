@@ -19,33 +19,66 @@ func (a *App) SetDebugConfig(cfg DebugConfig) error {
 	if err := a.requireDebugSvc(); err != nil {
 		return err
 	}
-	// Companion mode: o core roda NO serviço — a config é aplicada PRIMEIRO
-	// lá (validação + persistência + reload da conexão do core) e só então
-	// adotada na cópia local da UI. Assim uma rejeição do serviço (ex.:
-	// agentId inválido para NATS) chega à UI como erro, em vez de aplicar
-	// localmente e deixar os dois processos divergentes até reiniciar.
-	// Standalone (sem IPC) aplica localmente como antes.
+	// Companion mode: o core roda NO SERVIÇO — que é o dono único da config
+	// persistida. A UI envia o patch via RPC; o serviço valida, grava de forma
+	// atômica e recarrega o agentConn. NÃO existe fallback de escrita local:
+	// se o RPC falhar, devolvemos erro explícito (a UI mostra a mensagem) em
+	// vez de gravar um debug_config.json divergente do serviço.
+	// Standalone (sem IPC) aplica/persiste localmente como antes.
 	if a.ipcClient != nil {
-		if raw, err := json.Marshal(cfg); err == nil {
-			ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
-			resp, reqErr := a.ipcClient.Request(ctx, "debug:set", map[string]any{"config": json.RawMessage(raw)})
-			cancel()
-			if reqErr == nil {
-				a.DebugSvc.AdoptExternalConfig(cfg)
-				return nil
-			}
-			if resp != nil {
-				// O serviço respondeu com erro (validação) — propaga para a UI.
-				if errMsg, _ := resp["error"].(string); strings.TrimSpace(errMsg) != "" {
-					return fmt.Errorf("%s", errMsg)
-				}
-			}
-			// Serviço inacessível (sem resposta): cai no caminho local abaixo
-			// para não bloquear o usuário quando o core está fora do ar.
-			a.Logs.Append("[debug] serviço ausente ao propagar config (debug:set): " + reqErr.Error())
+		raw, err := json.Marshal(cfg)
+		if err != nil {
+			return fmt.Errorf("falha ao serializar config de debug: %w", err)
 		}
+		ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+		resp, reqErr := a.ipcClient.Request(ctx, "debug:set", map[string]any{"config": json.RawMessage(raw)})
+		cancel()
+		if reqErr != nil {
+			a.Logs.Append("[debug] falha ao propagar config (debug:set): " + reqErr.Error())
+			return fmt.Errorf("não foi possível salvar a configuração no serviço: %w", reqErr)
+		}
+		if resp == nil {
+			return fmt.Errorf("serviço não respondeu ao salvar a configuração")
+		}
+		if ok, _ := resp["ok"].(bool); !ok {
+			errMsg, _ := resp["error"].(string)
+			if strings.TrimSpace(errMsg) == "" {
+				errMsg = "o serviço rejeitou a configuração"
+			}
+			return fmt.Errorf("%s", errMsg)
+		}
+		// Sucesso: adota a config efetiva devolvida pelo serviço (já
+		// normalizada); se a resposta não trouxer, usa a config enviada.
+		if effective, ok := decodeDebugConfigFromRPCResponse(resp); ok {
+			a.DebugSvc.AdoptExternalConfig(effective)
+			return nil
+		}
+		a.DebugSvc.AdoptExternalConfig(cfg)
+		return nil
 	}
 	return a.DebugSvc.SetConfig(cfg)
+}
+
+// decodeDebugConfigFromRPCResponse extrai a config efetiva de respostas RPC
+// (debug:set devolve data.config; config:set devolve os campos direto em data).
+func decodeDebugConfigFromRPCResponse(resp map[string]any) (DebugConfig, bool) {
+	data, _ := resp["data"].(map[string]any)
+	if data == nil {
+		return DebugConfig{}, false
+	}
+	rawBody := data["config"]
+	if rawBody == nil {
+		rawBody = data
+	}
+	raw, err := json.Marshal(rawBody)
+	if err != nil {
+		return DebugConfig{}, false
+	}
+	var cfg DebugConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return DebugConfig{}, false
+	}
+	return cfg, true
 }
 
 func (a *App) TestDebugConnection(cfg DebugConfig) (string, error) {

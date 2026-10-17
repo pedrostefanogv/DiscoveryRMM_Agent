@@ -93,11 +93,20 @@ func GetDataDir() string {
 // o default do Wails (%APPDATA%\<exe>\EBWebView) quebra quando a UI roda
 // elevada/SYSTEM (Task Scheduler, restart pós-update), pois %APPDATA%
 // resolve para o systemprofile. ProgramData é gravável em qualquer contexto.
+//
+// O perfil é separado POR SESSÃO (WebView2\session-<id>): com a UI sem elevação
+// (A2) duas sessões (console + RDP) podem rodar a UI ao mesmo tempo, e o
+// Chromium embutido não aceita dois processos no mesmo diretório de perfil.
+// Sem sessão (serviço/sessão 0) mantém o caminho base.
 func WebView2UserDataPath() string {
 	if runtime.GOOS != "windows" {
 		return ""
 	}
-	return filepath.Join(platform.DataDir(), "WebView2")
+	base := filepath.Join(platform.DataDir(), "WebView2")
+	if session := currentProcessSessionID(); session > 0 {
+		return filepath.Join(base, fmt.Sprintf("session-%d", session))
+	}
+	return base
 }
 
 type App struct {
@@ -1094,6 +1103,9 @@ func NewApp(opts AppStartupOptions) *App {
 	// "configuração de servidor API incompleta" até reiniciar o agente/ui).
 	a.DebugSvc.LoadPersistedConfig()
 	a.DebugSvc.LoadConnectionConfigFromProduction()
+	// Alteração externa do debug_config.json (admin/editores) precisa reaplicar
+	// no core sem reiniciar: registra o hook e liga o watcher (idempotente).
+	a.StartDebugConfigWatcher()
 	a.initChatLogger()
 
 	mcp.RegisterDiscoveryTools(reg, a)

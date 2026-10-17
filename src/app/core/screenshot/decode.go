@@ -19,6 +19,11 @@ import (
 // maxPNGBytes, que é o teto que o servidor exige.
 const decodedImageMaxBase64 = 16 << 20
 
+// decodedImageMaxPixels limita o total de pixels de uma imagem aceita do
+// overlay (50 MP). Cobre 8K com folga e impede que um cabeçalho malicioso force
+// alocação de gigabytes na decodificação (decompression bomb).
+const decodedImageMaxPixels = 50_000_000
+
 // DecodeDataURLImage decodifica a imagem anotada gerada pelo canvas do overlay
 // (data:image/png ou data:image/webp, base64) e devolve bytes normalizados para
 // visão do LLM: downscale até maxDim e reencode no formato pedido ("auto"
@@ -45,29 +50,48 @@ func DecodeDataURLImage(dataURL string, maxDim, quality int, format string) ([]b
 // base64 obrigatório e teto de tamanho) — usado pelo "copiar para a área de
 // transferência".
 func DecodeDataURLToImage(dataURL string) (image.Image, error) {
+	_, img, err := DecodeDataURLImageBytes(dataURL)
+	return img, err
+}
+
+// DecodeDataURLImageBytes devolve o binário DECODIFICADO junto com a imagem.
+// O modo evidência precisa do hash do binário original: reencodar a imagem
+// mudaria os bytes e o SHA-256 deixaria de corresponder ao que o usuário viu.
+func DecodeDataURLImageBytes(dataURL string) ([]byte, image.Image, error) {
 	value := strings.TrimSpace(dataURL)
 	if !strings.HasPrefix(value, "data:image/") {
-		return nil, fmt.Errorf("data URL de imagem invalida")
+		return nil, nil, fmt.Errorf("data URL de imagem invalida")
 	}
 	if len(value) > decodedImageMaxBase64 {
-		return nil, fmt.Errorf("imagem grande demais (%d bytes)", len(value))
+		return nil, nil, fmt.Errorf("imagem grande demais (%d bytes)", len(value))
 	}
 	comma := strings.Index(value, ",")
 	if comma < 0 {
-		return nil, fmt.Errorf("data URL de imagem sem payload")
+		return nil, nil, fmt.Errorf("data URL de imagem sem payload")
 	}
 	if !strings.Contains(strings.ToLower(value[:comma]), ";base64") {
-		return nil, fmt.Errorf("data URL de imagem nao esta em base64")
+		return nil, nil, fmt.Errorf("data URL de imagem nao esta em base64")
 	}
 	raw, err := base64.StdEncoding.DecodeString(value[comma+1:])
 	if err != nil {
-		return nil, fmt.Errorf("base64 invalido: %w", err)
+		return nil, nil, fmt.Errorf("base64 invalido: %w", err)
+	}
+	// Teto de PIXELS antes de decodificar: um PNG pequeno (alguns MB) pode
+	// declarar dimensões enormes e decodificar para gigabytes (decompression
+	// bomb). DecodeConfig lê só o cabeçalho.
+	config, _, configErr := image.DecodeConfig(bytes.NewReader(raw))
+	if configErr == nil {
+		pixels := int64(config.Width) * int64(config.Height)
+		if config.Width <= 0 || config.Height <= 0 || pixels > decodedImageMaxPixels {
+			return nil, nil, fmt.Errorf(
+				"imagem grande demais para decodificar (%dx%d pixels)", config.Width, config.Height)
+		}
 	}
 	img, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
-		return nil, fmt.Errorf("formato de imagem nao suportado: %w", err)
+		return nil, nil, fmt.Errorf("formato de imagem nao suportado: %w", err)
 	}
-	return img, nil
+	return raw, img, nil
 }
 
 // NormalizeEncodedImage decodifica bytes de imagem já codificados (ex.: o PNG

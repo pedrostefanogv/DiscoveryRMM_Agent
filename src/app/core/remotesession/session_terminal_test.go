@@ -305,7 +305,7 @@ func TestOutputCoalescer_StatsCounters(t *testing.T) {
 // ── T5: capacidades no term.ready ──
 
 func TestBuildTermReadyPayload_Capabilities(t *testing.T) {
-	ready := buildTermReadyPayload([]string{"powershell", "cmd"}, "main", 120, 40, "powershell", `C:pwsh.exe`, "conpty")
+	ready := buildTermReadyPayload([]string{"powershell", "cmd"}, "main", 120, 40, "powershell", `C:pwsh.exe`, "conpty", `C:\Users\operador`)
 
 	// Campos antigos preservados (não quebrar consumidores atuais).
 	for _, k := range []string{"shells", "consoleId", "termCols", "termRows", "backend"} {
@@ -328,7 +328,7 @@ func TestBuildTermReadyPayload_Capabilities(t *testing.T) {
 
 	// Legacy NAO tem VT nem completion, mas redimensiona o console real
 	// (AttachConsole + SetConsoleScreenBufferSize) — R6.
-	legacy := buildTermReadyPayload(nil, "main", 80, 25, "cmd", `C:cmd.exe`, "legacy")
+	legacy := buildTermReadyPayload(nil, "main", 80, 25, "cmd", `C:cmd.exe`, "legacy", "")
 	if legacy["supportsVt"] != false || legacy["supportsResize"] != true || legacy["supportsCompletionQuery"] != false {
 		t.Fatalf("legacy: VT=false, resize=true, completion=false esperados: %v", legacy)
 	}
@@ -353,7 +353,9 @@ func TestBuildCompletionResponse_InvalidPayload(t *testing.T) {
 }
 
 func TestBuildCompletionResponse_UnsupportedShell(t *testing.T) {
-	st := &SessionTerminal{sessionID: "sess-c", termShellKind: "cmd", termBackend: "conpty"}
+	// cmd em ConPTY PASSOU a ter provider (WP4); o caso sem suporte é shell
+	// desconhecido ou backend legacy.
+	st := &SessionTerminal{sessionID: "sess-c", termShellKind: "powershell", termBackend: "legacy"}
 	out := st.buildCompletionResponse([]byte(`{"reqId":"r1","input":"Get-","cursor":4}`))
 
 	var res completionRes

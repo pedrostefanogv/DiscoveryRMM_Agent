@@ -12,19 +12,19 @@ func TestIsValidWSLDistro(t *testing.T) {
 	}
 
 	invalid := []string{
-		"",                     // vazio
-		"   ",                  // só espaços
-		"Ubuntu --exec cmd",    // flag dupla
-		"Ubuntu; rm -rf /",     // metacaractere ;
-		"Ubuntu && calc",       // &&
-		"Ubuntu | whoami",      // pipe
-		"Ubuntu > out.txt",     // redirect
-		"Ubuntu$IFS",           // $
-		"Ubuntu\\evil",         // backslash
-		"Ubuntu/x",             // barra
-		"Ubuntu\"quoted",       // aspas
-		"-Ubuntu",              // começa com hífen (parece flag)
-		"--Ubuntu",             // começa com -- (flag)
+		"",                  // vazio
+		"   ",               // só espaços
+		"Ubuntu --exec cmd", // flag dupla
+		"Ubuntu; rm -rf /",  // metacaractere ;
+		"Ubuntu && calc",    // &&
+		"Ubuntu | whoami",   // pipe
+		"Ubuntu > out.txt",  // redirect
+		"Ubuntu$IFS",        // $
+		"Ubuntu\\evil",      // backslash
+		"Ubuntu/x",          // barra
+		"Ubuntu\"quoted",    // aspas
+		"-Ubuntu",           // começa com hífen (parece flag)
+		"--Ubuntu",          // começa com -- (flag)
 	}
 	for _, d := range invalid {
 		if IsValidWSLDistro(d) {
@@ -45,6 +45,9 @@ func TestValidateSessionShellKind(t *testing.T) {
 		{"powershell ", ShellPowerShell},
 		{"cmd", ShellCmd},
 		{"bash", ShellBash},
+		{"zsh", ShellZsh},
+		{"zsh ", ShellZsh},
+		{"zsh; calc", ShellPowerShell}, // shell desconhecido → default
 		{"wsl", ShellWSL},
 		{"wsl:Ubuntu", ShellKind("wsl:Ubuntu")},
 		{"wsl:Ubuntu-22.04", ShellKind("wsl:Ubuntu-22.04")},

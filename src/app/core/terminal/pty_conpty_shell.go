@@ -188,6 +188,13 @@ func resolveShellCommand(shell ShellKind) (exe string, args []string) {
 			return p, []string{"-NoLogo", "-NoExit"}
 		}
 		return "powershell.exe", []string{"-NoLogo", "-NoExit"}
+	case ShellZsh:
+		// zsh do PATH ou de Git/MSYS2/Cygwin; sem executável o startup falha
+		// com erro claro (o shell não é oferecido sem zsh instalado).
+		if p, ok := ZshExecutable(); ok {
+			return p, nil
+		}
+		return "zsh.exe", nil
 	case ShellCmd:
 		return "cmd.exe", nil
 	case ShellWSL:

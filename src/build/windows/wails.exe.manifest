@@ -7,15 +7,18 @@
         </dependentAssembly>
     </dependency>
     <!--
-        Controle remoto (SendInput/UIPI) e gerenciamento de serviços exigem
-        privilégio de administrador. Sem elevação, o input é bloqueado
-        silenciosamente pelo UIPI em janelas elevadas e o SCM nega o acesso.
-        requestExecutionLevel=requireAdministrator garante High IL no launch.
+        A UI roda para TODOS os usuários logados e NÃO pede elevação
+        (requestExecutionLevel=asInvoker, Medium IL). Tudo que exige
+        privilégio (serviço Windows, SCM, controle remoto/input em janelas
+        elevadas, descomissionamento) vive no discovery-service.exe (SYSTEM,
+        sessão 0) e é acessado pela UI via IPC. Não volte para
+        requireAdministrator: isso quebraria o autostart sem UAC e o
+        multiusuário (uma UI por sessão ativa).
     -->
     <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
         <security>
             <requestedPrivileges>
-                <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+                <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
             </requestedPrivileges>
         </security>
     </trustInfo>

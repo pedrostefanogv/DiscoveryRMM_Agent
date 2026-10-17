@@ -24,6 +24,9 @@ import (
 	"time"
 
 	"github.com/Microsoft/go-winio"
+	"golang.org/x/sys/windows"
+
+	"discovery/app/core/buildinfo"
 )
 
 // IPCPipeName é o caminho do named pipe do serviço.
@@ -42,8 +45,23 @@ const (
 	ipcServerIdleTimeout       = 60 * time.Second
 )
 
-// ipcPipeSDDL concede acesso a SYSTEM e ao grupo Users builtin.
-const ipcPipeSDDL = "D:(A;;GA;;;SY)(A;;GA;;;BU)"
+// DACL dos dois canais (decisão S1).
+//
+// O pipe de LEITURA não concede mais GenericAll a Users: SYSTEM fica com GA e
+// Users com Read+Write (GRGW). Read puro (GR) quebraria o contrato JSON-lines:
+// o cliente precisa ESCREVER hello/request/status no mesmo handle duplex — o
+// probe IsServicePresent e a UI antiga deixariam de funcionar. O que Users
+// perde é o GA (FILE_CREATE_PIPE_INSTANCE/posse), impedindo sequestro do pipe;
+// mutações são bloqueadas no protocolo (canal admin + token).
+const ipcReadPipeSDDL = "D:(A;;GA;;;SY)(A;;GRGW;;;BU)"
+
+// O pipe ADMIN/MUTAÇÃO mantém GenericAll para Users (quem conecta é validado
+// por processo/token e precisa de token de sessão), e só aceita métodos
+// mutantes.
+const ipcAdminPipeSDDL = "D:(A;;GA;;;SY)(A;;GA;;;BU)"
+
+// ipcPipeSDDL mantém o nome histórico para logs/testes do pipe de leitura.
+const ipcPipeSDDL = ipcReadPipeSDDL
 
 // IPCMessageType identifica a mensagem do contrato IPC.
 type IPCMessageType string
@@ -140,6 +158,19 @@ type ipcClientConn struct {
 	// a cada 5s) mas o pipe continua aberto do lado do sistema — sem este sinal
 	// o serviço seguia contando uma UI morta como conectada.
 	lastActivity atomic.Int64
+
+	// Estado de segurança do canal (autenticação/limites).
+	admin      bool
+	connKey    string
+	identity   ipcAuthIdentity
+	identityOK bool
+	limiter    *ipcRequestLimiter
+	dedup      *ipcDedupCache
+
+	authMu      sync.Mutex
+	token       string
+	tokenExpiry time.Time
+	tokenValid  bool
 }
 
 // touch marca atividade do cliente (chamado a cada mensagem recebida).
@@ -165,12 +196,15 @@ func (c *ipcClientConn) writeTo(conn net.Conn, data []byte) error {
 	return err
 }
 
-// IPCServer escuta o pipe e distribui eventos do serviço para os clientes UI.
+// IPCServer escuta o pipe de leitura e o pipe admin, e distribui eventos do
+// serviço para os clientes UI do canal de leitura.
 type IPCServer struct {
-	listener net.Listener
-	mu       sync.Mutex
-	conns    map[net.Conn]*ipcClientConn
-	closed   atomic.Bool
+	listener      net.Listener
+	adminListener net.Listener
+	mu            sync.Mutex
+	conns         map[net.Conn]*ipcClientConn
+	tokens        *ipcTokenStore
+	closed        atomic.Bool
 
 	// OnMessage é chamado para cada mensagem recebida da UI. A conn é
 	// fornecida para que o handler possa responder DIRETAMENTE ao cliente de
@@ -179,11 +213,13 @@ type IPCServer struct {
 	OnMessage func(conn net.Conn, msg IPCMessage)
 }
 
-// StartIPCServer inicia o listener do pipe do serviço (chamado no modo
-// --service). Roda em goroutine própria; erros vão para o log.
+// StartIPCServer inicia os dois listeners (leitura e admin) do serviço
+// (chamado no modo --service). Roda em goroutines próprias; erros vão ao log.
+// A falha do pipe admin NÃO derruba o pipe de leitura: a UI continua operando
+// em modo somente-leitura (mutações retornam unauthorized tratado).
 func StartIPCServer(onMessage func(net.Conn, IPCMessage)) *IPCServer {
 	l, err := winio.ListenPipe(IPCPipeName, &winio.PipeConfig{
-		SecurityDescriptor: ipcPipeSDDL,
+		SecurityDescriptor: ipcReadPipeSDDL,
 		MessageMode:        false,
 	})
 	if err != nil {
@@ -194,11 +230,25 @@ func StartIPCServer(onMessage func(net.Conn, IPCMessage)) *IPCServer {
 	s := &IPCServer{
 		listener:  l,
 		conns:     make(map[net.Conn]*ipcClientConn),
+		tokens:    newIPCTokenStore(),
 		OnMessage: onMessage,
 	}
-	go s.acceptLoop()
+	go s.acceptLoop(l, false)
+
+	adminL, adminErr := winio.ListenPipe(IPCPipeAdminName, &winio.PipeConfig{
+		SecurityDescriptor: ipcAdminPipeSDDL,
+		MessageMode:        false,
+	})
+	if adminErr != nil {
+		log.Printf("[ipc] AVISO: falha ao escutar %s: %v — mutações ficarão indisponíveis", IPCPipeAdminName, adminErr)
+	} else {
+		s.adminListener = adminL
+		go s.acceptLoop(adminL, true)
+		log.Printf("[ipc] canal admin ativo em %s (SDDL: %s)", IPCPipeAdminName, ipcAdminPipeSDDL)
+	}
+
 	go s.idleSweepLoop()
-	log.Printf("[ipc] servidor ativo em %s (SDDL: %s)", IPCPipeName, ipcPipeSDDL)
+	log.Printf("[ipc] servidor ativo em %s (SDDL: %s)", IPCPipeName, ipcReadPipeSDDL)
 	return s
 }
 
@@ -226,7 +276,13 @@ func (s *IPCServer) sweepIdleConns(now time.Time) int {
 	s.mu.Lock()
 	var idle []net.Conn
 	for conn, client := range s.conns {
-		if client.idleFor(now) > ipcServerIdleTimeout {
+		timeout := ipcServerIdleTimeout
+		if client.admin {
+			// O canal admin não recebe o snapshot de 5s: usar o TTL do token
+			// (senão uma UI saudável perderia o canal de mutação a cada 60s).
+			timeout = ipcAuthTokenTTL
+		}
+		if client.idleFor(now) > timeout {
 			idle = append(idle, conn)
 		}
 	}
@@ -242,38 +298,90 @@ func (s *IPCServer) sweepIdleConns(now time.Time) int {
 	return len(idle)
 }
 
-// acceptLoop aceita clientes em loop até o servidor ser fechado.
-func (s *IPCServer) acceptLoop() {
+// acceptLoop aceita clientes de UM listener até o servidor ser fechado.
+// admin=true identifica o canal mutante.
+func (s *IPCServer) acceptLoop(l net.Listener, admin bool) {
+	if l == nil {
+		return
+	}
 	for {
-		conn, err := s.listener.Accept()
+		conn, err := l.Accept()
 		if err != nil {
 			if s.closed.Load() {
 				return
 			}
-			log.Printf("[ipc] accept falhou: %v", err)
+			log.Printf("[ipc] accept falhou (admin=%t): %v", admin, err)
 			time.Sleep(time.Second)
 			continue
 		}
-		log.Printf("[ipc] UI conectada: %s", conn.RemoteAddr())
-		go s.handleConn(conn)
+		if s.connCount() >= ipcMaxConnections {
+			log.Printf("[ipc] recusando conexão (admin=%t): limite global de %d conexões atingido", admin, ipcMaxConnections)
+			conn.Close()
+			continue
+		}
+		log.Printf("[ipc] cliente conectado (admin=%t): %s", admin, conn.RemoteAddr())
+		go s.handleConn(conn, admin)
 	}
 }
 
+// connCount devolve o total de conexões (leitura + admin).
+func (s *IPCServer) connCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.conns)
+}
+
 // handleConn lê mensagens de um cliente conectado.
-func (s *IPCServer) handleConn(conn net.Conn) {
+//
+// Segurança (decisão S1/S2/S3/C3):
+//   - pipe admin: valida SID/PID/sessão do processo chamador ANTES de aceitar;
+//     falhou a validação, fecha a conexão;
+//   - rate limit (50/s e 8 em voo por conexão) e dedup de cid são aplicados
+//     ANTES de despachar a goroutine do RPC;
+//   - canal admin só aceita método mutante; canal de leitura só aceita leitura;
+//   - todo request mutante precisa de token válido daquela conexão/sessão.
+func (s *IPCServer) handleConn(conn net.Conn, admin bool) {
+	client := &ipcClientConn{
+		reader:  bufio.NewReader(conn),
+		admin:   admin,
+		connKey: ipcNewConnKey(),
+		limiter: newIPCRequestLimiter(),
+		dedup:   newIPCDedupCache(),
+	}
+	if id, err := ipcCallerValidator(conn); err == nil {
+		client.identity = id
+		client.identityOK = true
+	} else {
+		ipcAuthStats.CallerValidationFail.Add(1)
+		log.Printf("[ipc] validação de chamador falhou (admin=%t): %v", admin, err)
+		if admin {
+			// Decisão: no canal administrativo, não validar = recusar.
+			conn.Close()
+			return
+		}
+	}
+
+	client.touch()
+	s.mu.Lock()
+	if len(s.conns) >= ipcMaxConnections {
+		s.mu.Unlock()
+		log.Printf("[ipc] recusando conexão (admin=%t): limite global de %d conexões", admin, ipcMaxConnections)
+		conn.Close()
+		return
+	}
+	s.conns[conn] = client
+	s.mu.Unlock()
+
 	defer func() {
 		s.mu.Lock()
 		delete(s.conns, conn)
 		s.mu.Unlock()
+		if s.tokens != nil {
+			s.tokens.invalidateConn(client.connKey)
+		}
 		conn.Close()
-		log.Printf("[ipc] UI desconectada")
+		log.Printf("[ipc] cliente desconectado (admin=%t)", admin)
 	}()
-
-	client := &ipcClientConn{reader: bufio.NewReader(conn)}
-	client.touch()
-	s.mu.Lock()
-	s.conns[conn] = client
-	s.mu.Unlock()
 
 	for {
 		if s.closed.Load() {
@@ -284,30 +392,407 @@ func (s *IPCServer) handleConn(conn net.Conn) {
 			return // EOF ou erro de parse — encerra a conexão
 		}
 		client.touch()
+
 		// hello é respondido DIRETAMENTE na conexão (o probe IsServicePresent
-		// espera hello_ack na mesma conexão antes de fechar).
+		// espera hello_ack na mesma conexão antes de fechar). No canal admin o
+		// hello emite/renova o token de sessão.
 		if msg.Type == IPCMsgHello {
-			if err := client.writeTo(conn, EncodeIPCMessage(NewIPCMessage(IPCMsgHelloAck, map[string]any{
-				"service":  ServiceName,
-				"protocol": IPCProtocolVersion,
-			}))); err != nil {
-				log.Printf("[ipc] falha ao responder hello_ack: %v", err)
+			s.sendHelloAck(client, conn)
+		}
+
+		release := func() {}
+		if msg.Type != IPCMsgHello {
+			var limitErr error
+			release, limitErr = client.limiter.begin()
+			if limitErr != nil {
+				if limitErr == errIPCRateLimited {
+					ipcAuthStats.RateLimited.Add(1)
+				} else {
+					ipcAuthStats.InFlightLimited.Add(1)
+				}
+				logIPCStructured("request_limited", fmt.Sprintf("admin=%t %s %s cid=%q",
+					client.admin, client.identity.String(), limitErr, msg.CorrelationID))
+				code := "ipc_rate_limited"
+				if limitErr == errIPCInFlight {
+					code = "ipc_inflight_limit"
+				}
+				s.respondIPCError(client, conn, msg.CorrelationID, code, limitErr.Error())
+				continue
 			}
 		}
-		if s.OnMessage != nil {
-			// RPC (Fase C) é despachado em goroutine: um RPC lento (ex.: leitura
-			// do snapshot offline de chamados/knowledge, muitos segundos) bloquearia
-			// o read loop DESTA conexão — o CompanionController deixaria de receber
-			// os snapshots de status e o rxWatchdog do cliente fecharia o pipe.
-			// RespondTo serializa a escrita pelo writeMu da conn e o cliente roteia
-			// as respostas por CorrelationID (out-of-order é seguro).
-			if msg.Type == IPCMsgRequest {
-				go s.OnMessage(conn, msg)
-			} else {
-				s.OnMessage(conn, msg)
+
+		if s.OnMessage == nil {
+			release()
+			continue
+		}
+		if !s.authorizeInbound(client, conn, msg) {
+			release()
+			continue
+		}
+
+		// Dedup de cid por conexão (janela de 60s): repetido devolve a resposta
+		// já emitida ou ignora enquanto o original está em voo.
+		if msg.Type == IPCMsgRequest {
+			if cached, duplicate := client.dedup.begin(msg.CorrelationID); duplicate {
+				ipcAuthStats.DuplicateCID.Add(1)
+				logIPCStructured("duplicate_cid", fmt.Sprintf("cid=%q %s", msg.CorrelationID, client.identity.String()))
+				if cached != nil {
+					reply := NewIPCMessage(IPCMsgResponse, cached)
+					reply.CorrelationID = msg.CorrelationID
+					_ = client.writeTo(conn, EncodeIPCMessage(reply))
+				}
+				release()
+				continue
 			}
+		}
+
+		// RPC (Fase C) é despachado em goroutine: um RPC lento (ex.: leitura
+		// do snapshot offline de chamados/knowledge, muitos segundos) bloquearia
+		// o read loop DESTA conexão — o CompanionController deixaria de receber
+		// os snapshots de status e o rxWatchdog do cliente fecharia o pipe.
+		// RespondTo serializa a escrita pelo writeMu da conn e o cliente roteia
+		// as respostas por CorrelationID (out-of-order é seguro).
+		if msg.Type == IPCMsgRequest {
+			go func() {
+				defer release()
+				s.OnMessage(conn, msg)
+			}()
+		} else {
+			s.OnMessage(conn, msg)
+			release()
 		}
 	}
+}
+
+// ipcNewConnKey gera a chave aleatória que amarra o token a UMA conexão.
+func ipcNewConnKey() string {
+	key, err := ipcRandomToken()
+	if err != nil {
+		// Fallback improvável: ainda assim único por conexão.
+		return fmt.Sprintf("conn-%d", time.Now().UnixNano())
+	}
+	return key
+}
+
+// authorizeInbound aplica o gate de canal/token/identidade ANTES do dispatch.
+func (s *IPCServer) authorizeInbound(client *ipcClientConn, conn net.Conn, msg IPCMessage) bool {
+	switch msg.Type {
+	case IPCMsgRequest:
+		method, _ := msg.Payload["method"].(string)
+		mutating := isIPCMutatingMethod(method)
+		if client.admin && !mutating {
+			ipcAuditMutating(method, client.identity, "denied_wrong_channel")
+			s.respondIPCError(client, conn, msg.CorrelationID, "ipc_wrong_channel",
+				"método de leitura não permitido no canal admin")
+			return false
+		}
+		if !client.admin && mutating {
+			ipcAuthStats.Unauthorized.Add(1)
+			ipcAuditMutating(method, client.identity, "denied_read_channel")
+			s.respondIPCError(client, conn, msg.CorrelationID, "ipc_unauthorized", "unauthorized")
+			return false
+		}
+		if mutating {
+			if err := s.validateMutatingToken(client, msg.Payload); err != nil {
+				ipcAuthStats.Unauthorized.Add(1)
+				ipcAuditMutating(method, client.identity, "denied_"+err.Error())
+				s.respondIPCError(client, conn, msg.CorrelationID, "ipc_unauthorized", "unauthorized")
+				return false
+			}
+			ipcAuditMutating(method, client.identity, "allowed")
+		}
+		return true
+
+	case IPCMsgRemoteSession:
+		// S2: nunca spawna worker sem canal admin + token + binding validados.
+		if err := s.validateMutatingToken(client, msg.Payload); err != nil {
+			ipcAuthStats.Unauthorized.Add(1)
+			s.denyRemoteSession(client, "token: "+err.Error())
+			return false
+		}
+		if err := ipcRemoteSessionAllowed(client.identity, client.admin, true, msg.Payload); err != nil {
+			ipcAuthStats.RemoteSessionDenied.Add(1)
+			s.denyRemoteSession(client, err.Error())
+			return false
+		}
+		return true
+
+	case IPCMsgNotificationRespond:
+		// S3: só a conexão autenticada da sessão destinatária (ou SYSTEM).
+		if !s.notificationRespondAllowed(client, msg.Payload) {
+			ipcAuthStats.NotificationDenied.Add(1)
+			return false
+		}
+		return true
+	}
+	return true
+}
+
+// authTokens devolve (inicializando se preciso) o store de tokens do servidor.
+func (s *IPCServer) authTokens() *ipcTokenStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tokens == nil {
+		s.tokens = newIPCTokenStore()
+	}
+	return s.tokens
+}
+
+// validateMutatingToken exige o token no payload e o valida contra a conexão e
+// a identidade validada do chamador.
+func (s *IPCServer) validateMutatingToken(client *ipcClientConn, payload map[string]any) error {
+	if client == nil {
+		return errIPCTokenMissing
+	}
+	if !client.admin {
+		return errIPCWrongChannel
+	}
+	if !client.identityOK {
+		return errIPCTokenMissing
+	}
+	token, _ := payload["token"].(string)
+	_, err := s.authTokens().validate(token, client.connKey, client.identity)
+	client.authMu.Lock()
+	client.tokenValid = err == nil
+	client.authMu.Unlock()
+	return err
+}
+
+// denyRemoteSession registra a recusa sem jamais spawnar worker.
+func (s *IPCServer) denyRemoteSession(client *ipcClientConn, reason string) {
+	logIPCStructured("remote_session_denied", fmt.Sprintf("%s conn=%s reason=%q",
+		client.identity.String(), client.connKey, reason))
+}
+
+// notificationRespondAllowed confere o vínculo notificationId → sessão.
+func (s *IPCServer) notificationRespondAllowed(client *ipcClientConn, payload map[string]any) bool {
+	notificationID, _ := payload["notificationId"].(string)
+	allowed := client.identityOK && ipcNotificationTargetAllows(notificationID, client.identity)
+	if !allowed {
+		logIPCStructured("notification_respond_denied", fmt.Sprintf("notification=%q %s",
+			notificationID, client.identity.String()))
+	}
+	return allowed
+}
+
+// sendHelloAck responde o handshake. No canal admin emite (ou renova) o token.
+func (s *IPCServer) sendHelloAck(client *ipcClientConn, conn net.Conn) {
+	payload := map[string]any{
+		"service":  ServiceName,
+		"protocol": IPCProtocolVersion,
+		"version":  buildinfo.Version,
+	}
+	if client.admin {
+		if !client.identityOK {
+			return
+		}
+		token, expires, err := s.authTokens().issue(client.connKey, client.identity)
+		if err != nil {
+			log.Printf("[ipc] falha ao emitir token: %v", err)
+			return
+		}
+		client.authMu.Lock()
+		client.token = token
+		client.tokenExpiry = expires
+		client.tokenValid = true
+		client.authMu.Unlock()
+		ipcAuthStats.TokenIssued.Add(1)
+		payload["token"] = token
+		payload["expiresAt"] = expires.UTC().Format(time.RFC3339)
+		logIPCStructured("token_issued", fmt.Sprintf("%s conn=%s expires=%s",
+			client.identity.String(), client.connKey, expires.UTC().Format(time.RFC3339)))
+	}
+	if err := client.writeTo(conn, EncodeIPCMessage(NewIPCMessage(IPCMsgHelloAck, payload))); err != nil {
+		log.Printf("[ipc] falha ao responder hello_ack: %v", err)
+	}
+}
+
+// respondIPCError envia uma resposta de erro para o cid informado.
+func (s *IPCServer) respondIPCError(client *ipcClientConn, conn net.Conn, cid, code, message string) {
+	if client == nil || conn == nil {
+		return
+	}
+	reply := NewIPCMessage(IPCMsgResponse, map[string]any{
+		"ok":    false,
+		"error": message,
+		"code":  code,
+	})
+	reply.CorrelationID = cid
+	if err := client.writeTo(conn, EncodeIPCMessage(reply)); err != nil {
+		log.Printf("[ipc] falha ao responder erro IPC: %v", err)
+	}
+}
+
+// ── Validação do chamador / sessão (Windows) ───────────────────────────────
+
+// ipcCallerValidator é substituível em testes (net.Pipe não expõe handle de
+// named pipe, então a validação real não roda nesses testes).
+var ipcCallerValidator = ipcValidatePipeCaller
+
+// ipcActiveSessionProvider resolve a sessão interativa ativa (console). Em
+// testes pode ser substituído para fixar a sessão destinatária.
+var ipcActiveSessionProvider = ipcActiveSessionIdentity
+
+// ipcValidatePipeCaller prova quem está do outro lado do pipe:
+// GetNamedPipeClientProcessId → ProcessIdToSessionId → OpenProcess →
+// OpenProcessToken/GetTokenInformation(TokenUser). Qualquer falha = recusa.
+func ipcValidatePipeCaller(conn net.Conn) (ipcAuthIdentity, error) {
+	var id ipcAuthIdentity
+	if conn == nil {
+		return id, fmt.Errorf("conexão nil")
+	}
+	fdConn, ok := conn.(interface{ Fd() uintptr })
+	if !ok {
+		return id, fmt.Errorf("conexão sem handle de pipe (Fd)")
+	}
+	handle := windows.Handle(fdConn.Fd())
+
+	var pid uint32
+	if err := windows.GetNamedPipeClientProcessId(handle, &pid); err != nil {
+		return id, fmt.Errorf("GetNamedPipeClientProcessId: %w", err)
+	}
+	var session uint32
+	if err := windows.ProcessIdToSessionId(pid, &session); err != nil {
+		return id, fmt.Errorf("ProcessIdToSessionId(%d): %w", pid, err)
+	}
+	proc, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return id, fmt.Errorf("OpenProcess(%d): %w", pid, err)
+	}
+	defer windows.CloseHandle(proc)
+	var token windows.Token
+	if err := windows.OpenProcessToken(proc, windows.TOKEN_QUERY, &token); err != nil {
+		return id, fmt.Errorf("OpenProcessToken(%d): %w", pid, err)
+	}
+	defer token.Close()
+	tokenUser, err := token.GetTokenUser()
+	if err != nil {
+		return id, fmt.Errorf("GetTokenUser(%d): %w", pid, err)
+	}
+	sid := tokenUser.User.Sid.String()
+	return ipcAuthIdentity{
+		SID:       sid,
+		PID:       pid,
+		SessionID: session,
+		System:    strings.EqualFold(sid, "S-1-5-18"),
+		Valid:     true,
+	}, nil
+}
+
+// ipcActiveSessionIdentity devolve SID/sessão do usuário do console. SID pode
+// ficar vazio (sem token de usuário na sessão); a sessão continua válida.
+func ipcActiveSessionIdentity() ipcAuthIdentity {
+	session := windows.WTSGetActiveConsoleSessionId()
+	if session == 0xFFFFFFFF {
+		return ipcAuthIdentity{}
+	}
+	id := ipcAuthIdentity{SessionID: session, Valid: true}
+	var token windows.Token
+	if err := windows.WTSQueryUserToken(session, &token); err != nil {
+		log.Printf("[ipc] WTSQueryUserToken(session=%d) falhou: %v", session, err)
+		return id
+	}
+	defer token.Close()
+	if tokenUser, err := token.GetTokenUser(); err == nil && tokenUser.User.Sid != nil {
+		id.SID = tokenUser.User.Sid.String()
+		id.System = strings.EqualFold(id.SID, "S-1-5-18")
+	}
+	return id
+}
+
+// currentNotificationTarget resolve o destinatário do prompt: sessão do
+// console quando disponível; senão a primeira UI autenticada conectada.
+// (Sessões RDP não têm console — o fallback evita negar respostas legítimas.)
+func (s *IPCServer) currentNotificationTarget() (ipcAuthIdentity, bool) {
+	if id := ipcActiveSessionProvider(); id.Valid {
+		return id, true
+	}
+	if s == nil {
+		return ipcAuthIdentity{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, client := range s.conns {
+		if client.admin || !client.identityOK {
+			continue
+		}
+		return client.identity, true
+	}
+	return ipcAuthIdentity{}, false
+}
+
+// ── API de autorização usada pelo dispatch (ipc_app_integration.go) ────────
+
+// clientFor devolve o estado da conexão (nil-safe).
+func (s *IPCServer) clientFor(conn net.Conn) *ipcClientConn {
+	if s == nil || conn == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conns[conn]
+}
+
+// authorizeRPC revalida canal/token no momento do dispatch e devolve o
+// context autenticado que o gate de handleIPCRequest exige para mutações.
+func (s *IPCServer) authorizeRPC(conn net.Conn, msg IPCMessage) (context.Context, error) {
+	ctx := context.Background()
+	method, _ := msg.Payload["method"].(string)
+	client := s.clientFor(conn)
+	if client == nil {
+		if isIPCMutatingMethod(method) {
+			return ctx, errIPCTokenMissing
+		}
+		return ctx, nil
+	}
+	if client.admin {
+		if !isIPCMutatingMethod(method) {
+			return ctx, errIPCWrongChannel
+		}
+		if err := s.validateMutatingToken(client, msg.Payload); err != nil {
+			return ctx, err
+		}
+		return withIPCAuth(ctx, ipcRequestAuth{
+			ConnKey:   client.connKey,
+			SID:       client.identity.SID,
+			PID:       client.identity.PID,
+			SessionID: client.identity.SessionID,
+			Admin:     true,
+		}), nil
+	}
+	if isIPCMutatingMethod(method) {
+		return ctx, errIPCWrongChannel
+	}
+	return ctx, nil
+}
+
+// recordRequestResult alimenta o dedup de cid com a resposta realmente emitida.
+func (s *IPCServer) recordRequestResult(conn net.Conn, cid string, response map[string]any) {
+	if client := s.clientFor(conn); client != nil && client.dedup != nil {
+		client.dedup.finish(cid, response)
+	}
+}
+
+// authorizeRemoteSessionMessage é a checagem final antes de spawnar worker
+// (S2): canal admin + token + vínculo pid/sessão do chamador.
+func (s *IPCServer) authorizeRemoteSessionMessage(conn net.Conn, payload map[string]any) error {
+	client := s.clientFor(conn)
+	if client == nil {
+		return errIPCTokenMissing
+	}
+	if err := s.validateMutatingToken(client, payload); err != nil {
+		return err
+	}
+	return ipcRemoteSessionAllowed(client.identity, client.admin, true, payload)
+}
+
+// authorizeNotificationRespond é a checagem final da resposta de prompt (S3).
+func (s *IPCServer) authorizeNotificationRespond(conn net.Conn, payload map[string]any) bool {
+	client := s.clientFor(conn)
+	if client == nil {
+		return false
+	}
+	return s.notificationRespondAllowed(client, payload)
 }
 
 // Broadcast envia uma mensagem para todos os clientes UI conectados.
@@ -333,6 +818,11 @@ func (s *IPCServer) Broadcast(msg IPCMessage) {
 	clients := make([]*ipcClientConn, 0, len(s.conns))
 	conns := make([]net.Conn, 0, len(s.conns))
 	for conn, client := range s.conns {
+		// Eventos são do canal de LEITURA: o admin não é uma UI e não deve
+		// receber broadcast (evita poluir a conexão de controle).
+		if client.admin {
+			continue
+		}
 		conns = append(conns, conn)
 		clients = append(clients, client)
 	}
@@ -387,11 +877,18 @@ func (s *IPCServer) RespondTo(conn net.Conn, msg IPCMessage) {
 	}
 }
 
-// ClientCount retorna quantas UIs estão conectadas.
+// ClientCount retorna quantas UIs estão conectadas (o canal admin não conta
+// como UI para o heartbeat/UIOnline).
 func (s *IPCServer) ClientCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.conns)
+	n := 0
+	for _, client := range s.conns {
+		if !client.admin {
+			n++
+		}
+	}
+	return n
 }
 
 // Close encerra o servidor e todas as conexões.
@@ -399,7 +896,12 @@ func (s *IPCServer) Close() {
 	if s == nil || !s.closed.CompareAndSwap(false, true) {
 		return
 	}
-	s.listener.Close()
+	if s.listener != nil {
+		s.listener.Close()
+	}
+	if s.adminListener != nil {
+		s.adminListener.Close()
+	}
 	s.mu.Lock()
 	for conn := range s.conns {
 		conn.Close()
@@ -417,6 +919,20 @@ type IPCClient struct {
 	conn net.Conn
 	mu   sync.Mutex
 	rx   *bufio.Reader
+	// writeMu serializa escritas na conexão de LEITURA (C1): Send concorrente
+	// intercalava bytes e corrompia o framing JSON-lines.
+	writeMu sync.Mutex
+
+	// Canal admin (mutações): conexão separada, token de sessão e mutex de
+	// escrita próprio.
+	adminMu      sync.Mutex
+	adminConn    net.Conn
+	adminRx      *bufio.Reader
+	adminWriteMu sync.Mutex
+	adminToken   string
+	adminExpires time.Time
+	adminHelloCh chan IPCServiceHelloAck
+	adminRenewMu sync.Mutex
 
 	closed     atomic.Bool
 	reconnectN atomic.Int32
@@ -454,6 +970,7 @@ func NewIPCClient(onMessage func(IPCMessage), onStateChange func(bool)) *IPCClie
 		downCh:          make(chan struct{}, 1),
 		closedCh:        make(chan struct{}),
 		pendingRequests: make(map[string]chan IPCMessage),
+		adminHelloCh:    make(chan IPCServiceHelloAck, 4),
 	}
 }
 
@@ -486,7 +1003,205 @@ func (c *IPCClient) Connect(timeout time.Duration) bool {
 	// elimina a data race em que dois readLoops liam o mesmo bufio.Reader
 	// (bufio não é thread-safe) quando a conexão era substituída.
 	go c.readLoop(conn, c.rx)
+
+	// Handshake do canal admin (token de sessão). Serviço antigo (sem pipe
+	// admin) ou falha de validação deixam a UI em modo somente-leitura —
+	// métodos mutantes retornam erro tratado.
+	if !c.connectAdmin(3 * time.Second) {
+		log.Printf("[ipc] canal admin indisponível — mutações ficarão bloqueadas até reconectar")
+	}
 	return true
+}
+
+// connectAdmin abre o pipe admin e faz o hello para obter o token de sessão.
+func (c *IPCClient) connectAdmin(timeout time.Duration) bool {
+	conn, err := winio.DialPipe(IPCPipeAdminName, &timeout)
+	if err != nil {
+		return false
+	}
+	conn.SetDeadline(time.Now().Add(timeout))
+	if _, err := conn.Write(EncodeIPCMessage(NewIPCMessage(IPCMsgHello, map[string]any{
+		"pid":      os.Getpid(),
+		"protocol": IPCProtocolVersion,
+	}))); err != nil {
+		conn.Close()
+		return false
+	}
+	reader := bufio.NewReader(conn)
+	msg, err := DecodeIPCMessage(reader)
+	if err != nil || msg.Type != IPCMsgHelloAck {
+		conn.Close()
+		return false
+	}
+	ack := helloAckFromPayload(msg.Payload)
+	if strings.TrimSpace(ack.Token) == "" {
+		conn.Close()
+		log.Printf("[ipc] canal admin recusou o handshake (sem token): %v", msg.Payload)
+		return false
+	}
+	conn.SetDeadline(time.Time{})
+
+	c.adminMu.Lock()
+	old := c.adminConn
+	c.adminConn = conn
+	c.adminRx = reader
+	c.adminToken = ack.Token
+	c.adminExpires = ack.ExpiresAt
+	c.adminMu.Unlock()
+	if old != nil {
+		old.Close()
+	}
+	go c.adminReadLoop(conn, reader)
+	log.Printf("[ipc] canal admin autenticado (token expira em %s)", ack.ExpiresAt.Format(time.RFC3339))
+	return true
+}
+
+// adminReadLoop roteia respostas de RPC do canal admin e hello_ack de renovação.
+func (c *IPCClient) adminReadLoop(conn net.Conn, rx *bufio.Reader) {
+	defer func() {
+		c.adminMu.Lock()
+		if c.adminConn == conn {
+			c.adminConn = nil
+			c.adminRx = nil
+			c.adminToken = ""
+			c.adminExpires = time.Time{}
+		}
+		c.adminMu.Unlock()
+		conn.Close()
+		log.Printf("[ipc] canal admin encerrado")
+	}()
+	for {
+		msg, err := DecodeIPCMessage(rx)
+		if err != nil {
+			return
+		}
+		switch {
+		case msg.Type == IPCMsgHelloAck:
+			select {
+			case c.adminHelloCh <- helloAckFromPayload(msg.Payload):
+			default:
+			}
+		case msg.Type == IPCMsgResponse && msg.CorrelationID != "":
+			c.routeResponse(msg)
+		default:
+			// O canal admin não recebe eventos; ignora mensagens inesperadas.
+		}
+	}
+}
+
+// routeResponse entrega uma resposta ao canal pendente pelo cid.
+func (c *IPCClient) routeResponse(msg IPCMessage) {
+	c.pendingRequestsMu.Lock()
+	ch, ok := c.pendingRequests[msg.CorrelationID]
+	if ok {
+		delete(c.pendingRequests, msg.CorrelationID)
+	}
+	c.pendingRequestsMu.Unlock()
+	if ok {
+		select {
+		case ch <- msg:
+		default:
+		}
+	}
+}
+
+// adminAuth devolve uma conexão admin com token válido, renovando via hello
+// quando necessário. Nunca segura adminMu durante I/O.
+func (c *IPCClient) adminAuth() (net.Conn, string, error) {
+	c.adminMu.Lock()
+	conn := c.adminConn
+	token := c.adminToken
+	expires := c.adminExpires
+	c.adminMu.Unlock()
+
+	if conn == nil {
+		if !c.connectAdmin(3 * time.Second) {
+			return nil, "", fmt.Errorf("canal admin indisponível (serviço sem autenticação?)")
+		}
+		c.adminMu.Lock()
+		conn, token, expires = c.adminConn, c.adminToken, c.adminExpires
+		c.adminMu.Unlock()
+	}
+	if strings.TrimSpace(token) == "" || (!expires.IsZero() && time.Until(expires) < time.Minute) {
+		if err := c.renewAdminToken(); err != nil {
+			return nil, "", err
+		}
+		c.adminMu.Lock()
+		conn, token = c.adminConn, c.adminToken
+		c.adminMu.Unlock()
+	}
+	if conn == nil || strings.TrimSpace(token) == "" {
+		return nil, "", fmt.Errorf("canal admin sem token válido")
+	}
+	return conn, token, nil
+}
+
+// renewAdminToken envia hello no canal admin e aguarda o novo hello_ack.
+func (c *IPCClient) renewAdminToken() error {
+	c.adminRenewMu.Lock()
+	defer c.adminRenewMu.Unlock()
+
+	// Outra goroutine pode já ter renovado enquanto esperávamos o mutex.
+	c.adminMu.Lock()
+	conn := c.adminConn
+	currentToken := c.adminToken
+	currentExpiry := c.adminExpires
+	c.adminMu.Unlock()
+	if conn != nil && strings.TrimSpace(currentToken) != "" && !currentExpiry.IsZero() &&
+		time.Until(currentExpiry) > time.Minute {
+		return nil
+	}
+	if conn == nil {
+		if !c.connectAdmin(3 * time.Second) {
+			return fmt.Errorf("canal admin indisponível")
+		}
+		return nil
+	}
+	if err := c.sendOn(conn, &c.adminWriteMu, NewIPCMessage(IPCMsgHello, map[string]any{
+		"pid":      os.Getpid(),
+		"protocol": IPCProtocolVersion,
+	})); err != nil {
+		return err
+	}
+	select {
+	case ack := <-c.adminHelloCh:
+		if strings.TrimSpace(ack.Token) == "" {
+			return fmt.Errorf("hello_ack admin sem token")
+		}
+		c.adminMu.Lock()
+		c.adminToken = ack.Token
+		c.adminExpires = ack.ExpiresAt
+		c.adminMu.Unlock()
+		return nil
+	case <-time.After(3 * time.Second):
+		return fmt.Errorf("timeout aguardando renovação do token admin")
+	}
+}
+
+// applyAdminToken injeta o token no payload (cópia) de um request mutante.
+func (c *IPCClient) applyAdminToken(payload map[string]any, token string) map[string]any {
+	cp := make(map[string]any, len(payload)+1)
+	for k, v := range payload {
+		cp[k] = v
+	}
+	cp["token"] = token
+	return cp
+}
+
+// sendOn serializa a escrita em UMA conexão.
+func (c *IPCClient) sendOn(conn net.Conn, mu *sync.Mutex, msg IPCMessage) error {
+	if conn == nil {
+		return fmt.Errorf("não conectado ao serviço")
+	}
+	data := EncodeIPCMessage(msg)
+	if data == nil {
+		return fmt.Errorf("falha ao serializar mensagem IPC")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	_, err := conn.Write(data)
+	return err
 }
 
 // RunConnectLoop mantém a conexão com backoff exponencial (2s→60s), padrão
@@ -619,17 +1334,23 @@ func (c *IPCClient) readLoop(conn net.Conn, rx *bufio.Reader) {
 }
 
 // Send envia uma mensagem ao serviço.
+//
+// C1: a escrita é serializada por writeMu (antes, Send concorrente intercalava
+// bytes e corrompia o framing JSON-lines). Mensagens de remote_session usam o
+// canal ADMIN com token — o serviço só spawna worker para chamador autenticado.
 func (c *IPCClient) Send(msg IPCMessage) error {
+	if msg.Type == IPCMsgRemoteSession {
+		conn, token, err := c.adminAuth()
+		if err != nil {
+			return err
+		}
+		msg.Payload = c.applyAdminToken(msg.Payload, token)
+		return c.sendOn(conn, &c.adminWriteMu, msg)
+	}
 	c.mu.Lock()
 	conn := c.conn
 	c.mu.Unlock()
-	if conn == nil {
-		return fmt.Errorf("não conectado ao serviço")
-	}
-	data := EncodeIPCMessage(msg)
-	conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
-	_, err := conn.Write(data)
-	return err
+	return c.sendOn(conn, &c.writeMu, msg)
 }
 
 // Request envia um request ao serviço e aguarda a resposta com timeout
@@ -662,7 +1383,20 @@ func (c *IPCClient) Request(ctx context.Context, method string, payload map[stri
 		c.pendingRequestsMu.Unlock()
 	}()
 
-	if err := c.Send(IPCMessage{Type: IPCMsgRequest, Payload: payload, CorrelationID: cid, Timestamp: time.Now().UnixMilli()}); err != nil {
+	reqMsg := IPCMessage{Type: IPCMsgRequest, Payload: payload, CorrelationID: cid, Timestamp: time.Now().UnixMilli()}
+	if isIPCMutatingMethod(method) {
+		// Mutações vão pelo canal admin com token de sessão; se o serviço for
+		// antigo (sem canal admin) devolvemos erro tratado — nunca caímos para
+		// o pipe de leitura.
+		conn, token, err := c.adminAuth()
+		if err != nil {
+			return nil, fmt.Errorf("ipc request %s: %w", method, err)
+		}
+		reqMsg.Payload = c.applyAdminToken(reqMsg.Payload, token)
+		if err := c.sendOn(conn, &c.adminWriteMu, reqMsg); err != nil {
+			return nil, err
+		}
+	} else if err := c.Send(reqMsg); err != nil {
 		return nil, err
 	}
 
@@ -698,12 +1432,46 @@ func (c *IPCClient) Close() {
 		c.conn = nil
 	}
 	c.mu.Unlock()
+	c.adminMu.Lock()
+	if c.adminConn != nil {
+		c.adminConn.Close()
+		c.adminConn = nil
+	}
+	c.adminToken = ""
+	c.adminExpires = time.Time{}
+	c.adminMu.Unlock()
 }
 
 // IPCServiceHelloAck carrega a resposta do handshake do serviço.
 type IPCServiceHelloAck struct {
-	Service  string `json:"service"`
-	Protocol int    `json:"protocol"`
+	Service   string    `json:"service"`
+	Protocol  int       `json:"protocol"`
+	Version   string    `json:"version,omitempty"`
+	Token     string    `json:"token,omitempty"`
+	ExpiresAt time.Time `json:"expiresAt,omitempty"`
+}
+
+// helloAckFromPayload decodifica o payload do hello_ack (compatível com
+// serviços antigos, que só mandavam service/protocol).
+func helloAckFromPayload(payload map[string]any) IPCServiceHelloAck {
+	var ack IPCServiceHelloAck
+	ack.Service, _ = payload["service"].(string)
+	// Serviços antigos (sem "protocol") = protocolo 1.
+	ack.Protocol = 1
+	if v, ok := payload["protocol"].(float64); ok {
+		ack.Protocol = int(v)
+	}
+	ack.Version, _ = payload["version"].(string)
+	ack.Token, _ = payload["token"].(string)
+	switch v := payload["expiresAt"].(type) {
+	case string:
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			ack.ExpiresAt = t
+		}
+	case float64:
+		ack.ExpiresAt = time.UnixMilli(int64(v))
+	}
+	return ack
 }
 
 // IsServicePresent faz um probe rápido de handshake ("serviço ativo?") —
@@ -736,12 +1504,7 @@ func probeServiceHello(timeout time.Duration) (IPCServiceHelloAck, bool) {
 	if err != nil || msg.Type != IPCMsgHelloAck {
 		return ack, false
 	}
-	ack.Service, _ = msg.Payload["service"].(string)
-	// Serviços antigos (sem "protocol") = protocolo 1.
-	ack.Protocol = 1
-	if v, ok := msg.Payload["protocol"].(float64); ok {
-		ack.Protocol = int(v)
-	}
+	ack = helloAckFromPayload(msg.Payload)
 	return ack, true
 }
 

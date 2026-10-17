@@ -45,7 +45,7 @@ func IsValidWSLDistro(distro string) bool {
 // ValidateSessionShellKind valida o campo shell recebido do servidor para
 // sessões remotas e retorna um ShellKind seguro:
 //   - "" / "powershell" → ShellPowerShell (default);
-//   - "cmd" | "bash" | "wsl" → mantidos;
+//   - "cmd" | "bash" | "zsh" | "wsl" → mantidos;
 //   - "wsl:<distro>" aceito somente com distro no charset permitido —
 //     caso contrário cai no WSL default;
 //   - qualquer outro valor cai no default (powershell).
@@ -56,7 +56,7 @@ func ValidateSessionShellKind(raw string) ShellKind {
 		return ShellPowerShell
 	case string(ShellCmd):
 		return ShellCmd
-	case string(ShellBash), string(ShellWSL):
+	case string(ShellBash), string(ShellWSL), string(ShellZsh):
 		return ShellKind(s)
 	}
 	if strings.HasPrefix(s, string(ShellWSL)+":") {

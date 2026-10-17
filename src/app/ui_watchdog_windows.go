@@ -9,11 +9,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 
+	"discovery/app/core/ctxutil"
 	"discovery/app/core/processutil"
 )
 
@@ -50,10 +52,14 @@ func (a *App) startUIWatchdog(ctx context.Context) {
 		SpawnUI:              a.spawnAgentUIInUserSession,
 		KillZombieUI:         killAgentUIProcesses,
 		Log:                  a.logUIWatchdog,
+		// Multiusuário: uma UI por sessão ativa, sem duplicar a que já existe.
+		ActiveSessions:  activeUserSessions,
+		UISessionCounts: uiProcessesBySession,
+		SpawnUISession:  a.spawnAgentUIInSession,
 	})
 	a.uiWatchdog.Store(watchdog)
 
-	a.logUIWatchdog("watchdog ativo: sem UI companion por 2 verificações (ou convite sem UI) a UI é relançada minimizada no tray")
+	a.logUIWatchdog("watchdog ativo: relança a UI minimizada no tray em CADA sessão ativa sem interface (limiar de 2 verificações, ou imediato em convite de chat)")
 	go watchdog.Run(ctx)
 }
 
@@ -68,6 +74,73 @@ func (a *App) logUIWatchdog(message string) {
 // hasActiveUserSession informa se existe sessão de console com usuário logado.
 func hasActiveUserSession() bool {
 	return windows.WTSGetActiveConsoleSessionId() != 0xFFFFFFFF
+}
+
+// activeUserSessions enumera as SESSÕES INTERATIVAS ativas via WTS
+// (WTSEnumerateSessions). Cada usuário logado — console, RDP ou troca rápida —
+// ganha a sua UI; uma sessão desconectada/locked continua com estado WTSActive
+// e mantém a UI viva no tray.
+//
+// Fallback: se a API WTS não estiver disponível (erro na enumeração), usa a
+// sessão do console — o comportamento single-session anterior. A sessão 0
+// (serviços) nunca é devolvida: lá não existe desktop de usuário.
+func activeUserSessions() []uint32 {
+	sessions, err := enumerateActiveUserSessions()
+	if err == nil && len(sessions) > 0 {
+		return sessions
+	}
+	console := windows.WTSGetActiveConsoleSessionId()
+	if console == 0xFFFFFFFF || console == 0 {
+		return nil
+	}
+	return []uint32{console}
+}
+
+// enumerateActiveUserSessions chama WTSEnumerateSessions(WTS_CURRENT_SERVER_HANDLE).
+// Devolve erro quando a chamada falha (fallback no chamador) e lista vazia
+// quando não há nenhuma sessão em estado WTSActive.
+func enumerateActiveUserSessions() ([]uint32, error) {
+	var info *windows.WTS_SESSION_INFO
+	var count uint32
+	if err := windows.WTSEnumerateSessions(0, 0, 1, &info, &count); err != nil {
+		return nil, fmt.Errorf("WTSEnumerateSessions: %w", err)
+	}
+	if info == nil || count == 0 {
+		return nil, nil
+	}
+	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(info)))
+
+	entrySize := unsafe.Sizeof(windows.WTS_SESSION_INFO{})
+	var sessions []uint32
+	for i := uint32(0); i < count; i++ {
+		entry := (*windows.WTS_SESSION_INFO)(unsafe.Pointer(uintptr(unsafe.Pointer(info)) + uintptr(i)*entrySize))
+		// Estado != WTSActive cobre Listen/Idle/Disconnected sem usuário
+		// interativo; a sessão 0 é o nó de serviços.
+		if entry.SessionID == 0 || entry.State != windows.WTSActive {
+			continue
+		}
+		sessions = append(sessions, entry.SessionID)
+	}
+	return sessions, nil
+}
+
+// uiProcessesBySession conta os discovery-agent.exe por sessão (ProcessIdToSessionId).
+// Erro em um PID é ignorado: o pior caso é tentar relançar onde já existe UI, e
+// o single-instance POR SESSÃO barra a duplicata silenciosamente.
+func uiProcessesBySession() map[uint32]int {
+	counts := make(map[uint32]int)
+	pids, err := findAgentUIPIDs()
+	if err != nil {
+		return counts
+	}
+	for _, pid := range pids {
+		sid, sidErr := procSessionID(pid)
+		if sidErr != nil {
+			continue
+		}
+		counts[sid]++
+	}
+	return counts
 }
 
 // countAgentUIProcesses conta os discovery-agent.exe em execução.
@@ -170,23 +243,50 @@ func uiAgentExecutablePath() (string, error) {
 	return path, nil
 }
 
-// spawnAgentUIInUserSession relança a UI na sessão do usuário logado, já
-// MINIMIZADA no tray (--startup-minimized) e marcada com a origem watchdog.
+// spawnAgentUIInSession relança a UI na sessão informada, já MINIMIZADA no
+// tray (--startup-minimized) e marcada com a origem watchdog.
 //
-// Roda como o usuário (WTSQueryUserToken → CreateProcessAsUser, o mesmo caminho
-// da automação e do worker de sessão remota): um serviço em sessão 0 não pode
-// criar janela na sessão interativa.
-func (a *App) spawnAgentUIInUserSession(reason string) error {
-	uiPath, err := uiAgentExecutablePath()
-	if err != nil {
-		return err
+// Roda como o usuário da sessão (WTSQueryUserToken(sessionID) →
+// CreateProcessAsUser via exec + ctxutil): um serviço em sessão 0 não pode
+// criar janela na sessão interativa. O sessionID vem de WTSEnumerateSessions e
+// define, sozinho, onde a janela nasce — nenhum estado global do serviço
+// depende de "a UI".
+func (a *App) spawnAgentUIInSession(sessionID uint32, reason string) error {
+	if sessionID == 0 || sessionID == 0xFFFFFFFF {
+		return fmt.Errorf("sessão %d não tem desktop interativo para a UI", sessionID)
 	}
+	tok, err := wtsQueryUserToken(sessionID)
+	if err != nil {
+		return fmt.Errorf("sem token de usuário na sessão %d: %w", sessionID, err)
+	}
+	if tok == 0 {
+		return fmt.Errorf("sem token de usuário na sessão %d (token nulo)", sessionID)
+	}
+	defer tok.Close()
 
+	userCtx := ctxutil.WithProcessUserToken(a.supportChatContext(), syscall.Token(tok))
+	return a.startAgentUIProcess(userCtx, sessionID, reason)
+}
+
+// spawnAgentUIInUserSession é o caminho single-session (console). Mantido para
+// compatibilidade do wiring legado e usado quando não há sessão enumerada.
+func (a *App) spawnAgentUIInUserSession(reason string) error {
 	userCtx, cleanup, ok := withActiveUserToken(a.supportChatContext())
 	if !ok {
 		return fmt.Errorf("sem sessão de usuário ativa")
 	}
 	defer cleanup()
+
+	sessionID := windows.WTSGetActiveConsoleSessionId()
+	return a.startAgentUIProcess(userCtx, sessionID, reason)
+}
+
+// startAgentUIProcess cria o processo da UI no contexto de usuário do ctx.
+func (a *App) startAgentUIProcess(userCtx context.Context, sessionID uint32, reason string) error {
+	uiPath, err := uiAgentExecutablePath()
+	if err != nil {
+		return err
+	}
 
 	// exec.Command (e não CommandContext): a UI não pode morrer junto com o
 	// serviço — um restart do serviço (update, sc restart) não deve fechar a
@@ -199,9 +299,9 @@ func (a *App) spawnAgentUIInUserSession(reason string) error {
 	processutil.ApplyUserContext(userCtx, cmd)
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("exec %s: %w", uiPath, err)
+		return fmt.Errorf("exec %s (sessão %d): %w", uiPath, sessionID, err)
 	}
-	a.logUIWatchdog(fmt.Sprintf("UI iniciada (pid=%d, motivo=%s)", cmd.Process.Pid, reason))
+	a.logUIWatchdog(fmt.Sprintf("UI iniciada (pid=%d, sessão=%d, motivo=%s)", cmd.Process.Pid, sessionID, reason))
 	// Libera o handle do processo (a UI tem vida própria).
 	go func() { _ = cmd.Wait() }()
 	return nil

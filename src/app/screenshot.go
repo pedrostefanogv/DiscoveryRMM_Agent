@@ -213,10 +213,15 @@ func (a *App) SetScreenshotSessionAllow(enabled bool) error {
 func (a *App) ResetScreenshotPolicy() (string, error) {
 	a.initScreenshotService()
 	policy := screenshot.DefaultPolicy().Normalize()
+	// Mesma seção crítica de SaveScreenshotPolicy (persistência + publicação
+	// juntas): o reset gravava o arquivo FORA do lock e um "Salvar política"
+	// concorrente podia regravar o disco com a política antiga depois do reset,
+	// deixando memória e arquivo divergentes até o próximo restart.
+	a.screenshotMu.Lock()
 	if err := a.saveScreenshotPolicyFile(policy); err != nil {
+		a.screenshotMu.Unlock()
 		return "", err
 	}
-	a.screenshotMu.Lock()
 	a.screenshotPolicy = policy
 	limiter := a.screenshotLimiter
 	a.screenshotMu.Unlock()
@@ -263,6 +268,18 @@ func (a *App) SaveScreenshotPolicy(policyJSON string) error {
 	// quando o usuário desliga os pedidos da IA (abaixo) ou desmarca a permissão.
 	if policy.AllowSessionCapture == nil {
 		policy.AllowSessionCapture = a.screenshotPolicy.AllowSessionCapture
+	}
+	// Os campos da galeria também não vêm no formulário de privacidade: sem
+	// preservar o valor vigente, salvar qualquer outra opção voltaria a galeria
+	// para os defaults (e reativaria a galeria de quem a desligou).
+	if policy.CopyOnConfirm == nil {
+		policy.CopyOnConfirm = a.screenshotPolicy.CopyOnConfirm
+	}
+	if policy.GalleryEnabled == nil {
+		policy.GalleryEnabled = a.screenshotPolicy.GalleryEnabled
+	}
+	if policy.GalleryMaxItems <= 0 {
+		policy.GalleryMaxItems = a.screenshotPolicy.GalleryMaxItems
 	}
 	if !policy.AiCaptureAllowed() {
 		denied := false

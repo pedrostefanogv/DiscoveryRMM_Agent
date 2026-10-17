@@ -2322,6 +2322,25 @@ var commentAttachments = [];
 var newTicketAttachments = [];
 // Origem do proximo print capturado pelo overlay: comentario ou abertura.
 var screenshotTarget = 'comment';
+// Chamado em que o print foi pedido. A captura e assincrona (a janela do
+// overlay pode demorar segundos): guardar o destino permite descartar o print
+// com aviso quando o usuario troca de chamado/tela antes de ele chegar, em vez
+// de anexar o conteudo no lugar errado.
+var screenshotTargetTicketId = '';
+
+// screenshotTargetStillValid confere se o contexto que pediu a captura ainda e
+// o que esta na tela. Sem contexto gravado (build antigo/fluxo sem chamado) a
+// entrega segue como antes.
+function screenshotTargetStillValid(target, ticketId) {
+  if (target === 'newTicket') {
+    // A view do formulario vem de app-core-globals.js: sem ela (build/ordem
+    // diferente) o comportamento antigo e mantido.
+    if (typeof supportNewTicketViewEl === 'undefined' || !supportNewTicketViewEl) return true;
+    return !supportNewTicketViewEl.classList.contains('hidden');
+  }
+  if (!ticketId) return true;
+  return !!currentTicketId && currentTicketId === ticketId;
+}
 
 // Tipo de imagem (a miniatura so faz sentido para image/*).
 function isImageAttachment(contentType) {
@@ -2532,14 +2551,45 @@ window.dsvTicketCommentScreenshot = function (dataUrl) {
   if (match) contentType = match[1];
   var extension = contentType.indexOf('webp') >= 0 ? 'webp' : (contentType.indexOf('jpeg') >= 0 ? 'jpg' : 'png');
   var name = 'print-' + new Date().toISOString().replace(/[:.]/g, '-') + '.' + extension;
+  var target = screenshotTarget === 'newTicket' ? 'newTicket' : 'comment';
+  var targetTicketId = screenshotTargetTicketId;
+  // Consome o destino: cada captura define o seu.
+  screenshotTarget = 'comment';
+  screenshotTargetTicketId = '';
+  // A captura leva alguns segundos (congelar + selecionar + anotar): se nesse
+  // meio-tempo o usuario trocou de chamado ou saiu do formulario de abertura,
+  // o print NAO pode cair na fila do outro contexto (antes ele era anexado ao
+  // chamado errado, ou ficava invisivel numa tela que nao estava aberta).
+  if (!screenshotTargetStillValid(target, targetTicketId)) {
+    showToast(translate('support.attachmentScreenshotWrongTarget'), 'error');
+    return;
+  }
+
+  // Print do overlay vira File e entra no MESMO fluxo dos arquivos escolhidos
+  // no input (validação de tipo/tamanho, prévia e upload presigned). Sem o
+  // helper (build antigo), cai no enfileiramento direto em base64.
+  var file = typeof screenshotDataUrlToFile === 'function'
+    ? screenshotDataUrlToFile(raw, name)
+    : null;
+  if (file) {
+    if (target === 'newTicket') {
+      handleNewTicketFiles([file]);
+    } else {
+      void handleCommentFiles([file]);
+    }
+    return;
+  }
   var base64 = dataUrlToBase64(raw);
-  if (screenshotTarget === 'newTicket') {
-    queueNewTicketAttachment(name, contentType, base64);
+  if (target === 'newTicket') {
+    // A policy pode não ter sido buscada ainda (print antes de qualquer arquivo
+    // escolhido no formulário): espera antes de validar tipo/tamanho.
+    void ensureTicketAttachmentSettings().then(function () {
+      queueNewTicketAttachment(name, contentType, base64, base64ApproxBytes(base64));
+    });
   } else {
     void ensureCommentAttachmentSettings();
     queueCommentAttachment(name, contentType, base64, Math.floor(base64.length * 3 / 4));
   }
-  screenshotTarget = 'comment';
 };
 
 // ── Anexos na ABERTURA do chamado (fila local ate o ticket existir) ────────
@@ -2561,7 +2611,98 @@ function renderNewTicketAttachments() {
   });
 }
 
-function queueNewTicketAttachment(fileName, contentType, base64Data) {
+// Policy do REPOSITÓRIO do chamado (TicketAttachmentSettings: tipos + tamanho).
+// A abertura de chamado usa os MESMOS limites do painel de anexos; antes ela
+// enfileirava qualquer arquivo e a recusa só aparecia no upload — depois de o
+// chamado já ter sido criado, com o anexo perdido e sem explicação.
+var ticketAttachmentSettings = null;
+var ticketAttachmentSettingsLoaded = false;
+// Promise em voo: dois anexos escolhidos em sequência compartilham UMA busca em
+// vez de o segundo passar sem policy (e sem validação).
+var ticketAttachmentSettingsPending = null;
+
+// ensureTicketAttachmentSettings busca a policy UMA vez. Sem ela (binding
+// ausente, servidor sem policy, erro de rede) NÃO bloqueia nada: o backend
+// revalida no upload e o padrão local só serve para dar uma mensagem melhor.
+function ensureTicketAttachmentSettings() {
+  if (ticketAttachmentSettingsLoaded) return Promise.resolve(ticketAttachmentSettings);
+  if (ticketAttachmentSettingsPending) return ticketAttachmentSettingsPending;
+  ticketAttachmentSettingsPending = loadTicketAttachmentSettings().then(function (settings) {
+    ticketAttachmentSettings = settings;
+    ticketAttachmentSettingsLoaded = true;
+    ticketAttachmentSettingsPending = null;
+    return settings;
+  });
+  return ticketAttachmentSettingsPending;
+}
+
+async function loadTicketAttachmentSettings() {
+  try {
+    var api = typeof appApi === 'function' ? appApi() : null;
+    if (!api || typeof api.TicketAttachmentSettings !== 'function') {
+      // Build sem o binding: avisa (i18n) e NÃO bloqueia — o servidor valida.
+      showToast(translate('support.newTicketAttachmentSettingsUnavailable'), 'error');
+      return null;
+    }
+    var raw = await api.TicketAttachmentSettings();
+    var parsed = raw;
+    if (typeof raw === 'string') {
+      try { parsed = JSON.parse(raw); } catch (_) { parsed = null; }
+    }
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (err) {
+    // Sem policy do servidor: avisa (i18n) e cai no comportamento anterior —
+    // enfileira normalmente, porque quem decide de verdade é o upload.
+    showToast(translate('support.newTicketAttachmentSettingsUnavailable'), 'error');
+    return null;
+  }
+}
+
+function ticketAttachmentLimitBytes() {
+  var max = ticketAttachmentSettings && Number(ticketAttachmentSettings.maxFileSizeBytes);
+  // Sem policy conhecida: teto local generoso (10 MB) só para a mensagem; o
+  // backend continua sendo a autoridade.
+  return max > 0 ? max : 10 * 1024 * 1024;
+}
+
+function ticketAttachmentAllowed(contentType) {
+  var list = (ticketAttachmentSettings && ticketAttachmentSettings.allowedContentTypes) || [];
+  // Settings indisponíveis => lista vazia => não bloqueia.
+  if (!list.length) return true;
+  var wanted = String(contentType || '').toLowerCase();
+  for (var i = 0; i < list.length; i += 1) {
+    if (String(list[i]).toLowerCase() === wanted) return true;
+  }
+  return false;
+}
+
+// Aproximação do tamanho a partir do base64 (3/4 do comprimento).
+function base64ApproxBytes(base64Data) {
+  return Math.floor(String(base64Data || '').length * 3 / 4);
+}
+
+// Enfileira o anexo da ABERTURA do chamado validando tipo/tamanho como o
+// comentário faz. Devolve true quando entrou na fila.
+function queueNewTicketAttachment(fileName, contentType, base64Data, sizeBytes) {
+  var approx = Number(sizeBytes) > 0 ? Number(sizeBytes) : base64ApproxBytes(base64Data);
+  var limit = ticketAttachmentLimitBytes();
+
+  if (!ticketAttachmentAllowed(contentType)) {
+    showToast(translate('support.newTicketAttachmentTypeBlocked', {
+      name: fileName,
+      type: contentType || 'application/octet-stream',
+    }), 'error');
+    return false;
+  }
+  if (ticketAttachmentSettings && approx > limit) {
+    showToast(translate('support.newTicketAttachmentTooLarge', {
+      name: fileName,
+      size: commentAttachmentSizeLabel(approx),
+      limit: commentAttachmentSizeLabel(limit),
+    }), 'error');
+    return false;
+  }
+
   newTicketAttachments.push({
     fileName: fileName,
     contentType: contentType || 'application/octet-stream',
@@ -2570,14 +2711,23 @@ function queueNewTicketAttachment(fileName, contentType, base64Data) {
     error: null,
   });
   renderNewTicketAttachments();
+  return true;
 }
 
-function handleNewTicketFiles(files) {
-  Array.prototype.slice.call(files || []).forEach(function (file) {
+async function handleNewTicketFiles(files) {
+  // Copia a lista ANTES do await: o chamador limpa o input (value = '') logo
+  // depois desta chamada e o FileList é "vivo" — iterar depois do await perdia
+  // os arquivos recém-escolhidos.
+  var list = Array.prototype.slice.call(files || []);
+  // Aguarda a policy antes de validar: sem isso o PRIMEIRO arquivo era checado
+  // com o padrão local mesmo se o servidor tivesse um limite/tipo diferente
+  // (mesmo motivo do "await" em handleCommentFiles).
+  await ensureTicketAttachmentSettings();
+  list.forEach(function (file) {
     if (!file) return;
     var reader = new FileReader();
     reader.onload = function () {
-      queueNewTicketAttachment(file.name || 'anexo', file.type, dataUrlToBase64(reader.result));
+      queueNewTicketAttachment(file.name || 'anexo', file.type, dataUrlToBase64(reader.result), file.size);
     };
     reader.onerror = function () {
       showToast(translate('support.attachmentReadError', { name: file.name }), 'error');
@@ -2610,6 +2760,7 @@ async function uploadNewTicketAttachments(ticketId) {
 
 function requestNewTicketScreenshot() {
   screenshotTarget = 'newTicket';
+  screenshotTargetTicketId = '';
   if (typeof openScreenshotCapture !== 'function') {
     screenshotTarget = 'comment';
     showToast(translate('support.attachmentScreenshotUnavailable'), 'error');
@@ -2620,7 +2771,9 @@ function requestNewTicketScreenshot() {
 
 function requestCommentScreenshot() {
   screenshotTarget = 'comment';
+  screenshotTargetTicketId = currentTicketId || '';
   if (typeof openScreenshotCapture !== 'function') {
+    screenshotTargetTicketId = '';
     showToast(translate('support.attachmentScreenshotUnavailable'), 'error');
     return;
   }

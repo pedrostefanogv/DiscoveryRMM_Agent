@@ -480,3 +480,299 @@ input[type="text"].screenshot-annot-input.hidden { display: none; }
 .screenshot-hover-preview img { display: block; width: 348px; max-height: 280px; object-fit: contain; }
 
 .chat-msg-image, .chat-attachment img, .chat-privacy-thumb { cursor: zoom-in; }
+
+/* ── WP2: atalhos, evidência, galeria, OCR, atraso e captura longa ─────── */
+
+/* Barra de dicas de atalho (visível com a seleção travada). */
+.screenshot-shortcut-bar {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 9013;
+  max-width: min(560px, calc(100vw - 220px));
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.screenshot-shortcut-bar.hidden { display: none; }
+
+/* Aviso flutuante dentro do overlay (salvar/copiar caminho/evidência). */
+.screenshot-overlay-flash {
+  position: fixed;
+  left: 50%;
+  bottom: 64px;
+  transform: translateX(-50%) translateY(8px);
+  z-index: 9020;
+  max-width: min(720px, calc(100vw - 40px));
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
+  overflow-wrap: anywhere;
+}
+.screenshot-overlay-flash.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+.screenshot-overlay-flash.error { border-color: color-mix(in srgb, var(--danger, #e5484d) 55%, var(--border)); color: var(--danger, #e5484d); }
+
+/* Botão de copiar caminho sem arquivo salvo ainda. */
+.screenshot-annot-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.screenshot-annot-btn.has-path { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+
+/* Seletor de janelas (tecla W). */
+.screenshot-window-picker {
+  position: fixed;
+  left: 50%;
+  top: 72px;
+  transform: translateX(-50%);
+  z-index: 9016;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(60vh, 520px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.45);
+}
+.screenshot-window-picker.hidden { display: none; }
+.screenshot-window-picker-head { display: flex; align-items: center; gap: 8px; }
+.screenshot-window-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-size: 13px;
+}
+.screenshot-window-list { display: flex; flex-direction: column; gap: 4px; overflow: auto; }
+.screenshot-window-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.screenshot-window-item:hover, .screenshot-window-item:focus-visible {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  outline: none;
+}
+.screenshot-window-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screenshot-window-geometry { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+.screenshot-window-empty { padding: 10px; color: var(--muted); font-size: 12px; }
+
+/* Menu da câmera no composer (atraso, rolagem, galeria). */
+.chat-screenshot-menu-btn, .chat-screenshot-gallery-btn { position: relative; }
+.screenshot-menu {
+  position: fixed;
+  z-index: 9300;
+  min-width: 218px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+.screenshot-menu.hidden { display: none; }
+.screenshot-menu-item {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.screenshot-menu-item:hover, .screenshot-menu-item:focus-visible {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  outline: none;
+}
+.screenshot-menu-sep { height: 1px; margin: 5px 4px; background: var(--border); }
+
+/* Captura com atraso: contagem regressiva em tela cheia, cancelável com Esc. */
+.screenshot-delay-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+}
+.screenshot-delay-overlay.hidden { display: none; }
+.screenshot-delay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 22px 28px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  border: 1px solid var(--border);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+}
+.screenshot-delay-count { font-size: 48px; font-weight: 700; color: var(--text); line-height: 1; }
+.screenshot-delay-hint { font-size: 12px; color: var(--muted); }
+
+/* Ações por anexo do composer (salvar, copiar caminho, OCR). */
+.chat-attachment-tools { display: flex; gap: 4px; }
+.chat-attachment-tool {
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chat-attachment-tool:hover:not([disabled]) {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+}
+.chat-attachment-tool[disabled] { opacity: 0.45; cursor: not-allowed; }
+
+/* Painel de OCR do print. */
+.screenshot-ocr-panel {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9550;
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(80vh, 640px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+}
+.screenshot-ocr-panel.hidden { display: none; }
+.screenshot-ocr-head { display: flex; align-items: center; gap: 8px; }
+.screenshot-ocr-caption { flex: 1 1 auto; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.screenshot-ocr-text {
+  flex: 1 1 auto;
+  min-height: 180px;
+  max-height: 52vh;
+  resize: vertical;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.screenshot-ocr-status { font-size: 11px; color: var(--muted); min-height: 14px; }
+.screenshot-ocr-status.error { color: var(--danger, #e5484d); }
+
+/* Galeria local de capturas. */
+.screenshot-gallery-panel {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 9450;
+  width: min(520px, calc(100vw - 28px));
+  max-height: min(70vh, 560px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+}
+.screenshot-gallery-panel.hidden { display: none; }
+.screenshot-gallery-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.screenshot-gallery-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.screenshot-gallery-head-actions { display: flex; gap: 6px; }
+.screenshot-gallery-list { display: flex; flex-direction: column; gap: 8px; overflow: auto; }
+.screenshot-gallery-item {
+  display: flex;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.screenshot-gallery-thumb {
+  flex: 0 0 auto;
+  width: 108px;
+  height: 64px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #000;
+  color: var(--muted);
+  cursor: zoom-in;
+  overflow: hidden;
+}
+.screenshot-gallery-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.screenshot-gallery-thumb-placeholder { font-size: 22px; }
+.screenshot-gallery-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 auto; }
+.screenshot-gallery-name { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screenshot-gallery-meta { font-size: 11px; color: var(--muted); }
+.screenshot-gallery-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
+.screenshot-gallery-action {
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+.screenshot-gallery-action:hover:not([disabled]) {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+}
+.screenshot-gallery-action[disabled] { opacity: 0.5; cursor: not-allowed; }
+.screenshot-gallery-empty { padding: 12px 4px; color: var(--muted); font-size: 12px; }
+.screenshot-gallery-status { font-size: 11px; color: var(--muted); min-height: 14px; }
+.screenshot-gallery-status.error { color: var(--danger, #e5484d); }
+
+/* Bloco de evidência na bolha de info do print. */
+.screenshot-evidence-block {
+  margin-top: 6px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}

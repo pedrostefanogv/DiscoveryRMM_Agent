@@ -55,11 +55,61 @@ function showFeedback(message) {
     return raw || null;
   }
 
+  // Nome do evento em que o Go avisa que a sessão do overlay terminou (mesmo
+  // emitido por releaseScreenshotOverlay em screenshot.go: "screenshot:overlay_close").
+  var SCREENSHOT_OVERLAY_CLOSE_EVENT = "screenshot:overlay_close";
+  // Listener já registrado? O boot pode rodar mais de uma vez em hot-reload.
+  var backendCloseBound = false;
+
   function boot() {
     // Handshake: o Go espera este aviso para exibir a janela (sem ele o usuário
     // veria um retângulo vazio enquanto a página carrega).
     call("ScreenshotOverlayReady").catch(function () {});
+    bindBackendClose();
     loop();
+  }
+
+  // bindBackendClose escuta o encerramento REAL da sessão no backend.
+  //
+  // Antes só existia o laço que avança quando screenshotOverlayState vira
+  // null. Se o Go encerrasse a sessão sozinho (abort, erro no Finish, janela
+  // fechada/ocultada), o estado local ficava preso com a tela congelada antiga:
+  // o laço nunca puxava a captura seguinte e o usuário só saía apertando Esc —
+  // aí a próxima captura reexibia a imagem velha.
+  function bindBackendClose() {
+    if (backendCloseBound) return;
+    if (!window.wails || typeof window.wails.on !== "function") return;
+    backendCloseBound = true;
+    try {
+      window.wails.on(SCREENSHOT_OVERLAY_CLOSE_EVENT, onBackendClose);
+    } catch (err) {
+      backendCloseBound = false;
+      if (window.console && typeof console.warn === "function") {
+        console.warn("[overlay] não foi possível escutar o fim da sessão:", err);
+      }
+    }
+  }
+
+  // onBackendClose limpa o estado local quando o backend encerra a sessão.
+  // Evento de OUTRA sessão (captura já substituída) é ignorado.
+  function onBackendClose(raw) {
+    var info = parsePayload(raw);
+    var state = screenshotOverlayState;
+    if (!state) return;
+    if (info && info.session && state.payload && state.payload.session &&
+        String(info.session) !== String(state.payload.session)) {
+      return;
+    }
+    screenshotHideOverlay();
+  }
+
+  // clearStaleOverlay limpa um estado local que o backend não reconhece mais.
+  // Chamado quando ScreenshotOverlayNext responde VAZIO (sem sessão/timeout) —
+  // sinal de que não há captura pendente e o laço não deve seguir exibindo a
+  // tela congelada de uma sessão já encerrada.
+  function clearStaleOverlay() {
+    if (!screenshotOverlayState) return;
+    screenshotHideOverlay();
   }
 
   function loop() {
@@ -67,6 +117,7 @@ function showFeedback(message) {
       .then(function (raw) {
         var payload = parsePayload(raw);
         if (!payload || !payload.session) {
+          clearStaleOverlay();
           setTimeout(loop, screenshotNextPollDelayMs);
           return;
         }
@@ -86,12 +137,15 @@ function showFeedback(message) {
         waitSessionEnd(loop);
       })
       .catch(function () {
+        // Binding indisponível/erro de transporte: sem overlay desenhado não há o
+        // que limpar; só tenta de novo.
         setTimeout(loop, 800);
       });
   }
 
-  // screenshotHideOverlay (Finish/Cancel) zera screenshotOverlayState; quando
-  // isso acontece a janela já foi escondida pelo Go e pode puxar a próxima.
+  // screenshotHideOverlay (Finish/Cancel/evento de fechamento do Go) zera
+  // screenshotOverlayState; quando isso acontece a janela já foi escondida pelo
+  // Go e pode puxar a próxima captura.
   function waitSessionEnd(next) {
     var timer = setInterval(function () {
       if (screenshotOverlayState) return;

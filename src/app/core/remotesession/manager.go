@@ -944,13 +944,10 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 		return
 	}
 
-	// Notificar viewer com shells disponiveis e console pronto
-	availableShells := []string{"powershell", "cmd"}
-	if available, distros := terminal.IsWSLAvailable(); available {
-		for _, d := range distros {
-			availableShells = append(availableShells, "wsl:"+d)
-		}
-	}
+	// Notificar viewer com shells disponiveis e console pronto.
+	// A lista vem do pacote terminal (powershell/cmd + zsh quando instalado +
+	// wsl:<distro>): antes era hardcoded e o zsh nunca aparecia no term.ready.
+	availableShells := terminal.AvailableShellKinds()
 
 	// Dimensoes EFETIVAS do console: Start aplica clamp, entao o valor pedido
 	// pelo servidor pode nao ser o que o ConPTY/console recebeu.
@@ -963,7 +960,11 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 		shellKind = string(console.Shell.ShellKind())
 	}
 	_, shellPath := terminal.ResolveShell(defaultShell)
-	ready := buildTermReadyPayload(availableShells, console.ID, console.Cols, console.Rows, shellKind, shellPath, backend)
+	// cwd EFETIVO da sessão: reportado pelo shell (OSC 633) quando o 1º prompt
+	// já chegou; senão heurístico/processo. A integração é injetada no Start e
+	// pode reportar depois — o subject .term.cwd cobre as mudanças seguintes.
+	cwd := sessTerm.CurrentCwd()
+	ready := buildTermReadyPayload(availableShells, console.ID, console.Cols, console.Rows, shellKind, shellPath, backend, cwd)
 	if err := m.natsStream.PublishTermReady(session.ID, ready); err != nil {
 		sessTerm.notePublishError()
 	}

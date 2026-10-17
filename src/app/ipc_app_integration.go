@@ -74,6 +74,17 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 			}))
 		}
 	case IPCMsgRemoteSession:
+		// S2: remote_session só é aceito de conexão ADMIN autenticada com token
+		// válido cujo pid/sessão batem com o pedido. Sem isso, recusa e NUNCA
+		// spawna worker (o payload também não recebe o authToken vivo).
+		if a.ipcServer != nil {
+			if err := a.ipcServer.authorizeRemoteSessionMessage(conn, msg.Payload); err != nil {
+				ipcAuthStats.RemoteSessionDenied.Add(1)
+				a.Logs.Append("[ipc] remote session recusada (sem autenticação): " + err.Error())
+				logIPCStructured("remote_session_denied", fmt.Sprintf("conn=%v reason=%q", conn != nil, err))
+				return
+			}
+		}
 		// Remote session DEVE rodar na sessão interativa do usuário (a sessão 0
 		// do serviço SYSTEM não tem desktop — captura falha e SendInput é
 		// bloqueado por UIPI).
@@ -103,6 +114,13 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 			}
 		}
 	case IPCMsgNotificationRespond:
+		// S3: a resposta só é aceita de conexão autenticada da sessão
+		// destinatária do prompt (ou SYSTEM). A sessão alvo é persistida quando
+		// o notification:new é emitido (ver broadcastIPCEvent).
+		if a.ipcServer != nil && !a.ipcServer.authorizeNotificationRespond(conn, msg.Payload) {
+			a.Logs.Append("[ipc] resposta de notificação recusada: conexão não autenticada ou de outra sessão")
+			return
+		}
 		if a.handleIPCNotificationRespond(msg.Payload) {
 			return
 		}
@@ -113,8 +131,35 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 		// Request/response RPC (PLANO_SEPARACAO_SERVICO_UI.md, Fase C): a UI
 		// companion consulta o core do serviço (status, config, inventário,
 		// memory) sem abrir o SQLite do serviço (decisão D3).
-		resp := a.handleIPCRequest(context.Background(), msg.Payload)
+		//
+		// Gate de autenticação do dispatch: authorizeRPC revalida canal/token e
+		// devolve o context com a identidade; o próprio handleIPCRequest recusa
+		// mutação sem esse context. Respostas de erro de auth não passam pelo
+		// handler (nada é executado).
+		ctx := context.Background()
 		if a.ipcServer != nil {
+			authCtx, authErr := a.ipcServer.authorizeRPC(conn, msg)
+			if authErr != nil {
+				method, _ := msg.Payload["method"].(string)
+				logIPCStructured("dispatch_denied", fmt.Sprintf("method=%q cid=%q reason=%q", method, msg.CorrelationID, authErr))
+				if a.ipcServer != nil {
+					reply := NewIPCMessage(IPCMsgResponse, map[string]any{
+						"ok":    false,
+						"error": "unauthorized",
+						"code":  "ipc_unauthorized",
+					})
+					reply.CorrelationID = msg.CorrelationID
+					a.ipcServer.RespondTo(conn, reply)
+				}
+				return
+			}
+			ctx = authCtx
+		}
+		// O token nunca é repassado aos handlers/RPCs.
+		delete(msg.Payload, "token")
+		resp := a.handleIPCRequest(ctx, msg.Payload)
+		if a.ipcServer != nil {
+			a.ipcServer.recordRequestResult(conn, msg.CorrelationID, resp)
 			reply := NewIPCMessage(IPCMsgResponse, resp)
 			reply.CorrelationID = msg.CorrelationID
 			a.ipcServer.RespondTo(conn, reply)
@@ -202,7 +247,23 @@ func (a *App) broadcastIPCEvent(name string, data ...any) {
 	if a == nil || a.ipcServer == nil || a.ipcServer.ClientCount() == 0 {
 		return
 	}
-	a.ipcServer.Broadcast(NewIPCMessage(IPCMsgEvent, buildIPCEventPayload(name, data...)))
+	payload := buildIPCEventPayload(name, data...)
+	// S3: persiste o destinatário do prompt no MESMO momento do broadcast. O
+	// payload do evento também carrega sessionId/sid para a UI (auditoria e
+	// prompt), sem quebrar o contrato antigo (campos extras são ignorados).
+	if name == "notification:new" {
+		if notificationID, _ := payload["id"].(string); strings.TrimSpace(notificationID) != "" {
+			target, ok := a.ipcServer.currentNotificationTarget()
+			ipcRememberNotificationTarget(notificationID, target, !ok)
+			if ok {
+				payload["sessionId"] = target.SessionID
+				if strings.TrimSpace(target.SID) != "" {
+					payload["sid"] = target.SID
+				}
+			}
+		}
+	}
+	a.ipcServer.Broadcast(NewIPCMessage(IPCMsgEvent, payload))
 }
 
 // ipcEventToFrontend desempacota o payload IPC {name, <campos>} no par

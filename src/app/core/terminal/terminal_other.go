@@ -15,6 +15,7 @@ const (
 	ShellPowerShell ShellKind = "powershell"
 	ShellBash       ShellKind = "bash"
 	ShellWSL        ShellKind = "wsl"
+	ShellZsh        ShellKind = "zsh"
 )
 
 // ConPTYShell é um stub para plataformas não-Windows.

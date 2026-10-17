@@ -156,7 +156,12 @@ func TestHandleIPCRequest_SupportKnowledgeMethodsRegistered(t *testing.T) {
 	a := &App{}
 	for _, method := range methods {
 		// handleIPCRequest apaga "method" do payload: map novo por iteração.
-		resp := a.handleIPCRequest(context.Background(), map[string]any{"method": method})
+		// Context autenticado: métodos mutantes passam pelo gate de auth do
+		// dispatch (sem ele retornariam ipc_unauthorized antes do guard de serviço).
+		authCtx := withIPCAuth(context.Background(), ipcRequestAuth{
+			Admin: true, ConnKey: "test", SID: "S-1-5-18", SessionID: 0,
+		})
+		resp := a.handleIPCRequest(authCtx, map[string]any{"method": method})
 		errMsg, _ := resp["error"].(string)
 		if strings.HasPrefix(errMsg, "método desconhecido") {
 			t.Fatalf("%s não está registrado no dispatcher IPC", method)

@@ -286,6 +286,11 @@ Var PayloadFileName
 ; Campos canonicos do agent (derivados de ServerUrl)
 Var ApiServer
 Var ApiInsecure
+# Rollback do serviço no self-update (item 2): "1" indica que o binário do
+# serviço foi renomeado para .bak_update nesta execução do instalador.
+Var ServiceBackupCreated
+# "1" indica que o health check falhou e o serviço foi revertido.
+Var ServiceRollbackDone
 
 !insertmacro MUI_PAGE_WELCOME # Welcome to the installer page.
 # !insertmacro MUI_PAGE_LICENSE "resources\eula.txt" # Adds a EULA page to the installer
@@ -316,6 +321,10 @@ InstallDirRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNI
 ShowInstDetails show # This will always show the installation details.
 
 Function .onInit
+   # Estado do rollback do serviço (self-update): zerado a cada execução.
+   StrCpy $ServiceBackupCreated "0"
+   StrCpy $ServiceRollbackDone "0"
+
    !insertmacro wails.checkArchitecture
 
    # ── Help (/?  /H  /HELP) ──
@@ -534,6 +543,13 @@ Function .onInit
    ${EndIf}
 FunctionEnd
 
+# .onInstFailed: callback do NSIS quando a instalação aborta. É o bloco de
+# recuperação do item 2: se o abort aconteceu DEPOIS do sc stop (falha de
+# cópia, cancelamento, erro em Section), o serviço não pode ficar parado.
+Function .onInstFailed
+   Call RecoverAgentServiceIfStopped
+FunctionEnd
+
 # Função para criar a página de configuração do agente
 Function AgentConfigPage
    # Modo genérico: sem wizard, agente entra em auto-provisioning via P2P
@@ -651,6 +667,26 @@ Section
          ${InstallerLogError} "Restaurado .bak_update -> ${PRODUCT_EXECUTABLE} (rollback)"
          install_binary_ok:
 
+         ; ── Binário do serviço: valida a cópia e descarta o backup ──
+         ; Só entra aqui se PrepareForInPlaceUpdate criou o .bak_update (build
+         ; com discovery-service.exe). Se o novo binário não foi copiado,
+         ; restaura o anterior e marca erro para o self-update reexecutar.
+         ${If} $ServiceBackupCreated == "1"
+            IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}" 0 install_service_binary_missing
+            ; O .bak_update é MANTIDO até o health check passar: é dele que sai
+            ; o rollback se o serviço não subir com o binário novo.
+            ${InstallerLog} "Binario do servico verificado — backup .bak_update mantido para o health check"
+            Goto install_service_binary_ok
+            install_service_binary_missing:
+            ${InstallerLogError} "Binario do servico NAO encontrado apos copia: $INSTDIR\${SERVICE_EXECUTABLE}"
+            IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" 0 install_service_binary_ok
+            Rename "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" "$INSTDIR\${SERVICE_EXECUTABLE}"
+            ${InstallerLogError} "Restaurado .bak_update do servico -> ${SERVICE_EXECUTABLE} (rollback de copia)"
+            StrCpy $ServiceRollbackDone "1"
+            SetErrorLevel 1
+            install_service_binary_ok:
+         ${EndIf}
+
          ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
             Delete "$INSTDIR\${LEGACY_PRODUCT_EXECUTABLE}"
          ${EndIf}
@@ -674,6 +710,9 @@ Section
          # (UI companion no logon de qualquer usuario).
          # PLANO_AGENT_SERVICE_SYSTEM.md, Fase 3.
          Call RegisterAgentService
+         # Health check pós-cópia (item 2): só descarta o .bak_update do serviço
+         # se ele ficar RUNNING; caso contrário restaura o binário anterior.
+         Call VerifyAgentServiceHealth
 
          # Registrar autostart da UI via Task Scheduler (At log on of any user)
          Call RegisterUIStartupTask
@@ -687,6 +726,10 @@ Section
          ; Restart agent apos update silencioso (/UPDATE).
          ; O Task Scheduler so dispara no login; restart imediato garante que o
          ; agente volte ao ar assim que o instalador terminar.
+         ${If} $ServiceRollbackDone == "1"
+            ${InstallerLogError} "Update mode: rollback do servico aplicado — reinicio automatico ignorado"
+            Goto update_restart_done
+         ${EndIf}
          ${If} $UpdateMode == "1"
             ${InstallerLog} "Update mode: verificando binario antes de reiniciar..."
             IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 update_binary_missing
@@ -695,18 +738,27 @@ Section
             ; direto ao tray (mesmo comportamento do autostart no logon), e nao
             ; abrir janela cheia na sessao do usuario apos o update.
             ;
-            ; PLANO_AGENT_SERVICE_SYSTEM.md Fase 3 (revisão): sobe o serviço
-            ; primeiro (core SYSTEM); o Exec da UI cobre o fallback standalone
-            ; quando o serviço não existe (sc start falha silenciosamente).
+            ; Sobe o serviço primeiro (core SYSTEM). Se o binário do serviço
+            ; existe, NÃO faz Exec da UI: o instalador roda como SYSTEM (sessão
+            ; 0) no self-update e criaria a janela no lugar errado. O watchdog
+            ; relança a UI em cada sessão ativa.
             nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" start ${DISCOVERY_SERVICE_NAME}'
             Pop $R4
+            IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}" 0 update_restart_ui
+            ${InstallerLog} "Update mode: serviço iniciado — UI será relançada por sessão (watchdog/task de logon)"
+            Goto update_restart_done
+            update_restart_ui:
             Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}" --startup-minimized --startup-source=update-restart'
             Goto update_restart_done
             update_binary_missing:
             ${InstallerLogError} "Update mode: binario NAO encontrado em $INSTDIR\${PRODUCT_EXECUTABLE} — agente nao reiniciado"
             update_restart_done:
          ${EndIf}
-         ${InstallerLog} "Instalacao concluida com sucesso"
+         ${If} $ServiceRollbackDone == "1"
+            ${InstallerLogError} "Instalacao concluida com ROLLBACK do servico (exit code nao-zero)"
+         ${Else}
+            ${InstallerLog} "Instalacao concluida com sucesso"
+         ${EndIf}
       !endif
 SectionEnd
 
@@ -962,10 +1014,16 @@ FunctionEnd
 Function LaunchInstalledApp
    # Em bootstrap, a segunda etapa instala em modo silencioso e o Finish page
    # deste instalador e o unico ponto interativo para abrir a UI imediatamente.
+   #
+   # IMPORTANTE (UI sem admin): o instalador roda elevado. Executar o
+   # discovery-agent.exe diretamente herdaria o token High IL e a UI abriria
+   # elevada — exatamente o que o manifest asInvoker remove. Delegar ao
+   # explorer.exe faz o shell interativo (Medium IL) abrir a UI no nível do
+   # usuário. Só há Finish page em instalação interativa, então o shell existe.
    StrCpy $R0 "$INSTDIR\${PRODUCT_EXECUTABLE}"
    ${If} ${FileExists} "$R0"
-      DetailPrint "Abrindo agente em $R0"
-      Exec '"$R0"'
+      DetailPrint "Abrindo agente (como o usuário interativo, sem elevação) em $R0"
+      Exec 'explorer.exe "$R0"'
       Return
    ${EndIf}
 
@@ -974,8 +1032,8 @@ Function LaunchInstalledApp
    ${If} $R1 != ""
       StrCpy $R0 "$R1\${PRODUCT_EXECUTABLE}"
       ${If} ${FileExists} "$R0"
-         DetailPrint "Abrindo agente em $R0"
-         Exec '"$R0"'
+         DetailPrint "Abrindo agente (como o usuário interativo, sem elevação) em $R0"
+         Exec 'explorer.exe "$R0"'
          Return
       ${EndIf}
    ${EndIf}
@@ -1192,6 +1250,31 @@ Function PrepareForInPlaceUpdate
          ${InstallerLog} "lock check: executavel renomeado para .bak_update — path liberado para nova copia"
       ${EndIf}
    lock_check_done:
+
+   # ── Backup do binário do SERVIÇO (rollback do self-update) ──
+   # Renomeia discovery-service.exe -> .bak_update antes da cópia. O backup é
+   # preservado até o health check (VerifyAgentServiceHealth); se o serviço não
+   # subir com o binário novo, RollbackAgentServiceUpdate restaura este arquivo.
+   # Se não existir (build sem serviço), nada a fazer.
+   IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}" 0 service_backup_done
+   StrCpy $R3 0
+   service_backup_retry:
+      ${If} $R3 >= 5
+         ${InstallerLogError} "backup do servico: falhou apos 5 tentativas — update seguira sem backup de rollback"
+         Goto service_backup_done
+      ${EndIf}
+      ClearErrors
+      Rename "$INSTDIR\${SERVICE_EXECUTABLE}" "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update"
+      ${If} ${Errors}
+         IntOp $R3 $R3 + 1
+         ${InstallerLog} "backup do servico: tentativa $R3/5 falhou — aguardando liberacao..."
+         Sleep 1500
+         Goto service_backup_retry
+      ${Else}
+         StrCpy $ServiceBackupCreated "1"
+         ${InstallerLog} "backup do servico criado: ${SERVICE_EXECUTABLE}.bak_update"
+      ${EndIf}
+   service_backup_done:
 FunctionEnd
 
 Function RegisterWindowsFirewallRule
@@ -1230,7 +1313,11 @@ Function RegisterUIStartupTask
    FileWrite $R8 "  $$action = New-ScheduledTaskAction -Execute '$INSTDIR\${PRODUCT_EXECUTABLE}' -Argument '--startup-minimized --startup-source=task-scheduler'$\r$\n"
    FileWrite $R8 "  $$trigger = New-ScheduledTaskTrigger -AtLogOn$\r$\n"
    FileWrite $R8 "  $$trigger.Delay = 'PT30S'$\r$\n"
-   FileWrite $R8 "  $$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Highest$\r$\n"
+   # LeastPrivilege (item 1): a UI companheira NÃO pede elevação. Ela roda com
+   # o token interativo do usuário (Medium IL) e tudo que exige privilégio é
+   # feito pelo serviço DiscoveryAgent via IPC. Não voltar para Highest: isso
+   # reintroduziria o UAC no logon e quebraria o autostart sem prompt.
+   FileWrite $R8 "  $$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel LeastPrivilege$\r$\n"
    FileWrite $R8 "  Register-ScheduledTask -TaskName '${DISCOVERY_UI_TASK_NAME}' -Action $$action -Trigger $$trigger -Principal $$principal -Description 'Discovery UI autostart for any logged-on user' -Force | Out-Null$\r$\n"
    FileWrite $R8 "  exit 0$\r$\n"
    FileWrite $R8 "} catch {$\r$\n"
@@ -1250,11 +1337,9 @@ Function RegisterUIStartupTask
 ui_startup_fallback:
    DetailPrint "Aviso: falha ao registrar Scheduled Task (${DISCOVERY_UI_TASK_NAME}). Aplicando fallback via Startup folder."
    ClearErrors
-   ; NOTA: com o manifest requireAdministrator, um atalho no Startup folder
-   ; (Startup folder) disparará o prompt de UAC a cada login do usuário.
-   ; O caminho preferido é o Scheduled Task com -RunLevel Highest (que também
-   ; pede elevação, mas de forma mais silenciosa no login). Este fallback é
-   ; mantido apenas para casos onde o Task Scheduler está indisponível.
+   ; NOTA: o manifest da UI é asInvoker e a Scheduled Task usa LeastPrivilege —
+   ; nenhum dos dois pede UAC. O atalho no Startup folder é o fallback para
+   ; máquinas sem Task Scheduler e sobe a UI no mesmo nível do usuário.
    CreateShortCut "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}" "--startup-minimized --startup-source=startup-link" "$INSTDIR\${PRODUCT_EXECUTABLE}" 0
    ${If} ${Errors}
       MessageBox MB_ICONSTOP "Falha ao registrar autostart da UI (${DISCOVERY_UI_TASK_NAME}) em Scheduled Task e Startup folder."
@@ -1396,6 +1481,131 @@ Function RegisterAgentService
    register_agent_svc_skip:
       ${InstallerLog} "Aviso: $INSTDIR\${SERVICE_EXECUTABLE} ausente — serviço não registrado; agente seguirá em modo standalone via Task Scheduler"
    register_agent_svc_done:
+FunctionEnd
+
+# ── Health check e rollback do self-update (item 2) ──────────────────────
+
+# VerifyAgentServiceHealth: depois de copiar os binários e registrar o
+# serviço, espera até 10s por STATE=RUNNING. Só então descarta o .bak_update.
+# Se não subir, restaura o binário anterior e reinicia o serviço (rollback),
+# deixando o motivo no installer.log e exit code não-zero para o updater.
+Function VerifyAgentServiceHealth
+   IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}" 0 health_skip
+   ${InstallerLog} "Health check: aguardando ${DISCOVERY_SERVICE_NAME} RUNNING..."
+   StrCpy $R1 0
+   health_retry:
+      ${If} $R1 >= 10
+         Goto health_failed
+      ${EndIf}
+      # Pipe precisa de cmd.exe (nsExec não interpreta pipes de shell).
+      nsExec::ExecToLog /OEM '"$SYSDIR\cmd.exe" /c sc.exe query ${DISCOVERY_SERVICE_NAME} | "$SYSDIR\find.exe" "RUNNING"'
+      Pop $R2
+      ${If} $R2 == 0
+         ${InstallerLog} "Health check: ${DISCOVERY_SERVICE_NAME} RUNNING"
+         Delete "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update"
+         ${InstallerLog} "Cleanup: ${SERVICE_EXECUTABLE}.bak_update removido (health check ok)"
+         Goto health_skip
+      ${EndIf}
+      ${If} $R1 == 3
+         # Segunda tentativa de start: o SCM pode ainda estar finalizando a
+         # criação do serviço quando RegisterAgentService chamou sc start.
+         nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" start ${DISCOVERY_SERVICE_NAME}'
+         Pop $R0
+      ${EndIf}
+      Sleep 1000
+      IntOp $R1 $R1 + 1
+      Goto health_retry
+   health_failed:
+      ${InstallerLogError} "Health check FALHOU: ${DISCOVERY_SERVICE_NAME} nao ficou RUNNING em 10s"
+      ${If} $ServiceBackupCreated == "1"
+         # Update in-place: existe binário anterior para restaurar.
+         Call RollbackAgentServiceUpdate
+      ${Else}
+         # Instalação nova (sem backup): NÃO apaga a definição do serviço — as
+         # failure actions e o start= auto ainda podem recuperá-lo no boot.
+         ${InstallerLogError} "Health check: sem .bak_update (instalacao nova) — servico mantido para recuperacao no proximo boot"
+         SetErrorLevel 1
+      ${EndIf}
+   health_skip:
+FunctionEnd
+
+# RollbackAgentServiceUpdate: remove a definição do serviço quebrado, restaura
+# discovery-service.exe.bak_update e recria/inicia o serviço com os mesmos
+# parâmetros de RegisterAgentService (binPath, failure actions, descrição).
+Function RollbackAgentServiceUpdate
+   ${InstallerLogError} "Rollback do servico: restaurando ${SERVICE_EXECUTABLE}.bak_update..."
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" stop ${DISCOVERY_SERVICE_NAME}'
+   Pop $R0
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" delete ${DISCOVERY_SERVICE_NAME}'
+   Pop $R0
+   Sleep 1000
+   nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${SERVICE_EXECUTABLE}" /F'
+   Pop $R0
+
+   IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" 0 rollback_no_backup
+   Delete "$INSTDIR\${SERVICE_EXECUTABLE}"
+   ClearErrors
+   Rename "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" "$INSTDIR\${SERVICE_EXECUTABLE}"
+   ${If} ${Errors}
+      ${InstallerLogError} "Rollback: FALHA ao restaurar ${SERVICE_EXECUTABLE}.bak_update — intervencao manual necessaria"
+      SetErrorLevel 1
+      StrCpy $ServiceRollbackDone "1"
+      Goto rollback_done
+   ${EndIf}
+   ${InstallerLog} "Rollback: binario anterior restaurado em $INSTDIR\${SERVICE_EXECUTABLE}"
+
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" create ${DISCOVERY_SERVICE_NAME} binPath= "\"$INSTDIR\${SERVICE_EXECUTABLE}\"" start= auto obj= LocalSystem DisplayName= "Discovery Agent Service"'
+   Pop $R0
+   ${If} $R0 != 0
+      nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" config ${DISCOVERY_SERVICE_NAME} binPath= "\"$INSTDIR\${SERVICE_EXECUTABLE}\"" start= auto'
+      Pop $R0
+   ${EndIf}
+   # Preserva as failure actions (crash → restart em 5s, 3 vezes, reset diário).
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" failure ${DISCOVERY_SERVICE_NAME} reset= 86400 actions= restart/5000/restart/5000/restart/5000'
+   Pop $R0
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" description ${DISCOVERY_SERVICE_NAME} "Discovery Agent core service (NATS, inventory, automation, P2P)"'
+   Pop $R0
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" start ${DISCOVERY_SERVICE_NAME}'
+   Pop $R0
+   ${If} $R0 != 0
+      ${InstallerLogError} "Rollback: sc start do servico restaurado falhou (codigo $R0)"
+   ${Else}
+      ${InstallerLog} "Rollback concluido: ${SERVICE_EXECUTABLE} anterior reiniciado"
+   ${EndIf}
+   SetErrorLevel 1
+   StrCpy $ServiceRollbackDone "1"
+   Goto rollback_done
+
+   rollback_no_backup:
+      ${InstallerLogError} "Rollback: ${SERVICE_EXECUTABLE}.bak_update ausente — servico ficou sem definicao; intervencao manual necessaria"
+      SetErrorLevel 1
+      StrCpy $ServiceRollbackDone "1"
+   rollback_done:
+FunctionEnd
+
+# RecoverAgentServiceIfStopped: bloco de recuperação para abort de instalação
+# DEPOIS do sc stop. Chamado por .onInstFailed; se o serviço existe e não está
+# RUNNING, tenta reiniciá-lo para não deixar a máquina sem core.
+Function RecoverAgentServiceIfStopped
+   ${InstallerLogInit}
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" query ${DISCOVERY_SERVICE_NAME}'
+   Pop $R2
+   ${If} $R2 == 1060
+      Return
+   ${EndIf}
+   nsExec::ExecToLog /OEM '"$SYSDIR\cmd.exe" /c sc.exe query ${DISCOVERY_SERVICE_NAME} | "$SYSDIR\find.exe" "RUNNING"'
+   Pop $R2
+   ${If} $R2 == 0
+      Return
+   ${EndIf}
+   ${InstallerLog} "Recuperacao apos abort: ${DISCOVERY_SERVICE_NAME} nao esta RUNNING — tentando iniciar"
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" start ${DISCOVERY_SERVICE_NAME}'
+   Pop $R0
+   ${If} $R0 != 0
+      ${InstallerLogError} "Recuperacao apos abort: sc start falhou (codigo $R0)"
+   ${Else}
+      ${InstallerLog} "Recuperacao apos abort: ${DISCOVERY_SERVICE_NAME} reiniciado"
+   ${EndIf}
 FunctionEnd
 
 # un.UnregisterAgentService: para e remove o serviço no uninstall.

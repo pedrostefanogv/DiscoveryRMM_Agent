@@ -97,6 +97,46 @@ function screenshotRenderAttachments() {
     var meta = document.createElement("span");
     meta.className = "chat-attachment-meta";
     meta.textContent = att.label || "print";
+    if (att.savedPath) meta.title = att.savedPath;
+
+    // Ações do anexo: salvar em arquivo, copiar o caminho salvo e OCR.
+    var tools = document.createElement("div");
+    tools.className = "chat-attachment-tools";
+
+    var saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "chat-attachment-tool";
+    saveBtn.textContent = "💾";
+    saveBtn.title = screenshotT("screenshot.saveFile");
+    saveBtn.setAttribute("aria-label", screenshotT("screenshot.saveFile"));
+    saveBtn.addEventListener("click", function () {
+      screenshotSaveAttachment(att);
+    });
+    tools.appendChild(saveBtn);
+
+    var pathBtn = document.createElement("button");
+    pathBtn.type = "button";
+    pathBtn.className = "chat-attachment-tool";
+    pathBtn.textContent = "🔗";
+    pathBtn.title = att.savedPath ? screenshotT("screenshot.copyPath") : screenshotT("screenshot.copyPathEmpty");
+    pathBtn.setAttribute("aria-label", screenshotT("screenshot.copyPath"));
+    pathBtn.disabled = !att.savedPath;
+    pathBtn.addEventListener("click", function () {
+      if (att.savedPath) screenshotCopyPathToClipboard(att.savedPath);
+    });
+    tools.appendChild(pathBtn);
+
+    var ocrBtn = document.createElement("button");
+    ocrBtn.type = "button";
+    ocrBtn.className = "chat-attachment-tool";
+    ocrBtn.textContent = "T";
+    ocrBtn.title = screenshotT("screenshot.ocrAction");
+    ocrBtn.setAttribute("aria-label", screenshotT("screenshot.ocrAction"));
+    ocrBtn.addEventListener("click", function () {
+      screenshotOpenOcr(att.dataUrl, att.label || "");
+    });
+    tools.appendChild(ocrBtn);
+
     var remove = document.createElement("button");
     remove.type = "button";
     remove.className = "chat-attachment-remove";
@@ -108,8 +148,21 @@ function screenshotRenderAttachments() {
     });
     chip.appendChild(img);
     chip.appendChild(meta);
+    chip.appendChild(tools);
     chip.appendChild(remove);
     bar.appendChild(chip);
+  });
+}
+
+// screenshotSaveAttachment salva o print anexado em arquivo e guarda o caminho
+// no próprio anexo (o botão de copiar caminho passa a valer para ele).
+function screenshotSaveAttachment(att) {
+  if (!att || !att.dataUrl) return;
+  screenshotSaveImageDataUrl(att.dataUrl, {}).then(function (saved) {
+    if (!saved) return;
+    att.savedPath = saved.path;
+    att.savedFileName = saved.fileName || "";
+    screenshotRenderAttachments();
   });
 }
 
@@ -131,7 +184,7 @@ function screenshotAttach(result) {
   }
   screenshotAttachments.push({
     dataUrl: result.dataUrl,
-    label: (result.width || 0) + "x" + (result.height || 0),
+    label: result.label || ((result.width || 0) + "x" + (result.height || 0)),
   });
   screenshotRenderAttachments();
   screenshotFeedback(screenshotT("chat.screenshotAttached"), false);
@@ -301,7 +354,7 @@ function initScreenshotPaste() {
   });
 }
 
-function screenshotAppendInfoBubble(result, label) {
+function screenshotAppendInfoBubble(result, label, evidence) {
   if (!result || !result.dataUrl) return;
   // O overlay roda em janela própria: sem o chat da IA aqui, a bolha é exibida
   // pela janela principal (que recebe o evento com byLlm=true).
@@ -321,6 +374,13 @@ function screenshotAppendInfoBubble(result, label) {
   if (result.auditId) img.setAttribute("data-screenshot-id", String(result.auditId));
   div.appendChild(caption);
   div.appendChild(img);
+  // Bloco de evidência do print (data/hora UTC, hostname e SHA-256 curto).
+  if (evidence && evidence.enabled) {
+    var block = document.createElement("div");
+    block.className = "screenshot-evidence-block";
+    block.textContent = screenshotEvidenceSummary(evidence);
+    div.appendChild(block);
+  }
   // Insere ANTES da bolha de streaming: o print foi produzido no MEIO do turno
   // e a resposta final ainda vai ser preenchida na bolha criada no início.
   if (typeof insertBeforeStreamingBubble === "function") {
@@ -393,6 +453,8 @@ function screenshotEnsureOverlayEls() {
     '  <span id="screenshotAnnotDrag" class="screenshot-annot-drag" data-i18n-title="screenshot.annotDrag">⣿</span>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="rect" data-i18n-title="screenshot.annotRect">▭</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="circle" data-i18n-title="screenshot.annotCircle">◯</button>',
+    // Realce/spotlight: escurece o entorno e deixa a região arrastada em destaque.
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="spotlight" data-i18n-title="screenshot.annotSpotlight"><svg viewBox="0 0 16 16" class="screenshot-annot-icon" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" rx="2" fill="currentColor" opacity="0.25"/><rect x="5" y="5" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="arrow" data-i18n-title="screenshot.annotArrow">↗</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="line" data-i18n-title="screenshot.annotLine">╱</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="pen" data-i18n-title="screenshot.annotPen">✎</button>',
@@ -409,6 +471,8 @@ function screenshotEnsureOverlayEls() {
     '  <button type="button" class="screenshot-annot-color" data-annot-color="#ff3b30" style="background:#ff3b30"></button>',
     '  <button type="button" class="screenshot-annot-color" data-annot-color="#ffcc00" style="background:#ffcc00"></button>',
     '  <button type="button" class="screenshot-annot-color" data-annot-color="#34c759" style="background:#34c759"></button>',
+    // Quarta cor: os atalhos 1–4 escolhem as quatro amostras da barra.
+    '  <button type="button" class="screenshot-annot-color" data-annot-color="#0a84ff" style="background:#0a84ff"></button>',
     // Cor personalizada: abre o seletor nativo (paleta do sistema). O próprio
     // botão é o "quadradinho" da cor escolhida; sem escolha, mostra um arco-íris.
     '  <button type="button" id="screenshotAnnotColorCustom" class="screenshot-annot-color screenshot-annot-color-custom" data-i18n-title="screenshot.annotColorCustom"></button>',
@@ -420,11 +484,26 @@ function screenshotEnsureOverlayEls() {
     '  <button type="button" class="screenshot-annot-btn" data-annot-width="6" data-i18n-title="screenshot.widthMedium"><span class="screenshot-width-mark" style="height:4px"></span></button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-width="10" data-i18n-title="screenshot.widthThick"><span class="screenshot-width-mark" style="height:7px"></span></button>',
     '  <span class="screenshot-annot-sep"></span>',
+    // Salvar em arquivo e copiar o caminho do último arquivo salvo.
+    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotSave" data-i18n-title="screenshot.saveFile">💾</button>',
+    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotCopyPath" data-i18n-title="screenshot.copyPath">🔗</button>',
+    // Modo evidência: marca d'água (data/hora UTC, hostname, SHA-256) no print.
+    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotEvidence" aria-pressed="false" data-i18n-title="screenshot.evidenceMode">🛡</button>',
     '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotUndo" data-i18n-title="screenshot.annotUndo">↺</button>',
     '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotClear" data-i18n-title="screenshot.annotClear">🧹</button>',
     '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotReselect" data-i18n-title="screenshot.annotReselect">⟲</button>',
     '  <button type="button" class="screenshot-annot-btn danger" id="screenshotAnnotCancel" data-i18n-title="screenshot.annotCancel">✕</button>',
     '  <button type="button" class="screenshot-annot-confirm" id="screenshotAnnotConfirm" data-i18n-title="screenshot.annotConfirm">✓</button>',
+    '</div>',
+    // Barra de dicas de atalho (aparece só com a seleção travada).
+    '<div id="screenshotShortcutBar" class="screenshot-shortcut-bar hidden"></div>',
+    // Seletor de janelas (tecla W): lista as janelas do payload com busca.
+    '<div id="screenshotWindowPicker" class="screenshot-window-picker hidden" role="dialog" aria-modal="false">',
+    '  <div class="screenshot-window-picker-head">',
+    '    <input id="screenshotWindowSearch" type="search" class="screenshot-window-search" autocomplete="off" spellcheck="false" />',
+    '    <button id="screenshotWindowPickerClose" type="button" class="screenshot-annot-btn danger" data-i18n-title="action.close">✕</button>',
+    '  </div>',
+    '  <div id="screenshotWindowList" class="screenshot-window-list" role="listbox"></div>',
     '</div>',
   ].join("");
   document.body.appendChild(root);
@@ -556,26 +635,11 @@ function screenshotEnsureOverlayEls() {
     textInput.addEventListener("blur", function () { screenshotCommitText(); });
   }
 
-  document.addEventListener("keydown", function (event) {
-    // Durante o "preparando" ainda não há estado, mas a janela já cobre o
-    // desktop: Esc/clique no X precisa poder cancelar a captura.
-    if (!screenshotOverlayState && !screenshotCaptureToken) return;
-    // Digitação de anotação/campo não pode disparar atalhos (setas, 0, +, -).
-    var tag = event.target && event.target.tagName ? String(event.target.tagName).toUpperCase() : "";
-    if (tag === "INPUT" || tag === "TEXTAREA" || event.target === textInput) return;
-    if (event.key === "Escape") { event.preventDefault(); screenshotCancelOverlay(); return; }
-    // screenshotOverlayState pode ser nulo no "preparando" (só o token existe).
-    if (event.key === "Enter" && screenshotOverlayState && screenshotOverlayState.selection) { event.preventDefault(); screenshotConfirmSelection(); return; }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") { event.preventDefault(); screenshotAnnotUndo(); return; }
-    // Zoom/pan por teclado (mesmos passos da barra de zoom).
-    if (event.key === "+" || event.key === "=") { event.preventDefault(); screenshotSetZoom(screenshotOverlayView.zoom * screenshotZoomStep); return; }
-    if (event.key === "-" || event.key === "_") { event.preventDefault(); screenshotSetZoom(screenshotOverlayView.zoom / screenshotZoomStep); return; }
-    if (event.key === "0") { event.preventDefault(); screenshotResetOverlayView(); return; }
-    if (event.key === "ArrowLeft") { event.preventDefault(); screenshotPanBy(-80, 0); return; }
-    if (event.key === "ArrowRight") { event.preventDefault(); screenshotPanBy(80, 0); return; }
-    if (event.key === "ArrowUp") { event.preventDefault(); screenshotPanBy(0, -80); return; }
-    if (event.key === "ArrowDown") { event.preventDefault(); screenshotPanBy(0, 80); }
-  });
+  // Extensões (salvar/copiar caminho/evidência/atalhos/seletor de janelas): os
+  // elementos existem a partir daqui, então o bind é feito uma única vez.
+  screenshotInitOverlayExtras();
+
+  document.addEventListener("keydown", screenshotOverlayKeydown);
 }
 
 /**
@@ -672,6 +736,12 @@ function screenshotShowOverlay(payload) {
   screenshotSetAnnotTool("rect");
   screenshotSetAnnotColor("#ff3b30");
   screenshotSetAnnotWidth(6);
+  // Nova captura: nenhum caminho salvo herdado e seletor de janelas fechado.
+  screenshotLastSavedPath = "";
+  screenshotUpdateCopyPathButton();
+  screenshotSetEvidenceButton(false);
+  screenshotToggleWindowPicker(false);
+  screenshotSetShortcutBarVisible(false);
   img.onload = function () {
     var state = screenshotOverlayState;
     if (!state || state.payload.session !== payload.session) return;
@@ -694,14 +764,14 @@ function screenshotShowOverlay(payload) {
     var state = screenshotOverlayState;
     if (!state || state.payload.session !== payload.session) return;
     if (state.ready) return;
-    screenshotFeedback("Não foi possível exibir a tela capturada. Tente novamente.", true);
+    screenshotFeedback(screenshotT("screenshot.overlayImageFailed"), true);
     screenshotCancelOverlay();
   }, 8000);
   var hint = document.getElementById("screenshotOverlayHint");
   if (hint) {
-    hint.textContent = payload.requestedByLlm
+    hint.textContent = (payload.requestedByLlm
       ? screenshotT("screenshot.llmHint", { reason: payload.reason || "" })
-      : screenshotT("screenshot.overlayHint");
+      : screenshotT("screenshot.overlayHint")) + " · " + screenshotT("screenshot.overlayWindowsHint");
   }
   // Política: sem tela inteira permitida (ou exigindo janela), o atalho nem aparece.
   var fullBtn = document.getElementById("screenshotModeFull");
@@ -744,6 +814,9 @@ function screenshotHideOverlay() {
   var canvas = screenshotOverlayCanvas();
   if (canvas) canvas.classList.add("hidden");
   screenshotSetAnnotToolbarVisible(false);
+  screenshotSetShortcutBarVisible(false);
+  screenshotToggleWindowPicker(false);
+  screenshotLastSavedPath = "";
   if (screenshotToolbarDragCleanup) {
     screenshotToolbarDragCleanup();
   }
@@ -1244,6 +1317,9 @@ function screenshotLockSelection(selection) {
     canvas.classList.remove("outside");
   }
   screenshotSetAnnotToolbarVisible(true);
+  // Barra de dicas de atalho: só faz sentido com a seleção travada (é quando
+  // as ferramentas de anotação estão ativas).
+  screenshotSetShortcutBarVisible(true);
   // O botão "ampliar a área" só passa a existir com a seleção travada.
   screenshotSetZoomAreaVisible(true);
   // A barra do topo (dica + tela inteira/janela/cancelar) some assim que a área
@@ -1276,6 +1352,7 @@ function screenshotAnnotReselect() {
   // ApplyView e o botão "ampliar a área" volta a ficar oculto.
   screenshotResetOverlayView();
   screenshotSetAnnotToolbarVisible(false);
+  screenshotSetShortcutBarVisible(false);
   screenshotSetZoomAreaVisible(false);
   // Volta a mostrar dica e atalhos para escolher outra área/janela.
   screenshotSetOverlayToolbarVisible(true);
@@ -1516,7 +1593,7 @@ function screenshotAnnotPoint(event) {
 
 // Ferramentas que desenham por arraste (retângulo/linha/seta/borrão).
 function screenshotIsDragTool(tool) {
-  return tool === "rect" || tool === "circle" || tool === "arrow" || tool === "line" || tool === "blur" || tool === "magnify";
+  return tool === "rect" || tool === "circle" || tool === "spotlight" || tool === "arrow" || tool === "line" || tool === "blur" || tool === "magnify";
 }
 
 // screenshotAnnotHoverCursor dá o retorno visual de que só a área selecionada é
@@ -1647,6 +1724,15 @@ function screenshotShapeDistance(shape, point, source) {
       return 0;
     }
     return Infinity;
+  }
+  if (shape.type === "spotlight") {
+    // O realce escurece o entorno; a marca é apagada clicando dentro da região.
+    var sx1 = Math.min(shape.x1, shape.x2);
+    var sy1 = Math.min(shape.y1, shape.y2);
+    var sx2 = Math.max(shape.x1, shape.x2);
+    var sy2 = Math.max(shape.y1, shape.y2);
+    var sInside = point.x >= sx1 && point.x <= sx2 && point.y >= sy1 && point.y <= sy2;
+    return sInside ? 0 : Infinity;
   }
   if (shape.type === "blur") {
     // O borrão cobre a área inteira: qualquer ponto dentro apaga.
@@ -1820,6 +1906,14 @@ function screenshotAnnotRedraw() {
     screenshotDrawShape(ctx, state.draft, screenshotOverlayImg(), 0, 1);
   }
   ctx.restore();
+  // Prévia do modo evidência: a faixa aparece dentro da área selecionada (é
+  // exatamente onde ela cairá na imagem final).
+  if (state.evidence && state.evidence.enabled) {
+    ctx.save();
+    ctx.translate(clip.x, clip.y);
+    screenshotDrawEvidenceWatermark(ctx, Math.max(1, clip.w), Math.max(1, clip.h), state.evidence);
+    ctx.restore();
+  }
 }
 
 // screenshotDrawShape desenha uma marca em pixels da IMAGEM. `source` é a tela
@@ -1836,6 +1930,8 @@ function screenshotDrawShape(ctx, shape, source, stepIndex, drawScale) {
     screenshotStrokeRoundedRect(ctx, shape);
   } else if (shape.type === "circle") {
     screenshotStrokeEllipse(ctx, shape);
+  } else if (shape.type === "spotlight") {
+    screenshotDrawSpotlight(ctx, shape);
   } else if (shape.type === "line") {
     ctx.beginPath();
     ctx.moveTo(shape.x1, shape.y1);
@@ -1898,6 +1994,26 @@ function screenshotRoundedRectPath(ctx, x, y, w, h, radius) {
   ctx.lineTo(x, y + r);
   ctx.quadraticCurveTo(x, y, x + r, y);
   ctx.closePath();
+}
+
+// Realce/spotlight: escurece tudo FORA da região arrastada e desenha um
+// contorno na cor ativa — o miolo continua nítido e em evidência.
+function screenshotDrawSpotlight(ctx, shape) {
+  var x = Math.min(shape.x1, shape.x2);
+  var y = Math.min(shape.y1, shape.y2);
+  var w = Math.abs(shape.x2 - shape.x1);
+  var h = Math.abs(shape.y2 - shape.y1);
+  if (w < 2 || h < 2) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(-100000, -100000, 200000, 200000);
+  ctx.rect(x, y, w, h);
+  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.fill("evenodd");
+  ctx.strokeStyle = shape.color || "#ffcc00";
+  ctx.lineWidth = Math.max(2, (shape.width || 6) * 0.7);
+  ctx.strokeRect(x, y, w, h);
+  ctx.restore();
 }
 
 // Círculo/elipse inscrita na mesma caixa do arraste do retângulo.
@@ -2194,6 +2310,8 @@ function screenshotBuildAnnotatedDataUrl() {
     screenshotDrawShape(ctx, shape, img, shape.type === "step" ? step : 0, factor);
   });
   ctx.restore();
+  // Modo evidência: faixa com data/hora UTC, hostname e SHA-256 curto.
+  screenshotDrawEvidenceWatermark(ctx, outW, outH, state.evidence);
   // SEMPRE PNG: a imagem anotada é o que o usuário lê e envia ao LLM — o
   // backend reencoda lossless (WebP/PNG) depois, dentro dos limites de payload.
   return canvas.toDataURL("image/png");
@@ -2211,11 +2329,13 @@ function screenshotConfirmSelection() {
     windowHandle: state.selection.windowHandle || 0,
     monitorIndex: state.selection.monitorIndex || 0,
   };
-  if (state.annotations.length > 0) {
+  // Com anotações OU modo evidência a imagem final é composta aqui (a faixa de
+  // evidência também precisa entrar no arquivo quando não há traços).
+  if (state.annotations.length > 0 || (state.evidence && state.evidence.enabled)) {
     try {
       selection.annotatedDataUrl = screenshotBuildAnnotatedDataUrl();
     } catch (err) {
-      screenshotFeedback("Falha ao compor as anotacoes: " + err, true);
+      screenshotFeedback(screenshotT("screenshot.annotComposeFailed", { error: String(err) }), true);
       return;
     }
   }
@@ -2255,10 +2375,10 @@ function supportChatForwardScreenshot(result) {
 
 // screenshotEmitOverlayResult reencaminha o print anotado para a janela que
 // pediu a captura. O evento é global; só a janela principal o trata.
-function screenshotEmitOverlayResult(result, destination, byLlm) {
+function screenshotEmitOverlayResult(result, destination, byLlm, evidence) {
   if (!result || !result.dataUrl) return;
   if (!window.wails || typeof window.wails.emit !== "function") return;
-  window.wails.emit(SCREENSHOT_OVERLAY_RESULT_EVENT, {
+  var payload = {
     destination: destination || screenshotDestinationDefault(),
     byLlm: !!byLlm,
     dataUrl: result.dataUrl,
@@ -2266,7 +2386,10 @@ function screenshotEmitOverlayResult(result, destination, byLlm) {
     height: result.height || 0,
     auditId: result.auditId || 0,
     at: Date.now(),
-  });
+  };
+  // Bloco de evidência: a janela principal anexa na bolha de info do print.
+  if (evidence && evidence.enabled) payload.evidence = evidence;
+  window.wails.emit(SCREENSHOT_OVERLAY_RESULT_EVENT, payload);
 }
 
 function screenshotFinishSelection(selection) {
@@ -2275,6 +2398,8 @@ function screenshotFinishSelection(selection) {
   var api = screenshotApi();
   var payload = state.payload;
   var byLLM = !!payload.requestedByLlm;
+  // Guardado ANTES de esconder: screenshotHideOverlay zera o estado global.
+  var evidence = state.evidence && state.evidence.enabled ? state.evidence : null;
   if (!api || typeof api.FinishScreenshotOverlay !== "function") {
     // Build antigo sem o binding: cancela no backend (restaura a janela) em vez
     // de só esconder o overlay — senão a janela ficaria cobrindo o desktop.
@@ -2294,12 +2419,16 @@ function screenshotFinishSelection(selection) {
     var destination = screenshotOverlayDestination || screenshotDestinationDefault();
     // Consome o destino: cada captura define o seu.
     screenshotOverlayDestination = "";
+    // Política: copiar a imagem automaticamente ao confirmar (cache com TTL).
+    if (destination !== "supportChat" && destination !== "ticketComment") {
+      screenshotCopyOnConfirm(result.dataUrl);
+    }
     if (destination === "supportChat") {
       supportChatForwardScreenshot(result);
     } else {
       // ticketComment / aiChat / llm: a janela principal aplica o print (o
       // overlay é uma janela própria e não tem o composer nem o chat da IA).
-      screenshotEmitOverlayResult(result, destination, byLLM);
+      screenshotEmitOverlayResult(result, destination, byLLM, evidence);
     }
   }).catch(function (err) {
     screenshotFeedback(screenshotT("screenshot.failed") + ": " + err, true);
@@ -2400,7 +2529,7 @@ function openScreenshotCapture(options) {
       screenshotOverlayDestination = "supportChat";
       supportChatNotifyCaptureFailed("timeout");
     }
-    screenshotFeedback("A captura de tela não respondeu. Tente novamente.", true);
+    screenshotFeedback(screenshotT("screenshot.prepareTimeout"), true);
   }, 30000);
 
   // ESTA janela não desenha mais o overlay: o Go congela a tela e entrega a
@@ -2624,8 +2753,37 @@ function screenshotSavePrivacyPolicy() {
     hideAgentWindow: hideWindowEl ? !!hideWindowEl.checked : true,
     imageFormat: formatEl ? formatEl.value : "auto",
   };
-  api.SaveScreenshotPolicy(JSON.stringify(payload))
+  // Campos que esta tela ainda não edita (copyOnConfirm/galeria): preservados da
+  // política vigente para o "Salvar política" não voltá-los ao padrão.
+  var copyEl = screenshotModalEl("chatPrivacyCopyOnConfirm");
+  var galleryEl = screenshotModalEl("chatPrivacyGalleryEnabled");
+  var galleryMaxEl = screenshotModalEl("chatPrivacyGalleryMax");
+  // Se a leitura da política falhar, o salvamento segue SEM os campos que esta
+  // tela não edita: o backend preserva a política vigente. Antes, um fallback
+  // (raw vazio) enviava copyOnConfirm=false/galleryEnabled=true e desligava a
+  // cópia ao confirmar (e religava a galeria) em silêncio.
+  screenshotLoadPolicy(true)
+    .catch(function () { return null; })
+    .then(function (policy) {
+      var raw = policy && policy.raw ? policy.raw : {};
+      var known = !!(policy && policy.loaded);
+
+      if (copyEl) payload.copyOnConfirm = !!copyEl.checked;
+      else if (known) payload.copyOnConfirm = raw.copyOnConfirm === true;
+
+      if (galleryEl) payload.galleryEnabled = !!galleryEl.checked;
+      else if (known) payload.galleryEnabled = raw.galleryEnabled !== false;
+
+      var maxItems = galleryMaxEl
+        ? Number(galleryMaxEl.value)
+        : (known ? Number(raw.galleryMaxItems) : NaN);
+      if (maxItems > 0) payload.galleryMaxItems = maxItems;
+
+      return api.SaveScreenshotPolicy(JSON.stringify(payload));
+    })
     .then(function () {
+      // A próxima captura precisa ver copyOnConfirm/galeria já atualizados.
+      screenshotInvalidatePolicyCache();
       screenshotFeedback(screenshotT("screenshot.policySaved"), false);
       screenshotLoadPrivacy();
     })
@@ -2675,6 +2833,7 @@ function screenshotResetPrivacyPolicy() {
   }
   api.ResetScreenshotPolicy()
     .then(function () {
+      screenshotInvalidatePolicyCache();
       screenshotFeedback(screenshotT("screenshot.policyReset"), false);
       screenshotLoadPrivacy();
     })
@@ -2735,6 +2894,7 @@ function screenshotEnsureLightbox() {
     '    <span class="screenshot-lightbox-buttons">',
     '      <span id="screenshotLightboxZoom" class="screenshot-lightbox-zoom">100%</span>',
     '      <button id="screenshotLightboxZoomFit" class="btn subtle" type="button" data-i18n-title="screenshot.zoomFit">⤢</button>',
+    '      <button id="screenshotLightboxOcr" class="btn subtle" type="button"></button>',
     '      <button id="screenshotLightboxCopy" class="btn subtle" type="button"></button>',
     '      <button id="screenshotLightboxClose" class="btn danger" type="button"></button>',
     '    </span>',
@@ -2752,6 +2912,17 @@ function screenshotEnsureLightbox() {
   if (copy) {
     copy.textContent = screenshotT("screenshot.copy");
     copy.addEventListener("click", screenshotCopyLightboxImage);
+  }
+  var ocrBtn = document.getElementById("screenshotLightboxOcr");
+  if (ocrBtn) {
+    ocrBtn.textContent = screenshotT("screenshot.ocrAction");
+    ocrBtn.title = screenshotT("screenshot.ocrAction");
+    ocrBtn.addEventListener("click", function () {
+      var img = document.getElementById("screenshotLightboxImage");
+      var src = img ? img.getAttribute("src") || img.src : "";
+      var cap = document.getElementById("screenshotLightboxCaption");
+      screenshotOpenOcr(src, cap ? cap.textContent || "" : "");
+    });
   }
   var fit = document.getElementById("screenshotLightboxZoomFit");
   if (fit) fit.addEventListener("click", screenshotResetLightboxView);
@@ -3028,6 +3199,8 @@ function initScreenshotCapture() {
   if (button) {
     button.addEventListener("click", function () { openScreenshotCapture(); });
   }
+  // Menu da câmera (atraso/rolagem) + acesso à galeria de capturas.
+  screenshotEnsureComposerControls();
 
   if (window.wails && typeof window.wails.on === "function") {
     // Print anotado produzido na janela DEDICADA do overlay. O pedido do chat
@@ -3055,6 +3228,16 @@ function onScreenshotOverlayResult(data) {
     }
     return;
   }
+  // Modo evidência: o print é documentado na timeline (com o bloco de
+  // evidência) em vez de virar anexo solto do composer.
+  if (info.evidence) {
+    screenshotAppendInfoBubble(
+      { dataUrl: info.dataUrl, auditId: info.auditId || 0 },
+      screenshotT("screenshot.evidenceCaptured"),
+      info.evidence,
+    );
+    return;
+  }
   if (info.byLlm) {
     screenshotAppendInfoBubble(
       { dataUrl: info.dataUrl, auditId: info.auditId || 0 },
@@ -3064,3 +3247,1534 @@ function onScreenshotOverlayResult(data) {
   }
   screenshotAttach({ dataUrl: info.dataUrl, width: info.width || 0, height: info.height || 0 });
 }
+
+// ── Barra de dicas e bind das extensões do overlay ───────────────────────
+
+function screenshotSetShortcutBarVisible(visible) {
+  var bar = document.getElementById("screenshotShortcutBar");
+  if (!bar) return;
+  bar.classList.toggle("hidden", !visible);
+}
+
+function screenshotShortcutHintText() {
+  return screenshotT("screenshot.shortcuts");
+}
+
+// screenshotApplyOverlayTranslations aplica os textos/títulos/aria do overlay
+// manualmente: o overlay é uma janela própria e pode não ter o observer de i18n
+// da janela principal rodando quando o conteúdo é montado por JS.
+function screenshotApplyOverlayTranslations() {
+  var root = screenshotOverlayRoot();
+  if (!root || !root.querySelectorAll) return;
+  Array.prototype.forEach.call(root.querySelectorAll("[data-i18n]"), function (el) {
+    el.textContent = screenshotT(el.getAttribute("data-i18n"));
+  });
+  Array.prototype.forEach.call(root.querySelectorAll("[data-i18n-title]"), function (el) {
+    el.setAttribute("title", screenshotT(el.getAttribute("data-i18n-title")));
+  });
+  Array.prototype.forEach.call(root.querySelectorAll("[data-i18n-aria-label]"), function (el) {
+    el.setAttribute("aria-label", screenshotT(el.getAttribute("data-i18n-aria-label")));
+  });
+  Array.prototype.forEach.call(root.querySelectorAll("[data-i18n-placeholder]"), function (el) {
+    el.setAttribute("placeholder", screenshotT(el.getAttribute("data-i18n-placeholder")));
+  });
+}
+
+// screenshotInitOverlayExtras liga os controles criados junto do overlay:
+// salvar/copiar caminho/evidência, dicas de atalho e o seletor de janelas.
+function screenshotInitOverlayExtras() {
+  var saveBtn = document.getElementById("screenshotAnnotSave");
+  if (saveBtn) saveBtn.addEventListener("click", screenshotOverlaySave);
+  var pathBtn = document.getElementById("screenshotAnnotCopyPath");
+  if (pathBtn) pathBtn.addEventListener("click", screenshotOverlayCopyPath);
+  var evidenceBtn = document.getElementById("screenshotAnnotEvidence");
+  if (evidenceBtn) evidenceBtn.addEventListener("click", screenshotToggleEvidence);
+  screenshotUpdateCopyPathButton();
+
+  var bar = document.getElementById("screenshotShortcutBar");
+  if (bar) bar.textContent = screenshotShortcutHintText();
+
+  var pickerClose = document.getElementById("screenshotWindowPickerClose");
+  if (pickerClose) {
+    pickerClose.title = screenshotT("action.close");
+    pickerClose.setAttribute("aria-label", screenshotT("action.close"));
+    pickerClose.addEventListener("click", function () { screenshotToggleWindowPicker(false); });
+  }
+  var picker = document.getElementById("screenshotWindowPicker");
+  if (picker) picker.setAttribute("aria-label", screenshotT("screenshot.windowPickerTitle"));
+  var search = document.getElementById("screenshotWindowSearch");
+  if (search) {
+    search.placeholder = screenshotT("screenshot.windowSearch");
+    search.setAttribute("aria-label", screenshotT("screenshot.windowSearch"));
+    search.addEventListener("input", function () { screenshotRenderWindowList(search.value); });
+    search.addEventListener("keydown", function (event) {
+      // Escape/Enter no campo pertencem ao seletor, não ao overlay.
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        screenshotToggleWindowPicker(false);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        screenshotWindowPickerChooseFirst();
+      }
+    });
+  }
+  screenshotApplyOverlayTranslations();
+}
+
+// ── Composer: menu da câmera (atraso/rolagem) e botão da galeria ─────────
+
+function screenshotMenuEl() {
+  return document.getElementById("screenshotComposerMenu");
+}
+
+function screenshotCloseComposerMenu() {
+  var menu = screenshotMenuEl();
+  if (menu) menu.classList.add("hidden");
+}
+
+function screenshotMenuAction(labelKey, onClick) {
+  var item = document.createElement("button");
+  item.type = "button";
+  item.className = "screenshot-menu-item";
+  item.setAttribute("role", "menuitem");
+  item.textContent = screenshotT(labelKey);
+  item.addEventListener("click", function () {
+    screenshotCloseComposerMenu();
+    onClick();
+  });
+  return item;
+}
+
+function screenshotOpenComposerMenu() {
+  var menu = screenshotMenuEl();
+  var camera = document.getElementById("chatScreenshotBtn");
+  if (!menu) return;
+  if (!menu.classList.contains("hidden")) {
+    screenshotCloseComposerMenu();
+    return;
+  }
+  var rect = camera ? camera.getBoundingClientRect() : { left: 16, top: 16, bottom: 16, right: 16 };
+  menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 230)) + "px";
+  menu.style.top = Math.max(8, rect.top - 8) + "px";
+  menu.style.bottom = "auto";
+  // Abre ACIMA da câmera quando não há espaço abaixo.
+  var height = menu.offsetHeight || 220;
+  if (rect.bottom + 8 + height > window.innerHeight) {
+    menu.style.top = Math.max(8, rect.top - height - 8) + "px";
+  }
+  menu.classList.remove("hidden");
+}
+
+// screenshotEnsureComposerControls injeta o menu da câmera e o botão da
+// galeria ao lado do ícone de câmera do composer (sem tocar no HTML do chat).
+function screenshotEnsureComposerControls() {
+  if (screenshotOverlayHost) return;
+  var camera = document.getElementById("chatScreenshotBtn");
+  if (!camera) return;
+
+  if (!document.getElementById("chatScreenshotMenuBtn")) {
+    var menuBtn = document.createElement("button");
+    menuBtn.id = "chatScreenshotMenuBtn";
+    menuBtn.type = "button";
+    menuBtn.className = "chat-icon-btn chat-screenshot-menu-btn";
+    menuBtn.textContent = "▾";
+    menuBtn.setAttribute("aria-haspopup", "menu");
+    menuBtn.setAttribute("aria-expanded", "false");
+    menuBtn.setAttribute("aria-label", screenshotT("screenshot.menuLabel"));
+    menuBtn.title = screenshotT("screenshot.menuLabel");
+    menuBtn.addEventListener("click", function () {
+      var open = !screenshotMenuEl() || screenshotMenuEl().classList.contains("hidden");
+      screenshotOpenComposerMenu();
+      menuBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    camera.insertAdjacentElement("afterend", menuBtn);
+  }
+
+  if (!document.getElementById("chatScreenshotGalleryBtn")) {
+    var galleryBtn = document.createElement("button");
+    galleryBtn.id = "chatScreenshotGalleryBtn";
+    galleryBtn.type = "button";
+    galleryBtn.className = "chat-icon-btn chat-screenshot-gallery-btn";
+    galleryBtn.textContent = "🖼";
+    galleryBtn.setAttribute("aria-haspopup", "dialog");
+    galleryBtn.setAttribute("aria-label", screenshotT("screenshot.galleryButton"));
+    galleryBtn.title = screenshotT("screenshot.galleryButton");
+    galleryBtn.addEventListener("click", function () { screenshotOpenGallery(); });
+    // Ordem visual: câmera, menu (▾) e galeria.
+    var menuAnchor = document.getElementById("chatScreenshotMenuBtn") || camera;
+    menuAnchor.insertAdjacentElement("afterend", galleryBtn);
+  }
+
+  if (!screenshotMenuEl()) {
+    var menu = document.createElement("div");
+    menu.id = "screenshotComposerMenu";
+    menu.className = "screenshot-menu hidden";
+    menu.setAttribute("role", "menu");
+    menu.appendChild(screenshotMenuAction("screenshot.menuCaptureNow", function () {
+      openScreenshotCapture({});
+    }));
+    menu.appendChild(screenshotMenuAction("screenshot.delay3", function () { screenshotStartDelayedCapture(3); }));
+    menu.appendChild(screenshotMenuAction("screenshot.delay5", function () { screenshotStartDelayedCapture(5); }));
+    menu.appendChild(screenshotMenuAction("screenshot.delay10", function () { screenshotStartDelayedCapture(10); }));
+    var sep = document.createElement("div");
+    sep.className = "screenshot-menu-sep";
+    menu.appendChild(sep);
+    menu.appendChild(screenshotMenuAction("screenshot.scrollingCapture", screenshotCaptureScrolling));
+    menu.appendChild(screenshotMenuAction("screenshot.galleryButton", screenshotOpenGallery));
+    document.body.appendChild(menu);
+  }
+
+  // Fecha o menu ao clicar fora (e no Esc).
+  if (document.body.dataset.screenshotMenuBound !== "1") {
+    document.body.dataset.screenshotMenuBound = "1";
+    document.addEventListener("click", function (event) {
+      var menu = screenshotMenuEl();
+      if (!menu || menu.classList.contains("hidden")) return;
+      if (menu.contains(event.target)) return;
+      if (event.target && event.target.closest && event.target.closest("#chatScreenshotMenuBtn")) return;
+      screenshotCloseComposerMenu();
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") screenshotCloseComposerMenu();
+    });
+  }
+  // A galeria respeita a política: sem galeria habilitada o botão não aparece.
+  screenshotLoadPolicy(false).then(function (policy) {
+    var btn = document.getElementById("chatScreenshotGalleryBtn");
+    if (btn) btn.classList.toggle("hidden", !policy.galleryEnabled);
+  });
+}
+
+// ── Captura com atraso (3/5/10 s) ────────────────────────────────────────
+
+var screenshotDelayState = null;
+
+function screenshotDelayOverlayEl() {
+  var el = document.getElementById("screenshotDelayOverlay");
+  if (el) return el;
+  el = document.createElement("div");
+  el.id = "screenshotDelayOverlay";
+  el.className = "screenshot-delay-overlay hidden";
+  el.setAttribute("role", "status");
+  el.setAttribute("aria-live", "polite");
+  el.innerHTML = [
+    '<div class="screenshot-delay-card">',
+    '  <div id="screenshotDelayCount" class="screenshot-delay-count">3</div>',
+    '  <div id="screenshotDelayHint" class="screenshot-delay-hint"></div>',
+    '  <button id="screenshotDelayCancel" type="button" class="btn subtle"></button>',
+    '</div>',
+  ].join("");
+  document.body.appendChild(el);
+  var cancel = document.getElementById("screenshotDelayCancel");
+  if (cancel) cancel.addEventListener("click", screenshotCancelDelayedCapture);
+  return el;
+}
+
+function screenshotCancelDelayedCapture() {
+  if (!screenshotDelayState) return;
+  var state = screenshotDelayState;
+  screenshotDelayState = null;
+  clearInterval(state.timer);
+  if (state.onKey) document.removeEventListener("keydown", state.onKey);
+  var el = document.getElementById("screenshotDelayOverlay");
+  if (el) el.classList.add("hidden");
+}
+
+function screenshotStartDelayedCapture(seconds) {
+  var total = Math.max(1, Math.round(Number(seconds) || 3));
+  screenshotCancelDelayedCapture();
+  var el = screenshotDelayOverlayEl();
+  var count = document.getElementById("screenshotDelayCount");
+  var hint = document.getElementById("screenshotDelayHint");
+  var cancel = document.getElementById("screenshotDelayCancel");
+  if (hint) hint.textContent = screenshotT("screenshot.delayHint", { seconds: total });
+  if (cancel) cancel.textContent = screenshotT("screenshot.delayCancel");
+  el.classList.remove("hidden");
+  var state = { remaining: total, timer: null, onKey: null };
+  function render() {
+    if (count) count.textContent = String(Math.max(0, state.remaining));
+    if (hint) hint.textContent = screenshotT("screenshot.delayHint", { seconds: Math.max(0, state.remaining) });
+  }
+  render();
+  state.onKey = function (event) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    screenshotCancelDelayedCapture();
+  };
+  document.addEventListener("keydown", state.onKey);
+  state.timer = setInterval(function () {
+    if (!screenshotDelayState) return;
+    state.remaining -= 1;
+    if (state.remaining <= 0) {
+      screenshotCancelDelayedCapture();
+      openScreenshotCapture({});
+      return;
+    }
+    render();
+  }, 1000);
+  screenshotDelayState = state;
+}
+
+// ── Captura de rolagem ("captura longa") ─────────────────────────────────
+
+var screenshotScrollingPending = false;
+
+function screenshotCaptureScrolling() {
+  if (screenshotScrollingPending) return;
+  var capture = screenshotApiMethod("CaptureScrollingScreenshot");
+  if (!capture) {
+    screenshotFeedback(screenshotT("screenshot.scrollingUnavailable"), true);
+    return;
+  }
+  screenshotScrollingPending = true;
+  screenshotFeedback(screenshotT("screenshot.scrollingPreparing"), false);
+  Promise.resolve()
+    .then(function () { return capture("captura longa manual", 10); })
+    .then(function (raw) {
+      var data = screenshotParse(raw);
+      if (!data || !data.imageDataUrl) {
+        screenshotFeedback(screenshotT("screenshot.scrollingFailed"), true);
+        return;
+      }
+      // O anexo usa o MESMO caminho do print comum (screenshotAttach).
+      screenshotAttach({
+        dataUrl: data.imageDataUrl,
+        width: data.width || 0,
+        height: data.height || 0,
+        label: screenshotT("screenshot.scrollingLabel", { scrolls: data.scrolls || 1 }),
+      });
+      if (data.truncated) {
+        screenshotFeedback(screenshotT("screenshot.scrollingTruncated"), true);
+      }
+    })
+    .catch(function (err) {
+      screenshotFeedback(screenshotT("screenshot.scrollingFailed") + ": " + String(err), true);
+    })
+    .then(function () {
+      screenshotScrollingPending = false;
+    });
+}
+
+// ── OCR do print (extrair texto) ─────────────────────────────────────────
+
+// screenshotCopyPlainText copia texto puro (OCR) com retorno ao usuário.
+function screenshotCopyPlainText(text) {
+  var value = String(text || "");
+  if (!value) return Promise.resolve(false);
+  return screenshotClipboardWriteText(value).then(function (ok) {
+    screenshotFeedback(
+      ok ? screenshotT("screenshot.ocrCopied") : screenshotT("screenshot.ocrCopyFailed"),
+      !ok,
+    );
+    return ok;
+  });
+}
+
+function screenshotOcrLanguage() {
+  try {
+    var locale = typeof getAppLocale === "function" ? getAppLocale() : "pt-br";
+    return locale === "pt-br" ? "pt-BR" : "en-US";
+  } catch (_) {
+    return "pt-BR";
+  }
+}
+
+function screenshotEnsureOcrPanel() {
+  if (document.getElementById("screenshotOcrPanel")) return;
+  var panel = document.createElement("div");
+  panel.id = "screenshotOcrPanel";
+  panel.className = "screenshot-ocr-panel hidden";
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-modal", "false");
+  panel.setAttribute("aria-label", "OCR");
+  panel.innerHTML = [
+    '<div class="screenshot-ocr-head">',
+    '  <span id="screenshotOcrCaption" class="screenshot-ocr-caption"></span>',
+    '  <button id="screenshotOcrCopy" type="button" class="btn subtle"></button>',
+    '  <button id="screenshotOcrClose" type="button" class="btn danger"></button>',
+    '</div>',
+    '<textarea id="screenshotOcrText" class="screenshot-ocr-text" readonly spellcheck="false"></textarea>',
+    '<div id="screenshotOcrStatus" class="screenshot-ocr-status"></div>',
+  ].join("");
+  document.body.appendChild(panel);
+  var close = document.getElementById("screenshotOcrClose");
+  if (close) {
+    close.textContent = screenshotT("action.close");
+    close.addEventListener("click", screenshotCloseOcr);
+  }
+  var copy = document.getElementById("screenshotOcrCopy");
+  if (copy) {
+    copy.textContent = screenshotT("screenshot.ocrCopy");
+    copy.addEventListener("click", function () {
+      var area = document.getElementById("screenshotOcrText");
+      if (area) screenshotCopyPlainText(area.value);
+    });
+  }
+  panel.addEventListener("click", function (event) {
+    if (event.target === panel) screenshotCloseOcr();
+  });
+}
+
+function screenshotCloseOcr() {
+  var panel = document.getElementById("screenshotOcrPanel");
+  if (panel) panel.classList.add("hidden");
+}
+
+// screenshotOpenOcr extrai o texto do print pelo binding OcrScreenshotImage e
+// mostra num painel com botão de copiar (ou a mensagem de engine indisponível).
+function screenshotOpenOcr(dataUrl, caption) {
+  if (!dataUrl) return;
+  if (screenshotOcrPending) return;
+  screenshotEnsureOcrPanel();
+  var panel = document.getElementById("screenshotOcrPanel");
+  var area = document.getElementById("screenshotOcrText");
+  var status = document.getElementById("screenshotOcrStatus");
+  var cap = document.getElementById("screenshotOcrCaption");
+  if (!panel || !area) return;
+  if (cap) cap.textContent = caption ? caption + " · OCR" : "OCR";
+  area.value = "";
+  if (status) status.textContent = screenshotT("screenshot.ocrRunning");
+  panel.classList.remove("hidden");
+  var ocrCloseBtn = document.getElementById("screenshotOcrClose");
+  if (ocrCloseBtn) ocrCloseBtn.focus();
+
+  var ocr = screenshotApiMethod("OcrScreenshotImage");
+  if (!ocr) {
+    if (status) status.textContent = screenshotT("screenshot.ocrUnavailable");
+    return;
+  }
+  screenshotOcrPending = true;
+  Promise.resolve()
+    .then(function () { return ocr(dataUrl, screenshotOcrLanguage()); })
+    .then(function (raw) {
+      var data = screenshotParse(raw);
+      if (!data || data.engineAvailable === false) {
+        if (status) {
+          status.textContent = screenshotT("screenshot.ocrEngineUnavailable") +
+            (data && data.error ? " (" + data.error + ")" : "");
+        }
+        return;
+      }
+      var text = String(data.text || "").trim();
+      area.value = text;
+      if (status) status.textContent = text ? "" : screenshotT("screenshot.ocrEmpty");
+    })
+    .catch(function (err) {
+      if (status) status.textContent = screenshotT("screenshot.ocrFailed", { error: String(err) });
+    })
+    .then(function () {
+      screenshotOcrPending = false;
+    });
+}
+
+// ── Galeria local de capturas ────────────────────────────────────────────
+
+function screenshotGalleryItems() {
+  var raw = screenshotStorageRead(SCREENSHOT_GALLERY_KEY);
+  if (!raw) return [];
+  try {
+    var list = JSON.parse(raw);
+    return Array.isArray(list) ? list.filter(function (item) { return item && item.path; }) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function screenshotGalleryWrite(items) {
+  var list = items || [];
+  if (screenshotStorageWrite(SCREENSHOT_GALLERY_KEY, JSON.stringify(list))) return true;
+  // Cota cheia: a gravação falhava em SILÊNCIO e o print salvo em disco
+  // desaparecia da galeria na próxima abertura. A lista é podada (metade por
+  // vez, preservando os mais recentes, que ficam no início) até caber; o
+  // usuário é avisado de que itens antigos saíram.
+  var kept = list.slice();
+  while (kept.length > 1) {
+    kept = kept.slice(0, Math.max(1, Math.floor(kept.length / 2)));
+    if (screenshotStorageWrite(SCREENSHOT_GALLERY_KEY, JSON.stringify(kept))) {
+      screenshotFeedback(screenshotT("screenshot.galleryTrimmed", { count: kept.length }), true);
+      return true;
+    }
+  }
+  screenshotFeedback(screenshotT("screenshot.galleryStorageFull"), true);
+  return false;
+}
+
+function screenshotGalleryAdd(saved) {
+  if (!saved || !saved.path) return;
+  screenshotLoadPolicy(false).then(function (policy) {
+    if (!policy.galleryEnabled) return;
+    var entry = {
+      path: String(saved.path),
+      fileName: String(saved.fileName || ""),
+      directory: String(saved.directory || ""),
+      bytes: Number(saved.bytes) || 0,
+      width: Number(saved.width) || 0,
+      height: Number(saved.height) || 0,
+      sha256: String(saved.sha256 || ""),
+      format: String(saved.format || ""),
+      at: Date.now(),
+    };
+    var items = screenshotGalleryItems().filter(function (item) { return item.path !== entry.path; });
+    items.unshift(entry);
+    // Teto de itens vem da política (galleryMaxItems).
+    items = items.slice(0, Math.max(1, policy.galleryMaxItems));
+    screenshotGalleryWrite(items);
+    var panel = document.getElementById("screenshotGalleryPanel");
+    if (panel && !panel.classList.contains("hidden")) screenshotRenderGallery();
+  });
+}
+
+function screenshotGalleryRemove(path) {
+  var items = screenshotGalleryItems().filter(function (item) { return item.path !== path; });
+  screenshotGalleryWrite(items);
+}
+
+function screenshotGalleryFileName(item) {
+  if (item && item.fileName) return item.fileName;
+  var path = String(item && item.path ? item.path : "");
+  var parts = path.split(/[\\/]/);
+  return parts[parts.length - 1] || path;
+}
+
+function screenshotFormatBytes(bytes) {
+  var value = Number(bytes) || 0;
+  if (value >= 1048576) return (value / 1048576).toFixed(1) + " MB";
+  if (value >= 1024) return (value / 1024).toFixed(0) + " KB";
+  return value + " B";
+}
+
+function screenshotGalleryDate(at) {
+  try {
+    return at ? new Date(at).toLocaleString() : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+// screenshotEnsureGalleryPanel monta o painel "Últimas capturas".
+function screenshotEnsureGalleryPanel() {
+  if (document.getElementById("screenshotGalleryPanel")) return;
+  var panel = document.createElement("div");
+  panel.id = "screenshotGalleryPanel";
+  panel.className = "screenshot-gallery-panel hidden";
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-modal", "false");
+  panel.innerHTML = [
+    '<div class="screenshot-gallery-head">',
+    '  <span class="screenshot-gallery-title" id="screenshotGalleryTitle"></span>',
+    '  <span class="screenshot-gallery-head-actions">',
+    '    <button id="screenshotGalleryFolder" type="button" class="btn subtle"></button>',
+    '    <button id="screenshotGalleryClose" type="button" class="btn danger"></button>',
+    '  </span>',
+    '</div>',
+    '<div id="screenshotGalleryList" class="screenshot-gallery-list"></div>',
+    '<div id="screenshotGalleryStatus" class="screenshot-gallery-status" role="status"></div>',
+  ].join("");
+  document.body.appendChild(panel);
+  panel.setAttribute("aria-labelledby", "screenshotGalleryTitle");
+  var title = document.getElementById("screenshotGalleryTitle");
+  if (title) title.textContent = screenshotT("screenshot.galleryTitle");
+  var close = document.getElementById("screenshotGalleryClose");
+  if (close) {
+    close.textContent = screenshotT("action.close");
+    close.addEventListener("click", screenshotCloseGallery);
+  }
+  var folder = document.getElementById("screenshotGalleryFolder");
+  if (folder) {
+    folder.textContent = screenshotT("screenshot.galleryFolder");
+    folder.addEventListener("click", function () {
+      var getFolder = screenshotApiMethod("GetScreenshotGalleryFolder");
+      if (!getFolder) {
+        screenshotFeedback(screenshotT("screenshot.unavailable"), true);
+        return;
+      }
+      Promise.resolve().then(function () { return getFolder(); }).then(function (path) {
+        screenshotCopyPathToClipboard(path || "");
+      }).catch(function () { screenshotFeedback(screenshotT("screenshot.unavailable"), true); });
+    });
+  }
+  panel.addEventListener("click", function (event) {
+    if (event.target === panel) screenshotCloseGallery();
+  });
+}
+
+function screenshotCloseGallery() {
+  var panel = document.getElementById("screenshotGalleryPanel");
+  if (panel) panel.classList.add("hidden");
+}
+
+function screenshotOpenGallery() {
+  screenshotLoadPolicy(false).then(function (policy) {
+    if (!policy.galleryEnabled) {
+      screenshotFeedback(screenshotT("screenshot.galleryDisabled"), true);
+      return;
+    }
+    screenshotEnsureGalleryPanel();
+    var panel = document.getElementById("screenshotGalleryPanel");
+    if (!panel) return;
+    panel.classList.remove("hidden");
+    screenshotRenderGallery();
+    var focusTarget = document.getElementById("screenshotGalleryClose");
+    if (focusTarget) focusTarget.focus();
+  });
+}
+
+function screenshotGalleryStatus(message, isError) {
+  var status = document.getElementById("screenshotGalleryStatus");
+  if (!status) return;
+  status.textContent = message || "";
+  status.classList.toggle("error", !!isError);
+}
+
+// screenshotGalleryActionButton cria um botão de ação de um item da galeria.
+function screenshotGalleryActionButton(labelKey, onClick, disabled) {
+  var btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "screenshot-gallery-action";
+  btn.textContent = screenshotT(labelKey);
+  btn.title = screenshotT(labelKey);
+  btn.disabled = !!disabled;
+  if (!disabled) btn.addEventListener("click", onClick);
+  return btn;
+}
+
+// screenshotGalleryReadImage lê o arquivo da captura como data URL (thumbnail
+// ou imagem cheia), degradando com mensagem quando o binding não existe.
+function screenshotGalleryReadImage(path, maxBytes) {
+  var read = screenshotApiMethod("ReadScreenshotImageFile");
+  if (!read) return Promise.resolve("");
+  return Promise.resolve()
+    .then(function () { return read(path, maxBytes || SCREENSHOT_THUMB_MAX_BYTES); })
+    .then(function (raw) {
+      // O binding devolve a própria data URL (string), não JSON.
+      if (typeof raw === "string" && raw.indexOf("data:") === 0) return raw;
+      var value = screenshotParse(raw);
+      if (typeof value === "string") return value;
+      if (value && value.dataUrl) return value.dataUrl;
+      return "";
+    })
+    .catch(function () { return ""; });
+}
+
+function screenshotRenderGallery() {
+  var list = document.getElementById("screenshotGalleryList");
+  if (!list) return;
+  list.innerHTML = "";
+  var policy = screenshotPolicySync();
+  var maxItems = policy.galleryMaxItems || 50;
+  var allItems = screenshotGalleryItems();
+  // Teto da política vale também para o que já estava salvo (ex.: teto reduzido
+  // depois): poda o excedente ao abrir a galeria.
+  if (allItems.length > maxItems) {
+    allItems = allItems.slice(0, maxItems);
+    screenshotGalleryWrite(allItems);
+  }
+  var items = allItems.slice(0, SCREENSHOT_GALLERY_RENDER_MAX);
+  var empty = document.getElementById("screenshotGalleryEmpty");
+  if (!items.length) {
+    if (!empty) {
+      empty = document.createElement("div");
+      empty.id = "screenshotGalleryEmpty";
+      empty.className = "screenshot-gallery-empty";
+      empty.textContent = screenshotT("screenshot.galleryEmpty");
+    }
+    list.appendChild(empty);
+    screenshotGalleryStatus(screenshotT("screenshot.galleryLimit", { max: maxItems }), false);
+    return;
+  }
+  if (allItems.length > items.length) {
+    // O teto de RENDERIZAÇÃO é menor que o teto da política: sem avisar, itens
+    // 25+ pareciam inexistentes.
+    screenshotGalleryStatus(
+      screenshotT("screenshot.galleryShowing", { shown: items.length, total: allItems.length }),
+      false);
+  }
+
+  items.forEach(function (item) {
+    var row = document.createElement("div");
+    row.className = "screenshot-gallery-item";
+
+    var thumbBtn = document.createElement("button");
+    thumbBtn.type = "button";
+    thumbBtn.className = "screenshot-gallery-thumb";
+    thumbBtn.title = screenshotT("screenshot.viewLarger");
+    thumbBtn.setAttribute("aria-label", screenshotT("screenshot.viewLarger"));
+    var ph = document.createElement("span");
+    ph.className = "screenshot-gallery-thumb-placeholder";
+    ph.textContent = "🖼";
+    thumbBtn.appendChild(ph);
+    thumbBtn.addEventListener("click", function () {
+      screenshotGalleryReadImage(item.path, 8 << 20).then(function (dataUrl) {
+        if (dataUrl) screenshotOpenLightbox(dataUrl, screenshotGalleryFileName(item));
+      });
+    });
+    row.appendChild(thumbBtn);
+
+    var info = document.createElement("div");
+    info.className = "screenshot-gallery-info";
+    var name = document.createElement("div");
+    name.className = "screenshot-gallery-name";
+    name.textContent = screenshotGalleryFileName(item);
+    name.title = item.path;
+    var meta = document.createElement("div");
+    meta.className = "screenshot-gallery-meta";
+    var metaParts = [];
+    if (item.width && item.height) metaParts.push(item.width + "×" + item.height);
+    if (item.bytes) metaParts.push(screenshotFormatBytes(item.bytes));
+    metaParts.push(screenshotGalleryDate(item.at));
+    meta.textContent = metaParts.filter(Boolean).join(" · ");
+    info.appendChild(name);
+    info.appendChild(meta);
+
+    var actions = document.createElement("div");
+    actions.className = "screenshot-gallery-actions";
+    actions.appendChild(screenshotGalleryActionButton("screenshot.galleryReattach", function () {
+      screenshotGalleryReadImage(item.path, 8 << 20).then(function (dataUrl) {
+        if (!dataUrl) {
+          screenshotGalleryStatus(screenshotT("screenshot.galleryReadFailed"), true);
+          return;
+        }
+        screenshotAttach({ dataUrl: dataUrl, width: item.width || 0, height: item.height || 0 });
+        screenshotCloseGallery();
+      });
+    }));
+    actions.appendChild(screenshotGalleryActionButton("screenshot.copyPath", function () {
+      screenshotCopyPathToClipboard(item.path);
+    }));
+    actions.appendChild(screenshotGalleryActionButton("screenshot.gallerySaveAs", function () {
+      screenshotGalleryReadImage(item.path, 8 << 20).then(function (dataUrl) {
+        if (!dataUrl) {
+          screenshotGalleryStatus(screenshotT("screenshot.galleryReadFailed"), true);
+          return;
+        }
+        screenshotSaveImageDataUrl(dataUrl, {
+          fileName: screenshotGalleryFileName(item),
+          saveAs: true,
+          directory: "",
+        });
+      });
+    }));
+    actions.appendChild(screenshotGalleryActionButton("screenshot.galleryDelete", function () {
+      var remove = screenshotApiMethod("DeleteScreenshotImageFile");
+      if (!remove) {
+        screenshotGalleryStatus(screenshotT("screenshot.unavailable"), true);
+        return;
+      }
+      if (typeof window.confirm === "function" && !window.confirm(screenshotT("screenshot.galleryDeleteConfirm"))) {
+        return;
+      }
+      Promise.resolve()
+        .then(function () { return remove(item.path); })
+        .then(function () {
+          screenshotGalleryRemove(item.path);
+          screenshotRenderGallery();
+          screenshotGalleryStatus(screenshotT("screenshot.galleryDeleted"), false);
+        })
+        .catch(function (err) {
+          screenshotGalleryStatus(screenshotT("screenshot.galleryDeleteFailed", { error: String(err) }), true);
+        });
+    }));
+
+    info.appendChild(actions);
+    row.appendChild(info);
+    list.appendChild(row);
+
+    // Miniatura carregada sob demanda (o arquivo pode ter sido apagado fora do
+    // agent: nesse caso o placeholder permanece e as ações seguem disponíveis).
+    screenshotGalleryReadImage(item.path, SCREENSHOT_THUMB_MAX_BYTES).then(function (dataUrl) {
+      if (!dataUrl) return;
+      var img = document.createElement("img");
+      img.src = dataUrl;
+      img.alt = screenshotGalleryFileName(item);
+      thumbBtn.innerHTML = "";
+      thumbBtn.appendChild(img);
+    });
+  });
+  screenshotGalleryStatus(screenshotT("screenshot.galleryLimit", { max: maxItems }), false);
+}
+
+// ── data URL → File (usado pelo fluxo de anexos do chamado) ──────────────
+
+// screenshotDataUrlToFile converte um PNG dataURL em File para reaproveitar os
+// mesmos handlers do input de arquivos (validação de tipo/tamanho e prévia).
+function screenshotDataUrlToFile(dataUrl, fileName) {
+  var raw = String(dataUrl || "");
+  var match = /^data:([^;,]*)(;base64)?,([\s\S]*)$/.exec(raw);
+  if (!match) return null;
+  var mime = match[1] || "image/png";
+  var isBase64 = !!match[2];
+  var payload = match[3] || "";
+  var binary = "";
+  try {
+    binary = isBase64 ? window.atob(payload) : decodeURIComponent(payload);
+  } catch (_) {
+    return null;
+  }
+  var bytes = new Uint8Array(binary.length);
+  for (var i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  var name = fileName || screenshotDefaultFileName();
+  var extension = mime.indexOf("webp") >= 0 ? "webp" : (mime.indexOf("jpeg") >= 0 ? "jpg" : "png");
+  if (!/\./.test(name)) name += "." + extension;
+  try {
+    return new File([bytes], name, { type: mime });
+  } catch (_) {
+    // Builds sem o construtor File: devolve o Blob (FileReader aceita ambos).
+    try {
+      return new Blob([bytes], { type: mime });
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// WP2 — UX da captura de tela
+//
+// Salvar em arquivo + copiar caminho, atalhos de teclado, copiar ao confirmar,
+// galeria local, captura com atraso/rolagem, OCR, modo evidência e seletor de
+// janelas. Tudo defensivo: bindings novos podem não existir em builds antigos
+// e, nesse caso, a ação degrada com aviso em vez de quebrar a captura.
+// ══════════════════════════════════════════════════════════════════════════
+
+var SCREENSHOT_GALLERY_KEY = "dsv.screenshot.gallery";
+var SCREENSHOT_LAST_DIR_KEY = "dsv.screenshot.lastDir";
+var SCREENSHOT_POLICY_TTL_MS = 60000;
+var SCREENSHOT_GALLERY_RENDER_MAX = 24;
+var SCREENSHOT_THUMB_MAX_BYTES = 3 * 1024 * 1024;
+
+var screenshotPolicyCache = { at: 0, data: null };
+var screenshotPolicyPending = null;
+var screenshotLastSavedPath = "";
+var screenshotOcrPending = false;
+
+// screenshotApiMethod devolve a função do binding (ou null). Centraliza o
+// "typeof api.X === 'function'" para todo o módulo.
+function screenshotApiMethod(name) {
+  var api = screenshotApi();
+  if (!api || !name) return null;
+  var fn = api[name];
+  return typeof fn === "function" ? fn : null;
+}
+
+function screenshotStorageRead(key) {
+  try {
+    return window.localStorage ? window.localStorage.getItem(key) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Devolve true quando o valor foi realmente gravado: cota cheia/modo privado
+// não podem ser confundidos com sucesso (era o que fazia a galeria perder
+// capturas sem nenhum aviso).
+function screenshotStorageWrite(key, value) {
+  try {
+    if (!window.localStorage) return false;
+    if (value === null || value === undefined) {
+      window.localStorage.removeItem(key);
+    } else {
+      window.localStorage.setItem(key, value);
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// ── Política (cache com TTL) ─────────────────────────────────────────────
+
+// screenshotPolicyNormalize garante os campos novos mesmo em builds antigos.
+function screenshotPolicyNormalize(raw) {
+  var policy = raw && typeof raw === "object" ? raw : {};
+  var maxItems = Number(policy.galleryMaxItems);
+  if (!(maxItems > 0)) maxItems = 50;
+  return {
+    copyOnConfirm: policy.copyOnConfirm === true,
+    galleryEnabled: policy.galleryEnabled !== false,
+    galleryMaxItems: maxItems,
+    // "loaded" separa "política real do backend" de "fallback sem binding": no
+    // fallback não dá para saber os valores e Salvar política NÃO pode inventá-los.
+    loaded: Object.keys(policy).length > 0,
+    raw: policy,
+  };
+}
+
+// screenshotLoadPolicy busca GetScreenshotPolicy com cache curto (a captura
+// não pode esperar o disco a cada confirmação, mas também não pode ficar presa
+// a uma política alterada na tela de privacidade).
+function screenshotLoadPolicy(force) {
+  var cached = screenshotPolicyCache.data;
+  if (!force && cached && Date.now() - screenshotPolicyCache.at < SCREENSHOT_POLICY_TTL_MS) {
+    return Promise.resolve(cached);
+  }
+  if (screenshotPolicyPending) return screenshotPolicyPending;
+  var getPolicy = screenshotApiMethod("GetScreenshotPolicy");
+  if (!getPolicy) {
+    var fallback = screenshotPolicyNormalize(null);
+    screenshotPolicyCache = { at: Date.now(), data: fallback };
+    return Promise.resolve(fallback);
+  }
+  screenshotPolicyPending = Promise.resolve()
+    .then(function () { return getPolicy(); })
+    .then(function (raw) {
+      var data = screenshotPolicyNormalize(screenshotParse(raw));
+      screenshotPolicyCache = { at: Date.now(), data: data };
+      return data;
+    })
+    .catch(function () {
+      // Falha de leitura não invalida o cache anterior; sem cache, padrões.
+      var data = screenshotPolicyCache.data || screenshotPolicyNormalize(null);
+      screenshotPolicyCache = { at: Date.now(), data: data };
+      return data;
+    })
+    .then(function (data) {
+      screenshotPolicyPending = null;
+      return data;
+    });
+  return screenshotPolicyPending;
+}
+
+function screenshotPolicySync() {
+  return screenshotPolicyCache.data || screenshotPolicyNormalize(null);
+}
+
+// screenshotInvalidatePolicyCache é chamado depois de salvar a política na
+// tela de privacidade para a próxima captura já usar os valores novos.
+function screenshotInvalidatePolicyCache() {
+  screenshotPolicyCache = { at: 0, data: null };
+  screenshotPolicyPending = null;
+}
+
+// ── Notificação dentro do overlay ────────────────────────────────────────
+//
+// showFeedback na janela do overlay só escreve no console (não há barra de
+// status lá). Este aviso flutuante garante retorno visível para salvar/copiar.
+function screenshotOverlayFlash(message, isError) {
+  screenshotFeedback(message, isError);
+  if (!screenshotOverlayHost && !screenshotOverlayRoot()) return;
+  var el = document.getElementById("screenshotOverlayFlash");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "screenshotOverlayFlash";
+    el.className = "screenshot-overlay-flash";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
+    document.body.appendChild(el);
+  }
+  el.textContent = String(message || "");
+  el.classList.toggle("error", !!isError);
+  el.classList.add("visible");
+  clearTimeout(screenshotOverlayFlash._timer);
+  screenshotOverlayFlash._timer = setTimeout(function () {
+    el.classList.remove("visible");
+  }, 3200);
+}
+
+// ── Salvar em arquivo + copiar caminho ──────────────────────────────────
+
+function screenshotLastDirectory() {
+  return screenshotStorageRead(SCREENSHOT_LAST_DIR_KEY) || "";
+}
+
+function screenshotRememberDirectory(directory) {
+  if (directory) screenshotStorageWrite(SCREENSHOT_LAST_DIR_KEY, String(directory));
+}
+
+// screenshotDefaultFileName devolve o nome/prefixo padrão do print. O Go
+// acrescenta timestamp e sufixo ao salvar; em anexos, a extensão é completada
+// pelo MIME quando o nome não tem uma.
+function screenshotDefaultFileName() {
+  return "print";
+}
+
+// screenshotClipboardFallback copia via seleção de um textarea oculto (WebView
+// sem a Clipboard API).
+function screenshotClipboardFallback(text) {
+  try {
+    var area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "readonly");
+    area.style.position = "fixed";
+    area.style.left = "-9999px";
+    document.body.appendChild(area);
+    area.select();
+    var ok = document.execCommand && document.execCommand("copy");
+    document.body.removeChild(area);
+    return !!ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+// screenshotClipboardWriteText escreve texto na área de transferência com o
+// fallback — usado tanto pelo caminho do arquivo quanto pelo texto do OCR.
+function screenshotClipboardWriteText(text) {
+  var clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
+  if (clipboard && typeof clipboard.writeText === "function") {
+    return clipboard.writeText(text).then(function () { return true; }).catch(function () {
+      return screenshotClipboardFallback(text);
+    });
+  }
+  return Promise.resolve(screenshotClipboardFallback(text));
+}
+
+// screenshotCopyPathToClipboard copia o caminho do print salvo.
+function screenshotCopyPathToClipboard(path) {
+  var text = String(path || "");
+  if (!text) {
+    screenshotOverlayFlash(screenshotT("screenshot.copyPathEmpty"), true);
+    return Promise.resolve(false);
+  }
+  return screenshotClipboardWriteText(text).then(function (ok) {
+    screenshotOverlayFlash(
+      ok ? screenshotT("screenshot.pathCopied", { path: text }) : screenshotT("screenshot.copyPathFailed"),
+      !ok,
+    );
+    return ok;
+  });
+}
+
+// screenshotSaveImageDataUrl salva um print em arquivo pelo binding
+// SaveScreenshotImage e registra o resultado na galeria local.
+function screenshotSaveImageDataUrl(dataUrl, options) {
+  var opts = options || {};
+  var save = screenshotApiMethod("SaveScreenshotImage");
+  if (!save) {
+    screenshotOverlayFlash(screenshotT("screenshot.saveUnavailable"), true);
+    return Promise.resolve(null);
+  }
+  if (!dataUrl) {
+    screenshotOverlayFlash(screenshotT("screenshot.saveFileFailed", { error: "imagem vazia" }), true);
+    return Promise.resolve(null);
+  }
+  // Contrato de SaveScreenshotImage: {format, directory, prefix}. O nome final é
+  // gerado pelo Go (prefixo + timestamp + sufixo), então o "fileName" da UI vira
+  // apenas o prefixo — e o diretório vazio cai na pasta padrão da galeria.
+  var requestedName = String(opts.fileName || screenshotDefaultFileName());
+  var payload = {
+    prefix: requestedName.replace(/\.[^.]+$/, ""),
+    directory: opts.directory === undefined ? screenshotLastDirectory() : String(opts.directory || ""),
+  };
+  return Promise.resolve()
+    .then(function () { return save(dataUrl, JSON.stringify(payload)); })
+    .then(function (raw) {
+      var saved = screenshotParse(raw);
+      if (!saved || !saved.path) {
+        screenshotOverlayFlash(screenshotT("screenshot.saveFileFailed", { error: "resposta vazia" }), true);
+        return null;
+      }
+      screenshotLastSavedPath = String(saved.path);
+      screenshotRememberDirectory(saved.directory || "");
+      screenshotGalleryAdd(saved);
+      screenshotOverlayFlash(screenshotT("screenshot.savedTo", { path: saved.path }), false);
+      screenshotUpdateCopyPathButton();
+      return saved;
+    })
+    .catch(function (err) {
+      screenshotOverlayFlash(screenshotT("screenshot.saveFileFailed", { error: String(err) }), true);
+      return null;
+    });
+}
+
+// screenshotOutputDataUrl compõe a imagem que seria confirmada (com anotações,
+// quando houver). Usada por salvar/copiar/OCR dentro do overlay.
+function screenshotOutputDataUrl() {
+  var state = screenshotOverlayState;
+  if (!state || !state.selection) return "";
+  if ((state.annotations && state.annotations.length > 0) || (state.evidence && state.evidence.enabled)) {
+    try {
+      return screenshotBuildAnnotatedDataUrl();
+    } catch (_) {
+      return "";
+    }
+  }
+  return screenshotSelectionSourceDataUrl();
+}
+
+// screenshotSelectionSourceDataUrl recorta a tela congelada SEM anotações —
+// base do hash de evidência e do OCR quando não há composição anotada.
+function screenshotSelectionSourceDataUrl() {
+  var img = screenshotOverlayImg();
+  var clip = screenshotSelectionImageRect();
+  if (!img || !clip) return "";
+  try {
+    var canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(clip.w));
+    canvas.height = Math.max(1, Math.round(clip.h));
+    var ctx = canvas.getContext("2d");
+    ctx.drawImage(img, clip.x, clip.y, clip.w, clip.h, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  } catch (_) {
+    return "";
+  }
+}
+
+function screenshotUpdateCopyPathButton() {
+  var btn = document.getElementById("screenshotAnnotCopyPath");
+  if (!btn) return;
+  var hasPath = !!screenshotLastSavedPath;
+  btn.classList.toggle("has-path", hasPath);
+  btn.disabled = !hasPath;
+  btn.setAttribute("aria-disabled", hasPath ? "false" : "true");
+}
+
+function screenshotOverlaySave() {
+  if (!screenshotOverlayState || !screenshotOverlayState.selection) return;
+  var dataUrl = screenshotOutputDataUrl();
+  if (!dataUrl) {
+    screenshotOverlayFlash(screenshotT("screenshot.saveFileFailed", { error: "sem imagem" }), true);
+    return;
+  }
+  screenshotSaveImageDataUrl(dataUrl, {});
+}
+
+function screenshotOverlayCopyPath() {
+  if (!screenshotLastSavedPath) {
+    screenshotOverlayFlash(screenshotT("screenshot.copyPathEmpty"), true);
+    return;
+  }
+  screenshotCopyPathToClipboard(screenshotLastSavedPath);
+}
+
+// ── Copiar ao confirmar (policy.copyOnConfirm) ───────────────────────────
+
+function screenshotCopyOnConfirm(dataUrl) {
+  if (!dataUrl) return;
+  screenshotLoadPolicy(false).then(function (policy) {
+    if (!policy || !policy.copyOnConfirm) return;
+    var copy = screenshotApiMethod("CopyImageDataURLToClipboard");
+    if (!copy) return;
+    Promise.resolve()
+      .then(function () { return copy(dataUrl); })
+      .then(function () {
+        screenshotOverlayFlash(screenshotT("screenshot.copied"), false);
+      })
+      .catch(function () {
+        // Falha ao copiar não invalida a captura (o print já foi confirmado).
+      });
+  });
+}
+
+// ── Modo evidência (watermark + bloco na bolha de info) ──────────────────
+
+function screenshotEvidenceFallbackDate() {
+  try {
+    return new Date().toISOString();
+  } catch (_) {
+    return "";
+  }
+}
+
+// screenshotResolveHostname tenta o status do agent (fonte do hostname na UI)
+// e cai para o payload, se algum build já o trouxer.
+function screenshotResolveHostname(callback) {
+  var payload = screenshotOverlayState && screenshotOverlayState.payload;
+  var fromPayload = payload && (payload.hostname || payload.machineName || payload.computerName);
+  if (fromPayload) {
+    callback(String(fromPayload));
+    return;
+  }
+  if (screenshotHostnameCache) {
+    callback(screenshotHostnameCache);
+    return;
+  }
+  var getStatus = screenshotApiMethod("GetStatusOverview");
+  if (!getStatus) {
+    callback("");
+    return;
+  }
+  Promise.resolve()
+    .then(function () { return getStatus(); })
+    .then(function (status) {
+      var host = status && (status.hostname || status.computerName || status.machineName);
+      screenshotHostnameCache = host ? String(host) : "";
+      callback(screenshotHostnameCache);
+    })
+    .catch(function () { callback(""); });
+}
+
+var screenshotHostnameCache = "";
+
+// screenshotPrimeEvidence preenche o bloco de evidência: SHA-256 vindo de
+// GetScreenshotEvidence (8 primeiros caracteres exibidos) + data/hora UTC +
+// hostname. Sem o binding, o watermark ainda sai com data/hora e aviso.
+function screenshotPrimeEvidence(callback) {
+  var source = screenshotSelectionSourceDataUrl();
+  var capturedAt = screenshotEvidenceFallbackDate();
+  function finish(sha, bytes, width, height, atUtc, unavailable) {
+    screenshotResolveHostname(function (hostname) {
+      callback({
+        sha256: sha || "",
+        shortSha: (sha || "").slice(0, 8),
+        capturedAtUtc: atUtc || capturedAt,
+        bytes: bytes || 0,
+        width: width || 0,
+        height: height || 0,
+        hostname: hostname || "",
+        unavailable: !!unavailable,
+      });
+    });
+  }
+  var evidence = screenshotApiMethod("GetScreenshotEvidence");
+  if (!evidence || !source) {
+    finish("", 0, 0, 0, capturedAt, true);
+    return;
+  }
+  Promise.resolve()
+    .then(function () { return evidence(source); })
+    .then(function (raw) {
+      var info = screenshotParse(raw);
+      if (!info || !info.sha256) {
+        finish("", 0, 0, 0, capturedAt, true);
+        return;
+      }
+      finish(info.sha256, info.bytes, info.width, info.height, info.capturedAtUtc, false);
+    })
+    .catch(function () {
+      finish("", 0, 0, 0, capturedAt, true);
+    });
+}
+
+function screenshotSetEvidenceButton(active) {
+  var btn = document.getElementById("screenshotAnnotEvidence");
+  if (!btn) return;
+  btn.classList.toggle("active", !!active);
+  btn.setAttribute("aria-pressed", active ? "true" : "false");
+}
+
+function screenshotToggleEvidence() {
+  var state = screenshotOverlayState;
+  if (!state) return;
+  if (state.evidence && state.evidence.enabled) {
+    state.evidence = null;
+    screenshotSetEvidenceButton(false);
+    screenshotAnnotRedraw();
+    screenshotOverlayFlash(screenshotT("screenshot.evidenceOff"), false);
+    return;
+  }
+  screenshotOverlayFlash(screenshotT("screenshot.evidencePreparing"), false);
+  // A evidência (binding + hostname) é assíncrona: guarda a sessão que a pediu
+  // para um resultado atrasado não ser aplicado na captura SEGUINTE — antes o
+  // print novo saía com data/hash de outra tela.
+  var session = state.payload ? state.payload.session : "";
+  screenshotPrimeEvidence(function (info) {
+    var current = screenshotOverlayState;
+    if (!current || !current.payload || current.payload.session !== session) return;
+    info.enabled = true;
+    current.evidence = info;
+    screenshotSetEvidenceButton(true);
+    screenshotAnnotRedraw();
+    if (info.unavailable) {
+      screenshotOverlayFlash(screenshotT("screenshot.evidenceNoHash"), true);
+    } else {
+      screenshotOverlayFlash(screenshotT("screenshot.evidenceOn", { sha: info.shortSha }), false);
+    }
+  });
+}
+
+// screenshotEvidenceSummary devolve o texto multilinha usado no bloco da
+// bolha de info (mesmos campos do watermark).
+function screenshotEvidenceSummary(evidence) {
+  if (!evidence) return "";
+  var when = String(evidence.capturedAtUtc || "");
+  try {
+    if (when) when = new Date(when).toISOString().replace("T", " ").replace(".000Z", " UTC");
+  } catch (_) {}
+  var lines = [];
+  lines.push(screenshotT("screenshot.evidenceWhen") + ": " + (when || "-"));
+  lines.push(screenshotT("screenshot.evidenceHost") + ": " + (evidence.hostname || "-"));
+  lines.push(
+    screenshotT("screenshot.evidenceSha") + ": " +
+    (evidence.shortSha ? evidence.shortSha + "…" : screenshotT("screenshot.evidenceShaUnavailable")),
+  );
+  if (evidence.width && evidence.height) {
+    lines.push(screenshotT("screenshot.evidenceSize") + ": " + evidence.width + "×" + evidence.height);
+  }
+  return lines.join("\n");
+}
+
+// screenshotDrawEvidenceWatermark desenha a faixa de evidência no canto
+// inferior da imagem final (data/hora UTC, hostname e SHA-256 curto).
+function screenshotDrawEvidenceWatermark(ctx, outW, outH, evidence) {
+  if (!ctx || !evidence || !evidence.enabled) return;
+  var scale = Math.max(0.6, Math.min(2, outW / 1200));
+  var fontSize = Math.round(13 * scale);
+  var pad = Math.round(8 * scale);
+  var lines = [
+    screenshotT("screenshot.evidenceBadge"),
+    screenshotT("screenshot.evidenceWhen") + ": " + (evidence.capturedAtUtc || "-"),
+    screenshotT("screenshot.evidenceHost") + ": " + (evidence.hostname || "-") +
+      "  ·  " + screenshotT("screenshot.evidenceSha") + ": " + (evidence.shortSha || "-"),
+  ];
+  ctx.save();
+  ctx.font = "600 " + fontSize + "px sans-serif";
+  var maxWidth = 0;
+  lines.forEach(function (line) {
+    maxWidth = Math.max(maxWidth, ctx.measureText(line).width);
+  });
+  var boxW = Math.min(outW - pad * 2, maxWidth + pad * 2);
+  var boxH = lines.length * (fontSize + Math.round(4 * scale)) + pad * 2;
+  var x = pad;
+  var y = outH - boxH - pad;
+  ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
+  ctx.fillRect(x, y, boxW, boxH);
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.45)";
+  ctx.lineWidth = Math.max(1, scale);
+  ctx.strokeRect(x, y, boxW, boxH);
+  ctx.fillStyle = "#ffffff";
+  ctx.textBaseline = "top";
+  lines.forEach(function (line, idx) {
+    ctx.fillText(line, x + pad, y + pad + idx * (fontSize + Math.round(4 * scale)));
+  });
+  ctx.restore();
+}
+
+// ── Atalhos de teclado do overlay ────────────────────────────────────────
+
+var SCREENSHOT_TOOL_KEYS = {
+  r: "rect",
+  s: "spotlight",
+  a: "arrow",
+  p: "pen",
+  t: "text",
+  b: "blur",
+  e: "eraser",
+  n: "step",
+};
+
+var SCREENSHOT_COLOR_KEYS = ["#ff3b30", "#ffcc00", "#34c759", "#0a84ff"];
+
+function screenshotIsEditableTarget(target) {
+  if (!target) return false;
+  var tag = target.tagName ? String(target.tagName).toUpperCase() : "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  return target.isContentEditable === true;
+}
+
+function screenshotOverlayCopyImage() {
+  var dataUrl = screenshotOutputDataUrl();
+  if (!dataUrl) {
+    screenshotOverlayFlash(screenshotT("screenshot.copyFailed"), true);
+    return;
+  }
+  var copy = screenshotApiMethod("CopyImageDataURLToClipboard");
+  if (!copy) {
+    screenshotOverlayFlash(screenshotT("screenshot.unavailable"), true);
+    return;
+  }
+  Promise.resolve()
+    .then(function () { return copy(dataUrl); })
+    .then(function () {
+      screenshotOverlayFlash(screenshotT("screenshot.copied"), false);
+    })
+    .catch(function (err) {
+      screenshotOverlayFlash(screenshotT("screenshot.copyFailed") + ": " + String(err), true);
+    });
+}
+
+// screenshotOverlayKeydown concentra os atalhos do overlay. Ignora tudo quando
+// o foco está num campo de texto (anotação/busca) para não roubar a digitação.
+function screenshotOverlayKeydown(event) {
+  if (!event) return;
+  // Durante o "preparando" ainda não há estado, mas a janela já cobre o
+  // desktop: Esc/clique no X precisa poder cancelar a captura.
+  if (!screenshotOverlayState && !screenshotCaptureToken) return;
+  if (screenshotIsEditableTarget(event.target)) return;
+
+  var key = String(event.key || "");
+  var lower = key.toLowerCase();
+  var mod = event.ctrlKey || event.metaKey;
+
+  // Seletor de janelas aberto: Esc fecha o seletor (sem cancelar a captura) e
+  // Enter escolhe a primeira janela da lista filtrada.
+  if (screenshotWindowPickerOpen()) {
+    if (key === "Escape") {
+      event.preventDefault();
+      screenshotToggleWindowPicker(false);
+      return;
+    }
+    if (key === "Enter") {
+      event.preventDefault();
+      screenshotWindowPickerChooseFirst();
+      return;
+    }
+    if (lower === "w") {
+      event.preventDefault();
+      screenshotToggleWindowPicker(false);
+      return;
+    }
+  }
+
+  if (key === "Escape") {
+    event.preventDefault();
+    screenshotCancelOverlay();
+    return;
+  }
+  if (mod && lower === "z") {
+    event.preventDefault();
+    screenshotAnnotUndo();
+    return;
+  }
+  if (mod && lower === "c") {
+    event.preventDefault();
+    screenshotOverlayCopyImage();
+    return;
+  }
+  if (mod && lower === "s") {
+    event.preventDefault();
+    screenshotOverlaySave();
+    return;
+  }
+  if (mod || event.altKey) return;
+
+  var state = screenshotOverlayState;
+  // Sem seleção travada, W ainda abre o seletor de janelas (escolher já trava).
+  if (lower === "w") {
+    event.preventDefault();
+    screenshotToggleWindowPicker();
+    return;
+  }
+  // screenshotOverlayState pode ser nulo no "preparando" (só o token existe).
+  if (key === "Enter" && state && state.selection) {
+    event.preventDefault();
+    screenshotConfirmSelection();
+    return;
+  }
+  if (state && state.selection && SCREENSHOT_TOOL_KEYS[lower]) {
+    event.preventDefault();
+    screenshotSetAnnotTool(SCREENSHOT_TOOL_KEYS[lower]);
+    return;
+  }
+  if (key >= "1" && key <= "4") {
+    event.preventDefault();
+    screenshotSetAnnotColor(SCREENSHOT_COLOR_KEYS[Number(key) - 1]);
+    return;
+  }
+  // Zoom/pan por teclado (mesmos passos da barra de zoom).
+  if (key === "+" || key === "=") {
+    event.preventDefault();
+    screenshotSetZoom(screenshotOverlayView.zoom * screenshotZoomStep);
+    return;
+  }
+  if (key === "-" || key === "_") {
+    event.preventDefault();
+    screenshotSetZoom(screenshotOverlayView.zoom / screenshotZoomStep);
+    return;
+  }
+  if (key === "0") {
+    event.preventDefault();
+    screenshotResetOverlayView();
+    return;
+  }
+  if (key === "ArrowLeft") { event.preventDefault(); screenshotPanBy(-80, 0); return; }
+  if (key === "ArrowRight") { event.preventDefault(); screenshotPanBy(80, 0); return; }
+  if (key === "ArrowUp") { event.preventDefault(); screenshotPanBy(0, -80); return; }
+  if (key === "ArrowDown") { event.preventDefault(); screenshotPanBy(0, 80); }
+}
+
+// ── Seletor de janelas (tecla W) ─────────────────────────────────────────
+
+function screenshotWindowPickerOpen() {
+  var picker = document.getElementById("screenshotWindowPicker");
+  return !!picker && !picker.classList.contains("hidden");
+}
+
+// screenshotSelectableWindows lista as janelas do payload que podem ser
+// capturadas (mesmo filtro do destaque/da janela em foco).
+function screenshotSelectableWindows() {
+  var state = screenshotOverlayState;
+  var list = state && state.payload && state.payload.windows ? state.payload.windows : [];
+  return list.filter(function (w) {
+    return w && !w.isSelf && !w.blocked && !w.minimized && w.width > 0 && w.height > 0;
+  });
+}
+
+function screenshotWindowLabel(win) {
+  var title = String((win && (win.title || win.processName)) || "").trim();
+  if (!title) title = screenshotT("screenshot.windowUntitled");
+  var process = win && win.processName ? String(win.processName) : "";
+  return process && title.indexOf(process) === -1 ? title + " — " + process : title;
+}
+
+function screenshotRenderWindowList(filter) {
+  var list = document.getElementById("screenshotWindowList");
+  if (!list) return;
+  var query = String(filter || "").trim().toLowerCase();
+  var windows = screenshotSelectableWindows();
+  if (query) {
+    windows = windows.filter(function (w) {
+      return screenshotWindowLabel(w).toLowerCase().indexOf(query) >= 0;
+    });
+  }
+  list.innerHTML = "";
+  if (!windows.length) {
+    var empty = document.createElement("div");
+    empty.className = "screenshot-window-empty";
+    empty.textContent = screenshotT("screenshot.windowSearchEmpty");
+    list.appendChild(empty);
+    return;
+  }
+  windows.forEach(function (win) {
+    var item = document.createElement("button");
+    item.type = "button";
+    item.className = "screenshot-window-item";
+    item.setAttribute("role", "option");
+    var geometry = document.createElement("span");
+    geometry.className = "screenshot-window-geometry";
+    geometry.textContent = win.width + "×" + win.height;
+    var label = document.createElement("span");
+    label.className = "screenshot-window-title";
+    label.textContent = screenshotWindowLabel(win);
+    item.appendChild(label);
+    item.appendChild(geometry);
+    item.addEventListener("click", function () {
+      screenshotChooseWindow(win);
+    });
+    list.appendChild(item);
+  });
+}
+
+function screenshotChooseWindow(win) {
+  if (!win) return;
+  screenshotToggleWindowPicker(false);
+  screenshotLockSelection({
+    kind: "window",
+    windowHandle: win.handle,
+    x: win.x,
+    y: win.y,
+    width: win.width,
+    height: win.height,
+    monitorIndex: 0,
+  });
+}
+
+function screenshotWindowPickerChooseFirst() {
+  var list = document.getElementById("screenshotWindowList");
+  if (!list) return;
+  var first = list.querySelector(".screenshot-window-item");
+  if (first) first.click();
+}
+
+function screenshotToggleWindowPicker(force) {
+  var picker = document.getElementById("screenshotWindowPicker");
+  if (!picker) return;
+  var show = typeof force === "boolean" ? force : picker.classList.contains("hidden");
+  if (show && !screenshotOverlayState) return;
+  picker.classList.toggle("hidden", !show);
+  if (!show) return;
+  var search = document.getElementById("screenshotWindowSearch");
+  var list = document.getElementById("screenshotWindowList");
+  if (list) list.innerHTML = "";
+  screenshotRenderWindowList("");
+  if (search) {
+    search.value = "";
+    search.placeholder = screenshotT("screenshot.windowSearch");
+    search.focus();
+  }
+}
+

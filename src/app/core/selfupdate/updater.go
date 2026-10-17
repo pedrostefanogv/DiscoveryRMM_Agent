@@ -96,6 +96,13 @@ type Updater struct {
 	// Usado pelo ResumePendingInstallReport para correlacionar execuções.
 	InstallerLogPath string
 
+	// ServiceMode indica que este Updater roda no core do serviço Windows
+	// (sessão 0/SYSTEM). Nesse modo o instalador é lançado SEMPRE por
+	// CreateProcess — ShellExecuteEx("runas") nunca é usado. A detecção
+	// automática (SCM/--service) também cobre o caso em que o campo não é
+	// preenchido; ver isServiceModeProcess em launch_windows.go.
+	ServiceMode bool
+
 	// OnSelfUpdateInstall é um callback opcional que, se definido, é chamado
 	// ANTES do launchInstaller para mostrar UI (ex.: PSADT Welcome + Progress)
 	// e executar o instalador de forma controlada (sem defer, sem cancelar).
@@ -631,10 +638,10 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		}
 
 		if err := u.persistPendingInstallState(pendingInstallState{
-			CurrentVersion:  currentVersion,
-			TargetVersion:   targetVersion,
-			CorrelationID:   correlationID,
-			RecordedAtUTC:   time.Now().UTC().Format(time.RFC3339),
+			CurrentVersion: currentVersion,
+			TargetVersion:  targetVersion,
+			CorrelationID:  correlationID,
+			RecordedAtUTC:  time.Now().UTC().Format(time.RFC3339),
 			// M-fix loop: grava o commit que está sendo INSTALADO (oferecido
 			// pelo servidor) — antes gravava o commit do processo antigo
 			// ("unknown" em builds sem -X), o que impedia a detecção de sucesso.

@@ -19,12 +19,13 @@ const (
 	wellKnownSidEveryone       = "*S-1-1-0"      // Everyone
 	wellKnownSidSystem         = "*S-1-5-18"     // SYSTEM
 	wellKnownSidAdministrators = "*S-1-5-32-544" // Builtin\Administrators
+	wellKnownSidUsers          = "*S-1-5-32-545" // Builtin\Users
 )
+
 // IsElevated retorna true se o processo atual está elevado (TokenElevation
-// ativo — Administrador ou SYSTEM). Usado para decidir se é seguro aplicar
-// DACLs restritas em arquivos de segredo: em contexto elevado a aplicação
-// funciona (SYSTEM/Admins mantêm acesso); em modo standalone não elevado
-// a aplicação da DACL falharia e quebraria a escrita da própria UI.
+// ativo — Administrador ou SYSTEM). A aplicação da DACL de arquivos de
+// segredo NÃO depende mais dela: HardenSecretFileACL é tentada sempre e o
+// caller apenas loga a falha (a escrita do serviço continua).
 func IsElevated() bool {
 	var token windows.Token
 	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token); err != nil {
@@ -85,16 +86,21 @@ func EnsureSharedStagingAccess(path string) error {
 // HardenSecretFileACL restringe a DACL de um arquivo que contém segredos
 // (config.json com deployToken/AuthToken, debug_config.json, chat_config.json).
 //
-// Correção A3: os.WriteFile(0o600) é no-op no Windows — o arquivo herda a ACL
-// do diretório (%ProgramData%\Discovery tem Users:(M)), então qualquer usuário
-// local podia LER o token e REESCREVER a configuração (config poisoning).
-// Aplica DACL explícita: SYSTEM e Administrators com Full Control; Everyone
-// apenas Read+Execute (a UI não elevada continua podendo ler; perde a escrita).
+// Correção P2/P7 (decisão "serviço é dono único da config"): os.WriteFile
+// (0o600) é no-op no Windows — o arquivo herda a ACL do diretório
+// (%ProgramData%\Discovery tem Users:(M)), então qualquer usuário local podia
+// LER o token e REESCREVER a configuração (config poisoning). A DACL explícita
+// passa a ser:
 //
-// Deve ser chamado APENAS por processos elevados (IsElevated) — a aplicação
-// da DACL exige privilégio e, em contexto não elevado (standalone), a escrita
-// da própria UI precisa continuar funcionando. Best-effort: o erro é
-// retornado para o caller logar, sem bloquear o fluxo de configuração.
+//	SYSTEM:F  — o serviço (dono único) lê e grava;
+//	Users:R   — usuários locais (inclusive a UI companion não elevada) leem,
+//	            mas NÃO reescrevem a config.
+//
+// A herança é removida (/inheritance:r) para a ACL do diretório não reintroduzir
+// Users:(M). Diferente da versão anterior, a aplicação NÃO depende de
+// IsElevated: quem decide é o caller, que deve tentar sempre e apenas logar a
+// falha (a escrita no serviço continua). Best-effort: o erro é retornado para
+// o caller logar, sem bloquear o fluxo de configuração.
 func HardenSecretFileACL(path string) error {
 	if _, err := os.Stat(path); err != nil {
 		return err
@@ -102,8 +108,7 @@ func HardenSecretFileACL(path string) error {
 	cmd := exec.Command("icacls.exe", path,
 		"/inheritance:r",
 		"/grant:r", wellKnownSidSystem+":F",
-		"/grant:r", wellKnownSidAdministrators+":F",
-		"/grant:r", wellKnownSidEveryone+":RX",
+		"/grant:r", wellKnownSidUsers+":R",
 		"/Q")
 	processutil.HideWindow(cmd)
 	out, err := cmd.CombinedOutput()

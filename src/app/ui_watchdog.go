@@ -68,6 +68,22 @@ type uiWatchdogDeps struct {
 	Log func(message string)
 	// Now é o relógio (injetável nos testes).
 	Now func() time.Time
+
+	// ── Multiusuário (opcional) ──────────────────────────────────────────
+	//
+	// Quando ActiveSessions e SpawnUISession são fornecidos, o watchdog passa
+	// a raciocinar POR SESSÃO: enumera as sessões interativas ativas (WTS) e
+	// relança a UI em cada uma que ainda não tem processo, sem duplicar. Sem
+	// eles (nil), mantém-se o comportamento single-session anterior — é o que
+	// os testes genéricos e o fallback de console usam.
+	//
+	// ActiveSessions devolve os IDs das sessões ativas (nunca inclui a sessão
+	// 0 de serviços). UISessionCounts mapeia sessionID → quantos processos
+	// discovery-agent.exe existem nela. SpawnUISession relança a UI na sessão
+	// informada (WTSQueryUserToken + CreateProcessAsUser via exec).
+	ActiveSessions  func() []uint32
+	UISessionCounts func() map[uint32]int
+	SpawnUISession  func(sessionID uint32, reason string) error
 }
 
 // uiWatchdog relança a UI quando ela não está viva e conectada ao IPC.
@@ -84,6 +100,13 @@ type uiWatchdog struct {
 	lastSpawn    time.Time
 	// lastNoticeKey deduplica mensagens de estado (ver logOnceLocked).
 	lastNoticeKey string
+
+	// ── Estado por sessão (modo multiusuário) ──
+	// sessionMisses conta verificações seguidas SEM UI em cada sessão;
+	// sessionLastSpawn aplica cooldown individual (um usuário novo não deve
+	// ser barrado pelo relançamento feito na sessão de outro).
+	sessionMisses    map[uint32]int
+	sessionLastSpawn map[uint32]time.Time
 }
 
 func newUIWatchdog(deps uiWatchdogDeps) *uiWatchdog {
@@ -162,11 +185,21 @@ func (w *uiWatchdog) RequestSpawn(reason string) {
 	// Log único por estado: um convite sem UI é evento raro, mas repetir a mesma
 	// linha a cada tentativa bloqueada pelo cooldown seria ruído no logstore.
 	w.logOnceLocked("pedido-sem-ui", "pedido de relançamento da UI ("+reason+") sem UI conectada")
+	if w.sessionMode() {
+		// Um pedido sem UI vale para TODAS as sessões sem interface: o convite
+		// pode ser para o usuário de qualquer uma delas.
+		w.spawnSessionsLocked(w.activeSessionsLocked(), "pedido:"+reason, uiWatchdogRequestCooldown, true)
+		return
+	}
 	w.spawnLocked("pedido:"+reason, uiWatchdogRequestCooldown)
 }
 
 // checkLocked é a verificação periódica (chamada com w.mu preso).
 func (w *uiWatchdog) checkLocked() {
+	if w.sessionMode() {
+		w.checkSessionsLocked()
+		return
+	}
 	if w.deps.HasUI() {
 		// Tudo em ordem: zera os contadores para que uma queda futura precise
 		// novamente do limiar completo.
@@ -213,6 +246,189 @@ func (w *uiWatchdog) checkLocked() {
 	// de usuário barram o relançamento, a mensagem "relançando" seria mentira.
 	// Quem relata o desfecho é spawnLocked (sucesso, falha ou espera).
 	w.spawnLocked("ausente", uiWatchdogSpawnCooldown)
+}
+
+// sessionMode informa se o watchdog tem as dependências para raciocinar por
+// sessão (multiusuário). Sem elas, vale o comportamento legado.
+func (w *uiWatchdog) sessionMode() bool {
+	return w.deps.ActiveSessions != nil && w.deps.SpawnUISession != nil
+}
+
+// activeSessionsLocked devolve as sessões interativas ativas, já normalizadas
+// (sem duplicatas, sem sessão 0, ordenadas) e poda o estado de sessões que
+// deixaram de existir (logoff/encerramento).
+func (w *uiWatchdog) activeSessionsLocked() []uint32 {
+	sessions := normalizedUISessions(w.deps.ActiveSessions())
+	keep := make(map[uint32]bool, len(sessions))
+	for _, sid := range sessions {
+		keep[sid] = true
+	}
+	for sid := range w.sessionMisses {
+		if !keep[sid] {
+			delete(w.sessionMisses, sid)
+		}
+	}
+	for sid := range w.sessionLastSpawn {
+		if !keep[sid] {
+			delete(w.sessionLastSpawn, sid)
+		}
+	}
+	return sessions
+}
+
+// checkSessionsLocked é a verificação periódica no modo multiusuário.
+//
+// Regras:
+//   - sem sessão ativa: nada a relançar (a próxima sessão logada será vista no
+//     próximo tick) e nenhum cooldown é consumido;
+//   - UI conectada no IPC: as sessões que JÁ têm processo são ignoradas, mas
+//     sessões ativas sem UI ainda são atendidas (é o caso de dois usuários:
+//     um com a UI aberta e outro sem);
+//   - processo vivo sem IPC: UI travada → encerra tudo e relança em cada
+//     sessão ativa (o lock de instância é POR SESSÃO, então uma UI nova por
+//     sessão é o resultado correto);
+//   - sem processo: relança em cada sessão ativa depois do limiar.
+func (w *uiWatchdog) checkSessionsLocked() {
+	if w.sessionMisses == nil {
+		w.sessionMisses = make(map[uint32]int)
+	}
+	if w.sessionLastSpawn == nil {
+		w.sessionLastSpawn = make(map[uint32]time.Time)
+	}
+
+	sessions := w.activeSessionsLocked()
+	if len(sessions) == 0 {
+		w.misses = 0
+		w.zombieChecks = 0
+		w.logOnceLocked("sem-sessao", "sem sessão de usuário ativa — UI será relançada quando alguém fizer logon")
+		return
+	}
+
+	counts := map[uint32]int{}
+	if w.deps.UISessionCounts != nil {
+		counts = w.deps.UISessionCounts()
+	}
+
+	if w.deps.HasUI() {
+		// Existe pelo menos uma UI conectada: não é caso de zumbi. Ainda assim,
+		// sessões sem processo precisam da sua própria UI.
+		w.misses = 0
+		w.zombieChecks = 0
+		w.zombieStreak = 0
+		missing := sessionsMissingUI(sessions, counts)
+		if len(missing) == 0 {
+			w.lastNoticeKey = ""
+			return
+		}
+		w.spawnSessionsLocked(missing, "sessao-sem-ui", uiWatchdogRequestCooldown, false)
+		return
+	}
+
+	if uiProcessTotal(counts) > 0 {
+		// Processo vivo sem NENHUMA UI conectada: ou está subindo, ou travou.
+		w.misses = 0
+		w.zombieChecks++
+		if w.zombieChecks < uiWatchdogZombieThreshold {
+			return
+		}
+		w.zombieChecks = 0
+		w.deps.Log(fmt.Sprintf(
+			"UI sem IPC por %d verificações com %d processo(s) vivo(s) — tratando como travada e relançando no tray em %d sessão(ões)",
+			uiWatchdogZombieThreshold, uiProcessTotal(counts), len(sessions)))
+		if killed := w.deps.KillZombieUI(); killed > 0 {
+			w.deps.Log(fmt.Sprintf("UI travada encerrada (%d processo(s))", killed))
+		}
+		// Depois do kill não existe UI em sessão nenhuma: relança em todas.
+		cooldown := uiWatchdogRequestCooldown
+		if w.zombieStreak > 0 {
+			cooldown = uiWatchdogSpawnCooldown
+		}
+		w.zombieStreak++
+		w.spawnSessionsLocked(sessions, "zumbi", cooldown, true)
+		return
+	}
+
+	w.zombieChecks = 0
+	w.spawnSessionsLocked(sessionsMissingUI(sessions, counts), "ausente", uiWatchdogSpawnCooldown, false)
+}
+
+// spawnSessionsLocked relança a UI nas sessões informadas, com limiar e
+// cooldown POR SESSÃO (force=true pula o limiar de verificações — usado depois
+// de matar a UI travada e em pedidos imediatos).
+func (w *uiWatchdog) spawnSessionsLocked(sessions []uint32, reason string, cooldown time.Duration, force bool) {
+	if len(sessions) == 0 {
+		return
+	}
+	if w.sessionMisses == nil {
+		w.sessionMisses = make(map[uint32]int)
+	}
+	if w.sessionLastSpawn == nil {
+		w.sessionLastSpawn = make(map[uint32]time.Time)
+	}
+	now := w.deps.Now()
+	for _, sid := range sessions {
+		if !force {
+			w.sessionMisses[sid]++
+			if w.sessionMisses[sid] < uiWatchdogMissThreshold {
+				continue
+			}
+		}
+		if last, ok := w.sessionLastSpawn[sid]; ok && now.Sub(last) < cooldown {
+			continue
+		}
+		// Marca ANTES de tentar: um spawn que falha não pode virar retry apertado.
+		w.sessionLastSpawn[sid] = now
+		if err := w.deps.SpawnUISession(sid, reason); err != nil {
+			w.deps.Log(fmt.Sprintf("falha ao relançar a UI (sessão %d, %s): %v", sid, reason, err))
+			continue
+		}
+		w.sessionMisses[sid] = 0
+		w.lastNoticeKey = ""
+		w.deps.Log(fmt.Sprintf("UI relançada minimizada no tray (sessão %d, %s)", sid, reason))
+	}
+}
+
+// normalizedUISessions limpa a lista de sessões: remove duplicatas, a sessão 0
+// (serviços — não tem desktop/usuário) e 0xFFFFFFFF (constante de "sem
+// sessão"), e ordena por ID para o log/plano ficarem determinísticos.
+func normalizedUISessions(raw []uint32) []uint32 {
+	seen := make(map[uint32]bool, len(raw))
+	out := make([]uint32, 0, len(raw))
+	for _, sid := range raw {
+		if sid == 0 || sid == 0xFFFFFFFF || seen[sid] {
+			continue
+		}
+		seen[sid] = true
+		out = append(out, sid)
+	}
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j] < out[j-1]; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+// sessionsMissingUI devolve as sessões ativas que ainda NÃO têm processo da UI.
+func sessionsMissingUI(sessions []uint32, counts map[uint32]int) []uint32 {
+	out := make([]uint32, 0, len(sessions))
+	for _, sid := range sessions {
+		if counts[sid] <= 0 {
+			out = append(out, sid)
+		}
+	}
+	return out
+}
+
+// uiProcessTotal soma os processos de UI em todas as sessões.
+func uiProcessTotal(counts map[uint32]int) int {
+	total := 0
+	for _, n := range counts {
+		if n > 0 {
+			total += n
+		}
+	}
+	return total
 }
 
 // spawnLocked relança a UI respeitando o cooldown (chamado com w.mu preso).
