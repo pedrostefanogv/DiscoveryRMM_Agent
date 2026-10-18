@@ -749,12 +749,6 @@ func NewApp(opts AppStartupOptions) *App {
 		},
 	)
 	wireRemoteConsentManager(a.RemoteSessionMgr)
-	if consentCfg := a.DebugSvc.GetConfig(); consentCfg.IsProvisioned() {
-		configureRemoteConsentRuntime(
-			workerAPIBase(WorkerDebugConfig{ApiScheme: consentCfg.APIScheme(), ApiServer: consentCfg.ApiServer}),
-			consentCfg.AuthToken,
-			consentCfg.AgentID)
-	}
 	inventoryProvider.SetProgressCallback(func() {
 		a.pulseInventoryHeartbeat()
 	})
@@ -852,6 +846,17 @@ func NewApp(opts AppStartupOptions) *App {
 	a.AgentConfigSvc = agentconfig.New(agentconfig.FetchDeps{
 		GetDebugConfig: a.GetDebugConfig,
 	})
+	// Runtime do reporte de consentimento: o DebugSvc só existe a partir daqui
+	// (usar antes causava nil pointer no startup do serviço).
+	if a.DebugSvc != nil {
+		consentCfg := a.DebugSvc.GetConfig()
+		if consentCfg.IsProvisioned() {
+			configureRemoteConsentRuntime(
+				workerAPIBase(WorkerDebugConfig{ApiScheme: consentCfg.APIScheme(), ApiServer: consentCfg.ApiServer}),
+				consentCfg.AuthToken,
+				consentCfg.AgentID)
+		}
+	}
 	a.SyncSvc = syncsvc.NewService(a)
 	a.P2PConfig = defaultP2PConfig()
 	a.P2PCoord = newP2PCoordinator(a)
