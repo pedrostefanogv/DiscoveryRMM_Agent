@@ -82,6 +82,62 @@ type Invite struct {
 	ExpiresAt   string `json:"expiresAtUtc"`
 }
 
+// InviteDecision é o resultado de registrar um convite recebido.
+//
+// Existe porque o registro do convite é um check-then-act: entre "posso atender
+// este convite?" e "registre o convite" o estado pode mudar (dois convites
+// chegando quase juntos, ou o mesmo convite reentregue pelo servidor). Devolver
+// a decisão para o chamador elimina a corrida e permite responder ao servidor o
+// motivo exato.
+type InviteDecision struct {
+	// Accepted indica que o convite foi registrado e a janela deve abrir.
+	Accepted bool
+	// Reason é o motivo estável de uma recusa, para reportar ao servidor:
+	// "busy" (outra conversa ATIVA) ou "already_active" (o convite é reentrega de
+	// uma conversa já aceita e não deve pedir confirmação de novo).
+	Reason string
+	// SupersededSessionID é a sessão de um convite ANTERIOR que estava aguardando
+	// resposta e foi substituída por este. Precisa ser RECUSADA no servidor,
+	// senão ele fica esperando a expiração e o atendente vê "aguardando" para um
+	// convite que o usuário nunca viu.
+	SupersededSessionID string
+}
+
+// Motivos de recusa de convite (InviteDecision.Reason).
+const (
+	InviteReasonBusy          = "busy"
+	InviteReasonAlreadyActive = "already_active"
+	// InviteReasonAlreadyFinished é a reentrega de um convite de uma conversa
+	// que já TERMINOU (sessão "ended" na mesma máquina). Sem esta guarda o
+	// estado voltava para "waiting" e a janela aberta em leitura ganhava o modal
+	// de convite por cima da conversa encerrada — e voltava a flutuar.
+	InviteReasonAlreadyFinished = "already_finished"
+	InviteReasonInvalid         = "invalid_invite"
+)
+
+// AttachmentPolicy é a dica de UI (allowlist de tipos e tamanho máximo) para o
+// seletor de arquivos da janela do chat.
+//
+// A AUTORIDADE continua sendo o servidor (TicketAttachmentSettings validado no
+// presign e no complete). Esta política só evita que o usuário escolha um
+// arquivo que será recusado depois — antes era um espelho hardcoded no agent e o
+// erro só aparecia no envio.
+type AttachmentPolicy struct {
+	Enabled             bool     `json:"enabled"`
+	AllowedContentTypes []string `json:"allowedContentTypes"`
+	MaxFileSizeBytes    int64    `json:"maxFileSizeBytes"`
+}
+
+// DefaultAttachmentPolicy é o espelho da política padrão do servidor
+// (TicketAttachmentSettings), usado quando a consulta falha.
+func DefaultAttachmentPolicy() AttachmentPolicy {
+	return AttachmentPolicy{
+		Enabled:             true,
+		AllowedContentTypes: []string{"image/jpeg", "image/png", "image/webp", "application/pdf"},
+		MaxFileSizeBytes:    10 * 1024 * 1024,
+	}
+}
+
 // ExpiredAt informa se o convite já venceu no instante informado.
 //
 // A entrega do comando NÃO é pontual: o servidor reentrega comandos não

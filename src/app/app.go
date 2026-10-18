@@ -152,6 +152,16 @@ type App struct {
 	// caminho síncrono do Go (o end virava best-effort no beforeunload e podia
 	// não chegar, deixando a sessão viva para a reconciliação reabrir a janela).
 	supportChatAllowClose *atomic.Bool
+	// supportChatReconcileTicks conta os ticks da reconciliação periódica: com
+	// conversa ATIVA e janela aberta (NATS entrega em tempo real + reconexão força
+	// refresh) o REST só é consultado de vez em quando — ver
+	// reconcileSupportChat em support_chat_window.go.
+	supportChatReconcileTicks atomic.Int64
+	// Cache da política de anexos do chat (allowlist/tamanho vindos do servidor).
+	supportChatPolicyMu      sync.Mutex
+	supportChatPolicy        supportchat.AttachmentPolicy
+	supportChatPolicyExpires time.Time
+	supportChatPolicyReady   bool
 	// logStore é o banco unificado de logs do processo (nil quando indisponível).
 	logStore *logstore.Store
 	// commandDedupe é o dedupe persistido de comandos (sobrevive ao reboot no

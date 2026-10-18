@@ -97,6 +97,26 @@
     els.viewerClose = byId("scViewerClose");
   }
 
+  /**
+   * Filtro do seletor de arquivos a partir da política do SERVIDOR
+   * (GET .../support-chat/attachment-policy, via SupportChatAttachmentPolicyJSON).
+   *
+   * Antes o agent devolvia um espelho hardcoded e o `accept` não era aplicado: o
+   * usuário escolhia o arquivo para só então descobrir que o tipo era proibido.
+   * Paste e drag&drop não passam pelo `accept` — esses continuam validados em
+   * uploadFile() com a mesma lista.
+   */
+  function applyFileInputAccept() {
+    if (!els.fileInput) return;
+
+    var allowed = (state.policy && state.policy.allowedContentTypes) || [];
+    if (!allowed.length) {
+      els.fileInput.removeAttribute("accept");
+      return;
+    }
+    els.fileInput.setAttribute("accept", allowed.join(","));
+  }
+
   function call(method) {
     var args = Array.prototype.slice.call(arguments, 1);
     var target = api();
@@ -273,9 +293,41 @@
       });
   }
 
+  // ── Render da conversa ────────────────────────────────────────────────
+  //
+  // OTIMIZAÇÃO: `render()` reconstrói tudo a cada evento de estado (mensagem
+  // nova, snapshot de até 60s, envio, mudança de status). Sem assinatura, um
+  // evento que não muda NADA na conversa (ex.: o snapshot periódico) apagava e
+  // recriava todos os nós — perdia a posição de rolagem, a seleção de texto e
+  // disparava layout a cada ciclo. Aqui a lista só é reconstruída quando o
+  // CONTEÚDO muda, e num único fragmento (um layout em vez de N).
+  //
+  // A assinatura usa o JSON das mensagens de propósito: o snapshot canônico
+  // completa nome/tipo/tamanho do anexo DEPOIS do envelope do NATS, sem a chave
+  // da mensagem mudar — comparar só as chaves deixaria o anexo eternamente
+  // exibido como "anexo".
+  var messagesSignature = "";
+
+  function messagesSignatureOf() {
+    return state.status + "|" + JSON.stringify(state.messages);
+  }
+
+  /** Usuário está no fim da conversa? (tolerância de 32px para DPI/fontes) */
+  function isMessagesAtBottom(container) {
+    return container.scrollHeight - container.scrollTop - container.clientHeight <= 32;
+  }
+
   function renderMessages() {
     var container = els.messages;
     if (!container) return;
+
+    var signature = messagesSignatureOf();
+    if (signature === messagesSignature) return;
+    messagesSignature = signature;
+
+    // Rolagem grudada no fim só quando o usuário JÁ estava no fim: antes cada
+    // atualização jogava a conversa para a última mensagem no meio da leitura.
+    var stickToBottom = isMessagesAtBottom(container);
 
     while (container.firstChild) container.removeChild(container.firstChild);
 
@@ -289,11 +341,13 @@
       return;
     }
 
+    var fragment = document.createDocumentFragment();
     state.messages.forEach(function (message) {
-      container.appendChild(buildRow(message));
+      fragment.appendChild(buildRow(message));
     });
+    container.appendChild(fragment);
 
-    container.scrollTop = container.scrollHeight;
+    if (stickToBottom) container.scrollTop = container.scrollHeight;
   }
 
   // Mensagem de SISTEMA (ex.: "Chat de suporte encerrado pelo usuário"): não é
@@ -805,6 +859,11 @@
       if (next.supportName) parts.push("Atendente: " + next.supportName);
       if (next.ticketTitle) parts.push(next.ticketTitle);
       document.title = "Chat — " + parts.join(" · ");
+    } else if (document.title !== "Chat com o suporte") {
+      // VOLTA ao título normal quando o convite sai de cena: sem este else o
+      // título "Convite do suporte — responda" ficava para sempre numa conversa
+      // cujo snapshot não trouxe atendente/chamado.
+      document.title = "Chat com o suporte";
     }
     render();
 
@@ -862,7 +921,21 @@
 
   // ── Anexos ───────────────────────────────────────────────────────────────
 
+  /**
+   * Anexa arquivos escolhidos/colados/arrastados.
+   *
+   * BUG DE UX: paste e drag&drop não passam pelo botão de anexo (que fica
+   * desabilitado quando a conversa não está ativa). Anexar antes do aceite ou
+   * depois do fim tentava o upload, o servidor recusava (presign exige sessão
+   * ativa) e o usuário recebia um erro de rede genérico sem entender a causa.
+   */
   function attachFiles(files) {
+    if (state.status !== "active") {
+      showBanner(state.status === "waiting"
+        ? "Aceite o convite do suporte antes de enviar arquivos."
+        : "A conversa não está ativa: não há como enviar arquivos agora.");
+      return;
+    }
     Array.prototype.slice.call(files || []).forEach(function (file) { uploadFile(file); });
   }
 
@@ -1290,14 +1363,22 @@
       }
     });
 
+    // Política de anexos: NÃO bloqueia a abertura da janela (é uma consulta ao
+    // servidor, sujeita a rede degradada). O default é permissivo e o servidor
+    // valida de verdade no presign/complete.
     call("SupportChatAttachmentPolicyJSON")
-      .then(function (policy) { if (policy) state.policy = policy; })
-      .catch(function () { /* mantém o default */ })
-      .then(function () {
-        applyState({ status: "none", connected: false, messages: [] });
-        return refresh();
+      .then(function (policy) {
+        if (!policy) return;
+        state.policy = policy;
+        applyFileInputAccept();
+        render();
       })
-      .catch(function (err) { showBanner("Não foi possível carregar a conversa: " + describe(err)); });
+      .catch(function () { /* mantém o default */ });
+
+    applyState({ status: "none", connected: false, messages: [] });
+    refresh().catch(function (err) {
+      showBanner("Não foi possível carregar a conversa: " + describe(err));
+    });
   }
 
   if (document.readyState === "loading") {

@@ -57,15 +57,55 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 
 	svc := a.supportChatService()
 
-	// Uma sessão por máquina: se já existe OUTRO chat ativo, recusa o convite
-	// imediatamente (o console mostra "máquina ocupada em outro chat").
-	if current := svc.State(); current.Status == supportchat.StatusActive &&
-		current.SessionID != "" && current.SessionID != invite.SessionID {
-		a.respondSupportChatInvite(invite.SessionID, false, "busy")
-		return true, 1, "", "maquina ocupada em outro chat de suporte"
+	// Decisão ATÔMICA no serviço (ver PrepareInviteIfIdle): o antigo
+	// "checa Estado() e depois PrepareInvite" era um check-then-act — dois
+	// convites quase simultâneos passavam os dois pela checagem e o segundo
+	// sobrescrevia o primeiro, deixando o servidor esperando resposta de um
+	// convite que o usuário nunca viu.
+	decision := svc.PrepareInviteIfIdle(invite)
+
+	// Convite ANTERIOR que aguardava resposta (mesma máquina, outra sessão) foi
+	// substituído: recusa no servidor para ele não ficar "aguardando" até expirar.
+	if decision.SupersededSessionID != "" {
+		a.Logs.Append("[supportchat] convite substituido por outro mais recente: " + decision.SupersededSessionID)
+		go a.respondSupportChatInvite(decision.SupersededSessionID, false, "replaced")
 	}
 
-	svc.PrepareInvite(invite)
+	// Só segue para o convite quando ele foi REALMENTE registrado — decisão
+	// explícita, sem depender de "o motivo veio vazio".
+	if !decision.Accepted {
+		switch decision.Reason {
+		case supportchat.InviteReasonAlreadyActive:
+			// Reentrega do convite de uma conversa JÁ ACEITA: nada de reabrir o
+			// pedido de confirmação (o modal aparecia em cima da conversa em curso).
+			// Só garante que a janela está aberta e na frente.
+			if a.app != nil {
+				go a.openSupportChatWindow()
+			}
+			body, _ := json.Marshal(map[string]any{
+				"alreadyActive": true,
+				"sessionId":     invite.SessionID,
+			})
+			return true, 0, string(body), ""
+
+		case supportchat.InviteReasonBusy:
+			// Uma sessão por máquina (o console mostra "máquina ocupada em outro chat").
+			a.respondSupportChatInvite(invite.SessionID, false, supportchat.InviteReasonBusy)
+			return true, 1, "", "maquina ocupada em outro chat de suporte"
+
+		case supportchat.InviteReasonAlreadyFinished:
+			// Nada a abrir: a conversa já terminou. Abrir a janela aqui mostraria
+			// uma conversa encerrada (ou vazia) "do nada".
+			body, _ := json.Marshal(map[string]any{
+				"alreadyFinished": true,
+				"sessionId":       invite.SessionID,
+			})
+			return true, 0, string(body), ""
+
+		default:
+			return true, 2, "", "convite de chat invalido"
+		}
+	}
 
 	// A confirmação acontece DENTRO da janela do chat (não mais num modal da
 	// interface principal). Quem abre a janela é o processo de UI: no modo
@@ -103,6 +143,16 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 			"awaitingUi":          true,
 		})
 		return true, 0, string(body), ""
+	}
+
+	// Processo ÚNICO (UI standalone, sem serviço): a janela pode ser aberta
+	// AQUI, sem depender do frontend. O evento para a janela principal é
+	// best-effort e, no cenário que mais dói — agent recém-iniciado no tray, com a
+	// janela principal nunca criada (criação preguiçosa) —, não existe webview
+	// carregado para receber o evento: o convite ficava engolido até a
+	// reconciliação de 60s. Abrir no Go elimina essa dependência.
+	if a.app != nil {
+		go a.openSupportChatWindow()
 	}
 
 	body, _ := json.Marshal(map[string]any{
@@ -148,6 +198,23 @@ func (a *App) scheduleSupportChatInviteRedelivery(invite supportchat.Invite) {
 				return
 
 			case <-deadline.C:
+				// ÚLTIMA conferência: a UI pode ter subido entre o último poll
+				// (500 ms) e o prazo. Recusar aqui mataria um convite que já está
+				// chegando na tela — exatamente o sintoma que esta janela de
+				// tolerância existe para eliminar.
+				if a.hasSupportChatUI() {
+					a.redeliverSupportChatInvite(invite)
+					return
+				}
+
+				// Só recusa se o convite AINDA é o pendente: se outra sessão o
+				// substituiu (ou ele já foi respondido), não mexe no estado.
+				if state := a.supportChatService().State(); state.Status != supportchat.StatusWaiting ||
+					state.SessionID != invite.SessionID {
+					a.Logs.Append("[supportchat] prazo de espera da UI venceu, mas o convite nao esta mais pendente; nada a recusar (sessionId=" + invite.SessionID + ")")
+					return
+				}
+
 				a.Logs.Append("[supportchat] convite sem UI em " + supportChatInviteUIWait.String() +
 					"; recusando para o suporte nao ficar esperando (sessionId=" + invite.SessionID + ")")
 				a.respondSupportChatInvite(invite.SessionID, false, "no_ui")
@@ -159,20 +226,27 @@ func (a *App) scheduleSupportChatInviteRedelivery(invite supportchat.Invite) {
 					continue
 				}
 
-				// A UI existe agora: reemite o convite (evento + toast) e a janela
-				// abre em primeiro plano. O estado "waiting" já foi registrado por
-				// PrepareInvite no handler do comando.
-				a.Logs.Append("[supportchat] UI disponivel; reemitindo o convite para a tela (sessionId=" + invite.SessionID + ")")
-				a.notifySupportChatInvite(invite)
-				a.EmitEvent("supportchat:invite",
-					"sessionId", invite.SessionID,
-					"ticketId", invite.TicketID,
-					"ticketTitle", invite.TicketTitle,
-					"supportName", invite.SupportName)
+				a.redeliverSupportChatInvite(invite)
 				return
 			}
 		}
 	}()
+}
+
+// redeliverSupportChatInvite reemite o convite para a UI que passou a existir:
+// evento supportchat:invite (a UI abre a janela pelo GO, sem depender do JS da
+// janela principal — ver openSupportChatInviteFromIPC) + toast nativo.
+//
+// O estado "waiting" já foi registrado pelo PrepareInviteIfIdle no handler do
+// comando; aqui só falta a SUPERFÍCIE onde o usuário dá o aceite.
+func (a *App) redeliverSupportChatInvite(invite supportchat.Invite) {
+	a.Logs.Append("[supportchat] UI disponivel; reemitindo o convite para a tela (sessionId=" + invite.SessionID + ")")
+	a.notifySupportChatInvite(invite)
+	a.EmitEvent("supportchat:invite",
+		"sessionId", invite.SessionID,
+		"ticketId", invite.TicketID,
+		"ticketTitle", invite.TicketTitle,
+		"supportName", invite.SupportName)
 }
 
 // hasSupportChatUI informa se existe uma interface capaz de renderizar a janela

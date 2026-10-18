@@ -485,6 +485,16 @@ func (a *App) startIPCClient() {
 						}
 					}
 				}
+				// Convite do chat de suporte: a janela é aberta AQUI, no Go, e não
+				// só pelo handler de JS da janela principal. Antes, se a janela
+				// principal do agent nunca tivesse sido criada (agent no tray,
+				// criação preguiçosa) ou estivesse sem webview carregado, o evento
+				// não tinha quem o escutasse e o convite simplesmente não aparecia —
+				// só o ícone no tray. O handler de JS continua existindo (caminho
+				// idempotente: a segunda abertura só traz a janela para a frente).
+				if name == "supportchat:invite" {
+					a.openSupportChatInviteFromIPC(msg.Payload)
+				}
 				// Estado do chat de suporte vindo do SERVIÇO: o modo da janela
 				// ("sempre no topo" só com convite pendente) é decidido aqui na
 				// UI, que é quem tem a janela. O serviço não sabe do Wails, então

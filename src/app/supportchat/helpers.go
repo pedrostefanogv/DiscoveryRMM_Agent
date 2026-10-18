@@ -42,13 +42,33 @@ func normalizeStatus(raw string) string {
 	}
 }
 
-// sortMessages mantém a ordem canônica por sequência (estável para mensagens
-// ainda sem sequência, como a bolha otimista do usuário).
+// sortMessages mantém a ordem canônica por sequência e deixa as bolhas
+// OTIMISTAS (sem sequência, ainda não confirmadas pelo servidor) no FIM.
+//
+// BUG LATENTE CORRIGIDO: o comparador antigo devolvia "false" sempre que um dos
+// lados não tinha sequência. Para o sort.SliceStable isso NÃO é uma ordenação
+// válida (viola transitividade): o resultado depende da ordem de entrada e, numa
+// mistura de otimistas com canônicas, a mensagem recém-enviada podia ficar no
+// meio da conversa. Particionar é determinístico e casa com o critério do
+// frontend (que já joga as otimistas para o fim).
 func sortMessages(messages []Message) {
-	sort.SliceStable(messages, func(i, j int) bool {
-		if messages[i].SequenceNumber == 0 || messages[j].SequenceNumber == 0 {
-			return false
+	if len(messages) < 2 {
+		return
+	}
+
+	canonical := make([]Message, 0, len(messages))
+	optimistic := make([]Message, 0, 4)
+	for _, message := range messages {
+		if message.SequenceNumber > 0 {
+			canonical = append(canonical, message)
+			continue
 		}
-		return messages[i].SequenceNumber < messages[j].SequenceNumber
+		optimistic = append(optimistic, message)
+	}
+
+	sort.SliceStable(canonical, func(i, j int) bool {
+		return canonical[i].SequenceNumber < canonical[j].SequenceNumber
 	})
+
+	copy(messages, append(canonical, optimistic...))
 }

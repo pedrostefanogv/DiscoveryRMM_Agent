@@ -217,3 +217,87 @@ func TestSupportChatWindowOptionsOn_PosicionaECentraliza(t *testing.T) {
 		t.Fatalf("X/Y não podem ser negativos; obtido X=%d Y=%d", opts.X, opts.Y)
 	}
 }
+
+// REQUISITO: o convite do chat precisa abrir a janela MESMO quando a janela
+// principal do agent nunca foi criada (agent no tray) — por isso a UI abre a
+// janela direto no Go a partir do evento IPC, sem depender do handler de JS.
+// Este teste cobre o desempacotamento do payload nas duas formas aceitas.
+func TestSupportChatInviteFromIPCPayload(t *testing.T) {
+	// Forma 1: campos do evento espalhados no payload (a forma normal).
+	spread := map[string]any{
+		"name":        "supportchat:invite",
+		"sessionId":   "sessao-1",
+		"ticketId":    "chamado-9",
+		"ticketTitle": "Notebook lento",
+		"supportName": "Ana",
+		"__qualquer":  1,
+	}
+	sessionID, ticketID, title, support, ok := supportChatInviteFromIPCPayload(spread)
+	if !ok {
+		t.Fatal("payload com sessionId deveria ser aceito")
+	}
+	if sessionID != "sessao-1" || ticketID != "chamado-9" || title != "Notebook lento" || support != "Ana" {
+		t.Fatalf("campos extraídos incorretamente: %q %q %q %q", sessionID, ticketID, title, support)
+	}
+
+	// Forma 2: estado cru sob a chave reservada (evento emitido com UM valor).
+	raw := map[string]any{
+		"name":         "supportchat:invite",
+		ipcEventRawKey: map[string]any{"sessionId": "sessao-2", "supportName": "Bruno"},
+	}
+	sessionID, _, _, support, ok = supportChatInviteFromIPCPayload(raw)
+	if !ok || sessionID != "sessao-2" || support != "Bruno" {
+		t.Fatalf("forma crua do payload não foi desempacotada: ok=%v session=%q support=%q", ok, sessionID, support)
+	}
+
+	// Conversa AVULSA: sem ticketId, mas com sessionId — continua válida.
+	if _, _, _, _, ok := supportChatInviteFromIPCPayload(map[string]any{"sessionId": "sessao-3"}); !ok {
+		t.Fatal("convite de conversa avulsa (sem ticketId) deve ser aceito")
+	}
+
+	// Sem sessionId (payload incompleto/antigo): recusado, sem pânico.
+	for _, payload := range []map[string]any{
+		nil,
+		{},
+		{"sessionId": "   "},
+		{"sessionId": 42},
+	} {
+		if _, _, _, _, ok := supportChatInviteFromIPCPayload(payload); ok {
+			t.Fatalf("payload sem sessionId válido deveria ser recusado: %+v", payload)
+		}
+	}
+}
+
+// OTIMIZAÇÃO: com conversa ATIVA e janela aberta o NATS entrega em tempo real e
+// a reconexão força um refresh completo — a consulta REST periódica ali só
+// precisa detectar expiração silenciosa no servidor, então roda 1 a cada
+// supportChatActiveReconcileEvery ticks. Nos demais casos (convite pendente,
+// janela fechada) a consulta continua em TODO tick: é o cenário em que o convite
+// se perde no canal unicast e o usuário fica sem a janela.
+func TestSupportChatReconcileNeeded_ThrottleComConversaAtiva(t *testing.T) {
+	// Janela fechada: sempre consulta (retomada/convite perdido).
+	if !supportChatReconcileNeeded(false, "active", 1) {
+		t.Fatal("janela fechada deve consultar o REST em todo tick")
+	}
+
+	// Convite pendente: sempre consulta.
+	for _, status := range []string{"waiting", "none", "ended", ""} {
+		if !supportChatReconcileNeeded(true, status, 1) {
+			t.Fatalf("status %q deveria consultar o REST em todo tick", status)
+		}
+	}
+
+	// Conversa ativa com janela aberta: só a cada N ticks.
+	checked := 0
+	for tick := int64(1); tick <= 10; tick++ {
+		if supportChatReconcileNeeded(true, "active", tick) {
+			checked++
+			if tick%supportChatActiveReconcileEvery != 0 {
+				t.Fatalf("tick %d não deveria consultar o REST com conversa ativa", tick)
+			}
+		}
+	}
+	if want := int64(10 / supportChatActiveReconcileEvery); int64(checked) != want {
+		t.Fatalf("esperava %d consultas em 10 ticks, obtido %d", want, checked)
+	}
+}

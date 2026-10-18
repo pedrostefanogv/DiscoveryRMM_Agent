@@ -331,6 +331,60 @@ func (a *App) syncSupportChatWindowFromIPCPayload(payload map[string]any) {
 	go a.applySupportChatWindowMode(status)
 }
 
+// supportChatInviteFromIPCPayload extrai os campos do convite de um payload IPC.
+//
+// O payload chega das duas formas documentadas em ipc_app_integration.go: com os
+// campos do evento espalhados no próprio payload ({name, sessionId, ...}) ou com
+// o valor cru sob ipcEventRawKey. Devolve ok=false quando não há sessionId — é a
+// única chave obrigatória do convite (conversa avulsa não tem ticketId).
+func supportChatInviteFromIPCPayload(payload map[string]any) (sessionID, ticketID, ticketTitle, supportName string, ok bool) {
+	if payload == nil {
+		return "", "", "", "", false
+	}
+
+	source := payload
+	if raw, isMap := payload[ipcEventRawKey].(map[string]any); isMap {
+		source = raw
+	}
+
+	sessionID, _ = source["sessionId"].(string)
+	if strings.TrimSpace(sessionID) == "" {
+		return "", "", "", "", false
+	}
+	ticketID, _ = source["ticketId"].(string)
+	ticketTitle, _ = source["ticketTitle"].(string)
+	supportName, _ = source["supportName"].(string)
+	return sessionID, ticketID, ticketTitle, supportName, true
+}
+
+// openSupportChatInviteFromIPC abre a janela do convite a partir do evento IPC
+// recebido do serviço (modo companion).
+//
+// A validação do convite (sessão ainda pendente/ativa no servidor) e o
+// PrepareInvite continuam em SupportChatOpenInviteWindow — aqui só existe o
+// desempacotamento do payload IPC.
+func (a *App) openSupportChatInviteFromIPC(payload map[string]any) {
+	if a == nil || a.app == nil || payload == nil {
+		return
+	}
+
+	sessionID, ticketID, ticketTitle, supportName, ok := supportChatInviteFromIPCPayload(payload)
+	if !ok {
+		a.Logs.Append("[supportchat] convite via IPC sem sessionId; ignorado")
+		return
+	}
+
+	go func() {
+		if err := a.SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, supportName); err != nil {
+			// O handler de JS da janela principal ainda pode abrir (é o caminho
+			// antigo, mantido); se nem ele existir, a reconciliação de 60s cobre.
+			a.Logs.Append("[supportchat] convite via IPC nao abriu a janela: " + err.Error())
+			return
+		}
+		a.Logs.Append("[supportchat] janela do convite aberta pelo evento IPC (sessao " + sessionID + ")")
+	}()
+}
+
 // openSupportChatWindow abre (ou foca) a janela do chat.
 //
 // Não é exportado de propósito: a abertura da janela é decidida pelo Go
@@ -514,9 +568,49 @@ func (a *App) runSupportChatReconcileLoop() {
 		case <-a.supportChatContext().Done():
 			return
 		case <-ticker.C:
-			a.resumeSupportChatIfActive(0)
+			a.reconcileSupportChat()
 		}
 	}
+}
+
+// supportChatActiveReconcileEvery é de quantos em quantos ticks a reconciliação
+// consulta o REST quando há conversa ATIVA com a janela aberta (60s * 5 = 5 min).
+const supportChatActiveReconcileEvery = 5
+
+// reconcileSupportChat é o tick periódico (ver runSupportChatReconcileLoop).
+//
+// Custo x benefício: o snapshot REST é 2 requisições por tick, por agent — e com
+// conversa ATIVA e janela aberta o NATS entrega em tempo real, a reconexão força
+// um refresh completo (OnNATSConnected → resumeSupportChatIfActive) e a própria
+// janela faz refresh nas ações do usuário. Então ali a consulta periódica só
+// precisa detectar EXPIRAÇÃO SILENCIOSA no servidor (sessão que morreu sem
+// evento): 1 tick a cada 5 mantém essa rede de segurança sem pagar o custo todo.
+//
+// Fora desse caso (convite pendente, janela fechada, retomada) a consulta
+// continua a cada tick — é o cenário em que o convite se perde no canal unicast.
+func (a *App) reconcileSupportChat() {
+	windowOpen := a.supportChatWindowOpen()
+	status := a.supportChatService().State().Status
+	tick := a.supportChatReconcileTicks.Add(1)
+
+	if !supportChatReconcileNeeded(windowOpen, status, tick) {
+		return
+	}
+
+	a.resumeSupportChatIfActive(0)
+}
+
+// supportChatReconcileNeeded decide se o tick periódico deve consultar o REST.
+//
+// Puro para poder ser testado sem App/janela (ver support_chat_window_test.go).
+func supportChatReconcileNeeded(windowOpen bool, status string, tick int64) bool {
+	if !windowOpen {
+		return true
+	}
+	if status != supportchat.StatusActive {
+		return true
+	}
+	return tick%supportChatActiveReconcileEvery == 0
 }
 
 // SupportChatAttachmentPolicyJSON devolve accept/tamanho para o seletor de arquivos.

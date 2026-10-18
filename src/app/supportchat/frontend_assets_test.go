@@ -302,3 +302,47 @@ func TestChatWindow_ConviteAvisaQueJanelaFicaNoTopo(t *testing.T) {
 		t.Fatal("support-chat.css precisa estilizar o aviso do convite (.sc-modal-hint)")
 	}
 }
+
+// REQUISITO: o seletor de arquivos da janela do chat precisa refletir a política
+// do SERVIDOR (allowlist/tamanho), e não um espelho fixo no agent — antes o
+// usuário escolhia o arquivo para só então descobrir que o tipo era proibido.
+// A consulta também NÃO pode bloquear a abertura da janela (rede degradada).
+func TestChatWindow_SeletorUsaPoliticaDoServidor(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+
+	if !strings.Contains(jsText, "function applyFileInputAccept(") {
+		t.Fatal("app-support-chat.js deve aplicar a allowlist do servidor no seletor (applyFileInputAccept)")
+	}
+	if !strings.Contains(jsText, `setAttribute("accept"`) {
+		t.Fatal("o filtro do seletor precisa ser aplicado no input de arquivo (accept)")
+	}
+	if !strings.Contains(jsText, "SupportChatAttachmentPolicyJSON") {
+		t.Fatal("app-support-chat.js deve consultar a política de anexos (SupportChatAttachmentPolicyJSON)")
+	}
+
+	// A consulta da política NÃO pode bloquear a abertura da janela: ela termina
+	// no próprio .catch (sem encadear applyState/refresh depois). Se alguém voltar
+	// a encadear, uma rede degradada atrasaria o carregamento da conversa.
+	policyIdx := strings.Index(jsText, "SupportChatAttachmentPolicyJSON")
+	if policyIdx < 0 {
+		t.Fatal("chamada da política não encontrada")
+	}
+	bootstrap := jsText[policyIdx:]
+
+	applyIdx := strings.Index(bootstrap, "applyState({ status: \"none\"")
+	if applyIdx < 0 {
+		t.Fatal("applyState inicial não encontrado no bootstrap")
+	}
+	catchIdx := strings.Index(bootstrap, "/* mantém o default */")
+	if catchIdx < 0 || catchIdx > applyIdx {
+		t.Fatal("a consulta da política precisa terminar em .catch e não pode ser encadeada antes de carregar a conversa")
+	}
+	if strings.Contains(bootstrap[catchIdx:applyIdx], ".then(") {
+		t.Fatal("o bootstrap não pode encadear a política antes de carregar a conversa (consulta não pode bloquear a janela)")
+	}
+}

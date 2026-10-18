@@ -20,6 +20,12 @@ import (
 const (
 	// requestTimeout protege a UI de uma rede degradada; snapshot e sends são curtos.
 	requestTimeout = 30 * time.Second
+	// attachmentEnrichWindow/attachmentEnrichLimit limitam o refresh disparado
+	// quando chega uma mensagem com anexo: o anexo recém-chegado está SEMPRE na
+	// janela recente, então reconsultar até 300 mensagens a cada print enviava
+	// a conversa inteira sem necessidade (vários prints = várias buscas completas).
+	attachmentEnrichWindow = 20
+	attachmentEnrichLimit  = 30
 	// seenClientIDsLimit limita o mapa de deduplicação em memória.
 	seenClientIDsLimit = 256
 	// maxInMemoryMessages limita a transcrição mantida em memória.
@@ -50,6 +56,12 @@ type Service struct {
 	state         State
 	seenClientIDs map[string]time.Time
 	seenOrder     []string
+
+	// waitingSince/activeSince alimentam o RESUMO de sessão no log (uma linha
+	// por sessão em vez de só as transições). waitingSince = quando o convite
+	// chegou; activeSince = quando o usuário aceitou (ou a sessão já veio ativa).
+	waitingSince time.Time
+	activeSince  time.Time
 
 	natsMu     sync.Mutex
 	nc         *nats.Conn
@@ -204,6 +216,9 @@ func (s *Service) applySessionOpened(envelope Envelope) {
 	s.state.SessionID = envelope.SessionID
 	s.state.TicketID = envelope.TicketID
 	s.state.Status = StatusActive
+	if s.activeSince.IsZero() {
+		s.activeSince = time.Now()
+	}
 	if s.state.Messages == nil {
 		s.state.Messages = []Message{}
 	}
@@ -228,6 +243,10 @@ func (s *Service) applySessionEnded(envelope Envelope) {
 	s.state.SessionID = envelope.SessionID
 	s.mu.Unlock()
 
+	// Resumo único da sessão (duração + volume): o log do agent já mostrava cada
+	// transição, mas reconstruir "quanto durou / quantas mensagens" exigia ler o
+	// histórico inteiro do logstore durante um atendimento.
+	s.logSessionClosed(envelope.SessionID, "servidor")
 	s.emitState("session-ended")
 }
 
@@ -241,9 +260,12 @@ func (s *Service) applyMessage(envelope Envelope) error {
 	if s.state.Messages == nil {
 		s.state.Messages = []Message{}
 	}
-	if envelope.Sequence > 0 && len(s.state.Messages) > 0 {
-		last := s.state.Messages[len(s.state.Messages)-1]
-		if envelope.Sequence <= last.SequenceNumber {
+	// BUG LATENTE CORRIGIDO: a guarda olhava a ÚLTIMA mensagem da lista. Com uma
+	// bolha OTIMISTA no fim (sequência 0), a comparação nunca rejeitava nada e um
+	// envelope antigo (replay do consumer durável) era aplicado por cima da
+	// conversa. A referência tem de ser a MAIOR sequência canônica conhecida.
+	if envelope.Sequence > 0 {
+		if last := s.maxCanonicalSequenceLocked(); last > 0 && envelope.Sequence <= last {
 			s.mu.Unlock()
 			return nil
 		}
@@ -305,6 +327,10 @@ func (s *Service) enrichAttachmentsFromREST(sessionID string) {
 
 	s.mu.Lock()
 	current := s.state.SessionID
+	lastSequence := int64(0)
+	if len(s.state.Messages) > 0 {
+		lastSequence = s.state.Messages[len(s.state.Messages)-1].SequenceNumber
+	}
 	s.mu.Unlock()
 	if sessionID == "" || current != sessionID {
 		return
@@ -317,7 +343,13 @@ func (s *Service) enrichAttachmentsFromREST(sessionID string) {
 	ctx, cancel := context.WithTimeout(base, requestTimeout)
 	defer cancel()
 
-	if _, err := s.ListMessages(ctx, 0, 300); err != nil {
+	// Só a JANELA RECENTE: a mensagem com anexo acabou de entrar (é a última), e
+	// o snapshot de /messages também devolve os metadados dos anexos dela.
+	from := lastSequence - attachmentEnrichWindow
+	if from < 0 {
+		from = 0
+	}
+	if _, err := s.ListMessages(ctx, from, attachmentEnrichLimit); err != nil {
 		s.deps.Logf("[supportchat] enriquecimento de anexos indisponível: " + err.Error())
 	}
 }
@@ -334,6 +366,20 @@ func (s *Service) trimMessagesLocked() {
 	kept := make([]Message, len(s.state.Messages)-drop)
 	copy(kept, s.state.Messages[drop:])
 	s.state.Messages = kept
+}
+
+// maxCanonicalSequenceLocked devolve a maior sequência canônica conhecida
+// (0 quando só existem bolhas otimistas). As canônicas estão ordenadas, então
+// basta descer do fim até a primeira com sequência.
+//
+// O chamador deve estar com s.mu travado.
+func (s *Service) maxCanonicalSequenceLocked() int64 {
+	for i := len(s.state.Messages) - 1; i >= 0; i-- {
+		if sequence := s.state.Messages[i].SequenceNumber; sequence > 0 {
+			return sequence
+		}
+	}
+	return 0
 }
 
 func (s *Service) alreadySeen(clientMessageID string) bool {
@@ -548,11 +594,73 @@ func (s *Service) resetTranscriptForSessionLocked(sessionID string) {
 
 // PrepareInvite registra o convite recebido (estado "aguardando confirmação").
 // A janela do chat só é aberta DEPOIS do aceite do usuário.
+//
+// Atalho de PrepareInviteIfIdle para chamadores que já sabem que podem atender
+// (testes e retomada). O caminho de produção — o comando TicketChatInvite — usa
+// a versão com decisão para não perder a corrida entre dois convites.
 func (s *Service) PrepareInvite(invite Invite) {
+	_ = s.PrepareInviteIfIdle(invite)
+}
+
+// PrepareInviteIfIdle registra o convite SOMENTE se ele puder ser atendido AGORA,
+// devolvendo a decisão para o chamador.
+//
+// Resolve três casos que o antigo check-fora-do-lock deixava passar:
+//
+//  1. CORRIDA: dois convites quase simultâneos passavam pela checagem "outra
+//     conversa ativa?" e o segundo sobrescrevia o estado do primeiro — o
+//     servidor ficava esperando resposta de um convite que o usuário nunca viu;
+//  2. REENTREGA de convite de uma conversa JÁ ACEITA: PrepareInvite rebaixava o
+//     estado para "waiting" e o modal de confirmação reaparecia no meio do
+//     atendimento;
+//  3. CONVITE SUBSTITUÍDO: o anterior deixava de existir em silêncio (expirava
+//     no servidor, com o atendente vendo "aguardando"). Agora o id é devolvido
+//     em SupersededSessionID para ser recusado explicitamente.
+func (s *Service) PrepareInviteIfIdle(invite Invite) InviteDecision {
+	invite.SessionID = strings.TrimSpace(invite.SessionID)
+	if invite.SessionID == "" {
+		return InviteDecision{Reason: InviteReasonInvalid}
+	}
+
+	now := time.Now()
+
 	s.mu.Lock()
+	previous := s.state
+	decision := InviteDecision{}
+
+	switch {
+	case previous.Status == StatusActive && previous.SessionID == invite.SessionID:
+		// Reentrega do convite de uma conversa já aceita: NÃO reabre o pedido de
+		// confirmação (o modal voltaria a aparecer em cima da conversa em curso).
+		decision.Reason = InviteReasonAlreadyActive
+		s.mu.Unlock()
+		s.deps.Logf("[supportchat] convite reentregue de conversa ja ativa ignorado: " + invite.SessionID)
+		return decision
+
+	case previous.Status == StatusActive:
+		// Uma sessão por máquina: outra conversa ATIVA manda recusar.
+		decision.Reason = InviteReasonBusy
+		s.mu.Unlock()
+		s.deps.Logf("[supportchat] convite recusado (maquina em outro chat ativo): " + invite.SessionID)
+		return decision
+
+	case previous.Status == StatusEnded && previous.SessionID == invite.SessionID:
+		// Reentrega de convite de uma conversa JÁ ENCERRADA: não ressuscita o
+		// pedido de confirmação (o modal apareceria por cima da conversa que o
+		// usuário ainda está lendo e a janela voltaria a flutuar).
+		decision.Reason = InviteReasonAlreadyFinished
+		s.mu.Unlock()
+		s.deps.Logf("[supportchat] convite de conversa ja encerrada ignorado: " + invite.SessionID)
+		return decision
+	}
+
+	if previous.Status == StatusWaiting && previous.SessionID != "" && previous.SessionID != invite.SessionID {
+		decision.SupersededSessionID = previous.SessionID
+	}
+
 	s.resetTranscriptForSessionLocked(invite.SessionID)
 	s.state.HasSession = true
-	s.state.SessionID = strings.TrimSpace(invite.SessionID)
+	s.state.SessionID = invite.SessionID
 	s.state.TicketID = strings.TrimSpace(invite.TicketID)
 	s.state.TicketTitle = invite.TicketTitle
 	s.state.SupportName = invite.SupportName
@@ -561,9 +669,17 @@ func (s *Service) PrepareInvite(invite Invite) {
 	if s.state.Messages == nil {
 		s.state.Messages = []Message{}
 	}
+	// waitingSince marca o começo da espera do aceite (relógio da sessão no
+	// resumo do log); a conversa ainda não começou, então activeSince fica zero.
+	s.waitingSince = now
+	s.activeSince = time.Time{}
+	decision.Accepted = true
 	s.mu.Unlock()
 
+	s.deps.Logf(fmt.Sprintf("[supportchat] convite recebido: sessao=%s chamado=%q atendente=%q",
+		invite.SessionID, invite.TicketTitle, invite.SupportName))
 	s.emitState("invite")
+	return decision
 }
 
 // Refresh faz o snapshot REST do estado (usado ao abrir a janela e na
@@ -584,6 +700,9 @@ func (s *Service) Refresh(ctx context.Context) (State, error) {
 		return s.State(), err
 	}
 
+	var disappearedSession, disappearedStatus string
+	disappearedMessages := 0
+
 	s.mu.Lock()
 	if !response.HasSession || response.Session == nil {
 		// Sem sessão ATIVA no servidor. Quando a conversa local TERMINOU, o
@@ -592,6 +711,14 @@ func (s *Service) Refresh(ctx context.Context) (State, error) {
 		// o que o usuário ainda estava lendo — inclusive a nota de quem
 		// encerrou. O agent continua sem histórico: nada é persistido.
 		if s.state.Status != StatusEnded || s.state.SessionID == "" {
+			// Sessão que MORREU no servidor sem evento de fim (expiração por
+			// inatividade): o resumo também precisa sair, senão exatamente o caso
+			// mais silencioso ficava sem registro no log do agent.
+			if s.state.SessionID != "" && (s.state.Status == StatusActive || s.state.Status == StatusWaiting) {
+				disappearedSession = s.state.SessionID
+				disappearedStatus = s.state.Status
+				disappearedMessages = len(s.state.Messages)
+			}
 			s.state = State{Status: StatusNone, Messages: []Message{}}
 		}
 	} else {
@@ -601,11 +728,31 @@ func (s *Service) Refresh(ctx context.Context) (State, error) {
 		s.state.TicketID = response.Session.TicketID
 		s.state.SupportName = response.Session.StartedBy
 		s.state.Status = normalizeStatus(response.Session.Status)
+		// Relógio da sessão: sem isto uma retomada (startup/reconexão) perdia a
+		// duração no resumo do log (o resumo sairia com "-").
+		switch s.state.Status {
+		case StatusActive:
+			if s.activeSince.IsZero() {
+				s.activeSince = time.Now()
+			}
+		case StatusWaiting:
+			if s.waitingSince.IsZero() {
+				s.waitingSince = time.Now()
+			}
+		}
 		if s.state.Messages == nil {
 			s.state.Messages = []Message{}
 		}
 	}
 	s.mu.Unlock()
+
+	if disappearedSession != "" {
+		reason := "sessao ausente no servidor"
+		if disappearedStatus == StatusWaiting {
+			reason = "convite expirado/removido no servidor"
+		}
+		s.logSessionClosedWith(disappearedSession, reason, disappearedMessages)
+	}
 
 	// BUGFIX: o snapshot REST precisa trazer TAMBÉM as mensagens. Sem isso, um
 	// agent reiniciado no meio de uma conversa (consumer durável já com os
@@ -873,13 +1020,30 @@ func (s *Service) RespondInvite(ctx context.Context, accepted bool, reason strin
 	}
 
 	s.mu.Lock()
+	waiting := s.waitingSince
 	if accepted {
 		s.state.Status = StatusActive
+		s.activeSince = time.Now()
 	} else {
 		s.state.Status = StatusEnded
 		s.state.HasSession = false
 	}
 	s.mu.Unlock()
+
+	if accepted {
+		waited := time.Duration(0)
+		if !waiting.IsZero() {
+			waited = time.Since(waiting)
+		}
+		s.deps.Logf(fmt.Sprintf("[supportchat] conversa iniciada: sessao=%s (aceite apos %s)",
+			sessionID, waited.Round(time.Second)))
+	} else {
+		reasonText := strings.TrimSpace(reason)
+		if reasonText == "" {
+			reasonText = "user_denied"
+		}
+		s.deps.Logf(fmt.Sprintf("[supportchat] convite recusado pelo usuario: sessao=%s motivo=%s", sessionID, reasonText))
+	}
 
 	s.emitState("invite-response")
 	return nil
@@ -922,6 +1086,7 @@ func (s *Service) End(ctx context.Context, reason string) error {
 	s.state.Status = StatusEnded
 	s.state.HasSession = false
 	s.mu.Unlock()
+	s.logSessionClosed(sessionID, reason)
 	s.emitState("end")
 
 	if lastErr != nil {
@@ -937,7 +1102,87 @@ func (s *Service) ClearState() {
 	s.state = State{Status: StatusNone, Messages: []Message{}}
 	s.seenClientIDs = make(map[string]time.Time)
 	s.seenOrder = nil
+	s.waitingSince = time.Time{}
+	s.activeSince = time.Time{}
 	s.mu.Unlock()
+}
+
+// logSessionClosed registra o RESUMO da sessão encerrada (uma linha por
+// conversa): duração, volume e motivo. O log do agent já registrava cada
+// transição, mas responder "quanto durou e quantas mensagens" durante um
+// atendimento exigia varrer o histórico do logstore.
+func (s *Service) logSessionClosed(sessionID, reason string) {
+	s.mu.Lock()
+	messages := len(s.state.Messages)
+	s.mu.Unlock()
+
+	s.logSessionClosedWith(sessionID, reason, messages)
+}
+
+// logSessionClosedWith é a versão com o volume já capturado (ver Refresh: o
+// estado é zerado antes do resumo).
+func (s *Service) logSessionClosedWith(sessionID, reason string, messages int) {
+	s.mu.Lock()
+	active := s.activeSince
+	waiting := s.waitingSince
+	// CONSOME os relógios da sessão: o mesmo fim chega por dois caminhos (o
+	// encerramento pelo usuário via REST + o evento SessionEnded do servidor).
+	// Sem consumir, o log ganhava DUAS linhas de resumo para a mesma conversa —
+	// a segunda sem duração e com outro motivo ("servidor"), o que confunde
+	// qualquer diagnóstico pelo logs.db.
+	s.activeSince = time.Time{}
+	s.waitingSince = time.Time{}
+	s.mu.Unlock()
+
+	// Nada para resumir (sessão já resumida/estado limpo): não polui o log.
+	if active.IsZero() && waiting.IsZero() {
+		return
+	}
+
+	duration := "-"
+	switch {
+	case !active.IsZero():
+		duration = time.Since(active).Round(time.Second).String()
+	case !waiting.IsZero():
+		// Encerrou antes do aceite (convite expirado/recusado).
+		duration = "nao aceito (" + time.Since(waiting).Round(time.Second).String() + ")"
+	}
+
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		sessionID = "-"
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "-"
+	}
+
+	s.deps.Logf(fmt.Sprintf("[supportchat] conversa encerrada: sessao=%s motivo=%s duracao=%s mensagens=%d",
+		sessionID, reason, duration, messages))
+}
+
+// FetchAttachmentPolicy consulta no SERVIDOR a política de anexos do chat
+// (allowlist de tipos MIME e tamanho máximo) para a janela montar o seletor.
+//
+// Em erro devolve o PADRÃO junto com o erro: a janela nunca fica sem política
+// (o servidor segue validando no presign/complete, então cair no default não
+// abre brecha — só evita travar o seletor de arquivos).
+func (s *Service) FetchAttachmentPolicy(ctx context.Context) (AttachmentPolicy, error) {
+	policy := DefaultAttachmentPolicy()
+
+	if err := s.doJSON(ctx, http.MethodGet, "/attachment-policy", nil, &policy); err != nil {
+		return DefaultAttachmentPolicy(), err
+	}
+
+	// Resposta vazia/parcial não pode desligar o seletor nem zerar o limite.
+	defaults := DefaultAttachmentPolicy()
+	if len(policy.AllowedContentTypes) == 0 {
+		policy.AllowedContentTypes = defaults.AllowedContentTypes
+	}
+	if policy.MaxFileSizeBytes <= 0 {
+		policy.MaxFileSizeBytes = defaults.MaxFileSizeBytes
+	}
+
+	return policy, nil
 }
 
 // DownloadAttachment baixa os bytes de um anexo do chat (o webview não tem o
