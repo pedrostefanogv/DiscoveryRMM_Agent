@@ -13,9 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
-
-	"golang.org/x/sys/windows"
 
 	"discovery/app/core/inventory/native"
 	"discovery/app/core/platform"
@@ -47,7 +44,8 @@ func configureRemoteConsentRuntime(apiBase, token, agentID string) {
 }
 
 // remoteConsentPrompt tenta o prompt Fluent do PSADT (contagem regressiva) e,
-// se o módulo/estilização falhar, cai para o MessageBox com timeout.
+// se o módulo/estilização falhar, cai para a janela nativa com contagem e
+// cancelamento imediato (remote_consent_native_windows.go).
 func remoteConsentPrompt(ctx context.Context, req remotesession.ConsentRequest) remotesession.ConsentDecision {
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
@@ -96,7 +94,7 @@ func remoteConsentPrompt(ctx context.Context, req remotesession.ConsentRequest) 
 		}
 		req.Timeout = remaining
 	}
-	if decision, ok := nativeConsentPrompt(req); ok {
+	if decision, ok := nativeConsentPrompt(ctx, req); ok {
 		return decision
 	}
 
@@ -137,20 +135,20 @@ func psadtConsentPrompt(ctx context.Context, req remotesession.ConsentRequest) (
 	}
 
 	visualReq := PSADTVisualNotificationRequest{
-		NotifType:        "prompt_yesno",
-		Title:            title,
-		Message:          message,
-		Subtitle:         "Acesso remoto",
-		AppName:          "Sessão remota",
-		PromptLeftText:   "Permitir",
-		PromptRightText:  "Negar",
-		PromptIcon:       "Question",
+		NotifType:       "prompt_yesno",
+		Title:           title,
+		Message:         message,
+		Subtitle:        "Acesso remoto",
+		AppName:         "Sessão remota",
+		PromptLeftText:  "Permitir",
+		PromptRightText: "Negar",
+		PromptIcon:      "Question",
 		// Enter/clique padrão segue a ação configurada: não "permite por acidente"
 		// quando a política é negar no timeout.
 		PromptDefaultButton: consentDefaultButton(req.TimeoutAction),
 		PromptTimeout:       timeoutSeconds,
-		PromptNoWait:     false,
-		PromptNotTopMost: false,
+		PromptNoWait:        false,
+		PromptNotTopMost:    false,
 	}
 	script, scriptTimeout := buildPSADTVisualScript(visualReq)
 	if scriptTimeout < req.Timeout+45*time.Second {
@@ -303,72 +301,6 @@ func parsePSADTConsentResult(output string) string {
 		return strings.TrimSpace(result)
 	}
 	return strings.Trim(line, "\" \r\n")
-}
-
-// nativeConsentPrompt usa MessageBoxTimeoutW como fallback: caixa topmost com
-// timeout e Sim/Não. Não tem contador animado, mas informa os segundos no texto.
-func nativeConsentPrompt(req remotesession.ConsentRequest) (remotesession.ConsentDecision, bool) {
-	user32 := windows.NewLazySystemDLL("user32.dll")
-	proc := user32.NewProc("MessageBoxTimeoutW")
-	if err := proc.Find(); err != nil {
-		return remotesession.ConsentDecision{}, false
-	}
-
-	title := strings.TrimSpace(req.Title)
-	if title == "" {
-		title = "Autorização de acesso remoto"
-	}
-	seconds := int(req.Timeout.Seconds())
-	if seconds < 10 {
-		seconds = 10
-	}
-	message := fmt.Sprintf("%s\n\nA janela fecha em %d segundos e a conexão será %s.",
-		strings.TrimSpace(req.Message), seconds,
-		map[bool]string{true: "autorizada", false: "recusada"}[strings.EqualFold(req.TimeoutAction, "approve")])
-
-	titlePtr, _ := windows.UTF16PtrFromString(title)
-	messagePtr, _ := windows.UTF16PtrFromString(message)
-	const (
-		mbYesNo         = 0x00000004
-		mbIconQuestion  = 0x00000020
-		mbTopMost       = 0x00040000
-		mbSetForeground = 0x00010000
-	)
-	flags := uintptr(mbYesNo | mbIconQuestion | mbTopMost | mbSetForeground)
-	result, _, _ := proc.Call(0, uintptr(unsafe.Pointer(messagePtr)), uintptr(unsafe.Pointer(titlePtr)),
-		flags, 0, uintptr(seconds*1000))
-
-	switch result {
-	case 6: // IDYES
-		return remotesession.ConsentDecision{
-			Accepted:      true,
-			Outcome:       "granted",
-			Reason:        "user_allowed",
-			PromptBackend: "native",
-			DecidedAt:     time.Now().UTC(),
-		}, true
-	case 7: // IDNO
-		return remotesession.ConsentDecision{
-			Accepted:      false,
-			Outcome:       "denied",
-			Reason:        "user_denied",
-			PromptBackend: "native",
-			DecidedAt:     time.Now().UTC(),
-		}, true
-	default: // 32000 = timeout
-		decision := remotesession.ConsentDecision{
-			Accepted:      strings.EqualFold(req.TimeoutAction, "approve"),
-			Auto:          true,
-			Outcome:       "timeout-denied",
-			Reason:        "timeout",
-			PromptBackend: "native",
-			DecidedAt:     time.Now().UTC(),
-		}
-		if decision.Accepted {
-			decision.Outcome = "timeout-granted"
-		}
-		return decision, true
-	}
 }
 
 // workerAPIBase monta a base HTTP (scheme://host) a partir do config do worker.

@@ -308,14 +308,14 @@ type PSADTVisualNotificationRequest struct {
 	BalloonNoWait      bool `json:"balloonNoWait"`
 
 	// Prompt (Show-ADTInstallationPrompt)
-	PromptLeftText   string `json:"promptLeftText"`
-	PromptMiddleText string `json:"promptMiddleText"`
-	PromptRightText  string `json:"promptRightText"`
-	PromptIcon       string `json:"promptIcon"`    // DialogSystemIcon: Information | Question | Exclamation | Error | Hand | Shield | Asterisk | Application | WinLogo | (vazio = omitir)
+	PromptLeftText      string `json:"promptLeftText"`
+	PromptMiddleText    string `json:"promptMiddleText"`
+	PromptRightText     string `json:"promptRightText"`
+	PromptIcon          string `json:"promptIcon"`          // DialogSystemIcon: Information | Question | Exclamation | Error | Hand | Shield | Asterisk | Application | WinLogo | (vazio = omitir)
 	PromptDefaultButton string `json:"promptDefaultButton"` // Left | Middle | Right (vazio = default do PSADT)
-	PromptTimeout    int    `json:"promptTimeout"` // segundos, 0 = 120s (nao use o default de 55min do config.psd1)
-	PromptNoWait     bool   `json:"promptNoWait"`
-	PromptNotTopMost bool   `json:"promptNotTopMost"`
+	PromptTimeout       int    `json:"promptTimeout"`       // segundos, 0 = 120s (nao use o default de 55min do config.psd1)
+	PromptNoWait        bool   `json:"promptNoWait"`
+	PromptNotTopMost    bool   `json:"promptNotTopMost"`
 
 	// CountdownNotice (NotifType "countdown") — textos do strings.psd1 staged.
 	// Vazios usam "OK" / "Fechar" / "Esta janela fechara automaticamente em:".

@@ -838,6 +838,14 @@ export class PSADTVisualNotificationRequest {
              */
             this["promptIcon"] = "";
         }
+        if (!("promptDefaultButton" in $$source)) {
+            /**
+             * Left | Middle | Right (vazio = default do PSADT)
+             * @member
+             * @type {string}
+             */
+            this["promptDefaultButton"] = "";
+        }
         if (!("promptTimeout" in $$source)) {
             /**
              * segundos, 0 = 120s (nao use o default de 55min do config.psd1)

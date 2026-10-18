@@ -7,7 +7,9 @@
 - `notify`: banner/aviso sem bloquear.
 - Sem usuário interativo: aplica `timeoutAction` imediatamente.
 - Prompt primário: PSADT (`Show-ADTInstallationPrompt`, botões Permitir/Negar,
-  `-NoExitOnTimeout`). Fallback: `MessageBoxTimeoutW` topmost. Se ambos falharem,
+  `-NoExitOnTimeout`, `-DefaultButton` alinhado ao `timeoutAction`). Fallback:
+  janela nativa topmost com contagem animada, botão padrão alinhado à política e
+  cancelamento imediato quando o contexto é cancelado. Se ambos falharem,
   **nega** (fail closed).
 - Decisão enviada por HTTP com `SetAgentAuthHeadersWithAgentID`; falha de reporte
   impede o início da sessão.
@@ -20,6 +22,7 @@
 
 ## Arquivos
 - `app/core/remotesession/consent.go`, `consent_gate.go`
-- `app/remote_consent_prompt.go` (prompt + report)
+- `app/remote_consent_prompt.go` (prompt PSADT + report)
+- `app/remote_consent_native_windows.go` (fallback nativo animado)
 - `app/core/screen/session_banner_windows.go`
 - `app/remote_session_worker.go` (wiring)
