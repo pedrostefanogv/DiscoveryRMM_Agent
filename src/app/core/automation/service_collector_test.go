@@ -74,7 +74,6 @@ func TestPostCollectorValue_SendsLastOutputLine(t *testing.T) {
 	}
 }
 
-
 func TestBuildCustomFieldReportMetadata(t *testing.T) {
 	cfCtx := &ExecutionCustomFieldCtx{Fields: map[string]any{"anydesk": "123", "ativo": true}}
 	collected := []CollectedValueRequest{
@@ -84,9 +83,9 @@ func TestBuildCustomFieldReportMetadata(t *testing.T) {
 
 	raw := buildCustomFieldReportMetadata(cfCtx, collected, "def-anydesk")
 	var payload struct {
-		Read           []string `json:"read"`
+		Read           []string               `json:"read"`
 		Collected      []collectedFieldReport `json:"collected"`
-		CollectorField string   `json:"collectorField"`
+		CollectorField string                 `json:"collectorField"`
 	}
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		t.Fatalf("json invalido: %v", err)
@@ -152,7 +151,6 @@ func TestMergeJSONMetadata(t *testing.T) {
 		t.Errorf("base vazia: %q", got)
 	}
 }
-
 
 func TestBuildExecutionNoteContent(t *testing.T) {
 	task := AutomationTask{TaskID: "t1", Name: "Coletar inventário"}

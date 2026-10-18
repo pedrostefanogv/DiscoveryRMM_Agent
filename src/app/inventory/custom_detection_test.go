@@ -65,12 +65,12 @@ func TestCompareVersionsLoose(t *testing.T) {
 		{"2.4.0", "2.0.0", 1, true},
 		{"1.9.0", "2.0.0", -1, true},
 		{"2.0.0", "2.0.0", 0, true},
-		{"1.2.10", "1.2.9", 1, true},   // comparacao numerica, nao lexicografica
+		{"1.2.10", "1.2.9", 1, true}, // comparacao numerica, nao lexicografica
 		{"2026.2", "2026.1.9", 1, true},
-		{"v1.2.3", "1.2.3", 0, true},   // prefixo textual ignorado
+		{"v1.2.3", "1.2.3", 0, true}, // prefixo textual ignorado
 		{"1.2.3-beta", "1.2.3", 0, true},
-		{"3.0", "3.0.0", 0, true},      // componente ausente = 0
-		{"", "1.0", 0, false},          // sem numero de um lado
+		{"3.0", "3.0.0", 0, true}, // componente ausente = 0
+		{"", "1.0", 0, false},     // sem numero de um lado
 		{"abc", "def", 0, false},
 	}
 	for _, tc := range cases {

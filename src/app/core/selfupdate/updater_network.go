@@ -217,6 +217,7 @@ func (u *Updater) fetchPublicSHA256(ctx context.Context) (string, error) {
 // OBRIGATÓRIO. Sem hash de referência nenhum download é iniciado:
 //   - P2P é recusado (não há como validar o que um peer entrega);
 //   - HTTP é recusado (não há como validar o que o servidor entrega).
+//
 // Nos dois caminhos o hash do arquivo é verificado após o download; divergência
 // ou ausência abortam com remoção do arquivo temporário, sem instalar.
 //

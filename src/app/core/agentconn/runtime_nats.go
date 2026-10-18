@@ -212,7 +212,6 @@ func (r *Runtime) subscribeFanoutCommand(ctx context.Context, nc *nats.Conn, cfg
 	return nil
 }
 
-
 // subscribeSupportChat assina o canal servidor -> agent do chat de suporte.
 //
 // Usa consumer JetStream durável (AckExplicit/ManualAck/DeliverAll) para que

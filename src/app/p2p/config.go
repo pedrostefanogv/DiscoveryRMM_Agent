@@ -131,14 +131,15 @@ const (
 	// bwStepBytes é a granularidade do limite (configurável de 10 em 10 MB/s).
 	bwStepBytes = int64(10 << 20)
 	// bwMinBytes/bwMaxBytes: piso e teto do limite configurável.
-	bwMinBytes = bwStepBytes            // 10 MB/s
-	bwMaxBytes = 100 * bwStepBytes      // 100 MB/s
+	bwMinBytes = bwStepBytes       // 10 MB/s
+	bwMaxBytes = 100 * bwStepBytes // 100 MB/s
 )
 
 // clampBandwidthBytesPerSec normaliza o limite informado pelo servidor:
-//   <= 0 → 0 (sem limite, default);
-//   > 0  → arredondado para BAIXO ao múltiplo de 10 MB/s mais próximo,
-//          dentro do intervalo [10 MB/s, 100 MB/s] (infra ainda não gigabit).
+//
+//	<= 0 → 0 (sem limite, default);
+//	> 0  → arredondado para BAIXO ao múltiplo de 10 MB/s mais próximo,
+//	       dentro do intervalo [10 MB/s, 100 MB/s] (infra ainda não gigabit).
 func clampBandwidthBytesPerSec(v int64) int64 {
 	if v <= 0 {
 		return 0

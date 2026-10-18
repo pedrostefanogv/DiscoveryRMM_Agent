@@ -107,6 +107,8 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		AgentHomeTab:                      NormalizeAgentHomeTab(getString("agentHomeTab")),
 		InventoryIntervalHours:            getIntPtr("inventoryIntervalHours"),
 		AgentHeartbeatIntervalSeconds:     getIntPtr("agentHeartbeatIntervalSeconds"),
+		WindowsUpdateEnabled:              getBoolPtr("windowsUpdateEnabled"),
+		WindowsUpdateScanIntervalMinutes:  getIntPtr("windowsUpdateScanIntervalMinutes"),
 		SiteID:                            getString("siteId"),
 		ClientID:                          getString("clientId"),
 		ResolvedAt:                        getString("resolvedAt"),
@@ -305,6 +307,33 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.CloudBootstrapEnabled }),
 		srv.CloudBootstrapEnabled,
 	))
+	// Windows Update (patches): habilitado por padrão; site/cliente podem
+	// desligar. Ausência do campo no payload NÃO desliga o módulo.
+	serverWindowsUpdate := true
+	if srv.WindowsUpdateEnabled != nil {
+		serverWindowsUpdate = *srv.WindowsUpdateEnabled
+	}
+	cfg.WindowsUpdateEnabled = boolPtr(resolveBool(
+		boolFromPtr(site, func(s *SiteConfiguration) *bool { return s.WindowsUpdateEnabled }),
+		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.WindowsUpdateEnabled }),
+		serverWindowsUpdate,
+	))
+
+	scanInterval := 360
+	if srv.WindowsUpdateScanIntervalMinutes != nil {
+		scanInterval = *srv.WindowsUpdateScanIntervalMinutes
+	}
+	if cli != nil && cli.WindowsUpdateScanIntervalMinutes != nil {
+		scanInterval = *cli.WindowsUpdateScanIntervalMinutes
+	}
+	if site != nil && site.WindowsUpdateScanIntervalMinutes != nil {
+		scanInterval = *site.WindowsUpdateScanIntervalMinutes
+	}
+	if scanInterval < 60 {
+		scanInterval = 60
+	}
+	cfg.WindowsUpdateScanIntervalMinutes = &scanInterval
+
 	cfg.AppStoreEnabled = boolPtr(resolveBool(
 		boolFromPtr(site, func(s *SiteConfiguration) *bool {
 			if s.AppStorePolicy != nil && strings.ToLower(*s.AppStorePolicy) != "disabled" {

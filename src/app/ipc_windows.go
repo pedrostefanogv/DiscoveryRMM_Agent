@@ -404,20 +404,23 @@ func (s *IPCServer) handleConn(conn net.Conn, admin bool) {
 		// (probe/ferramenta/UI antiga) continua conectado, mas NÃO conta como
 		// identidade autenticada — não quebra o probe IsServicePresent.
 		client.identityOK = id.Valid && id.UIImage
-		if admin {
-			if !ipcAdminCallerAllowed(id) {
-				// A.0.1: chamador válido porém NÃO-UI no canal admin. Não emite
-				// token: responde hello_ack sem token e fecha (mais abaixo).
-				client.callerNotAllowed = true
-				ipcAuthStats.CallerNotAllowed.Add(1)
-				ipcAuthStats.CallerValidationFail.Add(1)
-				logIPCStructured("ipc_caller_not_allowed", fmt.Sprintf(
-					"admin=true %s image=%q reason=not_discovery_ui", id.String(), id.ImagePath))
-			} else if id.Valid {
-				// Bypass de dev (DISCOVERY_IPC_ALLOW_ANY_CALLER=1) também libera
-				// a emissão do token para chamador válido não-UI.
-				client.identityOK = true
-			}
+		if id.Valid && !client.identityOK && ipcCallerIsTrustedUI(id) {
+			// Bypass de dev (DISCOVERY_IPC_ALLOW_ANY_CALLER=1): a build de
+			// desenvolvimento roda FORA do diretório de instalação, então o
+			// bypass precisa valer nos DOIS canais. Antes ele só liberava o
+			// token admin: a UI de dev mutava, mas não recebia entrega
+			// targeted, não conseguia responder prompt (notification:respond) e
+			// ficava fora da contagem de UIs online.
+			client.identityOK = true
+		}
+		if admin && !client.identityOK {
+			// A.0.1: chamador válido porém NÃO-UI no canal admin. Não emite
+			// token: responde hello_ack sem token e fecha (mais abaixo).
+			client.callerNotAllowed = true
+			ipcAuthStats.CallerNotAllowed.Add(1)
+			ipcAuthStats.CallerValidationFail.Add(1)
+			logIPCStructured("ipc_caller_not_allowed", fmt.Sprintf(
+				"admin=true %s image=%q reason=not_discovery_ui", id.String(), id.ImagePath))
 		}
 	} else {
 		ipcAuthStats.CallerValidationFail.Add(1)
@@ -1069,8 +1072,37 @@ func (s *IPCServer) RespondTo(conn net.Conn, msg IPCMessage) {
 	}
 }
 
-// ClientCount retorna quantas UIs estão conectadas (o canal admin não conta
-// como UI para o heartbeat/UIOnline).
+// UIAuthenticatedCount devolve quantas UIs AUTENTICADAS estão conectadas,
+// contando PROCESSOS distintos (não conexões): uma mesma UI pode abrir mais de
+// uma conexão de leitura e continua sendo UMA UI. Conexões não autenticadas
+// (probe, ferramenta, UI antiga fora do diretório de instalação) e o canal admin
+// não contam — é este número que alimenta uiOnline/uiOnlineCount no heartbeat.
+func (s *IPCServer) UIAuthenticatedCount() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pids := make(map[uint32]struct{}, len(s.conns))
+	unknownPID := 0
+	for _, client := range s.conns {
+		if client.admin || !client.identityOK {
+			continue
+		}
+		if pid := client.identity.PID; pid != 0 {
+			pids[pid] = struct{}{}
+			continue
+		}
+		// Identidade sem PID (só em teste): não há como agrupar, conta a conexão.
+		unknownPID++
+	}
+	return len(pids) + unknownPID
+}
+
+// ClientCount retorna quantas conexões do canal de leitura existem (o canal
+// admin não conta). NÃO é "quantas UIs": inclui chamadores não autenticados e
+// conta conexões, não processos — para presença/UI online use
+// UIAuthenticatedCount.
 func (s *IPCServer) ClientCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -26,6 +26,7 @@ import (
 	"discovery/app/core/models"
 	"discovery/app/core/processutil"
 	"discovery/app/core/tlsutil"
+	"discovery/app/core/windowsupdate"
 	"discovery/app/debug"
 	"discovery/app/netutil"
 	"discovery/app/services/hardwareid"
@@ -198,6 +199,15 @@ type Service struct {
 	lifecycleCtx     context.Context
 	lifecycleCancel  context.CancelFunc
 	lifecycleStarted bool
+
+	// ── Windows Update (gerenciador de patches) ──
+	// wuClient abstrai o WUA; wuCache persiste o ultimo scan no SQLite;
+	// wuEnabled é o kill switch vindo da configuracao do servidor.
+	wuMu      sync.Mutex
+	scanMu    sync.Mutex
+	wuClient  windowsupdate.Client
+	wuCache   WindowsUpdateCache
+	wuEnabled func() bool
 }
 
 // NewService builds an inventory service.

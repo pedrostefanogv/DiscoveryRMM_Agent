@@ -77,8 +77,8 @@ func buildPNGHeaderOnly(width, height uint32) []byte {
 	ihdr := make([]byte, 13)
 	binary.BigEndian.PutUint32(ihdr[0:4], width)
 	binary.BigEndian.PutUint32(ihdr[4:8], height)
-	ihdr[8] = 8  // bit depth
-	ihdr[9] = 6  // RGBA
+	ihdr[8] = 8 // bit depth
+	ihdr[9] = 6 // RGBA
 	// compressão/filtro/interlace = 0
 
 	chunk := func(kind string, data []byte) []byte {

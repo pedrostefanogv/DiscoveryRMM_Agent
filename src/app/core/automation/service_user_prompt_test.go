@@ -8,9 +8,9 @@ import (
 
 func TestResolveUserPromptTimeoutSeconds_Defaults(t *testing.T) {
 	cases := []struct {
-		name  string
-		task  AutomationTask
-		want  int
+		name string
+		task AutomationTask
+		want int
 	}{
 		{name: "default quando ausente", task: AutomationTask{}, want: 60},
 		{name: "default quando zero", task: AutomationTask{PromptTimeoutSeconds: 0}, want: 60},

@@ -107,24 +107,55 @@ const ipcUIExecutableName = "discovery-agent.exe"
 // diferente de "1" mantém a validação ligada.
 const ipcCallerBypassEnv = "DISCOVERY_IPC_ALLOW_ANY_CALLER"
 
-// ipcAllowedUIDirectories devolve os diretórios de instalação aceitos para a
-// UI. Lidos do ambiente a cada checagem (barato e testável com t.Setenv).
+// ipcServiceExecutablePath resolve o binário do processo atual (o SERVIÇO em
+// produção). Substituível em teste.
+var ipcServiceExecutablePath = os.Executable
+
+// ipcAllowedUIDirectories devolve os diretórios aceitos como instalação da UI.
+//
+// ÂNCORA PRINCIPAL: o diretório do próprio binário do serviço. O par UI×serviço
+// é sempre instalado LADO A LADO (uiAgentExecutablePath resolve
+// discovery-agent.exe como irmão de discovery-service.exe), então isso cobre o
+// diretório padrão do instalador e também um diretório escolhido na tela de
+// instalação (MUI_PAGE_DIRECTORY) — antes, um install em D:\Apps\Discovery
+// deixava a UI sem token admin e TODAS as mutações falhavam com unauthorized.
+//
+// Os diretórios padrão entram como defesa em profundidade (binário copiado/
+// movido mantendo a UI no lugar). %LOCALAPPDATA%\Programs\Discovery NÃO entra:
+// nenhum instalador instala aí e o caminho é GRAVÁVEL PELO USUÁRIO — aceitá-lo
+// entregaria token admin a qualquer executável que o usuário colocasse nele.
 func ipcAllowedUIDirectories() []string {
 	var roots []string
+	seen := make(map[string]struct{}, 3)
+	add := func(dir string) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" || dir == "." {
+			return
+		}
+		dir = filepath.Clean(dir)
+		key := strings.ToLower(dir)
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		roots = append(roots, dir)
+	}
+	if exe, err := ipcServiceExecutablePath(); err == nil {
+		add(filepath.Dir(exe))
+	}
 	for _, env := range []string{"ProgramFiles", "ProgramFiles(x86)"} {
 		if base := strings.TrimSpace(os.Getenv(env)); base != "" {
-			roots = append(roots, filepath.Join(base, "Discovery"))
+			add(filepath.Join(base, "Discovery"))
 		}
-	}
-	if base := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); base != "" {
-		roots = append(roots, filepath.Join(base, "Programs", "Discovery"))
 	}
 	return roots
 }
 
 // ipcIsDiscoveryUIImagePath decide se imagePath é discovery-agent.exe DENTRO de
-// um dos diretórios permitidos. Comparação case-insensitive (Windows) e com
-// separador de caminho, para "Discovery2" NÃO casar com "Discovery".
+// um dos diretórios permitidos. Comparação case-insensitive (Windows) do
+// DIRETÓRIO inteiro — não prefixo de string: "Discovery2" não casa, um
+// subdiretório não casa (a UI fica ao lado do serviço) e ".." já foi resolvido
+// pelo Clean.
 func ipcIsDiscoveryUIImagePath(imagePath string, roots []string) bool {
 	clean := filepath.Clean(strings.TrimSpace(imagePath))
 	if clean == "" || clean == "." {
@@ -133,13 +164,13 @@ func ipcIsDiscoveryUIImagePath(imagePath string, roots []string) bool {
 	if !strings.EqualFold(filepath.Base(clean), ipcUIExecutableName) {
 		return false
 	}
+	dir := filepath.Dir(clean)
 	for _, root := range roots {
 		root = filepath.Clean(strings.TrimSpace(root))
 		if root == "" || root == "." {
 			continue
 		}
-		prefix := root + string(os.PathSeparator)
-		if len(clean) > len(prefix) && strings.EqualFold(clean[:len(prefix)], prefix) {
+		if strings.EqualFold(dir, root) {
 			return true
 		}
 	}
@@ -151,10 +182,12 @@ func ipcCallerBypassEnabled() bool {
 	return strings.TrimSpace(os.Getenv(ipcCallerBypassEnv)) == "1"
 }
 
-// ipcAdminCallerAllowed decide se o chamador pode receber token admin. Sem
-// bypass, exige UIImage (validado pelo ipcCallerValidator com
-// QueryFullProcessImageName). O bypass é logado como AVISO em cada handshake.
-func ipcAdminCallerAllowed(id ipcAuthIdentity) bool {
+// ipcCallerIsTrustedUI decide se o chamador pode agir como UI nos DOIS canais
+// (token admin no canal admin; identidade autenticada — entrega targeted,
+// resposta de prompt e contagem de UI — no canal de leitura). Sem bypass, exige
+// UIImage (validado pelo ipcCallerValidator com QueryFullProcessImageName). O
+// bypass é logado como AVISO em cada handshake.
+func ipcCallerIsTrustedUI(id ipcAuthIdentity) bool {
 	if id.UIImage {
 		return true
 	}

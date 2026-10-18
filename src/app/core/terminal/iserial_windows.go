@@ -91,12 +91,12 @@ const (
 // NewShellInteractive cria um shell do melhor backend disponível, com o ConPTY
 // como caminho padrão:
 //
-//	1. ConPTY in-process (menor latência) — com retry/backoff;
-//	2. dispatcher (ConPTY isolado em processo filho) — mesma tecnologia;
-//	3. console real (legacy) APENAS se o ConPTY não existir na máquina ou se
-//	   DISCOVERY_TERM_ALLOW_LEGACY=1. Caso contrário devolve erro com a causa,
-//	   que o viewer mostra ao operador (em vez de um shell de pipe que "abre"
-//	   mas não executa nada).
+//  1. ConPTY in-process (menor latência) — com retry/backoff;
+//  2. dispatcher (ConPTY isolado em processo filho) — mesma tecnologia;
+//  3. console real (legacy) APENAS se o ConPTY não existir na máquina ou se
+//     DISCOVERY_TERM_ALLOW_LEGACY=1. Caso contrário devolve erro com a causa,
+//     que o viewer mostra ao operador (em vez de um shell de pipe que "abre"
+//     mas não executa nada).
 func NewShellInteractive(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, error) {
 	policy := ResolveBackendPolicy()
 	if policy == BackendLegacy {

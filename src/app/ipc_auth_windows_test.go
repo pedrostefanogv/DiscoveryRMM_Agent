@@ -85,6 +85,15 @@ func (*ipcDiscardConn) SetDeadline(time.Time) error      { return nil }
 func (*ipcDiscardConn) SetReadDeadline(time.Time) error  { return nil }
 func (*ipcDiscardConn) SetWriteDeadline(time.Time) error { return nil }
 
+// ipcUniqueConn é um net.Conn de descarte com identidade PRÓPRIA: net.Conn é a
+// chave do mapa de conexões do servidor e structs vazias (ipcDiscardConn)
+// compartilham o mesmo endereço em Go — dois &ipcDiscardConn{} seriam a MESMA
+// chave de mapa e uma conexão sobrescreveria a outra.
+type ipcUniqueConn struct {
+	ipcDiscardConn
+	id uint32
+}
+
 // testUIImageIdentity monta a identidade como o validador real faz: SID/PID/
 // sessão + caminho da imagem e o veredito UIImage calculado pelo caminho.
 func testUIImageIdentity(session uint32, imagePath string) ipcAuthIdentity {
@@ -1118,5 +1127,226 @@ func TestIPCMutatingOutcomeAuditOnFailure(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("desfecho do mutante deveria ser logado com sid/pid/sessionId/method/result; logs=%v", logs())
+	}
+}
+
+// ── A.0.1: âncoras do diretório de instalação da UI ────────────────────────
+
+// O instalador permite escolher o diretório (MUI_PAGE_DIRECTORY) e o watchdog
+// lança a UI como IRMÃ do binário do serviço. A validação precisa aceitar esse
+// diretório (antes um install fora de %ProgramFiles%\Discovery deixava a UI sem
+// token admin e TODAS as mutações falhavam) e NÃO pode aceitar caminho gravável
+// pelo usuário (%LOCALAPPDATA%).
+func TestIPCAllowedUIDirectoriesAnchorOnServiceDir(t *testing.T) {
+	base := isolateUIDirs(t) // ProgramFiles=<base>; (x86)/LOCALAPPDATA vazios
+
+	custom := filepath.Join(t.TempDir(), "Apps", "Discovery")
+	oldExec := ipcServiceExecutablePath
+	ipcServiceExecutablePath = func() (string, error) {
+		return filepath.Join(custom, "discovery-service.exe"), nil
+	}
+	t.Cleanup(func() { ipcServiceExecutablePath = oldExec })
+
+	roots := ipcAllowedUIDirectories()
+	if !ipcIsDiscoveryUIImagePath(filepath.Join(custom, ipcUIExecutableName), roots) {
+		t.Fatal("UI ao lado do binário do serviço (install customizado) deveria ser aceita")
+	}
+	if !ipcIsDiscoveryUIImagePath(filepath.Join(base, "Discovery", ipcUIExecutableName), roots) {
+		t.Fatal("diretório padrão do instalador deveria continuar aceito")
+	}
+
+	local := filepath.Join(t.TempDir(), "AppData", "Local")
+	t.Setenv("LOCALAPPDATA", local)
+	if ipcIsDiscoveryUIImagePath(filepath.Join(local, "Programs", "Discovery", ipcUIExecutableName), ipcAllowedUIDirectories()) {
+		t.Fatal("caminho gravável pelo usuário (%LOCALAPPDATA%/Programs/Discovery) não pode ser aceito")
+	}
+
+	if ipcIsDiscoveryUIImagePath(filepath.Join(base, "Discovery", "bin", ipcUIExecutableName), ipcAllowedUIDirectories()) {
+		t.Fatal("subdiretório não é o diretório de instalação da UI (ela fica ao lado do serviço)")
+	}
+	if ipcIsDiscoveryUIImagePath(filepath.Join(base, "Discovery", "..", "Outros", ipcUIExecutableName), ipcAllowedUIDirectories()) {
+		t.Fatal("caminho com '..' resolvido para fora do diretório de instalação não pode ser aceito")
+	}
+	if ipcIsDiscoveryUIImagePath(filepath.Join(custom, "outro.exe"), ipcAllowedUIDirectories()) {
+		t.Fatal("executável com nome diferente NÃO é a UI, mesmo dentro do diretório de instalação")
+	}
+}
+
+// ── Bypass de dev nos DOIS canais ─────────────────────────────────────────
+
+// O bypass de desenvolvimento (DISCOVERY_IPC_ALLOW_ANY_CALLER=1) existia só no
+// canal admin: a build de dev (executável FORA do diretório de instalação)
+// conseguia mutar, mas ficava sem entrega targeted, sem poder responder prompt e
+// fora da contagem de UIs online. O bypass precisa valer para a identidade da UI
+// nos dois canais (sem ele, tudo continua fail-closed).
+func TestIPCReadChannelBypassAuthenticatesDevUI(t *testing.T) {
+	base := isolateUIDirs(t)
+	t.Setenv(ipcCallerBypassEnv, "1")
+
+	ipcNotificationTargets.mu.Lock()
+	ipcNotificationTargets.entries = map[string]ipcNotificationTarget{}
+	ipcNotificationTargets.mu.Unlock()
+	ipcRememberNotificationTarget("n-dev", testIdentity(5), false)
+
+	var dispatched atomic.Int64
+	onMessage := func(_ net.Conn, msg IPCMessage) {
+		if msg.Type == IPCMsgNotificationRespond {
+			dispatched.Add(1)
+		}
+	}
+	peer := startIPCTestPeer(t, false, testUIImageIdentity(5, filepath.Join(base, "Outros", "outro.exe")), onMessage)
+	peer.hello(t)
+
+	peer.server.mu.Lock()
+	var client *ipcClientConn
+	for _, c := range peer.server.conns {
+		client = c
+	}
+	peer.server.mu.Unlock()
+	if client == nil {
+		t.Fatal("conexão de leitura deveria estar registrada")
+	}
+	if !client.identityOK {
+		t.Fatal("bypass de dev deveria autenticar a UI de dev TAMBÉM no canal de leitura")
+	}
+	if got := peer.server.UIAuthenticatedCount(); got != 1 {
+		t.Fatalf("UI de dev autenticada deveria contar como 1 UI online, got %d", got)
+	}
+
+	peer.send(t, NewIPCMessage(IPCMsgNotificationRespond, map[string]any{
+		"notificationId": "n-dev", "result": "approved",
+	}))
+	deadline := time.Now().Add(2 * time.Second)
+	for dispatched.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if dispatched.Load() != 1 {
+		t.Fatal("com bypass, a resposta de prompt da UI de dev deveria ser aceita")
+	}
+}
+
+// ── A3: contagem de UIs autenticadas (uiOnlineCount) ──────────────────────
+
+// ClientCount conta CONEXÕES do canal de leitura, incluindo chamador não
+// autenticado — o heartbeat usava esse número como "UIs online". A contagem
+// correta é por PROCESSO autenticado: leitura+admin da mesma UI = 1 UI.
+func TestIPCUIAuthenticatedCountCountsDistinctUIs(t *testing.T) {
+	server := newIPCTestServer(func(net.Conn, IPCMessage) {})
+	nextID := uint32(0)
+	add := func(admin, authenticated bool, pid, session uint32) *ipcUniqueConn {
+		nextID++
+		conn := &ipcUniqueConn{id: nextID}
+		server.conns[conn] = &ipcClientConn{
+			reader:     bufio.NewReader(&ipcDiscardConn{}),
+			admin:      admin,
+			identity:   ipcAuthIdentity{SID: "S-1-5-21-x", PID: pid, SessionID: session, Valid: authenticated},
+			identityOK: authenticated,
+		}
+		return conn
+	}
+	// Duas conexões de leitura da MESMA UI + a conexão admin dela.
+	add(false, true, 100, 2)
+	add(false, true, 100, 2)
+	add(true, true, 100, 2)
+	// Probe/ferramenta não autenticada na mesma sessão.
+	add(false, false, 200, 2)
+
+	if got := server.UIAuthenticatedCount(); got != 1 {
+		t.Fatalf("duas conexões da mesma UI + admin = 1 UI; got %d", got)
+	}
+	if got := server.ClientCount(); got != 3 {
+		t.Fatalf("ClientCount continua contando conexões de leitura (3), got %d", got)
+	}
+	// Entrega por sessão: as 2 conexões de leitura autenticadas recebem; a admin
+	// (mesma UI) e a não autenticada NÃO — sem toast duplicado.
+	msg := NewIPCMessage(IPCMsgEvent, map[string]any{"name": "notification:new"})
+	if sent := server.SendToSession(2, msg); sent != 2 {
+		t.Fatalf("entrega por sessão deveria ir só às conexões de leitura autenticadas (2), got %d", sent)
+	}
+
+	// Outra UI (outra sessão) conta separado.
+	add(false, true, 300, 7)
+	if got := server.UIAuthenticatedCount(); got != 2 {
+		t.Fatalf("2 UIs autenticadas em sessões diferentes; got %d", got)
+	}
+
+	var nilServer *IPCServer
+	if got := nilServer.UIAuthenticatedCount(); got != 0 {
+		t.Fatalf("servidor nil deve devolver 0, got %d", got)
+	}
+}
+
+// uiOnline bool precisa seguir a MESMA contagem: conexão não autenticada não é
+// interface online (senão o serviço suprime o toast nativo sem ter quem renderize).
+func TestHeartbeatUIOnlineCountsAuthenticatedUIs(t *testing.T) {
+	server := newIPCTestServer(func(net.Conn, IPCMessage) {})
+	a := NewApp(AppStartupOptions{ServiceMode: true})
+	a.ipcServer = server
+
+	m := a.getHeartbeatMetrics()
+	if m.UIOnline == nil || m.UIOnlineCount == nil {
+		t.Fatal("no modo serviço uiOnline/uiOnlineCount deveriam estar preenchidos")
+	}
+	if *m.UIOnline || *m.UIOnlineCount != 0 {
+		t.Fatalf("sem UI conectada: uiOnline=%t count=%d", *m.UIOnline, *m.UIOnlineCount)
+	}
+
+	probeConn := &ipcUniqueConn{id: 1}
+	server.conns[probeConn] = &ipcClientConn{
+		reader:   bufio.NewReader(&ipcDiscardConn{}),
+		identity: ipcAuthIdentity{SessionID: 2, Valid: true},
+	}
+	m = a.getHeartbeatMetrics()
+	if *m.UIOnline || *m.UIOnlineCount != 0 {
+		t.Fatalf("conexão não autenticada não pode marcar UI online: uiOnline=%t count=%d", *m.UIOnline, *m.UIOnlineCount)
+	}
+
+	uiConn := &ipcUniqueConn{id: 2}
+	server.conns[uiConn] = &ipcClientConn{
+		reader:     bufio.NewReader(&ipcDiscardConn{}),
+		identity:   testIdentity(2),
+		identityOK: true,
+	}
+	m = a.getHeartbeatMetrics()
+	if !*m.UIOnline || *m.UIOnlineCount != 1 {
+		t.Fatalf("UI autenticada: uiOnline=%t count=%d (esperado true/1)", *m.UIOnline, *m.UIOnlineCount)
+	}
+}
+
+// Close concorrente com SendToSession/Broadcast: a entrega monta um snapshot das
+// conexões (fora do lock), então fechar o servidor no meio não pode panicar,
+// corromper o mapa nem entregar depois do fechamento. Roda sob -race.
+func TestIPCSendToSessionConcurrentWithClose(t *testing.T) {
+	server := newIPCTestServer(func(net.Conn, IPCMessage) {})
+	for i := 0; i < 4; i++ {
+		conn := &ipcUniqueConn{id: uint32(i + 1)}
+		server.conns[conn] = &ipcClientConn{
+			reader:     bufio.NewReader(&ipcDiscardConn{}),
+			identity:   testIdentity(uint32(i + 1)),
+			identityOK: true,
+		}
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			msg := NewIPCMessage(IPCMsgEvent, map[string]any{"name": "notification:new"})
+			if n%2 == 0 {
+				server.SendToSession(uint32(n%4+1), msg)
+				return
+			}
+			server.Broadcast(msg)
+		}(i)
+	}
+	server.Close()
+	wg.Wait()
+
+	if got := server.SendToSession(1, NewIPCMessage(IPCMsgEvent, map[string]any{"name": "late"})); got != 0 {
+		t.Fatalf("servidor fechado não pode entregar (got %d)", got)
+	}
+	if got := server.UIAuthenticatedCount(); got != 0 {
+		t.Fatalf("servidor fechado não tem UIs (got %d)", got)
 	}
 }

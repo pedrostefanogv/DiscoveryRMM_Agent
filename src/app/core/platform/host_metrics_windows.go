@@ -12,8 +12,8 @@ import (
 // via GlobalMemoryStatusEx. Ambos nativos (kernel32), sem subprocessos.
 
 var (
-	hostSampleMu            sync.Mutex
-	hostCPUSampler          = NewCPUSampler()
+	hostSampleMu                 sync.Mutex
+	hostCPUSampler               = NewCPUSampler()
 	procGlobalMemoryStatusExHost = modkernel32CPU.NewProc("GlobalMemoryStatusEx")
 )
 

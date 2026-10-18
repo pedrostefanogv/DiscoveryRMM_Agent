@@ -508,6 +508,84 @@ function initAppBindings() {
   }
 }
 
+// ── Aviso de versão UI × serviço (A.2.2) ────────────────────────────────────
+//
+// O serviço informa a própria versão no hello_ack do IPC; o binding
+// GetIPCServiceInfo devolve o par (versão da UI x versão do serviço) em JSON.
+// Um par misto (UI antiga + serviço novo, ou o inverso) é o sintoma clássico de
+// atualização pela metade: a UI abre mas RPCs/eventos podem divergir.
+//
+// Regras de robustez (o aviso NUNCA pode quebrar o boot):
+//   - binding ausente (build antiga, debug HTTP ou navegador) -> silêncio;
+//   - JSON inesperado/erro do binding -> silêncio (sem toast, sem exceção);
+//   - translate/showToast ausentes -> mensagem crua, sem exceção;
+//   - um toast por par de versões (reconexões não repetem o aviso).
+var serviceVersionNoticeShownFor = "";
+
+function checkServiceVersionMismatch() {
+  try {
+    var api = window.go && window.go.app && window.go.app.App;
+    if (!api || typeof api.GetIPCServiceInfo !== "function") {
+      return;
+    }
+    Promise.resolve(api.GetIPCServiceInfo())
+      .then(function (raw) {
+        if (!raw) return;
+        var info;
+        try {
+          info = JSON.parse(raw);
+        } catch (_) {
+          return; // contrato inesperado: não derruba o boot
+        }
+        if (!info || info.connected !== true || info.mismatch !== true) {
+          return;
+        }
+        var uiVersion = String(info.uiVersion || "").trim();
+        var serviceVersion = String(info.serviceVersion || "").trim();
+        if (!uiVersion || !serviceVersion) {
+          return;
+        }
+        var noticeKey = uiVersion + "\u0000" + serviceVersion;
+        if (noticeKey === serviceVersionNoticeShownFor) {
+          return;
+        }
+        serviceVersionNoticeShownFor = noticeKey;
+        var message =
+          typeof translate === "function"
+            ? translate("app.serviceVersionMismatch", {
+                ui: uiVersion,
+                service: serviceVersion,
+              })
+            : "UI " + uiVersion + " · serviço " + serviceVersion;
+        if (typeof showToast === "function") {
+          showToast(message, "error");
+        }
+        if (typeof console !== "undefined" && console.warn) {
+          console.warn("[ipc] " + message);
+        }
+      })
+      .catch(function (_) {
+        // Serviço indisponível no boot: o evento service:ipc_state reavalia.
+      });
+  } catch (_) {
+    // Ambiente sem Wails (debug HTTP/browser): nada a avisar.
+  }
+}
+
+// initServiceVersionNotice checa no boot e de novo quando o IPC conecta (o
+// handshake pode terminar depois do bootstrap, porque o RunConnectLoop roda em
+// goroutine).
+function initServiceVersionNotice() {
+  checkServiceVersionMismatch();
+  if (window.wails && typeof window.wails.on === "function") {
+    window.wails.on("service:ipc_state", function (payload) {
+      if (payload && payload.connected) {
+        checkServiceVersionMismatch();
+      }
+    });
+  }
+}
+
 async function bootstrapApp() {
   if (typeof initApplicationLocale === "function") {
     await initApplicationLocale();
@@ -525,6 +603,8 @@ async function bootstrapApp() {
   } catch (_) {
     setRuntimeFlags({ debugMode: false });
   }
+
+  initServiceVersionNotice();
 
   if (typeof syncProvisioningOverlayFromRuntime === "function") {
     await syncProvisioningOverlayFromRuntime();

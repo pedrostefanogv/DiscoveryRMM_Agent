@@ -13,7 +13,7 @@ func TestPortDecodesNetworkOrderPort(t *testing.T) {
 		0x8700: 135,   // RPC endpoint mapper
 		0x3D0D: 3389,  // RDP
 		0x78A0: 41080, // faixa HTTP P2P do agente (DefaultP2PPortRangeStart)
-		0x5000: 80, // HTTP (0x0050 em network byte order)
+		0x5000: 80,    // HTTP (0x0050 em network byte order)
 	}
 	for raw, want := range cases {
 		if got := Port(raw); got != want {

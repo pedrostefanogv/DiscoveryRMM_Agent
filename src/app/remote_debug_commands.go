@@ -345,6 +345,11 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		return a.handleSoftwareUninstallCommand(parent, payload)
 	}
 
+	// Gerenciador de patches do Windows (WUA): scan/install/hide/policy.
+	if IsWindowsUpdateCommandType(cmdType) {
+		return a.handleWindowsUpdateCommand(parent, payload)
+	}
+
 	// Delega comandos de inventário sob demanda (SystemInfo)
 	if cmdType == "systeminfo" {
 		return a.handleSystemInfoCommand(parent, payload)

@@ -25,6 +25,7 @@ func (*IPCServer) Broadcast(IPCMessage)                 {}
 func (*IPCServer) SendToSession(uint32, IPCMessage) int { return 0 }
 func (*IPCServer) RespondTo(net.Conn, IPCMessage)       {}
 func (*IPCServer) ClientCount() int                     { return 0 }
+func (*IPCServer) UIAuthenticatedCount() int            { return 0 }
 func (*IPCServer) Close()                               {}
 
 // IPCClient é um stub não-Windows.

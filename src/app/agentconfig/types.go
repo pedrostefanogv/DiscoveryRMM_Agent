@@ -126,6 +126,12 @@ type AgentConfiguration struct {
 	// StartupMaxCPUPercent defines the CPU usage threshold (0-100) above which
 	// the agent will throttle osquery queries during startup. Default 50.
 	StartupMaxCPUPercent *int `json:"startupMaxCPUPercent"`
+	// WindowsUpdateEnabled é o kill switch do gerenciador de patches (WUA).
+	// nil = habilitado (o servidor envia o valor resolvido).
+	WindowsUpdateEnabled *bool `json:"windowsUpdateEnabled"`
+	// WindowsUpdateScanIntervalMinutes controla a cadência do scan WUA.
+	// nil = default (360 min, mínimo 60).
+	WindowsUpdateScanIntervalMinutes *int `json:"windowsUpdateScanIntervalMinutes"`
 }
 
 // ServerConfiguration representa a configuração global do servidor (API v1).
@@ -164,6 +170,10 @@ type ServerConfiguration struct {
 	StartupThrottleEnabled *bool `json:"startupThrottleEnabled"`
 	// StartupMaxCPUPercent defines the CPU usage threshold (0-100) for throttling.
 	StartupMaxCPUPercent int `json:"startupMaxCPUPercent"`
+	// Kill switch do gerenciador de patches (Windows Update). nil = habilitado.
+	WindowsUpdateEnabled *bool `json:"windowsUpdateEnabled"`
+	// Cadencia do scan WUA em minutos (nil = default 360, minimo 60).
+	WindowsUpdateScanIntervalMinutes *int `json:"windowsUpdateScanIntervalMinutes"`
 }
 
 // ClientConfiguration representa a configuração no nível do cliente (API v1).
@@ -194,6 +204,8 @@ type ClientConfiguration struct {
 	Version                           int     `json:"version"`
 	StartupThrottleEnabled            *bool   `json:"startupThrottleEnabled"`
 	StartupMaxCPUPercent              *int    `json:"startupMaxCPUPercent"`
+	WindowsUpdateEnabled              *bool   `json:"windowsUpdateEnabled"`
+	WindowsUpdateScanIntervalMinutes  *int    `json:"windowsUpdateScanIntervalMinutes"`
 }
 
 // SiteConfiguration representa a configuração no nível do site (API v1).
@@ -227,6 +239,8 @@ type SiteConfiguration struct {
 	Version                           int     `json:"version"`
 	StartupThrottleEnabled            *bool   `json:"startupThrottleEnabled"`
 	StartupMaxCPUPercent              *int    `json:"startupMaxCPUPercent"`
+	WindowsUpdateEnabled              *bool   `json:"windowsUpdateEnabled"`
+	WindowsUpdateScanIntervalMinutes  *int    `json:"windowsUpdateScanIntervalMinutes"`
 }
 
 // AgentConfigResponse é o wrapper completo retornado por GET /me/configuration (API v1).

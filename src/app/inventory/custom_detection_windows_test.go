@@ -47,11 +47,11 @@ func TestIsCustomPackageInstalledNoneModeIsFailSafe(t *testing.T) {
 	svc := &Service{inventory: fake}
 
 	cases := []appstore.Item{
-		{},                                                     // DetectionMode None
+		{}, // DetectionMode None
 		{DetectionMode: appstore.DetectionModeNone, DetectionName: "Foxit PDF Reader"},
-		{DetectionMode: appstore.DetectionModeInventoryLink},   // sem nome
-		{DetectionMode: appstore.DetectionModeCommand},         // sem comando
-		{DetectionMode: 99, DetectionCommand: "exit 0"},        // modo desconhecido
+		{DetectionMode: appstore.DetectionModeInventoryLink}, // sem nome
+		{DetectionMode: appstore.DetectionModeCommand},       // sem comando
+		{DetectionMode: 99, DetectionCommand: "exit 0"},      // modo desconhecido
 	}
 	for _, item := range cases {
 		installed, detail := svc.IsCustomPackageInstalled(context.Background(), item)

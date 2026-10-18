@@ -502,6 +502,24 @@ func (db *DB) initializeCurrent() error {
 		CREATE INDEX IF NOT EXISTS idx_p2p_telemetry_outbox_exp ON p2p_telemetry_outbox(expires_at);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_p2p_telemetry_outbox_idempotency ON p2p_telemetry_outbox(agent_id, idempotency_key);
 		CREATE INDEX IF NOT EXISTS idx_consolidation_window_updated ON consolidation_window_state(agent_id, updated_at DESC);
+
+		-- Cache do ultimo scan de Windows Update (payload pronto para upload +
+		-- hash para evitar reenvio). Aditivo: nao exige bump de schema.
+		CREATE TABLE IF NOT EXISTS windows_update_cache (
+			agent_id TEXT PRIMARY KEY,
+			payload_json TEXT NOT NULL,
+			payload_hash TEXT NOT NULL,
+			scanned_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+
+		-- Estado da sonda de reinicio pendente (evita upload quando nao mudou).
+		CREATE TABLE IF NOT EXISTS windows_update_reboot_state (
+			agent_id TEXT PRIMARY KEY,
+			reasons_json TEXT NOT NULL,
+			checked_at INTEGER NOT NULL,
+			uploaded_at INTEGER
+		);
 	`
 
 	_, err := db.conn.Exec(schema)

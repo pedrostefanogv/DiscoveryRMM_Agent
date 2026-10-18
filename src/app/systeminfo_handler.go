@@ -44,10 +44,11 @@ func (a *App) handleRefreshOnDemand(ctx context.Context, payloadJSON map[string]
 		Hardware:       agentcommands.GetBoolField(payloadJSON, "Hardware"),
 		StartupItems:   agentcommands.GetBoolField(payloadJSON, "StartupItems"),
 		ScheduledTasks: agentcommands.GetBoolField(payloadJSON, "ScheduledTasks"),
+		WindowsUpdates: agentcommands.GetBoolField(payloadJSON, "WindowsUpdates"),
 	}
 
 	// If nothing specific requested, default to ports + connections only
-	hasAny := flags.Ports || flags.Connections || flags.Software || flags.Printers || flags.Hardware || flags.StartupItems || flags.ScheduledTasks
+	hasAny := flags.Ports || flags.Connections || flags.Software || flags.Printers || flags.Hardware || flags.StartupItems || flags.ScheduledTasks || flags.WindowsUpdates
 	if !hasAny {
 		flags.Ports = true
 		flags.Connections = true
@@ -123,6 +124,17 @@ func (a *App) handleRefreshOnDemand(ctx context.Context, payloadJSON map[string]
 			if flags.Hardware {
 				results = append(results, "hardware=ok")
 			}
+		}
+	}
+
+	if flags.WindowsUpdates {
+		if !a.windowsUpdatesReady() {
+			results = append(results, "windowsUpdates=unsupported")
+		} else if scanResult, scanErr := a.InventorySvc.ScanAndSyncWindowsUpdates(ctx); scanErr != nil {
+			a.Logs.Append("[agent] refresh-on-demand: falha no scan de windows update: " + scanErr.Error())
+			results = append(results, "windowsUpdates=failed")
+		} else {
+			results = append(results, fmt.Sprintf("windowsUpdates=pending:%d", scanResult.PendingCount))
 		}
 	}
 
@@ -221,4 +233,6 @@ type refreshOnDemandFlags struct {
 	Hardware       bool
 	StartupItems   bool
 	ScheduledTasks bool
+	// WindowsUpdates dispara um scan WUA + upload (aba Atualizações do agente).
+	WindowsUpdates bool
 }

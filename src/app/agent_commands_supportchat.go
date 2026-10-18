@@ -114,7 +114,9 @@ func (a *App) hasSupportChatUI() bool {
 	if a.app != nil {
 		return true
 	}
-	return a.ipcServer != nil && a.ipcServer.ClientCount() > 0
+	// UIAuthenticatedCount (não ClientCount): conexão de probe/não autenticada
+	// não é UI — contá-la impedia o watchdog de relançar a UI de verdade.
+	return a.ipcServer != nil && a.ipcServer.UIAuthenticatedCount() > 0
 }
 
 // respondSupportChatInvite reporta a decisão ao servidor (best-effort).

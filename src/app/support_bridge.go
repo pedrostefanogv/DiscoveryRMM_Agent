@@ -247,6 +247,7 @@ func (a *App) TicketAttachmentSettings() (json.RawMessage, error) {
 	}
 	return json.Marshal(settings)
 }
+
 // ── Anexos de COMENTARIO (bindings do webview) ────────────────────────────
 //
 // O anexo de conversa e filho do COMENTARIO: o webview cria o comentario e, com

@@ -38,7 +38,7 @@ func TestUtf8IncompleteTailCarry(t *testing.T) {
 	if got := Utf8IncompleteTail(chunk1); got != 1 {
 		t.Fatalf("tail(chunk1) = %d; want 1", got)
 	}
-	carry := chunk1[len(chunk1)-1:]           // [0xC3] retido
+	carry := chunk1[len(chunk1)-1:] // [0xC3] retido
 	chunk2 := []byte("\xadsticas")
 	joined := append(append([]byte(nil), carry...), chunk2...) // [0xC3, 0xAD, 's'...]
 	if got := Utf8IncompleteTail(joined); got != 0 {

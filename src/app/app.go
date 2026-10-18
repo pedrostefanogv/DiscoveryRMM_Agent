@@ -43,6 +43,7 @@ import (
 	"discovery/app/core/screenshot"
 	"discovery/app/core/selfupdate"
 	"discovery/app/core/services"
+	"discovery/app/core/windowsupdate"
 	"discovery/app/core/winget"
 	"discovery/app/coreagent"
 	"discovery/app/customfields"
@@ -475,7 +476,9 @@ func NewApp(opts AppStartupOptions) *App {
 		// nesses casos o Dispatch cai no fallback nativo (Fase C2/D4).
 		Ctx: func() interface{ Done() <-chan struct{} } {
 			if a.RuntimeFlags.ServiceMode {
-				if a.ipcServer != nil && a.ipcServer.ClientCount() > 0 {
+				// UIAuthenticatedCount: conexão de probe/não autenticada NÃO é UI —
+				// contar ClientCount aqui suprimia o toast nativo sem interface real.
+				if a.ipcServer != nil && a.ipcServer.UIAuthenticatedCount() > 0 {
 					return a.ctx
 				}
 				return nil
@@ -897,6 +900,20 @@ func NewApp(opts AppStartupOptions) *App {
 			return a.HardwareIDSvc.Get()
 		},
 	})
+	// Gerenciador de patches do Windows: cliente WUA (COM) + kill switch vindo
+	// da configuração resolvida do servidor. O cache SQLite é injetado depois
+	// (o DB só existe quando o serviço sobe), em attachInventoryDatabase.
+	a.InventorySvc.SetWindowsUpdateDeps(appinventory.WindowsUpdateDeps{
+		Client: windowsupdate.New(windowsupdate.DefaultOptions()),
+		Enabled: func() bool {
+			cfg := a.GetAgentConfiguration()
+			if cfg.WindowsUpdateEnabled == nil {
+				return true
+			}
+			return *cfg.WindowsUpdateEnabled
+		},
+	})
+
 	// Pré-carga P2P pedida pelo policy-sync (PreloadPackages): reaproveita o mesmo
 	// caminho coordenado do comando p2ppreload (ShouldPreloadPackage + stagger).
 	a.AutomationSvc.SetPreloadHandler(func(packages []automation.PreloadPackage) {
@@ -1410,7 +1427,12 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 	// informa ao servidor se há UI companion conectada via IPC. Fora do modo
 	// serviço (UI standalone) o campo permanece nil (omitido no JSON).
 	if a.RuntimeFlags.ServiceMode && a.ipcServer != nil {
-		count := a.ipcServer.ClientCount()
+		// UIAuthenticatedCount (e não ClientCount): o servidor precisa saber
+		// quantas UIs AUTENTICADAS existem de fato. ClientCount conta conexões
+		// do canal de leitura — incluindo probe/ferramenta não autenticada e
+		// duas conexões da MESMA UI — o que fazia o console acreditar em
+		// interface presente onde não havia ninguém (A3).
+		count := a.ipcServer.UIAuthenticatedCount()
 		online := count > 0
 		metrics.UIOnline = &online
 		metrics.UIOnlineCount = &count
@@ -1691,6 +1713,9 @@ func (a *App) runCoreStartup(ctx context.Context) {
 		}
 		if a.InventorySvc != nil {
 			a.InventorySvc.SetDB(db)
+			// Cache local do scan de Windows Update (diff de payload + sonda de
+			// reinício). *database.DB implementa inventory.WindowsUpdateCache.
+			a.InventorySvc.SetWindowsUpdateDeps(appinventory.WindowsUpdateDeps{Cache: db})
 			_ = a.InventorySvc.Startup(ctx)
 		}
 		if a.SupportSvc != nil {
@@ -1993,6 +2018,50 @@ func (a *App) runStagedStartup(ctx context.Context) {
 				return
 			case <-ticker.C:
 				a.runPeriodicInventorySync(ctx)
+			}
+		}
+	})
+
+	// ── Gerenciador de Patches do Windows (WUA) ─────────────────────────
+	// Scan periódico: atraso inicial com jitter (evita tempestade de scans de
+	// WUA na frota logo após o boot) e ciclo configurável (default 6h).
+	a.safeGo(func() {
+		initialDelay := windowsUpdateInitialDelay(ctx, a)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(initialDelay):
+		}
+		for {
+			a.runWindowsUpdateScan(ctx)
+			interval := a.windowsUpdateScanInterval()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(interval):
+			}
+		}
+	})
+
+	// Sonda de reinício pendente: barata (somente registro), reportada só em
+	// mudança. Alimenta o badge "Reinício pendente" em /agents.
+	a.safeGo(func() {
+		const pendingRebootInterval = 10 * time.Minute
+		initialDelay := 2 * time.Minute
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(initialDelay):
+		}
+		ticker := time.NewTicker(pendingRebootInterval)
+		defer ticker.Stop()
+		a.reportPendingReboot(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.reportPendingReboot(ctx)
 			}
 		}
 	})

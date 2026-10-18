@@ -11,6 +11,7 @@ func EnsureSharedStagingAccess(path string) error {
 func EnsureWorldReadable(filePath string) error {
 	return nil
 }
+
 // IsElevated is a no-op on non-Windows platforms (não há modelo UAC fora
 // do Windows; considera elevado para não bloquear fluxos).
 func IsElevated() bool {
