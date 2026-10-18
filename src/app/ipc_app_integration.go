@@ -77,13 +77,16 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 		// S2: remote_session só é aceito de conexão ADMIN autenticada com token
 		// válido cujo pid/sessão batem com o pedido. Sem isso, recusa e NUNCA
 		// spawna worker (o payload também não recebe o authToken vivo).
-		if a.ipcServer != nil {
-			if err := a.ipcServer.authorizeRemoteSessionMessage(conn, msg.Payload); err != nil {
-				ipcAuthStats.RemoteSessionDenied.Add(1)
-				a.Logs.Append("[ipc] remote session recusada (sem autenticação): " + err.Error())
-				logIPCStructured("remote_session_denied", fmt.Sprintf("conn=%v reason=%q", conn != nil, err))
-				return
-			}
+		//
+		// FAIL-CLOSED: o autorizador é nil-safe e DENEGA sem servidor IPC (o
+		// guard antigo "ipcServer != nil" liberava o caminho inteiro quando o
+		// servidor ainda não tinha sido atribuído à App — janela real entre
+		// StartIPCServer (aceita e despacha) e a.ipcServer = ... no startup).
+		if err := a.ipcServer.authorizeRemoteSessionMessage(conn, msg.Payload); err != nil {
+			ipcAuthStats.RemoteSessionDenied.Add(1)
+			a.Logs.Append("[ipc] remote session recusada (sem autenticação): " + err.Error())
+			logIPCStructured("remote_session_denied", fmt.Sprintf("conn=%v reason=%q", conn != nil, err))
+			return
 		}
 		// Remote session DEVE rodar na sessão interativa do usuário (a sessão 0
 		// do serviço SYSTEM não tem desktop — captura falha e SendInput é
@@ -117,7 +120,8 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 		// S3: a resposta só é aceita de conexão autenticada da sessão
 		// destinatária do prompt (ou SYSTEM). A sessão alvo é persistida quando
 		// o notification:new é emitido (ver broadcastIPCEvent).
-		if a.ipcServer != nil && !a.ipcServer.authorizeNotificationRespond(conn, msg.Payload) {
+		// FAIL-CLOSED: sem servidor IPC não há como provar o destinatário — nega.
+		if !a.ipcServer.authorizeNotificationRespond(conn, msg.Payload) {
 			a.Logs.Append("[ipc] resposta de notificação recusada: conexão não autenticada ou de outra sessão")
 			return
 		}
@@ -136,25 +140,25 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 		// devolve o context com a identidade; o próprio handleIPCRequest recusa
 		// mutação sem esse context. Respostas de erro de auth não passam pelo
 		// handler (nada é executado).
+		// authorizeRPC é nil-safe: sem servidor IPC o contexto sai SEM auth e o
+		// gate de handleIPCRequest recusa qualquer mutação (fail-closed).
 		ctx := context.Background()
-		if a.ipcServer != nil {
-			authCtx, authErr := a.ipcServer.authorizeRPC(conn, msg)
-			if authErr != nil {
-				method, _ := msg.Payload["method"].(string)
-				logIPCStructured("dispatch_denied", fmt.Sprintf("method=%q cid=%q reason=%q", method, msg.CorrelationID, authErr))
-				if a.ipcServer != nil {
-					reply := NewIPCMessage(IPCMsgResponse, map[string]any{
-						"ok":    false,
-						"error": "unauthorized",
-						"code":  "ipc_unauthorized",
-					})
-					reply.CorrelationID = msg.CorrelationID
-					a.ipcServer.RespondTo(conn, reply)
-				}
-				return
+		authCtx, authErr := a.ipcServer.authorizeRPC(conn, msg)
+		if authErr != nil {
+			method, _ := msg.Payload["method"].(string)
+			logIPCStructured("dispatch_denied", fmt.Sprintf("method=%q cid=%q reason=%q", method, msg.CorrelationID, authErr))
+			if a.ipcServer != nil {
+				reply := NewIPCMessage(IPCMsgResponse, map[string]any{
+					"ok":    false,
+					"error": "unauthorized",
+					"code":  "ipc_unauthorized",
+				})
+				reply.CorrelationID = msg.CorrelationID
+				a.ipcServer.RespondTo(conn, reply)
 			}
-			ctx = authCtx
+			return
 		}
+		ctx = authCtx
 		// O token nunca é repassado aos handlers/RPCs.
 		delete(msg.Payload, "token")
 		resp := a.handleIPCRequest(ctx, msg.Payload)

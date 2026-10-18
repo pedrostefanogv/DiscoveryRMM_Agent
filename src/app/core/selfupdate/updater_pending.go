@@ -57,6 +57,20 @@ func (u *Updater) persistPendingInstallState(state pendingInstallState) error {
 		}
 	}
 
+	return u.writePendingInstallState(state)
+}
+
+// writePendingInstallState grava o estado SEM mexer no contador de tentativas.
+// Use esta função para atualizações de campos que não representam uma nova
+// tentativa de instalação (ex.: persistInstallerPID). Persistir o PID pelo
+// caminho de persistPendingInstallState incrementava InstallAttempts — cada
+// launch consumia 2 tentativas e o updater podia declarar "install-loop" e
+// descartar um estado que na verdade tinha sido instalado com sucesso.
+func (u *Updater) writePendingInstallState(state pendingInstallState) error {
+	path := u.pendingInstallStatePath()
+	if path == "" {
+		return errors.New("diretorio temporario de update nao configurado")
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -110,7 +124,7 @@ func (u *Updater) persistInstallerPID(pid uint32) {
 		return
 	}
 	state.InstallerPID = pid
-	if err := u.persistPendingInstallState(state); err != nil {
+	if err := u.writePendingInstallState(state); err != nil {
 		u.logf("aviso: nao foi possivel persistir PID do instalador: %v", err)
 	}
 }

@@ -2,12 +2,37 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"discovery/app/agentconfig"
 	"discovery/app/status"
 )
+
+// A.3.3: o User Data Folder do WebView2 é por sessão, mas sessão 0 (serviços)
+// e 0xFFFFFFFF ("sem sessão" do WTS) NÃO podem virar subdiretório — o segundo
+// criaria um "session-4294967295" inútil sob ProgramData.
+func TestWebView2SessionDir(t *testing.T) {
+	base := filepath.Join("base", "WebView2")
+	cases := []struct {
+		name    string
+		session uint32
+		want    string
+	}{
+		{"servico-sessao-0", 0, base},
+		{"wts-sem-sessao", 0xFFFFFFFF, base},
+		{"console-sessao-1", 1, filepath.Join(base, "session-1")},
+		{"rdp-sessao-7", 7, filepath.Join(base, "session-7")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := webView2SessionDir(base, tc.session); got != tc.want {
+				t.Fatalf("webView2SessionDir(%q, %d) = %q, esperado %q", base, tc.session, got, tc.want)
+			}
+		})
+	}
+}
 
 // TestParseUpgradeOutput_WithSpinner verifies that the parser handles the \r-only
 // progress spinners that winget emits before the actual table header.

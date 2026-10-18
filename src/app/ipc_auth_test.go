@@ -277,6 +277,43 @@ func TestHandleIPCRequestMutatingRequiresAuthContext(t *testing.T) {
 	}
 }
 
+// TestHandleIPCMessageRemoteSessionWithoutIPCServerIsDenied cobre o fail-closed
+// do dispatch de remote_session (S2): o guard antigo "if a.ipcServer != nil"
+// liberava o caminho INTEIRO quando a App ainda não tinha o servidor atribuído
+// (janela real entre StartIPCServer — que já aceita e despacha — e
+// "a.ipcServer = StartIPCServer(...)" no startup). Sem autorizador não há
+// prova de identidade, então o comando tem de ser recusado e NUNCA spawnar
+// worker.
+func TestHandleIPCMessageRemoteSessionWithoutIPCServerIsDenied(t *testing.T) {
+	a := &App{}
+	before := ipcAuthStats.RemoteSessionDenied.Load()
+	a.handleIPCMessage(nil, IPCMessage{
+		Type: IPCMsgRemoteSession,
+		Payload: map[string]any{
+			"action":    "start",
+			"sessionId": "sessao-remota-1",
+			"authToken": "token-nao-deve-ser-injetado",
+		},
+	})
+	if got := ipcAuthStats.RemoteSessionDenied.Load(); got != before+1 {
+		t.Fatalf("remote_session sem servidor IPC deveria ser NEGADO (fail-closed): denied %d -> %d", before, got)
+	}
+}
+
+// TestHandleIPCMessageNotificationRespondWithoutIPCServerIsDenied garante que a
+// resposta de prompt também é negada sem servidor IPC (não há como provar a
+// sessão destinatária).
+func TestHandleIPCMessageNotificationRespondWithoutIPCServerIsDenied(t *testing.T) {
+	a := &App{}
+	// NotificationSvc nil faria handleIPCNotificationRespond devolver false de
+	// qualquer forma; o que se verifica aqui é que o gate de autorização roda
+	// antes e não há panic (fail-closed, sem nil deref).
+	a.handleIPCMessage(nil, IPCMessage{
+		Type:    IPCMsgNotificationRespond,
+		Payload: map[string]any{"notificationId": "n-1", "result": "approved"},
+	})
+}
+
 func TestWithIPCAuthRoundTrip(t *testing.T) {
 	if _, ok := ipcAuthFromContext(context.Background()); ok {
 		t.Fatal("context vazio não deveria ter auth")

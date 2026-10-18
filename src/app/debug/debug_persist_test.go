@@ -207,3 +207,119 @@ func TestSetConfigPersistsAndAppliesPartialFields(t *testing.T) {
 		t.Fatal("NatsServer deveria ser derivado do ApiServer")
 	}
 }
+
+// TestLoadPersistedConfigHardensACLOfExistingFile cobre A.1.5: a DACL
+// restritiva (SYSTEM:F + Users:R) precisa valer também para o arquivo que JÁ
+// existia no disco. Antes ela era aplicada apenas no temporário de cada
+// gravação nova — um arquivo herdado de uma instalação anterior (ou criado pelo
+// instalador) permanecia com a ACL do diretório até o próximo save do serviço.
+// Falha do icacls é best-effort: só loga, o carregamento continua.
+func TestLoadPersistedConfigHardensACLOfExistingFile(t *testing.T) {
+	path := testConfigPath(t)
+	data, err := json.Marshal(validConfig("acl.example.local"))
+	if err != nil {
+		t.Fatalf("serializar config: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("preparar config: %v", err)
+	}
+
+	var hardened []string
+	svc := NewService(Options{
+		ConfigPaths:     func() []string { return []string{path} },
+		WatcherInterval: time.Hour,
+		HardenFileACL: func(p string) error {
+			hardened = append(hardened, p)
+			return errors.New("icacls falhou (simulado)")
+		},
+	})
+	svc.LoadPersistedConfig()
+	defer svc.StopWatcher()
+
+	if len(hardened) != 1 || hardened[0] != path {
+		t.Fatalf("DACL do arquivo existente deveria ser endurecida 1x em %q, got %v", path, hardened)
+	}
+	if got := svc.GetConfig(); got.ApiServer != "acl.example.local" {
+		t.Fatalf("falha de ACL não pode impedir o carregamento da config: %+v", got)
+	}
+}
+
+// TestConfigWatcherDoesNotOverwriteConfigPersistedByService é a regressão da
+// corrida watcher x RPC (A.1.3): o watcher lia o debug_config.json, uma
+// gravação do serviço (config:set/SetConfig) acontecia nesse meio-tempo e a
+// adoção do conteúdo LIDO ANTES publicava em memória a config VELHA — memória
+// divergente do disco até a próxima alteração externa.
+func TestConfigWatcherDoesNotOverwriteConfigPersistedByService(t *testing.T) {
+	path := testConfigPath(t)
+	initial := validConfig("initial.example.local")
+	data, err := json.Marshal(initial)
+	if err != nil {
+		t.Fatalf("serializar config inicial: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("preparar config inicial: %v", err)
+	}
+
+	// Watcher com intervalo longo: o teste dispara o poll manualmente para
+	// controlar a ordem dos eventos.
+	svc := serviceForPath(path, time.Hour)
+	svc.LoadPersistedConfig()
+	defer svc.StopWatcher()
+
+	// Injeta um "atraso" na leitura do arquivo pelo watcher: ele captura o
+	// conteúdo ANTIGO e só continua depois da gravação do serviço.
+	readStarted := make(chan struct{})
+	releaseRead := make(chan struct{})
+	var once sync.Once
+	var stale []byte
+	oldRead := osReadFile
+	t.Cleanup(func() { osReadFile = oldRead })
+	osReadFile = func(p string) ([]byte, error) {
+		if p != path {
+			return oldRead(p)
+		}
+		once.Do(func() {
+			stale, _ = oldRead(p)
+			close(readStarted)
+			<-releaseRead
+		})
+		return stale, nil
+	}
+
+	pollDone := make(chan struct{})
+	go func() {
+		defer close(pollDone)
+		svc.pollExternalConfigChange()
+	}()
+	<-readStarted
+
+	newer := validConfig("rpc.example.local")
+	newer.AuthToken = "token-rpc"
+	setDone := make(chan error, 1)
+	go func() { setDone <- svc.SetConfig(newer) }()
+
+	// Tempo para o SetConfig chegar ao ponto de gravação: com a serialização
+	// (applyMu) ele espera a adoção externa terminar; sem ela, já gravou.
+	time.Sleep(150 * time.Millisecond)
+	close(releaseRead)
+
+	if err := <-setDone; err != nil {
+		t.Fatalf("SetConfig concorrente com o watcher falhou: %v", err)
+	}
+	<-pollDone
+
+	if got := svc.GetConfig(); got.ApiServer != "rpc.example.local" || got.AuthToken != "token-rpc" {
+		t.Fatalf("watcher sobrescreveu a config mais nova persistida pelo serviço: %+v", got)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ler config final: %v", err)
+	}
+	var persisted Config
+	if err := json.Unmarshal(raw, &persisted); err != nil {
+		t.Fatalf("config final inválida: %v — %q", err, string(raw))
+	}
+	if persisted.ApiServer != "rpc.example.local" {
+		t.Fatalf("arquivo final não é o gravado pelo serviço: %q", persisted.ApiServer)
+	}
+}

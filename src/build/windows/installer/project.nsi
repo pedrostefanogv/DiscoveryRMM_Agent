@@ -291,6 +291,10 @@ Var ApiInsecure
 Var ServiceBackupCreated
 # "1" indica que o health check falhou e o serviço foi revertido.
 Var ServiceRollbackDone
+# "1" indica que algum binário não pôde ser substituído (arquivo em uso após
+# as tentativas). Nesse caso o instalador NÃO pode reportar sucesso: o updater
+# usa log/exit code para decidir retry e o circuit breaker.
+Var UpdateIncomplete
 
 !insertmacro MUI_PAGE_WELCOME # Welcome to the installer page.
 # !insertmacro MUI_PAGE_LICENSE "resources\eula.txt" # Adds a EULA page to the installer
@@ -324,6 +328,7 @@ Function .onInit
    # Estado do rollback do serviço (self-update): zerado a cada execução.
    StrCpy $ServiceBackupCreated "0"
    StrCpy $ServiceRollbackDone "0"
+   StrCpy $UpdateIncomplete "0"
 
    !insertmacro wails.checkArchitecture
 
@@ -547,6 +552,10 @@ FunctionEnd
 # recuperação do item 2: se o abort aconteceu DEPOIS do sc stop (falha de
 # cópia, cancelamento, erro em Section), o serviço não pode ficar parado.
 Function .onInstFailed
+   # Primeiro devolve os binários renomeados para .bak_update e que ainda não
+   # foram substituídos (abort/cancelamento entre o backup e a cópia). Sem isso
+   # o serviço (ou a UI) fica SEM binário no $INSTDIR e o sc start falha.
+   Call RecoverAgentBinariesIfMissing
    Call RecoverAgentServiceIfStopped
 FunctionEnd
 
@@ -661,10 +670,16 @@ Section
          Goto install_binary_ok
          install_binary_missing:
          ${InstallerLogError} "Binario NAO encontrado apos copia: $INSTDIR\${PRODUCT_EXECUTABLE}"
-         ; Se a cópia falhou, tentar restaurar o .bak
-         IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update" 0 install_binary_ok
+         ; Se a cópia falhou, tentar restaurar o .bak. Sem backup (instalação
+         ; nova) o app simplesmente não existe: NÃO pode sair como sucesso.
+         IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update" 0 install_binary_no_backup
          Rename "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update" "$INSTDIR\${PRODUCT_EXECUTABLE}"
          ${InstallerLogError} "Restaurado .bak_update -> ${PRODUCT_EXECUTABLE} (rollback)"
+         Goto install_binary_ok
+         install_binary_no_backup:
+         ${InstallerLogError} "Binario ausente e sem backup de rollback — instalacao INVALIDA (exit code nao-zero)"
+         StrCpy $UpdateIncomplete "1"
+         SetErrorLevel 1
          install_binary_ok:
 
          ; ── Binário do serviço: valida a cópia e descarta o backup ──
@@ -679,10 +694,15 @@ Section
             Goto install_service_binary_ok
             install_service_binary_missing:
             ${InstallerLogError} "Binario do servico NAO encontrado apos copia: $INSTDIR\${SERVICE_EXECUTABLE}"
-            IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" 0 install_service_binary_ok
+            IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" 0 install_service_binary_no_backup
             Rename "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" "$INSTDIR\${SERVICE_EXECUTABLE}"
             ${InstallerLogError} "Restaurado .bak_update do servico -> ${SERVICE_EXECUTABLE} (rollback de copia)"
             StrCpy $ServiceRollbackDone "1"
+            SetErrorLevel 1
+            Goto install_service_binary_ok
+            install_service_binary_no_backup:
+            ${InstallerLogError} "Binario do servico ausente e sem backup — atualizacao INCOMPLETA (exit code nao-zero)"
+            StrCpy $UpdateIncomplete "1"
             SetErrorLevel 1
             install_service_binary_ok:
          ${EndIf}
@@ -756,6 +776,12 @@ Section
          ${EndIf}
          ${If} $ServiceRollbackDone == "1"
             ${InstallerLogError} "Instalacao concluida com ROLLBACK do servico (exit code nao-zero)"
+            SetErrorLevel 1
+         ${ElseIf} $UpdateIncomplete == "1"
+            ; NÃO logar sucesso aqui: o updater correlaciona o installer.log e
+            ; trataria como instalação bem-sucedida mesmo com binário antigo.
+            ${InstallerLogError} "Instalacao concluida com PENDENCIAS: binario em uso nao foi substituido (exit code nao-zero)"
+            SetErrorLevel 1
          ${Else}
             ${InstallerLog} "Instalacao concluida com sucesso"
          ${EndIf}
@@ -1232,10 +1258,19 @@ Function PrepareForInPlaceUpdate
    # o handle). O rename para .bak_update libera o path original para o
    # NSIS copiar o novo binário sem "Access Denied".
    # NOTA: o .bak_update é deletado APÓS a cópia bem-sucedida (na Section).
+   #
+   # Backup OBSOLETO: updates abortados podem deixar um .bak_update para trás.
+   # Rename para um destino existente falha no Windows — sem remover o antigo,
+   # o path original nunca é liberado e o NSIS "instala" mantendo o binário
+   # velho (update silencioso falso). Só remove quando o binário ATUAL existe:
+   # ele é o alvo de rollback mais novo e substitui o backup anterior.
+   IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 lock_check_done
+   Delete "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update"
    StrCpy $R3 0
    retry_lock_check:
       ${If} $R3 >= 5
-         ${InstallerLogError} "lock check: falhou apos 5 tentativas — prosseguindo mesmo assim"
+         ${InstallerLogError} "lock check: falhou apos 5 tentativas — binario da UI pode nao ter sido substituido"
+         StrCpy $UpdateIncomplete "1"
          Goto lock_check_done
       ${EndIf}
       IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 lock_check_done
@@ -1257,10 +1292,15 @@ Function PrepareForInPlaceUpdate
    # subir com o binário novo, RollbackAgentServiceUpdate restaura este arquivo.
    # Se não existir (build sem serviço), nada a fazer.
    IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}" 0 service_backup_done
+   # Mesmo motivo do binário da UI: um .bak_update obsoleto (update abortado)
+   # impede o Rename e o serviço continuaria rodando o binário antigo. O
+   # binário atual (que vai virar o novo backup) é sempre o alvo melhor.
+   Delete "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update"
    StrCpy $R3 0
    service_backup_retry:
       ${If} $R3 >= 5
-         ${InstallerLogError} "backup do servico: falhou apos 5 tentativas — update seguira sem backup de rollback"
+         ${InstallerLogError} "backup do servico: falhou apos 5 tentativas — binario do servico pode nao ter sido substituido"
+         StrCpy $UpdateIncomplete "1"
          Goto service_backup_done
       ${EndIf}
       ClearErrors
@@ -1486,29 +1526,41 @@ FunctionEnd
 # ── Health check e rollback do self-update (item 2) ──────────────────────
 
 # VerifyAgentServiceHealth: depois de copiar os binários e registrar o
-# serviço, espera até 10s por STATE=RUNNING. Só então descarta o .bak_update.
-# Se não subir, restaura o binário anterior e reinicia o serviço (rollback),
-# deixando o motivo no installer.log e exit code não-zero para o updater.
+# serviço, espera até 2 minutos (A.2.4) por STATE=RUNNING. "RUNNING" isolado
+# NÃO basta: um serviço que sobe e cai logo depois faria o instalador apagar o
+# único backup (.bak_update) e reportar sucesso com o serviço morto. Por isso,
+# depois do primeiro RUNNING, espera 5s e confirma que continua RUNNING antes
+# de descartar o backup. Se não subir/estabilizar, restaura o binário anterior
+# e reinicia o serviço (rollback), com exit code não-zero para o updater.
 Function VerifyAgentServiceHealth
    IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}" 0 health_skip
    ${InstallerLog} "Health check: aguardando ${DISCOVERY_SERVICE_NAME} RUNNING..."
    StrCpy $R1 0
    health_retry:
-      ${If} $R1 >= 10
+      ${If} $R1 >= 120
          Goto health_failed
       ${EndIf}
       # Pipe precisa de cmd.exe (nsExec não interpreta pipes de shell).
       nsExec::ExecToLog /OEM '"$SYSDIR\cmd.exe" /c sc.exe query ${DISCOVERY_SERVICE_NAME} | "$SYSDIR\find.exe" "RUNNING"'
       Pop $R2
       ${If} $R2 == 0
-         ${InstallerLog} "Health check: ${DISCOVERY_SERVICE_NAME} RUNNING"
+         ${InstallerLog} "Health check: ${DISCOVERY_SERVICE_NAME} RUNNING — confirmando estabilidade (5s)..."
+         Sleep 5000
+         nsExec::ExecToLog /OEM '"$SYSDIR\cmd.exe" /c sc.exe query ${DISCOVERY_SERVICE_NAME} | "$SYSDIR\find.exe" "RUNNING"'
+         Pop $R2
+         ${If} $R2 != 0
+            ${InstallerLogError} "Health check: servico caiu logo apos o RUNNING inicial (nao estabilizou)"
+            Goto health_failed
+         ${EndIf}
+         ${InstallerLog} "Health check: ${DISCOVERY_SERVICE_NAME} RUNNING estavel"
          Delete "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update"
          ${InstallerLog} "Cleanup: ${SERVICE_EXECUTABLE}.bak_update removido (health check ok)"
          Goto health_skip
       ${EndIf}
       ${If} $R1 == 3
-         # Segunda tentativa de start: o SCM pode ainda estar finalizando a
-         # criação do serviço quando RegisterAgentService chamou sc start.
+      ${OrIf} $R1 == 15
+         # Retentativas de start: o SCM pode ainda estar finalizando a criação
+         # do serviço quando RegisterAgentService chamou sc start.
          nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" start ${DISCOVERY_SERVICE_NAME}'
          Pop $R0
       ${EndIf}
@@ -1516,7 +1568,7 @@ Function VerifyAgentServiceHealth
       IntOp $R1 $R1 + 1
       Goto health_retry
    health_failed:
-      ${InstallerLogError} "Health check FALHOU: ${DISCOVERY_SERVICE_NAME} nao ficou RUNNING em 10s"
+      ${InstallerLogError} "Health check FALHOU: ${DISCOVERY_SERVICE_NAME} nao ficou RUNNING estavel em 120s"
       ${If} $ServiceBackupCreated == "1"
          # Update in-place: existe binário anterior para restaurar.
          Call RollbackAgentServiceUpdate
@@ -1533,6 +1585,12 @@ FunctionEnd
 # discovery-service.exe.bak_update e recria/inicia o serviço com os mesmos
 # parâmetros de RegisterAgentService (binPath, failure actions, descrição).
 Function RollbackAgentServiceUpdate
+   # PRÉ-CONDIÇÃO: sem backup NÃO se apaga a definição do serviço. Antes o
+   # sc delete vinha primeiro e, se o .bak_update tivesse desaparecido (AV,
+   # limpeza, rollback anterior), a máquina ficava sem serviço nenhum — pior
+   # que o binário novo com problema. Sem backup, a definição fica intacta e
+   # as failure actions/start=auto ainda podem recuperar no boot.
+   IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" 0 rollback_no_backup
    ${InstallerLogError} "Rollback do servico: restaurando ${SERVICE_EXECUTABLE}.bak_update..."
    nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" stop ${DISCOVERY_SERVICE_NAME}'
    Pop $R0
@@ -1542,24 +1600,40 @@ Function RollbackAgentServiceUpdate
    nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${SERVICE_EXECUTABLE}" /F'
    Pop $R0
 
-   IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" 0 rollback_no_backup
+   # (Sem segundo check do backup: se ele desaparecer entre o check acima e o
+   # Rename, o próprio Rename falha e o serviço é recriado logo abaixo — nunca
+   # deixamos o SCM sem definição.)
    Delete "$INSTDIR\${SERVICE_EXECUTABLE}"
    ClearErrors
    Rename "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" "$INSTDIR\${SERVICE_EXECUTABLE}"
    ${If} ${Errors}
-      ${InstallerLogError} "Rollback: FALHA ao restaurar ${SERVICE_EXECUTABLE}.bak_update — intervencao manual necessaria"
-      SetErrorLevel 1
-      StrCpy $ServiceRollbackDone "1"
-      Goto rollback_done
+      ${InstallerLogError} "Rollback: FALHA ao restaurar ${SERVICE_EXECUTABLE}.bak_update — recriando a definicao do servico com o binario disponivel"
+   ${Else}
+      ${InstallerLog} "Rollback: binario anterior restaurado em $INSTDIR\${SERVICE_EXECUTABLE}"
    ${EndIf}
-   ${InstallerLog} "Rollback: binario anterior restaurado em $INSTDIR\${SERVICE_EXECUTABLE}"
 
-   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" create ${DISCOVERY_SERVICE_NAME} binPath= "\"$INSTDIR\${SERVICE_EXECUTABLE}\"" start= auto obj= LocalSystem DisplayName= "Discovery Agent Service"'
-   Pop $R0
-   ${If} $R0 != 0
-      nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" config ${DISCOVERY_SERVICE_NAME} binPath= "\"$INSTDIR\${SERVICE_EXECUTABLE}\"" start= auto'
+   # O sc delete anterior pode ainda estar em andamento ("marked for delete"):
+   # sc create falha com 1072 nesse intervalo. Tenta por até 10s antes de
+   # desistir, para não deixar o SCM sem a definição do serviço.
+   StrCpy $R5 0
+   rollback_create_retry:
+      nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" create ${DISCOVERY_SERVICE_NAME} binPath= "\"$INSTDIR\${SERVICE_EXECUTABLE}\"" start= auto obj= LocalSystem DisplayName= "Discovery Agent Service"'
       Pop $R0
-   ${EndIf}
+      ${If} $R0 != 0
+         nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" config ${DISCOVERY_SERVICE_NAME} binPath= "\"$INSTDIR\${SERVICE_EXECUTABLE}\"" start= auto'
+         Pop $R0
+      ${EndIf}
+      ${If} $R0 == 0
+         Goto rollback_create_done
+      ${EndIf}
+      IntOp $R5 $R5 + 1
+      ${If} $R5 >= 10
+         ${InstallerLogError} "Rollback: sc create/config falhou apos 10 tentativas (codigo $R0)"
+         Goto rollback_create_done
+      ${EndIf}
+      Sleep 1000
+      Goto rollback_create_retry
+   rollback_create_done:
    # Preserva as failure actions (crash → restart em 5s, 3 vezes, reset diário).
    nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" failure ${DISCOVERY_SERVICE_NAME} reset= 86400 actions= restart/5000/restart/5000/restart/5000'
    Pop $R0
@@ -1577,10 +1651,44 @@ Function RollbackAgentServiceUpdate
    Goto rollback_done
 
    rollback_no_backup:
-      ${InstallerLogError} "Rollback: ${SERVICE_EXECUTABLE}.bak_update ausente — servico ficou sem definicao; intervencao manual necessaria"
+      ${InstallerLogError} "Rollback: ${SERVICE_EXECUTABLE}.bak_update ausente — definicao do servico MANTIDA intacta para recuperacao no proximo boot"
       SetErrorLevel 1
       StrCpy $ServiceRollbackDone "1"
    rollback_done:
+FunctionEnd
+
+# RecoverAgentBinariesIfMissing: desfaz o rename para .bak_update quando o
+# binário original NÃO chegou a ser copiado (abort/cancelamento/erro entre o
+# backup e a cópia). Sem isso o $INSTDIR fica sem discovery-agent.exe ou
+# discovery-service.exe e o sc start do .onInstFailed falha para sempre.
+# Só restaura quando o destino está AUSENTE: se o binário novo já está no
+# lugar, .bak_update é backup de rollback e permanece intacto.
+Function RecoverAgentBinariesIfMissing
+   ${InstallerLogInit}
+   IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 recover_ui
+   Goto recover_service
+   recover_ui:
+   IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update" 0 recover_service
+   ClearErrors
+   Rename "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+   ${If} ${Errors}
+      ${InstallerLogError} "Recuperacao: falha ao restaurar ${PRODUCT_EXECUTABLE}.bak_update"
+   ${Else}
+      ${InstallerLog} "Recuperacao: ${PRODUCT_EXECUTABLE}.bak_update restaurado (abort durante o update)"
+   ${EndIf}
+   recover_service:
+   IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}" 0 recover_svc
+   Goto recover_done
+   recover_svc:
+   IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" 0 recover_done
+   ClearErrors
+   Rename "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" "$INSTDIR\${SERVICE_EXECUTABLE}"
+   ${If} ${Errors}
+      ${InstallerLogError} "Recuperacao: falha ao restaurar ${SERVICE_EXECUTABLE}.bak_update"
+   ${Else}
+      ${InstallerLog} "Recuperacao: ${SERVICE_EXECUTABLE}.bak_update restaurado (abort durante o update)"
+   ${EndIf}
+   recover_done:
 FunctionEnd
 
 # RecoverAgentServiceIfStopped: bloco de recuperação para abort de instalação

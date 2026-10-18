@@ -153,6 +153,56 @@ func TestResumePendingInstallReport_ClearsStateOnVersionMatch(t *testing.T) {
 	}
 }
 
+// Regressão: persistir o PID do instalador (watchdog) NÃO é uma nova tentativa
+// de instalação. Antes, persistInstallerPID chamava persistPendingInstallState,
+// que incrementava InstallAttempts: cada launch consumia 2 tentativas e o
+// updater podia declarar "install-loop" e descartar um install bem-sucedido.
+func TestPersistInstallerPIDDoesNotIncrementAttempts(t *testing.T) {
+	u := &Updater{TempDir: t.TempDir(), Logf: func(string, ...any) {}}
+	state := pendingInstallState{
+		CurrentVersion: "1.0.0",
+		TargetVersion:  "1.1.0",
+		CorrelationID:  "corr-pid",
+		RecordedAtUTC:  "2026-01-01T00:00:00Z",
+	}
+
+	if err := u.persistPendingInstallState(state); err != nil {
+		t.Fatalf("persistPendingInstallState inicial: %v", err)
+	}
+	loaded, err := u.loadPendingInstallState()
+	if err != nil {
+		t.Fatalf("loadPendingInstallState inicial: %v", err)
+	}
+	if loaded.InstallAttempts != 0 {
+		t.Fatalf("primeira gravação não deveria contar tentativa: %d", loaded.InstallAttempts)
+	}
+
+	// Nova tentativa real (mesmo target/current) incrementa uma vez.
+	if err := u.persistPendingInstallState(state); err != nil {
+		t.Fatalf("persistPendingInstallState retry: %v", err)
+	}
+	loaded, err = u.loadPendingInstallState()
+	if err != nil {
+		t.Fatalf("loadPendingInstallState retry: %v", err)
+	}
+	if loaded.InstallAttempts != 1 {
+		t.Fatalf("retry deveria incrementar para 1: %d", loaded.InstallAttempts)
+	}
+
+	// Persistir o PID do instalador NÃO pode incrementar.
+	u.persistInstallerPID(4242)
+	loaded, err = u.loadPendingInstallState()
+	if err != nil {
+		t.Fatalf("loadPendingInstallState após PID: %v", err)
+	}
+	if loaded.InstallAttempts != 1 {
+		t.Fatalf("persistInstallerPID incrementou tentativas: %d (esperado 1)", loaded.InstallAttempts)
+	}
+	if loaded.InstallerPID != 4242 {
+		t.Fatalf("InstallerPID = %d, esperado 4242", loaded.InstallerPID)
+	}
+}
+
 func TestWindowBusy(t *testing.T) {
 	// Sem callback: nunca adia.
 	u := &Updater{}

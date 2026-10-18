@@ -97,16 +97,24 @@ func GetDataDir() string {
 // O perfil é separado POR SESSÃO (WebView2\session-<id>): com a UI sem elevação
 // (A2) duas sessões (console + RDP) podem rodar a UI ao mesmo tempo, e o
 // Chromium embutido não aceita dois processos no mesmo diretório de perfil.
-// Sem sessão (serviço/sessão 0) mantém o caminho base.
+// Sem sessão (serviço/sessão 0/0xFFFFFFFF = "sem sessão") mantém o caminho base.
 func WebView2UserDataPath() string {
 	if runtime.GOOS != "windows" {
 		return ""
 	}
-	base := filepath.Join(platform.DataDir(), "WebView2")
-	if session := currentProcessSessionID(); session > 0 {
-		return filepath.Join(base, fmt.Sprintf("session-%d", session))
+	return webView2SessionDir(filepath.Join(platform.DataDir(), "WebView2"), currentProcessSessionID())
+}
+
+// webView2SessionDir resolve o User Data Folder do WebView2 para uma sessão.
+// Sessão 0 (serviços) e 0xFFFFFFFF (WTS "sem sessão") NÃO podem virar
+// "session-0"/"session-4294967295": o primeiro colidiria com o perfil base e o
+// segundo criaria um diretório inútil com permissões herdadas de ProgramData.
+// Função pura para ser testável sem depender da sessão real do processo.
+func webView2SessionDir(base string, session uint32) string {
+	if session == 0 || session == 0xFFFFFFFF {
+		return base
 	}
-	return base
+	return filepath.Join(base, fmt.Sprintf("session-%d", session))
 }
 
 type App struct {

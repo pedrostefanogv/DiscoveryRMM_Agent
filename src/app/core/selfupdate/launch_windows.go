@@ -82,6 +82,13 @@ func (u *Updater) removeMarkOfTheWeb(exePath string) {
 // Exportado para que o callback PSADT no pacote app possa chamar a elevação UAC
 // diretamente de dentro da sessão PSADT.
 func LaunchInstallerElevated(exePath string, args string) (pid uint32, processHandle windows.Handle, err error) {
+	// Defesa em profundidade (A.2.3): este helper é exportado e chamado também
+	// por fluxos de automação (PSADT, descomissionamento). Nenhum deles pode
+	// levar a um "runas" na sessão 0 — lá não há desktop para o UAC.
+	if err := installerElevationAllowed(isServiceModeProcess(nil)); err != nil {
+		return 0, 0, err
+	}
+
 	verb, _ := windows.UTF16PtrFromString("runas")
 	file, _ := windows.UTF16PtrFromString(exePath)
 	params := mustUTF16Ptr(args)

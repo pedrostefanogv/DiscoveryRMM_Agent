@@ -110,6 +110,17 @@ Instale via NSIS (`task build:windows:installer`) com os **dois binários**
 
 ## Coleta de evidências (anexar ao relatório)
 
+Script pronto (somente leitura, gera Markdown + ZIP): `Discovery/scripts/windows/collect_e2_evidence.ps1`
+
+~~~powershell
+powershell -ExecutionPolicy Bypass -File .\collect_e2_evidence.ps1 -OutputDir C:\Temp\e2-evidence
+~~~
+
+Ele coleta versões/hashes, `sc qc/query/failure`, task de logon (RunLevel), processos por sessão,
+pipes do IPC, ACL e validade do `debug_config.json`, `logs.db` (últimas 200 + evidências de
+PRESHUTDOWN e `ipc_unauthorized`/rate limit), sessões ativas, handles do SQLite e perfis WebView2.
+Comandos manuais equivalentes (referência):
+
 ```powershell
 # Versões e serviço
 sc qc DiscoveryAgent; sc query DiscoveryAgent

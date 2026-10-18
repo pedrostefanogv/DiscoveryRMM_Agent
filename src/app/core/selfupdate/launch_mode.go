@@ -1,6 +1,9 @@
 package selfupdate
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // installerLaunchMode é o caminho de criação do processo do instalador NSIS.
 //
@@ -41,6 +44,18 @@ func decideInstallerLaunchMode(serviceMode, elevated bool) installerLaunchMode {
 		return installerLaunchCreateProcess
 	}
 	return installerLaunchShellElevated
+}
+
+// installerElevationAllowed é a trava de segurança do ShellExecuteEx("runas")
+// para QUALQUER chamador (self-update, automação/PSADT, descomissionamento):
+// na sessão 0/SYSTEM não existe desktop interativo, então solicitar elevação
+// não tem como ser atendido — pode falhar ou ficar pendurado até o timeout.
+// A decisão é pura para ser testável sem Windows.
+func installerElevationAllowed(serviceMode bool) error {
+	if serviceMode {
+		return fmt.Errorf("ShellExecuteEx(runas) bloqueado: processo em modo serviço (sessão 0) não tem desktop/UAC; use CreateProcess como SYSTEM")
+	}
+	return nil
 }
 
 // hasServiceModeArg reconhece --service / /service / -service (o binário do

@@ -31,6 +31,17 @@ func TestDecideInstallerLaunchMode(t *testing.T) {
 	}
 }
 
+// Trava de defesa em profundidade: o helper exportado LaunchInstallerElevated
+// (usado também por automação/PSADT) não pode chamar "runas" no modo serviço.
+func TestInstallerElevationBlockedInServiceMode(t *testing.T) {
+	if err := installerElevationAllowed(true); err == nil {
+		t.Fatal("modo serviço deve bloquear ShellExecuteEx(runas)")
+	}
+	if err := installerElevationAllowed(false); err != nil {
+		t.Fatalf("UI/serviço elevado pode chamar runas quando não é sessão 0: %v", err)
+	}
+}
+
 func TestHasServiceModeArg(t *testing.T) {
 	cases := []struct {
 		args []string

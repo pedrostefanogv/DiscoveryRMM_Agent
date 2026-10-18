@@ -110,6 +110,14 @@ type Service struct {
 	// dono único e duas gravações concorrentes não podem intercalar temp/rename.
 	persistMu sync.Mutex
 
+	// applyMu serializa as TRANSIÇÕES de config (gravação do RPC x adoção de
+	// alteração externa pelo watcher). Sem ele, o watcher podia ler o arquivo
+	// ANTES de uma gravação do RPC e adotar esse conteúdo velho DEPOIS,
+	// sobrescrevendo em memória a config que o serviço acabou de persistir
+	// (memória divergente do disco até a próxima alteração externa).
+	// Ordem de aquisição: applyMu → persistMu/watchMu/mu (nunca o inverso).
+	applyMu sync.Mutex
+
 	configPathsFn func() []string
 	hardenACL     func(string) error
 
@@ -166,11 +174,13 @@ func installerConfigAllowInsecureTLS(cfg InstallerConfig) bool {
 }
 
 func (s *Service) applyAllowInsecureTLS(allow bool) {
+	s.applyMu.Lock()
 	s.mu.Lock()
 	cfg := s.config
 	cfg.AllowInsecureTLS = allow
 	s.config = cfg
 	s.mu.Unlock()
+	s.applyMu.Unlock()
 	tlsutil.SetConfigAllowInsecureTLS(allow)
 }
 
@@ -193,13 +203,38 @@ func (s *Service) LoadPersistedConfig() {
 			return
 		}
 
+		s.applyMu.Lock()
 		s.mu.Lock()
 		s.config = cfg
 		s.mu.Unlock()
+		s.applyMu.Unlock()
 		tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
+		// A.1.5: a DACL restritiva (SYSTEM:F + Users:R) vale para o arquivo JÁ
+		// existente, não só para o temporário de cada gravação nova. Um arquivo
+		// criado antes desta fase (ou pelo instalador) herda a ACL do diretório
+		// (ProgramData/Discovery tem Users:(M)) e só seria endurecido no
+		// próximo save do serviço — que pode nunca acontecer. Best-effort: a
+		// falha é apenas logada (não impede o carregamento da config).
+		if aclErr := s.hardenLoadedConfigACL(path); aclErr != nil {
+			s.logf("[debug] aviso: nao foi possivel restringir ACL de " + path + ": " + aclErr.Error())
+		}
 		s.logf("[debug] configuração carregada de " + path)
 		return
 	}
+}
+
+// hardenLoadedConfigACL aplica a DACL de segredo no arquivo de config que já
+// existe no disco (ver HardenSecretFileACL). Não depende de elevação: quem
+// decide é o resultado do icacls, e o caller apenas loga a falha.
+func (s *Service) hardenLoadedConfigACL(path string) error {
+	if s == nil || s.hardenACL == nil || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		// Arquivo sumiu entre a leitura e o harden: nada a fazer.
+		return nil
+	}
+	return s.hardenACL(path)
 }
 
 // parsePersistedConfigData valida um JSON de debug_config.json antes de adotar
@@ -441,10 +476,38 @@ func (s *Service) seedSignaturesLocked() {
 // pollExternalConfigChange compara mtime+hash do arquivo atual com a última
 // assinatura conhecida. Mudou → recarrega com validação; JSON inválido mantém
 // a config em memória (último válido).
+//
+// applyMu serializa TODO o ciclo (ler o arquivo → validar → publicar em
+// memória) com as gravações do próprio serviço (SetConfig/config:set,
+// segurança remota, toggle winget). Sem essa serialização o watcher podia ler o
+// arquivo ANTES de uma gravação do RPC e adotar esse conteúdo velho DEPOIS,
+// sobrescrevendo em memória a config mais nova que o serviço acabou de
+// persistir. O hook de reaplicação roda FORA do lock (ele recarrega o
+// agentConn e notifica as UIs — I/O não pode bloquear a config).
 func (s *Service) pollExternalConfigChange() {
+	s.applyMu.Lock()
+	cfg, path, adopted := s.pollExternalConfigChangeLocked()
+	s.applyMu.Unlock()
+	if !adopted {
+		return
+	}
+
+	s.logf("[debug] configuração recarregada após alteração externa em " + path)
+
+	s.watchMu.Lock()
+	hook := s.externalHook
+	s.watchMu.Unlock()
+	if hook != nil {
+		hook(cfg)
+	}
+}
+
+// pollExternalConfigChangeLocked faz a detecção/adoção. O caller DEVE segurar
+// applyMu (é ele que impede a corrida com as gravações do serviço).
+func (s *Service) pollExternalConfigChangeLocked() (Config, string, bool) {
 	path, sig, ok := s.currentConfigSignature()
 	if !ok {
-		return
+		return Config{}, "", false
 	}
 
 	s.watchMu.Lock()
@@ -454,44 +517,33 @@ func (s *Service) pollExternalConfigChange() {
 	s.watchMu.Unlock()
 
 	if !baseline {
-		return
+		return Config{}, "", false
 	}
 	if seen && prev == sig {
-		return
+		return Config{}, "", false
 	}
 	if sig == "" {
-		return
+		return Config{}, "", false
 	}
 
 	data, err := osReadFile(path)
 	if err != nil {
 		s.logf("[debug] watcher: falha ao ler " + path + ": " + err.Error())
-		return
+		return Config{}, "", false
 	}
 	cfg, err := parsePersistedConfigData(data)
 	if err != nil {
 		s.logf("[debug] watcher: JSON externo inválido em " + path + " — mantendo config em memória: " + err.Error())
-		return
+		return Config{}, "", false
 	}
-	s.adoptExternalConfig(path, cfg)
-}
-
-func (s *Service) adoptExternalConfig(path string, cfg Config) {
 	if reflect.DeepEqual(s.GetConfig(), cfg) {
-		return
+		return Config{}, "", false
 	}
 	s.mu.Lock()
 	s.config = cfg
 	s.mu.Unlock()
 	tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
-	s.logf("[debug] configuração recarregada após alteração externa em " + path)
-
-	s.watchMu.Lock()
-	hook := s.externalHook
-	s.watchMu.Unlock()
-	if hook != nil {
-		hook(cfg)
-	}
+	return cfg, path, true
 }
 
 func (s *Service) currentConfigSignature() (string, string, bool) {
@@ -607,9 +659,11 @@ func (s *Service) ApplyRuntimeConnectionConfig(apiScheme, apiServer, authToken, 
 		cfg.Server = cfg.ApiServer
 	}
 
+	s.applyMu.Lock()
 	s.mu.Lock()
 	s.config = cfg
 	s.mu.Unlock()
+	s.applyMu.Unlock()
 	tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
 	s.notifyConfigChanged(cfg)
 }
@@ -617,6 +671,10 @@ func (s *Service) ApplyRuntimeConnectionConfig(apiScheme, apiServer, authToken, 
 // ApplyRemoteConnectionSecurity updates TLS pinning and transport hardening values from /me/configuration.
 // It persists the updated runtime config and forces reconnect so new policies apply immediately.
 func (s *Service) ApplyRemoteConnectionSecurity(natsServerHost, natsServerHostInternal string, natsUseWssExternal, enforceTLSHashValidation, handshakeEnabled *bool, apiTLSCertHash, natsTLSCertHash string) (bool, error) {
+	// applyMu: a leitura de s.config, a mutação, a publicação em memória e a
+	// persistência são UMA transição (o watcher externo não pode adotar um
+	// arquivo lido antes desta gravação).
+	s.applyMu.Lock()
 	s.mu.Lock()
 	cfg := s.config
 
@@ -661,10 +719,12 @@ func (s *Service) ApplyRemoteConnectionSecurity(natsServerHost, natsServerHostIn
 	tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
 
 	if !changed {
+		s.applyMu.Unlock()
 		return false, nil
 	}
 
 	persistErr := s.PersistConfig(cfg)
+	s.applyMu.Unlock()
 	if persistErr != nil {
 		s.logf("[debug] falha ao persistir atualização de segurança remota: " + persistErr.Error())
 	}
@@ -688,10 +748,12 @@ func (s *Service) ApplyP2PWingetInstallEnabledRemote(enabled *bool) (bool, error
 	if s == nil {
 		return false, nil
 	}
+	s.applyMu.Lock()
 	s.mu.Lock()
 	cfg := s.config
 	if enabled == nil {
 		s.mu.Unlock()
+		s.applyMu.Unlock()
 		return false, nil
 	}
 
@@ -707,12 +769,15 @@ func (s *Service) ApplyP2PWingetInstallEnabledRemote(enabled *bool) (bool, error
 	s.mu.Unlock()
 
 	if !changed {
+		s.applyMu.Unlock()
 		return false, nil
 	}
 
-	if err := s.PersistConfig(cfg); err != nil {
-		s.logf("[p2p-winget] falha ao persistir atualização remota: " + err.Error())
-		return true, err
+	persistErr := s.PersistConfig(cfg)
+	s.applyMu.Unlock()
+	if persistErr != nil {
+		s.logf("[p2p-winget] falha ao persistir atualização remota: " + persistErr.Error())
+		return true, persistErr
 	}
 	// Não força reload: é uma flag local de comportamento, não de transporte.
 	s.logf(fmt.Sprintf("[p2p-winget] automationP2pWingetInstallEnabled=%t aplicado pela API", *enabled))
@@ -954,6 +1019,10 @@ func (s *Service) SetConfig(cfg Config) error {
 	s.logf(fmt.Sprintf("[debug] atualizando configuracao: api=%s://%s nats=%s natsWs=%s agentId=%s",
 		cfg.APIScheme(), cfg.ApiServer, cfg.NatsServer, cfg.NatsWsServer, cfg.AgentID))
 
+	// applyMu: publicar em memória + persistir é UMA transição de estado. O
+	// watcher de alteração externa toma o mesmo lock para ler+adotar o arquivo,
+	// então ele nunca publica em memória um conteúdo lido antes desta gravação.
+	s.applyMu.Lock()
 	s.mu.Lock()
 	s.config = cfg
 	s.mu.Unlock()
@@ -973,9 +1042,11 @@ func (s *Service) SetConfig(cfg Config) error {
 		}
 	}
 
-	if err := s.PersistConfig(cfg); err != nil {
-		s.logf("[debug] falha ao persistir configuracao: " + err.Error())
-		return err
+	persistErr := s.PersistConfig(cfg)
+	s.applyMu.Unlock()
+	if persistErr != nil {
+		s.logf("[debug] falha ao persistir configuracao: " + persistErr.Error())
+		return persistErr
 	}
 	if s.agentConn != nil {
 		s.logf("[debug] solicitando reload da conexão do agente")
@@ -1003,9 +1074,11 @@ func (s *Service) AdoptExternalConfig(cfg Config) {
 	normalizeSecurityConfig(&cfg)
 	cfg.normalizeApiScheme()
 
+	s.applyMu.Lock()
 	s.mu.Lock()
 	s.config = cfg
 	s.mu.Unlock()
+	s.applyMu.Unlock()
 	tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
 	s.logf("[debug] config adotada de processo externo (memória, sem persistir)")
 }
