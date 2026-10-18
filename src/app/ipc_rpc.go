@@ -23,7 +23,7 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 	// context autenticado anexado por IPCServer.authorizeRPC (canal admin +
 	// token validado). Chamadas diretas/internas sem esse contexto são
 	// recusadas — nenhum caminho executa mutação sem autenticação.
-	if ipcMethodRequiresAdmin(method) {
+	if ipcRequestRequiresAdmin(method, payload) {
 		if _, ok := ipcAuthFromContext(ctx); !ok {
 			return map[string]any{
 				"ok":    false,

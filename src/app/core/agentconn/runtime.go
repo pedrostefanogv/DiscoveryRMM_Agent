@@ -114,6 +114,10 @@ type AgentHeartbeat struct {
 	// IPC — útil para o servidor decidir roteamento de notificações interativas
 	// e remote session. Omitido quando o processo não é serviço (UI standalone).
 	UIOnline *bool `json:"uiOnline,omitempty"`
+	// UIOnlineCount é o número de UIs conectadas ao serviço (agregado). Aditivo:
+	// ausente em agentes antigos e fora do modo serviço. Permite ao servidor
+	// distinguir "1 UI" de "2+ UIs em sessões diferentes" (A3).
+	UIOnlineCount *int `json:"uiOnlineCount,omitempty"`
 	// LoggedUser é o usuário da sessão interativa (console) reportado a cada
 	// heartbeat, usado para exibição e busca de agentes no console web.
 	//
@@ -151,6 +155,8 @@ type AgentHeartbeatMetrics struct {
 	Port   int
 	// UIOnline: nil = não aplicável (não é serviço); true/false = estado IPC
 	UIOnline *bool
+	// UIOnlineCount: quantas UIs conectadas (nil = não aplicável)
+	UIOnlineCount *int
 	// LoggedUser: usuário da sessão de console ativa ("DOMINIO\usuario"), vazio
 	// quando não há sessão interativa. Coletado nativamente no Windows.
 	LoggedUser string
@@ -285,7 +291,7 @@ type Options struct {
 	// HandleSupportChatEnvelope recebe um envelope do chat de suporte vindo do
 	// servidor (canal servidor -> agent). Erro devolve o Ack (reentrega).
 	HandleSupportChatEnvelope func(parent context.Context, data []byte) error
-	OnCommandOutput        func(cmdType string, output string, errText string)
+	OnCommandOutput           func(cmdType string, output string, errText string)
 
 	GetHeartbeatMetrics           func() AgentHeartbeatMetrics
 	OnP2PEvent                    func(PeerEventMessage)
@@ -619,6 +625,9 @@ func (r *Runtime) collectHeartbeat(cfg Config, ipAddr string) AgentHeartbeat {
 		// UI online (companion conectada via IPC) — apenas no modo serviço.
 		if m.UIOnline != nil {
 			hb.UIOnline = m.UIOnline
+		}
+		if m.UIOnlineCount != nil {
+			hb.UIOnlineCount = m.UIOnlineCount
 		}
 		// Usuário logado (sessão interativa/console). Sempre presente (mesmo
 		// vazio) para o servidor distinguir "sem sessão" de "agent antigo".

@@ -76,30 +76,80 @@ func hasActiveUserSession() bool {
 	return windows.WTSGetActiveConsoleSessionId() != 0xFFFFFFFF
 }
 
-// activeUserSessions enumera as SESSÕES INTERATIVAS ativas via WTS
-// (WTSEnumerateSessions). Cada usuário logado — console, RDP ou troca rápida —
-// ganha a sua UI; uma sessão desconectada/locked continua com estado WTSActive
-// e mantém a UI viva no tray.
+// ── Enumeração de sessões WTS (watchdog multiusuário) ──────────────────────
 //
-// Fallback: se a API WTS não estiver disponível (erro na enumeração), usa a
-// sessão do console — o comportamento single-session anterior. A sessão 0
-// (serviços) nunca é devolvida: lá não existe desktop de usuário.
-func activeUserSessions() []uint32 {
-	sessions, err := enumerateActiveUserSessions()
-	if err == nil && len(sessions) > 0 {
-		return sessions
+// Cada usuário logado — console ou RDP — ganha a sua UI. Sessão RDP
+// DESCONECTADA (WTSDisconnected) entra na lista de propósito: o usuário
+// continua logado, o desktop existe e a UI precisa estar viva no tray para
+// receber chat/scripts quando ele reconectar. Antes só WTSActive entrava, então
+// quem desconectava o RDP ficava sem UI (ou com a UI morta sem relançamento)
+// até reconectar.
+//
+// A sessão 0 (serviços) e 0xFFFFFFFF ("sem sessão") nunca entram, e o
+// comportamento anterior é mantido quando a API WTS não está disponível: cai
+// para a sessão do console.
+
+// wtsSessionEntry é a projeção testável de WTS_SESSION_INFO (a struct nativa
+// exige ponteiros e não é injetável nos testes).
+type wtsSessionEntry struct {
+	SessionID uint32
+	// State espelha WTS_CONNECTSTATE_CLASS (WTSActive, WTSDisconnected, ...).
+	State uint32
+}
+
+// wtsSessionHasDesktop informa se o estado da sessão tem desktop de usuário.
+// WTSActive cobre console/logon normal; WTSDisconnected cobre RDP/quick-switch
+// em que o usuário segue logado (a UI fica no tray até a reconexão).
+func wtsSessionHasDesktop(state uint32) bool {
+	return state == windows.WTSActive || state == windows.WTSDisconnected
+}
+
+// uiSessionsFromWTS filtra as entradas cruas do WTS: só sessões com desktop de
+// usuário, nunca a sessão 0 (serviços) nem 0xFFFFFFFF (sem sessão).
+func uiSessionsFromWTS(entries []wtsSessionEntry) []uint32 {
+	sessions := make([]uint32, 0, len(entries))
+	for _, entry := range entries {
+		if entry.SessionID == 0 || entry.SessionID == 0xFFFFFFFF {
+			continue
+		}
+		if !wtsSessionHasDesktop(entry.State) {
+			continue
+		}
+		sessions = append(sessions, entry.SessionID)
 	}
-	console := windows.WTSGetActiveConsoleSessionId()
+	return sessions
+}
+
+// activeUserSessions enumera as SESSÕES INTERATIVAS via WTS (produção).
+func activeUserSessions() []uint32 {
+	return activeUserSessionsWith(enumerateWTSSessions, windows.WTSGetActiveConsoleSessionId)
+}
+
+// activeUserSessionsWith é activeUserSessions com as chamadas WTS injetáveis
+// (usado pelos testes de regressão). Fallback preservado: erro na enumeração —
+// API WTS indisponível — ou nenhuma sessão utilizável devolve a sessão do
+// console, que é o comportamento single-session anterior.
+func activeUserSessionsWith(
+	enumerate func() ([]wtsSessionEntry, error),
+	consoleSession func() uint32,
+) []uint32 {
+	entries, err := enumerate()
+	if err == nil {
+		if sessions := uiSessionsFromWTS(entries); len(sessions) > 0 {
+			return sessions
+		}
+	}
+	console := consoleSession()
 	if console == 0xFFFFFFFF || console == 0 {
 		return nil
 	}
 	return []uint32{console}
 }
 
-// enumerateActiveUserSessions chama WTSEnumerateSessions(WTS_CURRENT_SERVER_HANDLE).
-// Devolve erro quando a chamada falha (fallback no chamador) e lista vazia
-// quando não há nenhuma sessão em estado WTSActive.
-func enumerateActiveUserSessions() ([]uint32, error) {
+// enumerateWTSSessions chama WTSEnumerateSessions(WTS_CURRENT_SERVER_HANDLE) e
+// devolve as entradas cruas. Devolve erro quando a chamada falha (fallback no
+// chamador) e lista vazia quando o servidor não tem sessão nenhuma.
+func enumerateWTSSessions() ([]wtsSessionEntry, error) {
 	var info *windows.WTS_SESSION_INFO
 	var count uint32
 	if err := windows.WTSEnumerateSessions(0, 0, 1, &info, &count); err != nil {
@@ -111,17 +161,12 @@ func enumerateActiveUserSessions() ([]uint32, error) {
 	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(info)))
 
 	entrySize := unsafe.Sizeof(windows.WTS_SESSION_INFO{})
-	var sessions []uint32
+	entries := make([]wtsSessionEntry, 0, count)
 	for i := uint32(0); i < count; i++ {
 		entry := (*windows.WTS_SESSION_INFO)(unsafe.Pointer(uintptr(unsafe.Pointer(info)) + uintptr(i)*entrySize))
-		// Estado != WTSActive cobre Listen/Idle/Disconnected sem usuário
-		// interativo; a sessão 0 é o nó de serviços.
-		if entry.SessionID == 0 || entry.State != windows.WTSActive {
-			continue
-		}
-		sessions = append(sessions, entry.SessionID)
+		entries = append(entries, wtsSessionEntry{SessionID: entry.SessionID, State: entry.State})
 	}
-	return sessions, nil
+	return entries, nil
 }
 
 // uiProcessesBySession conta os discovery-agent.exe por sessão (ProcessIdToSessionId).

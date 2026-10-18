@@ -142,6 +142,13 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 		// handler (nada é executado).
 		// authorizeRPC é nil-safe: sem servidor IPC o contexto sai SEM auth e o
 		// gate de handleIPCRequest recusa qualquer mutação (fail-closed).
+		// A.0.8: o audit de gate registra "allowed" ANTES de executar; aqui
+		// capturamos método/início para logar o DESFECHO real (ok|code + duração)
+		// quando a resposta for emitida.
+		method, _ := msg.Payload["method"].(string)
+		mutating := ipcRequestRequiresAdmin(method, msg.Payload)
+		dispatchStart := time.Now()
+
 		ctx := context.Background()
 		authCtx, authErr := a.ipcServer.authorizeRPC(conn, msg)
 		if authErr != nil {
@@ -162,6 +169,15 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 		// O token nunca é repassado aos handlers/RPCs.
 		delete(msg.Payload, "token")
 		resp := a.handleIPCRequest(ctx, msg.Payload)
+		if mutating {
+			// Desfecho real do mutante (independente do gate): sucesso vira
+			// result=ok; falha vira o code de domínio (ou "error") e incrementa
+			// o contador de falhas.
+			auth, _ := ipcAuthFromContext(ctx)
+			outcomeOK, _ := resp["ok"].(bool)
+			outcomeCode, _ := resp["code"].(string)
+			ipcAuditMutatingOutcome(method, auth, outcomeOK, outcomeCode, time.Since(dispatchStart))
+		}
 		if a.ipcServer != nil {
 			a.ipcServer.recordRequestResult(conn, msg.CorrelationID, resp)
 			reply := NewIPCMessage(IPCMsgResponse, resp)
@@ -255,19 +271,38 @@ func (a *App) broadcastIPCEvent(name string, data ...any) {
 	// S3: persiste o destinatário do prompt no MESMO momento do broadcast. O
 	// payload do evento também carrega sessionId/sid para a UI (auditoria e
 	// prompt), sem quebrar o contrato antigo (campos extras são ignorados).
+	//
+	// A.3.5: quando o destinatário é CONHECIDO, entrega só às conexões
+	// autenticadas daquela sessão. Se nenhuma casar (UI em outra sessão, canal
+	// ainda não autenticado), cai para Broadcast — compatibilidade preservada.
+	var target ipcAuthIdentity
+	targetKnown := false
 	if name == "notification:new" {
 		if notificationID, _ := payload["id"].(string); strings.TrimSpace(notificationID) != "" {
-			target, ok := a.ipcServer.currentNotificationTarget()
-			ipcRememberNotificationTarget(notificationID, target, !ok)
+			t, ok := a.ipcServer.currentNotificationTarget()
+			ipcRememberNotificationTarget(notificationID, t, !ok)
 			if ok {
-				payload["sessionId"] = target.SessionID
-				if strings.TrimSpace(target.SID) != "" {
-					payload["sid"] = target.SID
+				target, targetKnown = t, true
+				payload["sessionId"] = t.SessionID
+				if strings.TrimSpace(t.SID) != "" {
+					payload["sid"] = t.SID
 				}
 			}
 		}
+	} else if name == "supportchat:invite" {
+		if t, ok := a.ipcServer.currentNotificationTarget(); ok && t.Valid {
+			target, targetKnown = t, true
+		}
 	}
-	a.ipcServer.Broadcast(NewIPCMessage(IPCMsgEvent, payload))
+
+	msg := NewIPCMessage(IPCMsgEvent, payload)
+	sent := 0
+	if targetKnown {
+		sent = a.ipcServer.SendToSession(target.SessionID, msg)
+	}
+	if sent == 0 {
+		a.ipcServer.Broadcast(msg)
+	}
 }
 
 // ipcEventToFrontend desempacota o payload IPC {name, <campos>} no par

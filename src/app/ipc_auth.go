@@ -15,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,6 +37,22 @@ const (
 	ipcMaxRequestsPerSecond = 50
 	ipcMaxRequestsInFlight  = 8
 	ipcMaxConnections       = 32
+
+	// ipcMaxAdminConnections limita SÓ o canal admin/mutante (DoS, A.3.2): o
+	// global de 32 continua valendo para o canal de leitura. A UI abre a
+	// conexão admin sob demanda e a fecha quando fica ociosa, então 8 é folgado.
+	ipcMaxAdminConnections = 8
+
+	// ipcAdminIdleTimeout é a ociosidade da CONEXÃO admin. O token continua
+	// com TTL de 12h (ipcAuthTokenTTL); o que expira aqui é a conexão parada —
+	// a UI reabre sob demanda e recebe um token novo.
+	ipcAdminIdleTimeout = 5 * time.Minute
+
+	// ipcMaxHellosPerSecond limita hello POR CONEXÃO: cada hello emite (ou
+	// rotaciona) o token admin, então uma rajada não pode ser ilimitada. O
+	// probe IsServicePresent abre uma conexão nova e manda UM hello — sempre
+	// passa.
+	ipcMaxHellosPerSecond = 10
 
 	// janela do dedup de "cid" por conexão.
 	ipcDedupWindow = 60 * time.Second
@@ -65,12 +83,88 @@ type ipcAuthIdentity struct {
 	SessionID uint32
 	System    bool
 	Valid     bool
+	// ImagePath/UIImage (A.0.1): caminho da imagem do processo chamador e se
+	// ele é a UI (discovery-agent.exe sob um diretório de instalação). Só a UI
+	// pode receber token admin; no canal de leitura o chamador não-UI continua
+	// conectado, mas NÃO conta como identidade autenticada.
+	ImagePath string
+	UIImage   bool
 }
 
 // String devolve os campos no formato chave=valor usado no log estruturado.
 func (id ipcAuthIdentity) String() string {
 	return fmt.Sprintf("sid=%q pid=%d session=%d system=%t valid=%t",
 		id.SID, id.PID, id.SessionID, id.System, id.Valid)
+}
+
+// ── Restrição de chamador: só a UI recebe token admin (A.0.1) ──────────────
+
+// ipcUIExecutableName é o único nome de imagem autorizado a receber token
+// admin. A UI instalada é sempre discovery-agent.exe.
+const ipcUIExecutableName = "discovery-agent.exe"
+
+// ipcCallerBypassEnv é o bypass EXPLÍCITO de desenvolvimento: qualquer valor
+// diferente de "1" mantém a validação ligada.
+const ipcCallerBypassEnv = "DISCOVERY_IPC_ALLOW_ANY_CALLER"
+
+// ipcAllowedUIDirectories devolve os diretórios de instalação aceitos para a
+// UI. Lidos do ambiente a cada checagem (barato e testável com t.Setenv).
+func ipcAllowedUIDirectories() []string {
+	var roots []string
+	for _, env := range []string{"ProgramFiles", "ProgramFiles(x86)"} {
+		if base := strings.TrimSpace(os.Getenv(env)); base != "" {
+			roots = append(roots, filepath.Join(base, "Discovery"))
+		}
+	}
+	if base := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); base != "" {
+		roots = append(roots, filepath.Join(base, "Programs", "Discovery"))
+	}
+	return roots
+}
+
+// ipcIsDiscoveryUIImagePath decide se imagePath é discovery-agent.exe DENTRO de
+// um dos diretórios permitidos. Comparação case-insensitive (Windows) e com
+// separador de caminho, para "Discovery2" NÃO casar com "Discovery".
+func ipcIsDiscoveryUIImagePath(imagePath string, roots []string) bool {
+	clean := filepath.Clean(strings.TrimSpace(imagePath))
+	if clean == "" || clean == "." {
+		return false
+	}
+	if !strings.EqualFold(filepath.Base(clean), ipcUIExecutableName) {
+		return false
+	}
+	for _, root := range roots {
+		root = filepath.Clean(strings.TrimSpace(root))
+		if root == "" || root == "." {
+			continue
+		}
+		prefix := root + string(os.PathSeparator)
+		if len(clean) > len(prefix) && strings.EqualFold(clean[:len(prefix)], prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// ipcCallerBypassEnabled informa se o bypass de dev está ligado.
+func ipcCallerBypassEnabled() bool {
+	return strings.TrimSpace(os.Getenv(ipcCallerBypassEnv)) == "1"
+}
+
+// ipcAdminCallerAllowed decide se o chamador pode receber token admin. Sem
+// bypass, exige UIImage (validado pelo ipcCallerValidator com
+// QueryFullProcessImageName). O bypass é logado como AVISO em cada handshake.
+func ipcAdminCallerAllowed(id ipcAuthIdentity) bool {
+	if id.UIImage {
+		return true
+	}
+	if ipcCallerBypassEnabled() {
+		logIPCStructured("caller_validation_bypassed",
+			fmt.Sprintf("caller validation bypassed (dev) env=%s pid=%d image=%q",
+				ipcCallerBypassEnv, id.PID, id.ImagePath))
+		return true
+	}
+	return false
 }
 
 // ipcRandomToken gera 32 bytes aleatórios em hex (crypto/rand).
@@ -230,8 +324,33 @@ func isIPCMutatingMethod(method string) bool {
 	}
 }
 
+// isIPCMutatingRequest refina a classificação pelo PAYLOAD: alguns métodos são
+// leitura no caminho comum mas MUTAM quando um flag do pedido é ligado.
+// Caso real (revisão 2026-10-17): store:catalog com force=true dispara refresh
+// (HTTP + regravação do cache de política) e passava pelo canal de leitura sem
+// token — mutação disfarçada de leitura.
+func isIPCMutatingRequest(method string, payload map[string]any) bool {
+	if isIPCMutatingMethod(method) {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "store:catalog":
+		if raw, ok := payload["force"]; ok {
+			if b, isBool := raw.(bool); isBool && b {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ipcMethodRequiresAdmin é o nome usado pelo gate do dispatch (ipc_rpc.go).
 func ipcMethodRequiresAdmin(method string) bool { return isIPCMutatingMethod(method) }
+
+// ipcRequestRequiresAdmin decide canal/token pelo método + payload (gate do App).
+func ipcRequestRequiresAdmin(method string, payload map[string]any) bool {
+	return isIPCMutatingRequest(method, payload)
+}
 
 // ── Contexto autenticado do dispatch ───────────────────────────────────────
 
@@ -280,6 +399,16 @@ func newIPCRequestLimiter() *ipcRequestLimiter {
 	return &ipcRequestLimiter{
 		now:         time.Now,
 		maxPerSec:   ipcMaxRequestsPerSecond,
+		maxInFlight: ipcMaxRequestsInFlight,
+	}
+}
+
+// newIPCHelloLimiter limita hellos por conexão (emissão/rotação de token).
+// Reusa a janela deslizante do limiter de requests com um teto próprio.
+func newIPCHelloLimiter() *ipcRequestLimiter {
+	return &ipcRequestLimiter{
+		now:         time.Now,
+		maxPerSec:   ipcMaxHellosPerSecond,
 		maxInFlight: ipcMaxRequestsInFlight,
 	}
 }
@@ -542,6 +671,12 @@ type ipcAuthMetrics struct {
 	RemoteSessionDenied  atomic.Int64
 	NotificationDenied   atomic.Int64
 	TokenIssued          atomic.Int64
+	CallerNotAllowed     atomic.Int64
+	HelloRateLimited     atomic.Int64
+	AdminConnRefused     atomic.Int64
+	AdminIdleClosed      atomic.Int64
+	MutatingSucceeded    atomic.Int64
+	MutatingFailed       atomic.Int64
 }
 
 var ipcAuthStats ipcAuthMetrics
@@ -555,6 +690,27 @@ func ipcAuditMutating(method string, id ipcAuthIdentity, result string) {
 		ipcAuthStats.MutatingDenied.Add(1)
 	}
 	logIPCStructured("mutating_request", fmt.Sprintf("method=%q %s result=%s", method, id.String(), result))
+}
+
+// ipcAuditMutatingOutcome (A.0.8) registra o DESFECHO REAL do request mutante,
+// que o audit de gate ("allowed") não conhece: o gate roda ANTES da execução.
+// Loga sid/pid/sessionId/method/ok|code/duração — sem tocar no contrato.
+func ipcAuditMutatingOutcome(method string, auth ipcRequestAuth, ok bool, code string, dur time.Duration) {
+	result := "ok"
+	if !ok {
+		if strings.TrimSpace(code) == "" {
+			code = "error"
+		}
+		result = code
+	}
+	if ok {
+		ipcAuthStats.MutatingSucceeded.Add(1)
+	} else {
+		ipcAuthStats.MutatingFailed.Add(1)
+	}
+	logIPCStructured("mutating_outcome", fmt.Sprintf(
+		"sid=%q pid=%d sessionId=%d method=%q result=%s duration=%s",
+		auth.SID, auth.PID, auth.SessionID, method, result, dur.Round(time.Millisecond)))
 }
 
 // ipcStructuredLogger é substituível em testes para não poluir a saída.

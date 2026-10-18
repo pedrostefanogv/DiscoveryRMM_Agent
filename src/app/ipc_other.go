@@ -21,10 +21,11 @@ func StartIPCServer(onMessage func(net.Conn, IPCMessage)) *IPCServer { return ni
 // IPCServer é um stub não-Windows.
 type IPCServer struct{}
 
-func (*IPCServer) Broadcast(IPCMessage)           {}
-func (*IPCServer) RespondTo(net.Conn, IPCMessage) {}
-func (*IPCServer) ClientCount() int               { return 0 }
-func (*IPCServer) Close()                         {}
+func (*IPCServer) Broadcast(IPCMessage)                 {}
+func (*IPCServer) SendToSession(uint32, IPCMessage) int { return 0 }
+func (*IPCServer) RespondTo(net.Conn, IPCMessage)       {}
+func (*IPCServer) ClientCount() int                     { return 0 }
+func (*IPCServer) Close()                               {}
 
 // IPCClient é um stub não-Windows.
 type IPCClient struct{}

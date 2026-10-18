@@ -8,6 +8,7 @@ var APP_LOCALE_TAGS = {
 var APP_I18N_DICTIONARY = {
   "pt-br": {
     "app.name": "Discovery",
+    "app.serviceVersionMismatch": "UI e serviço em versões diferentes (UI {ui} · serviço {service}). Rode o instalador para atualizar os dois.",
     "action.collapseMenu": "Colapsar menu",
     "action.maximizeRestore": "Maximizar ou restaurar",
     "action.closeToTray": "Fechar para tray",
@@ -859,6 +860,7 @@ var APP_I18N_DICTIONARY = {
     "ztc.loading": "Carregando dados de provisionamento Zero-Touch...",
   },
   "en-us": {
+    "app.serviceVersionMismatch": "UI and service are on different versions (UI {ui} · service {service}). Run the installer to update both.",
     "app.name": "Discovery",
     "action.collapseMenu": "Collapse menu",
     "action.maximizeRestore": "Maximize or restore",

@@ -24,3 +24,18 @@ func TestPreshutdownTimeoutFor(t *testing.T) {
 		t.Fatalf("grace 200 deveria clampar a 180000ms, got %d", got)
 	}
 }
+
+// Regressão (A.4.1): o deadline do SCM tem de cobrir TODO o grace aceito pelo
+// serviço (1..120s) com a margem de 5s, senão o SCM encerra o processo no meio
+// do grace que o handler prometeu. Valores acima do teto são clampados a 180s.
+func TestPreshutdownTimeoutFor_CoversAcceptableGrace(t *testing.T) {
+	for grace := 1; grace <= 120; grace++ {
+		want := uint32(grace*1000 + 5000)
+		if got := PreshutdownTimeoutFor(grace); got != want {
+			t.Fatalf("grace %d: PreshutdownTimeoutFor = %dms, esperado %dms (grace + 5s)", grace, got, want)
+		}
+		if PreshutdownTimeoutFor(grace) <= uint32(grace*1000) {
+			t.Fatalf("grace %d: deadline do SCM não pode ser <= grace", grace)
+		}
+	}
+}

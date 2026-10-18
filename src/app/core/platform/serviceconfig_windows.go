@@ -29,6 +29,11 @@ type servicePreshutdownInfo struct {
 // PreshutdownTimeoutFor calcula o timeout (ms) do PRESHUTDOWN a partir do grace
 // em segundos, com margem de 5s para o serviço reportar STOPPED e limitado ao
 // teto clássico de 180s.
+//
+// Este timeout é o DEADLINE do SCM para o serviço (A.4.1): ele precisa ser
+// sempre MAIOR que o grace usado pelo handler (serviceControlFlow), senão o SCM
+// mata o processo no meio do grace que o serviço prometeu respeitar. A margem de
+// 5s é exatamente o tempo para o teardown + STOPPED depois do deadline interno.
 func PreshutdownTimeoutFor(graceSeconds int) uint32 {
 	if graceSeconds <= 0 {
 		return 0

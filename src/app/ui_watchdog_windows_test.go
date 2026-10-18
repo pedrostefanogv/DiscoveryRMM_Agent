@@ -4,8 +4,11 @@ package app
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 // Aqui o watchdog é construído com as dependências REAIS do serviço (processos,
@@ -97,5 +100,100 @@ func TestUIWatchdog_NoticeResetsAfterSuccessfulSpawn(t *testing.T) {
 	w.Tick()
 	if len(f.spawns) != 2 {
 		t.Fatalf("esperado novo relançamento depois da queda; spawns=%v", f.spawns)
+	}
+}
+
+// ── Regressão WTS: sessão RDP desconectada ────────────────────────────────
+//
+// Antes só WTSActive entrava na enumeração: quem desconectava o RDP deixava de
+// ser visto e ficava sem UI (ou com a UI morta sem relançamento) até
+// reconectar. WTSDisconnected precisa entrar — o usuário continua logado e o
+// desktop existe. Sessão 0 (serviços) e 0xFFFFFFFF ("sem sessão") nunca entram.
+// A enumeração é injetável para o teste não depender de sessões reais da máquina.
+func TestUISessionsFromWTS_IncludesDisconnected(t *testing.T) {
+	entries := []wtsSessionEntry{
+		{SessionID: 0, State: windows.WTSActive},          // serviços
+		{SessionID: 1, State: windows.WTSActive},          // console
+		{SessionID: 2, State: windows.WTSDisconnected},    // RDP desconectado
+		{SessionID: 0xFFFFFFFF, State: windows.WTSActive}, // "sem sessão"
+		{SessionID: 3, State: windows.WTSListen},          // listener sem usuário
+		{SessionID: 4, State: windows.WTSConnected},       // ainda conectando
+	}
+	got := uiSessionsFromWTS(entries)
+	want := []uint32{1, 2}
+	if len(got) != len(want) {
+		t.Fatalf("uiSessionsFromWTS = %v, esperado %v (disconnected incluída, 0/0xFFFFFFFF fora)", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("uiSessionsFromWTS = %v, esperado %v", got, want)
+		}
+	}
+}
+
+// A sessão desconectada chega ao watchdog pelo caminho de produção
+// (activeUserSessionsWith), e o fallback de console continua valendo quando a
+// API WTS não está disponível.
+func TestActiveUserSessionsWith_IncludesDisconnectedAndKeepsFallback(t *testing.T) {
+	entries := []wtsSessionEntry{
+		{SessionID: 0, State: windows.WTSActive},
+		{SessionID: 1, State: windows.WTSActive},
+		{SessionID: 2, State: windows.WTSDisconnected},
+	}
+	if got := activeUserSessionsWith(
+		func() ([]wtsSessionEntry, error) { return entries, nil },
+		func() uint32 { return 9 },
+	); len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("sessões = %v, esperado [1 2]", got)
+	}
+
+	// API WTS indisponível: comportamento anterior (sessão do console).
+	if got := activeUserSessionsWith(
+		func() ([]wtsSessionEntry, error) { return nil, errors.New("wtsapi32 indisponível") },
+		func() uint32 { return 2 },
+	); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("fallback de console = %v, esperado [2]", got)
+	}
+
+	// Enumeração vazia (sem sessão utilizável) também cai no console.
+	if got := activeUserSessionsWith(
+		func() ([]wtsSessionEntry, error) { return nil, nil },
+		func() uint32 { return 5 },
+	); len(got) != 1 || got[0] != 5 {
+		t.Fatalf("fallback com lista vazia = %v, esperado [5]", got)
+	}
+
+	// Sem console (0/0xFFFFFFFF) não há onde abrir a UI.
+	for _, console := range []uint32{0, 0xFFFFFFFF} {
+		if got := activeUserSessionsWith(
+			func() ([]wtsSessionEntry, error) { return nil, errors.New("wtsapi32 indisponível") },
+			func() uint32 { return console },
+		); got != nil {
+			t.Fatalf("console=0x%X deveria devolver nil; obtido %v", console, got)
+		}
+	}
+}
+
+// O watchdog relança a UI na sessão desconectada sem duplicar a que já existe
+// lá (o plano por sessão usa a lista filtrada acima).
+func TestUIWatchdogSessions_DisconnectedSessionGetsUI(t *testing.T) {
+	f := &uiWatchdogSessionFake{
+		hasUI: true,
+		sessions: uiSessionsFromWTS([]wtsSessionEntry{
+			{SessionID: 0, State: windows.WTSActive},
+			{SessionID: 1, State: windows.WTSActive},
+			{SessionID: 2, State: windows.WTSDisconnected},
+		}),
+		counts: map[uint32]int{1: 1, 2: 0},
+	}
+	w := newUIWatchdogSessionFake(f)
+
+	w.Tick()
+	w.Tick()
+	if len(f.spawns) != 1 {
+		t.Fatalf("só a sessão desconectada sem UI deveria ser relançada; spawns=%v", f.spawns)
+	}
+	if f.spawns[0] != "2:sessao-sem-ui" {
+		t.Fatalf("sessão errada: %v", f.spawns)
 	}
 }

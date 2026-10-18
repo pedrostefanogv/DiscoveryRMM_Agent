@@ -9,8 +9,11 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,22 +28,70 @@ type ipcTestPeer struct {
 	reader *bufio.Reader
 }
 
-// startIPCTestPeer sobe um handleConn sobre net.Pipe com identidade fixa.
-func startIPCTestPeer(t *testing.T, admin bool, identity ipcAuthIdentity, onMessage func(net.Conn, IPCMessage)) *ipcTestPeer {
-	t.Helper()
-	old := ipcCallerValidator
-	ipcCallerValidator = func(net.Conn) (ipcAuthIdentity, error) { return identity, nil }
-	t.Cleanup(func() { ipcCallerValidator = old })
-
-	server := &IPCServer{
+// newIPCTestServer cria um servidor sem named pipe (net.Pipe nos testes).
+func newIPCTestServer(onMessage func(net.Conn, IPCMessage)) *IPCServer {
+	return &IPCServer{
 		conns:     make(map[net.Conn]*ipcClientConn),
 		tokens:    newIPCTokenStore(),
 		OnMessage: onMessage,
 	}
+}
+
+// attachIPCTestPeer sobe um handleConn sobre net.Pipe no servidor informado,
+// com a identidade fixa. A validação real de pipe não roda sobre net.Pipe.
+// Cada peer é iniciado após o hello do anterior nos testes multi-conexão, então
+// o stub global não é disputado.
+func attachIPCTestPeer(t *testing.T, server *IPCServer, admin bool, identity ipcAuthIdentity) *ipcTestPeer {
+	t.Helper()
+	id := identity
+	old := ipcCallerValidator
+	ipcCallerValidator = func(net.Conn) (ipcAuthIdentity, error) { return id, nil }
+	t.Cleanup(func() { ipcCallerValidator = old })
+
 	serverEnd, clientEnd := net.Pipe()
 	go server.handleConn(serverEnd, admin)
 	t.Cleanup(func() { clientEnd.Close() })
 	return &ipcTestPeer{server: server, conn: clientEnd, reader: bufio.NewReader(clientEnd)}
+}
+
+// startIPCTestPeer sobe um handleConn sobre net.Pipe com identidade fixa.
+func startIPCTestPeer(t *testing.T, admin bool, identity ipcAuthIdentity, onMessage func(net.Conn, IPCMessage)) *ipcTestPeer {
+	t.Helper()
+	server := newIPCTestServer(onMessage)
+	return attachIPCTestPeer(t, server, admin, identity)
+}
+
+// readMaybe tenta ler um frame com deadline e devolve o erro em vez de falhar
+// (usado para provar que NADA foi entregue/recebido).
+func (p *ipcTestPeer) readMaybe(timeout time.Duration) (IPCMessage, error) {
+	p.conn.SetReadDeadline(time.Now().Add(timeout))
+	return DecodeIPCMessage(p.reader)
+}
+
+// ipcTestAddr/ipcDiscardConn servem para gravar respostas sem bloquear no pipe.
+type ipcTestAddr string
+
+func (a ipcTestAddr) Network() string { return "test" }
+func (a ipcTestAddr) String() string  { return string(a) }
+
+type ipcDiscardConn struct{}
+
+func (*ipcDiscardConn) Read([]byte) (int, error)         { return 0, io.EOF }
+func (*ipcDiscardConn) Write(p []byte) (int, error)      { return len(p), nil }
+func (*ipcDiscardConn) Close() error                     { return nil }
+func (*ipcDiscardConn) LocalAddr() net.Addr              { return ipcTestAddr("local") }
+func (*ipcDiscardConn) RemoteAddr() net.Addr             { return ipcTestAddr("remote") }
+func (*ipcDiscardConn) SetDeadline(time.Time) error      { return nil }
+func (*ipcDiscardConn) SetReadDeadline(time.Time) error  { return nil }
+func (*ipcDiscardConn) SetWriteDeadline(time.Time) error { return nil }
+
+// testUIImageIdentity monta a identidade como o validador real faz: SID/PID/
+// sessão + caminho da imagem e o veredito UIImage calculado pelo caminho.
+func testUIImageIdentity(session uint32, imagePath string) ipcAuthIdentity {
+	id := testIdentity(session)
+	id.ImagePath = imagePath
+	id.UIImage = ipcIsDiscoveryUIImagePath(imagePath, ipcAllowedUIDirectories())
+	return id
 }
 
 func (p *ipcTestPeer) send(t *testing.T, msg IPCMessage) {
@@ -68,7 +119,15 @@ func (p *ipcTestPeer) hello(t *testing.T) IPCMessage {
 }
 
 func testIdentity(session uint32) ipcAuthIdentity {
-	return ipcAuthIdentity{SID: fmt.Sprintf("S-1-5-21-%d", session), PID: 1000 + session, SessionID: session, Valid: true}
+	// UIImage=true: a identidade de teste representa a UI instalada; os testes
+	// de restrição de chamador montam a identidade com testUIImageIdentity.
+	return ipcAuthIdentity{
+		SID:       fmt.Sprintf("S-1-5-21-%d", session),
+		PID:       1000 + session,
+		SessionID: session,
+		Valid:     true,
+		UIImage:   true,
+	}
 }
 
 func TestIPCHelloAckHasVersionAndAdminToken(t *testing.T) {
@@ -662,5 +721,402 @@ func TestIPCClientHelloAckFromPayload(t *testing.T) {
 	old := helloAckFromPayload(map[string]any{"service": ServiceName})
 	if old.Protocol != 1 || old.Version != "" || old.Token != "" {
 		t.Fatalf("compat com serviço antigo quebrada: %+v", old)
+	}
+}
+
+// ── A.0.1: token admin só para a UI instalada ──────────────────────────────
+
+// captureIPCStructuredLogs troca o logger estruturado para inspecionar as
+// linhas emitidas e devolve um acessor concorrente-seguro.
+func captureIPCStructuredLogs(t *testing.T) func() []string {
+	t.Helper()
+	old := ipcStructuredLogger
+	var mu sync.Mutex
+	var msgs []string
+	ipcStructuredLogger = func(scope, message string) {
+		mu.Lock()
+		msgs = append(msgs, scope+" "+message)
+		mu.Unlock()
+	}
+	t.Cleanup(func() { ipcStructuredLogger = old })
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]string, len(msgs))
+		copy(out, msgs)
+		return out
+	}
+}
+
+// isolateUIDirs fixa os diretórios de instalação aceitos num temp dir, para o
+// teste não depender do Program Files da máquina.
+func isolateUIDirs(t *testing.T) string {
+	t.Helper()
+	base := t.TempDir()
+	t.Setenv("ProgramFiles", base)
+	t.Setenv("ProgramFiles(x86)", "")
+	t.Setenv("LOCALAPPDATA", "")
+	return base
+}
+
+func TestIPCAdminTokenOnlyForDiscoveryUIImage(t *testing.T) {
+	base := isolateUIDirs(t)
+	validImage := filepath.Join(base, "Discovery", ipcUIExecutableName)
+
+	// Caminho válido (discovery-agent.exe sob <ProgramFiles>/Discovery): emite
+	// token e carrega identidade/sessão no hello_ack.
+	admin := startIPCTestPeer(t, true, testUIImageIdentity(2, validImage), func(net.Conn, IPCMessage) {})
+	ack := admin.hello(t)
+	if token, _ := ack.Payload["token"].(string); len(token) != 64 {
+		t.Fatalf("UI instalada deveria receber token, got %q", token)
+	}
+	if ack.Payload["sessionId"] != float64(2) || ack.Payload["sid"] != "S-1-5-21-2" {
+		t.Fatalf("hello_ack deveria trazer sessionId/sid, got %v", ack.Payload)
+	}
+
+	// Outro executável (fora dos diretórios/ nome errado): NÃO emite token,
+	// responde hello_ack com erro e FECHA a conexão.
+	before := ipcAuthStats.CallerNotAllowed.Load()
+	foreign := startIPCTestPeer(t, true, testUIImageIdentity(3, filepath.Join(base, "Outros", "outro.exe")), func(net.Conn, IPCMessage) {})
+	ack = foreign.hello(t)
+	if _, hasToken := ack.Payload["token"]; hasToken {
+		t.Fatal("executável que não é a UI NÃO pode receber token admin")
+	}
+	if ack.Payload["code"] != "ipc_caller_not_allowed" {
+		t.Fatalf("hello_ack deveria sinalizar ipc_caller_not_allowed, got %v", ack.Payload)
+	}
+	if ack.Payload["sessionId"] != float64(3) {
+		t.Fatalf("identidade/sessão continuam no hello_ack, got %v", ack.Payload)
+	}
+	if _, err := foreign.readMaybe(500 * time.Millisecond); err == nil {
+		t.Fatal("conexão admin de chamador não autorizado deveria ser FECHADA após o hello_ack")
+	}
+	if ipcAuthStats.CallerNotAllowed.Load() != before+1 {
+		t.Fatal("contador CallerNotAllowed deveria registrar a recusa")
+	}
+
+	// Mesmo nome, diretório parecido ("Discovery2") também não casa.
+	if ipcIsDiscoveryUIImagePath(filepath.Join(base, "Discovery2", ipcUIExecutableName), ipcAllowedUIDirectories()) {
+		t.Fatal("diretório Discovery2 não pode ser aceito como Discovery")
+	}
+}
+
+func TestIPCAdminCallerBypassEmitsTokenAndLogs(t *testing.T) {
+	base := isolateUIDirs(t)
+	t.Setenv(ipcCallerBypassEnv, "1")
+	logs := captureIPCStructuredLogs(t)
+
+	admin := startIPCTestPeer(t, true, testUIImageIdentity(4, filepath.Join(base, "Outros", "outro.exe")), func(net.Conn, IPCMessage) {})
+	ack := admin.hello(t)
+	if token, _ := ack.Payload["token"].(string); len(token) != 64 {
+		t.Fatalf("bypass de dev deveria emitir token, got %q", token)
+	}
+	found := false
+	for _, line := range logs() {
+		if strings.Contains(line, "caller validation bypassed (dev)") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("bypass deveria ser LOGADO; logs=%v", logs())
+	}
+}
+
+// ── A.3.2/A.3.5: identidade nos dois canais e no handshake ─────────────────
+
+func TestIPCHelloAckCarriesSessionIdentityOnBothChannels(t *testing.T) {
+	read := startIPCTestPeer(t, false, testIdentity(6), func(net.Conn, IPCMessage) {})
+	ack := read.hello(t)
+	if ack.Payload["sessionId"] != float64(6) || ack.Payload["sid"] != "S-1-5-21-6" {
+		t.Fatalf("canal de leitura deveria trazer sessionId/sid, got %v", ack.Payload)
+	}
+	if _, hasToken := ack.Payload["token"]; hasToken {
+		t.Fatal("canal de leitura não emite token")
+	}
+
+	admin := startIPCTestPeer(t, true, testIdentity(9), func(net.Conn, IPCMessage) {})
+	ack = admin.hello(t)
+	if ack.Payload["sessionId"] != float64(9) || ack.Payload["sid"] != "S-1-5-21-9" {
+		t.Fatalf("canal admin deveria trazer sessionId/sid, got %v", ack.Payload)
+	}
+}
+
+func TestIPCReadChannelNonUICallerStaysUnauthenticated(t *testing.T) {
+	base := isolateUIDirs(t)
+	peer := startIPCTestPeer(t, false, testUIImageIdentity(5, filepath.Join(base, "Outros", "outro.exe")), func(net.Conn, IPCMessage) {})
+	ack := peer.hello(t)
+	if ack.Type != IPCMsgHelloAck {
+		t.Fatal("probe/UI antiga de processo não-UI precisa continuar recebendo hello_ack")
+	}
+	// A conexão existe, mas NÃO conta como autenticada (identityOK=false).
+	peer.server.mu.Lock()
+	var client *ipcClientConn
+	for _, c := range peer.server.conns {
+		client = c
+	}
+	peer.server.mu.Unlock()
+	if client == nil {
+		t.Fatal("conexão de leitura deveria estar registrada")
+	}
+	if client.identityOK {
+		t.Fatal("chamador não-UI no canal de leitura não pode ser identityOK")
+	}
+	if client.identity.SessionID != 5 {
+		t.Fatalf("sessão deveria continuar registrada para auditoria, got %d", client.identity.SessionID)
+	}
+}
+
+// ── A.3.5: entrega de eventos por sessão ───────────────────────────────────
+
+func TestBroadcastIPCEventTargetsNotificationSession(t *testing.T) {
+	ipcNotificationTargets.mu.Lock()
+	ipcNotificationTargets.entries = map[string]ipcNotificationTarget{}
+	ipcNotificationTargets.mu.Unlock()
+
+	oldProvider := ipcActiveSessionProvider
+	ipcActiveSessionProvider = func() ipcAuthIdentity { return testIdentity(7) }
+	t.Cleanup(func() { ipcActiveSessionProvider = oldProvider })
+
+	server := newIPCTestServer(func(net.Conn, IPCMessage) {})
+	peer7 := attachIPCTestPeer(t, server, false, testIdentity(7))
+	peer7.hello(t)
+	peer8 := attachIPCTestPeer(t, server, false, testIdentity(8))
+	peer8.hello(t)
+	// Sessão 7 sem identidade autenticada: nunca pode receber evento targeted.
+	unauth7 := attachIPCTestPeer(t, server, false, testUIImageIdentity(7, filepath.Join(t.TempDir(), "x.exe")))
+	unauth7.hello(t)
+
+	a := &App{ipcServer: server}
+	// net.Pipe não tem buffer: o envio só conclui com o leitor ativo, então o
+	// broadcast roda em goroutine e o teste mede entrega/não-entrega em paralelo.
+	done := make(chan struct{})
+	go func() {
+		a.broadcastIPCEvent("notification:new", map[string]any{"id": "n-target", "title": "Instalação"})
+		close(done)
+	}()
+
+	msg := peer7.read(t)
+	if msg.Type != IPCMsgEvent || msg.Payload["name"] != "notification:new" {
+		t.Fatalf("sessão alvo deveria receber o evento, got %+v", msg)
+	}
+	if msg.Payload["sessionId"] != float64(7) || msg.Payload["sid"] != "S-1-5-21-7" {
+		t.Fatalf("evento targeted deveria carregar a sessão alvo, got %v", msg.Payload)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("entrega targeted travou (escrita para conexão fora da sessão alvo?)")
+	}
+	if _, err := peer8.readMaybe(300 * time.Millisecond); err == nil {
+		t.Fatal("conexão de OUTRA sessão não pode receber o evento targeted")
+	}
+	if _, err := unauth7.readMaybe(100 * time.Millisecond); err == nil {
+		t.Fatal("conexão não autenticada nunca recebe evento targeted")
+	}
+
+	// supportchat:invite segue a mesma regra.
+	done = make(chan struct{})
+	go func() {
+		a.broadcastIPCEvent("supportchat:invite", "sessionId", "chat-1", "ticketId", "t-1")
+		close(done)
+	}()
+	invite := peer7.read(t)
+	if invite.Payload["name"] != "supportchat:invite" {
+		t.Fatalf("sessão alvo deveria receber o convite, got %+v", invite)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("entrega do convite travou")
+	}
+	if _, err := peer8.readMaybe(300 * time.Millisecond); err == nil {
+		t.Fatal("convite não pode vazar para outra sessão")
+	}
+}
+
+func TestBroadcastIPCEventFallsBackWhenNoSessionTarget(t *testing.T) {
+	ipcNotificationTargets.mu.Lock()
+	ipcNotificationTargets.entries = map[string]ipcNotificationTarget{}
+	ipcNotificationTargets.mu.Unlock()
+
+	oldProvider := ipcActiveSessionProvider
+	ipcActiveSessionProvider = func() ipcAuthIdentity { return ipcAuthIdentity{} }
+	t.Cleanup(func() { ipcActiveSessionProvider = oldProvider })
+
+	server := newIPCTestServer(func(net.Conn, IPCMessage) {})
+	// Chamadores não-UI: identityOK=false → currentNotificationTarget não tem
+	// alvo conhecido; a compatibilidade exige Broadcast.
+	peerA := attachIPCTestPeer(t, server, false, testUIImageIdentity(1, filepath.Join(t.TempDir(), "a.exe")))
+	peerA.hello(t)
+	peerB := attachIPCTestPeer(t, server, false, testUIImageIdentity(2, filepath.Join(t.TempDir(), "b.exe")))
+	peerB.hello(t)
+
+	a := &App{ipcServer: server}
+	// Broadcast escreve conn a conn e net.Pipe bloqueia até o leitor: os dois
+	// leitores precisam estar ativos ANTES do envio.
+	type readResult struct {
+		msg IPCMessage
+		err error
+	}
+	readOne := func(peer *ipcTestPeer) <-chan readResult {
+		ch := make(chan readResult, 1)
+		go func() {
+			peer.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+			msg, err := DecodeIPCMessage(peer.reader)
+			ch <- readResult{msg: msg, err: err}
+		}()
+		return ch
+	}
+	chA := readOne(peerA)
+	chB := readOne(peerB)
+	done := make(chan struct{})
+	go func() {
+		a.broadcastIPCEvent("notification:new", map[string]any{"id": "n-fallback"})
+		close(done)
+	}()
+
+	for _, ch := range []<-chan readResult{chA, chB} {
+		res := <-ch
+		if res.err != nil {
+			t.Fatalf("broadcast deveria chegar às duas UIs sem sessão alvo: %v", res.err)
+		}
+		if res.msg.Payload["name"] != "notification:new" || res.msg.Payload["id"] != "n-fallback" {
+			t.Fatalf("sem sessão alvo o evento deve ir em broadcast, got %+v", res.msg.Payload)
+		}
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("broadcast não concluiu")
+	}
+}
+
+// ── A.3.2/DoS: teto e ociosidade do canal admin ────────────────────────────
+
+func TestIPCServerAdminConnectionCap(t *testing.T) {
+	server := newIPCTestServer(func(net.Conn, IPCMessage) {})
+	for i := 0; i < ipcMaxAdminConnections; i++ {
+		conn, peer := net.Pipe()
+		t.Cleanup(func() { conn.Close(); peer.Close() })
+		server.conns[conn] = &ipcClientConn{
+			reader:     bufio.NewReader(conn),
+			admin:      true,
+			identity:   testIdentity(uint32(i + 1)),
+			identityOK: true,
+		}
+	}
+	before := ipcAuthStats.AdminConnRefused.Load()
+	extra := attachIPCTestPeer(t, server, true, testIdentity(20))
+	if _, err := extra.readMaybe(500 * time.Millisecond); err == nil {
+		t.Fatal("9ª conexão admin deveria ser RECUSADA")
+	}
+	if ipcAuthStats.AdminConnRefused.Load() != before+1 {
+		t.Fatal("recusa do teto admin deveria ser contada")
+	}
+	if got := server.adminConnCount(); got != ipcMaxAdminConnections {
+		t.Fatalf("teto admin deveria permanecer em %d, got %d", ipcMaxAdminConnections, got)
+	}
+}
+
+func TestIPCServerSweepIdleConnsAdminTimeout(t *testing.T) {
+	if ipcAdminIdleTimeout != 5*time.Minute {
+		t.Fatalf("ociosidade do admin deveria ser 5min, got %s", ipcAdminIdleTimeout)
+	}
+	server := &IPCServer{
+		conns:            make(map[net.Conn]*ipcClientConn),
+		adminIdleTimeout: 50 * time.Millisecond, // injetável/curto no teste
+	}
+	adminConn, adminPeer := net.Pipe()
+	defer adminConn.Close()
+	defer adminPeer.Close()
+	readConn, readPeer := net.Pipe()
+	defer readConn.Close()
+	defer readPeer.Close()
+
+	admin := &ipcClientConn{reader: bufio.NewReader(adminConn), admin: true}
+	admin.touch()
+	admin.lastActivity.Store(time.Now().Add(-100 * time.Millisecond).UnixMilli())
+	read := &ipcClientConn{reader: bufio.NewReader(readConn)}
+	read.touch()
+
+	server.conns[adminConn] = admin
+	server.conns[readConn] = read
+
+	if dropped := server.sweepIdleConns(time.Now()); dropped != 1 {
+		t.Fatalf("admin ocioso deveria ser derrubado; derrubou %d", dropped)
+	}
+	if _, ok := server.conns[adminConn]; ok {
+		t.Fatal("conexão admin ociosa precisa sair do mapa")
+	}
+	if _, ok := server.conns[readConn]; !ok {
+		t.Fatal("conexão de leitura saudável não pode ser derrubada pelo teto do admin")
+	}
+}
+
+// ── Hello: rate limit próprio ──────────────────────────────────────────────
+
+func TestIPCHelloRateLimitClosesConnection(t *testing.T) {
+	peer := startIPCTestPeer(t, false, testIdentity(2), func(net.Conn, IPCMessage) {})
+	for i := 0; i < ipcMaxHellosPerSecond; i++ {
+		if ack := peer.hello(t); ack.Type != IPCMsgHelloAck {
+			t.Fatalf("hello %d deveria ser respondido, got %s", i+1, ack.Type)
+		}
+	}
+	before := ipcAuthStats.HelloRateLimited.Load()
+	peer.conn.SetWriteDeadline(time.Now().Add(time.Second))
+	_, _ = peer.conn.Write(EncodeIPCMessage(NewIPCMessage(IPCMsgHello, map[string]any{"pid": 1, "protocol": IPCProtocolVersion})))
+	if _, err := peer.readMaybe(500 * time.Millisecond); err == nil {
+		t.Fatalf("rajada de hello além de %d/s deveria fechar a conexão", ipcMaxHellosPerSecond)
+	}
+	if ipcAuthStats.HelloRateLimited.Load() != before+1 {
+		t.Fatal("rate limit de hello deveria ser contado")
+	}
+}
+
+// ── A.0.8: desfecho real do request mutante ────────────────────────────────
+
+func TestIPCMutatingOutcomeAuditOnFailure(t *testing.T) {
+	logs := captureIPCStructuredLogs(t)
+	identity := testIdentity(2)
+	conn := &ipcDiscardConn{}
+	client := &ipcClientConn{
+		admin:      true,
+		connKey:    "conn-outcome",
+		identity:   identity,
+		identityOK: true,
+		limiter:    newIPCRequestLimiter(),
+		dedup:      newIPCDedupCache(),
+	}
+	server := newIPCTestServer(func(net.Conn, IPCMessage) {})
+	server.conns[conn] = client
+	token, _, err := server.tokens.issue(client.connKey, identity)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+
+	a := &App{ipcServer: server}
+	before := ipcAuthStats.MutatingFailed.Load()
+	// updates:scan é mutante e FALHA deterministicamente sem UpdatesSvc.
+	a.handleIPCMessage(conn, IPCMessage{
+		Type:          IPCMsgRequest,
+		CorrelationID: "c-outcome",
+		Payload:       map[string]any{"method": "updates:scan", "token": token},
+	})
+	if got := ipcAuthStats.MutatingFailed.Load(); got != before+1 {
+		t.Fatalf("falha mutante deveria incrementar MutatingFailed (%d -> %d)", before, got)
+	}
+	found := false
+	for _, line := range logs() {
+		if strings.Contains(line, "mutating_outcome") &&
+			strings.Contains(line, "method=\"updates:scan\"") &&
+			strings.Contains(line, "result=error") &&
+			strings.Contains(line, "sessionId=2") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("desfecho do mutante deveria ser logado com sid/pid/sessionId/method/result; logs=%v", logs())
 	}
 }

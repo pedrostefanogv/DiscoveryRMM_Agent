@@ -103,6 +103,266 @@ func graceDurationFor(cmd svc.Cmd, graceSeconds int) time.Duration {
 	return d
 }
 
+// ── Máquina de estados do ciclo de controle do SCM (A.4.1) ──────────────────
+//
+// Execute() é um select sobre o canal do SCM. Para que a SEQUÊNCIA
+// PRESHUTDOWN → grace → teardown seja testável sem SCM real, sem depender do
+// Windows de verdade e sem App, ela vive em serviceControlFlow, atrás de
+// injeções (relógio/timers, reporte de status, nota de shutdown do sistema e
+// teardown do core). O comportamento não mudou — só o lugar onde a decisão
+// mora, para permitir o teste de integração da sequência.
+//
+// Validação em VM (A.4.2) — NÃO coberta por teste automatizado, pendente:
+//   - o SCM entrega SERVICE_CONTROL_PRESHUTDOWN ANTES do logoff/início do
+//     desligamento (Windows 10/11, com Fast Startup ligado e desligado);
+//   - com grace > 0 o acesso remoto continua utilizável durante o grace;
+//   - `sc stop DiscoveryAgent` (SERVICE_CONTROL_STOP) retorna em < 5s, porque
+//     Stop não passa pelo grace (vai direto para actionTeardownNow).
+//
+// O teste da sequência (sem SCM) está em servicemode_service_windows_test.go,
+// nos casos TestServiceControlFlow_*.
+
+// serviceControlHeartbeatInterval é o intervalo do status STOP_PENDING
+// enviado durante o grace (prova ao SCM que o serviço não travou).
+const serviceControlHeartbeatInterval = 5 * time.Second
+
+// serviceControlTimer abstrai *time.Timer/*time.Ticker para que os testes
+// possam disparar o deadline na mão, sem esperar tempo real.
+type serviceControlTimer interface {
+	Chan() <-chan time.Time
+	Stop()
+}
+
+type goTimer struct{ t *time.Timer }
+
+func (g goTimer) Chan() <-chan time.Time { return g.t.C }
+func (g goTimer) Stop()                  { g.t.Stop() }
+
+type goTicker struct{ t *time.Ticker }
+
+func (g goTicker) Chan() <-chan time.Time { return g.t.C }
+func (g goTicker) Stop()                  { g.t.Stop() }
+
+// serviceControlClock cria os timers do fluxo e dorme (o SCM exige um
+// intervalo mínimo entre os dois status enviados em resposta a um
+// Interrogate). Injetável nos testes.
+type serviceControlClock struct {
+	NewTimer  func(time.Duration) serviceControlTimer
+	NewTicker func(time.Duration) serviceControlTimer
+	Sleep     func(time.Duration)
+}
+
+// realServiceControlClock é o relógio de produção.
+func realServiceControlClock() serviceControlClock {
+	return serviceControlClock{
+		NewTimer:  func(d time.Duration) serviceControlTimer { return goTimer{t: time.NewTimer(d)} },
+		NewTicker: func(d time.Duration) serviceControlTimer { return goTicker{t: time.NewTicker(d)} },
+		Sleep:     time.Sleep,
+	}
+}
+
+// serviceControlEffects são os efeitos colaterais observáveis do fluxo de
+// controle. Nos testes viram gravações; em produção, envio de status ao SCM,
+// log no logstore e teardown do core.
+type serviceControlEffects struct {
+	// Report envia um status ao SCM (changes <- svc.Status{...}).
+	Report func(svc.Status)
+	// NoteSystemShutdown marca que o SO entrou em encerramento/reinício.
+	NoteSystemShutdown func()
+	// Teardown encerra o core do agent exatamente uma vez (idempotente).
+	Teardown func(reason string)
+	// Logf registra no log unificado do serviço.
+	Logf func(format string, args ...any)
+}
+
+// serviceControlFlow é a máquina de estados do ciclo de controle: decide, para
+// cada comando do SCM, o status a reportar e quando o teardown acontece.
+type serviceControlFlow struct {
+	graceSeconds int
+	cmdsAccepted svc.Accepted
+	clock        serviceControlClock
+	effects      serviceControlEffects
+
+	// stopPending indica que o grace já começou (Stop/Shutdown repetido não
+	// reagenda o deadline).
+	stopPending bool
+	// finished garante teardown + STOPPED reportados uma única vez.
+	finished   bool
+	checkpoint uint32
+
+	graceTimer serviceControlTimer
+	heartbeat  serviceControlTimer
+}
+
+// newServiceControlFlow monta o fluxo. clock/effects zerados caem nos padrões
+// de produção (relógio real, efeitos no-op), de modo que o handler real só
+// precisa informar o que de fato faz.
+func newServiceControlFlow(graceSeconds int, clock serviceControlClock, effects serviceControlEffects) *serviceControlFlow {
+	if clock.NewTimer == nil || clock.NewTicker == nil || clock.Sleep == nil {
+		clock = realServiceControlClock()
+	}
+	if effects.Report == nil {
+		effects.Report = func(svc.Status) {}
+	}
+	if effects.NoteSystemShutdown == nil {
+		effects.NoteSystemShutdown = func() {}
+	}
+	if effects.Teardown == nil {
+		effects.Teardown = func(string) {}
+	}
+	if effects.Logf == nil {
+		effects.Logf = func(string, ...any) {}
+	}
+	// grace=0 → comportamento legado: NÃO aceita PRESHUTDOWN (o SCM não manda
+	// a notificação antecipada de shutdown).
+	cmds := svc.AcceptStop | svc.AcceptShutdown
+	if graceSeconds > 0 {
+		cmds |= svc.AcceptPreShutdown
+	}
+	return &serviceControlFlow{
+		graceSeconds: graceSeconds,
+		cmdsAccepted: cmds,
+		clock:        clock,
+		effects:      effects,
+	}
+}
+
+// CmdsAccepted devolve os comandos aceitos, para reportar em svc.Status.
+func (f *serviceControlFlow) CmdsAccepted() svc.Accepted {
+	if f == nil {
+		return svc.AcceptStop | svc.AcceptShutdown
+	}
+	return f.cmdsAccepted
+}
+
+// Close para os timers do grace/heartbeat (o handler chama no retorno).
+func (f *serviceControlFlow) Close() {
+	if f == nil {
+		return
+	}
+	if f.graceTimer != nil {
+		f.graceTimer.Stop()
+		f.graceTimer = nil
+	}
+	if f.heartbeat != nil {
+		f.heartbeat.Stop()
+		f.heartbeat = nil
+	}
+}
+
+// GraceC expõe o deadline do grace (nil enquanto não agendado), para o select
+// do handler.
+func (f *serviceControlFlow) GraceC() <-chan time.Time {
+	if f == nil || f.graceTimer == nil {
+		return nil
+	}
+	return f.graceTimer.Chan()
+}
+
+// HeartbeatC expõe o ticker de heartbeat (nil enquanto não agendado).
+func (f *serviceControlFlow) HeartbeatC() <-chan time.Time {
+	if f == nil || f.heartbeat == nil {
+		return nil
+	}
+	return f.heartbeat.Chan()
+}
+
+// Heartbeat reporta STOP_PENDING com checkpoint incremental durante o grace.
+func (f *serviceControlFlow) Heartbeat() {
+	if f == nil || f.finished {
+		return
+	}
+	f.checkpoint++
+	f.effects.Report(svc.Status{
+		State:      svc.StopPending,
+		Accepts:    f.cmdsAccepted,
+		CheckPoint: f.checkpoint,
+		WaitHint:   uint32(f.graceSeconds * 1000),
+	})
+}
+
+// HandleControl processa um comando do SCM. finish=true significa que o
+// handler deve reportar STOPPED e retornar — o teardown já foi executado aqui.
+func (f *serviceControlFlow) HandleControl(cmd svc.Cmd) (finish bool, reason string) {
+	if f == nil {
+		return false, ""
+	}
+	switch resolveServiceControl(cmd, f.graceSeconds) {
+	case actionInterrogate:
+		status := svc.Status{State: svc.Running, Accepts: f.cmdsAccepted}
+		if f.stopPending {
+			status.State = svc.StopPending
+			status.CheckPoint = f.checkpoint
+			status.WaitHint = uint32(f.graceSeconds * 1000)
+		}
+		// Dois reportes com intervalo curto: o SCM pode ter perdido o primeiro
+		// enquanto o handler estava ocupado.
+		f.effects.Report(status)
+		f.clock.Sleep(100 * time.Millisecond)
+		f.effects.Report(status)
+		return false, ""
+
+	case actionTeardownNow:
+		// grace=0 (ou Stop): o encerramento é imediato, mas o sinal de
+		// shutdown do SO continua valendo para o caminho de power action não
+		// tratar o reboot como falha do PSADT.
+		if isShutdownCommand(cmd) {
+			f.effects.NoteSystemShutdown()
+		}
+		f.effects.Logf("[service] SCM %s recebido — encerrando imediatamente", svcCmdName(cmd))
+		f.effects.Report(svc.Status{State: svc.StopPending, Accepts: f.cmdsAccepted})
+		reason = "SCM " + svcCmdName(cmd)
+		f.finish(reason)
+		return true, reason
+
+	case actionHoldThenTeardown:
+		if f.stopPending {
+			// Já em grace: mantém StopPending (o SCM não repete shutdown, mas
+			// um Interrogate pode chegar).
+			return false, ""
+		}
+		f.stopPending = true
+		if isShutdownCommand(cmd) {
+			f.effects.NoteSystemShutdown()
+		}
+		d := graceDurationFor(cmd, f.graceSeconds)
+		f.effects.Logf("[service] SCM %s recebido — grace de encerramento ativo por %s (remoto preservado)", svcCmdName(cmd), d)
+		f.effects.Report(svc.Status{
+			State:      svc.StopPending,
+			Accepts:    f.cmdsAccepted,
+			CheckPoint: f.checkpoint,
+			WaitHint:   uint32(d.Milliseconds()),
+		})
+		f.graceTimer = f.clock.NewTimer(d)
+		// Heartbeat de status durante o grace: mantém o SCM informado de que o
+		// serviço está em STOP_PENDING de propósito (não travado).
+		f.heartbeat = f.clock.NewTicker(serviceControlHeartbeatInterval)
+		return false, ""
+	}
+	return false, ""
+}
+
+// HandleGraceExpired executa o teardown quando o deadline do grace vence.
+func (f *serviceControlFlow) HandleGraceExpired() { f.finish("grace expirado") }
+
+// Stop encerra o ciclo por um motivo externo (ex.: canal do SCM fechado).
+func (f *serviceControlFlow) Stop(reason string) { f.finish(reason) }
+
+// finish executa o teardown exatamente uma vez e reporta STOPPED.
+func (f *serviceControlFlow) finish(reason string) {
+	if f == nil || f.finished {
+		return
+	}
+	f.finished = true
+	f.effects.Teardown(reason)
+	f.effects.Report(svc.Status{State: svc.Stopped, Accepts: f.cmdsAccepted})
+}
+
+// isShutdownCommand indica os comandos que sinalizam encerramento do SO.
+func isShutdownCommand(cmd svc.Cmd) bool {
+	return cmd == svc.PreShutdown || cmd == svc.Shutdown
+}
+
 // discoveryService implementa svc.Handler para o core do agent.
 type discoveryService struct {
 	app *App
@@ -178,15 +438,10 @@ func IsWindowsServiceProcess() bool {
 // teardown. Isso mantém o acesso remoto utilizável durante o reinício/
 // desligamento nativo do Windows. Stop (sc stop/update/uninstall) continua
 // encerrando imediatamente.
+//
+// A decisão de cada comando (e o deadline do grace) está em
+// serviceControlFlow.HandleControl — aqui fica só o loop de eventos do SCM.
 func (s *discoveryService) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
-	// grace=0 → comportamento legado: NÃO aceita PRESHUTDOWN (o SCM não
-	// manda a notificação antecipada de shutdown).
-	graceSeconds := shutdownGraceSeconds()
-	cmdsAccepted := svc.AcceptStop | svc.AcceptShutdown
-	if graceSeconds > 0 {
-		cmdsAccepted |= svc.AcceptPreShutdown
-	}
-
 	changes <- svc.Status{State: svc.StartPending}
 	log.Printf("[service] SCM Start recebido")
 
@@ -200,95 +455,41 @@ func (s *discoveryService) Execute(_ []string, r <-chan svc.ChangeRequest, chang
 		_ = app.RunCore(context.Background())
 	}()
 
-	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
+	flow := newServiceControlFlow(shutdownGraceSeconds(), realServiceControlClock(), serviceControlEffects{
+		Report:             func(status svc.Status) { changes <- status },
+		NoteSystemShutdown: noteSystemShutdown,
+		// teardown executa o encerramento do core exatamente uma vez.
+		Teardown: func(reason string) {
+			s.teardownOnce.Do(func() {
+				log.Printf("[service] %s — encerrando core", reason)
+				app.ServiceShutdown()
+			})
+		},
+		Logf: log.Printf,
+	})
+	defer flow.Close()
+
+	changes <- svc.Status{State: svc.Running, Accepts: flow.CmdsAccepted()}
 	log.Printf("[service] core do agent em execução (SYSTEM)")
-
-	var (
-		graceC      <-chan time.Time
-		graceTimer  *time.Timer
-		stopC       <-chan time.Time
-		stopTicker  *time.Ticker
-		checkPoint  uint32
-		stopPending bool
-	)
-	defer func() {
-		if graceTimer != nil {
-			graceTimer.Stop()
-		}
-		if stopTicker != nil {
-			stopTicker.Stop()
-		}
-	}()
-
-	// teardown executa o encerramento do core exatamente uma vez.
-	teardown := func(reason string) {
-		s.teardownOnce.Do(func() {
-			log.Printf("[service] %s — encerrando core", reason)
-			app.ServiceShutdown()
-		})
-	}
-	// stopAndReturn reporta STOPPED e finaliza o handler.
-	stopAndReturn := func(reason string) (bool, uint32) {
-		teardown(reason)
-		changes <- svc.Status{State: svc.Stopped, Accepts: cmdsAccepted}
-		// Exit code 0: encerramento limpo — NÃO conta como crash para
-		// as failure actions do SCM (restart/5000 só dispara em código
-		// não-zero).
-		return false, 0
-	}
 
 	for {
 		select {
 		case c, ok := <-r:
 			if !ok {
-				return stopAndReturn("canal de controle do SCM fechado")
+				flow.Stop("canal de controle do SCM fechado")
+				return false, 0
 			}
-			switch resolveServiceControl(c.Cmd, graceSeconds) {
-			case actionInterrogate:
-				status := svc.Status{State: svc.Running, Accepts: cmdsAccepted}
-				if stopPending {
-					status.State = svc.StopPending
-					status.CheckPoint = checkPoint
-					status.WaitHint = uint32(graceSeconds * 1000)
-				}
-				changes <- status
-				time.Sleep(100 * time.Millisecond)
-				changes <- status
-			case actionTeardownNow:
-				if c.Cmd == svc.PreShutdown || c.Cmd == svc.Shutdown {
-					// grace=0 (ou Shutdown legado): o encerramento do SO é
-					// imediato, mas o sinal continua valendo para o caminho de
-					// power action não tratar o reboot como falha do PSADT.
-					noteSystemShutdown()
-				}
-				log.Printf("[service] SCM %s recebido — encerrando imediatamente", svcCmdName(c.Cmd))
-				changes <- svc.Status{State: svc.StopPending, Accepts: cmdsAccepted}
-				return stopAndReturn("SCM " + svcCmdName(c.Cmd))
-			case actionHoldThenTeardown:
-				if stopPending {
-					// Já em grace: mantém StopPending (o SCM não repete
-					// shutdown, mas um Interrogate pode chegar).
-					continue
-				}
-				stopPending = true
-				if c.Cmd == svc.PreShutdown || c.Cmd == svc.Shutdown {
-					noteSystemShutdown()
-				}
-				d := graceDurationFor(c.Cmd, graceSeconds)
-				log.Printf("[service] SCM %s recebido — grace de encerramento ativo por %s (remoto preservado)", svcCmdName(c.Cmd), d)
-				changes <- svc.Status{State: svc.StopPending, Accepts: cmdsAccepted, CheckPoint: checkPoint, WaitHint: uint32(d.Milliseconds())}
-				graceTimer = time.NewTimer(d)
-				graceC = graceTimer.C
-				// Heartbeat de status durante o grace: mantém o SCM informado de
-				// que o serviço está em STOP_PENDING de propósito (não travado).
-				stopTicker = time.NewTicker(5 * time.Second)
-				stopC = stopTicker.C
+			if finish, _ := flow.HandleControl(c.Cmd); finish {
+				// Exit code 0: encerramento limpo — NÃO conta como crash para
+				// as failure actions do SCM (restart/5000 só dispara em código
+				// não-zero).
+				return false, 0
 			}
-		case <-stopC:
-			checkPoint++
-			changes <- svc.Status{State: svc.StopPending, Accepts: cmdsAccepted, CheckPoint: checkPoint, WaitHint: uint32(graceSeconds * 1000)}
-		case <-graceC:
-			return stopAndReturn("grace expirado")
+		case <-flow.HeartbeatC():
+			flow.Heartbeat()
+		case <-flow.GraceC():
+			flow.HandleGraceExpired()
+			return false, 0
 		}
 	}
 }

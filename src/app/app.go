@@ -1410,8 +1410,10 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 	// informa ao servidor se há UI companion conectada via IPC. Fora do modo
 	// serviço (UI standalone) o campo permanece nil (omitido no JSON).
 	if a.RuntimeFlags.ServiceMode && a.ipcServer != nil {
-		online := a.ipcServer.ClientCount() > 0
+		count := a.ipcServer.ClientCount()
+		online := count > 0
 		metrics.UIOnline = &online
+		metrics.UIOnlineCount = &count
 	}
 
 	return metrics
