@@ -23,10 +23,59 @@ import (
 	"time"
 )
 
+// ipcPipePrefix é o prefixo obrigatório de um named pipe local do Windows.
+//
+// BUG CORRIGIDO (revisão 2026-10-18): IPCPipeAdminName estava escrito como
+// `\.pipediscovery-agent-ipc-admin` — sem o prefixo `\\.\pipe\` e sem o
+// separador antes do nome. Consequência em produção (agente 1.2.1): o
+// winio.ListenPipe falhava com "Incorrect function", o canal admin NUNCA era
+// criado e TODA mutação (chamados, comentários, anexos, config, updates,
+// knowledge) ficava bloqueada, enquanto as LEITURAS continuavam funcionando —
+// o que escondia a causa e fazia o chat de IA culpar o servidor de suporte.
+//
+// Derivar os dois nomes deste prefixo torna a classe do bug estruturalmente
+// impossível: um typo não passa na validação de startup.
+const ipcPipePrefix = `\\.\pipe\`
+
 // IPCPipeAdminName é o canal administrativo/mutante. Diferente do pipe de
 // leitura, ele exige validação do processo chamador e token de sessão para
 // cada request mutante. A UI antiga continua usando somente IPCPipeName.
-const IPCPipeAdminName = `\.pipediscovery-agent-ipc-admin`
+const IPCPipeAdminName = ipcPipePrefix + "discovery-agent-ipc-admin"
+
+// Limites do componente de nome que vem depois do prefixo do pipe.
+const (
+	ipcPipeLeafMinLen = 1
+	ipcPipeLeafMaxLen = 200
+)
+
+// validateIPCPipeName valida o caminho COMPLETO de um named pipe local do
+// Windows: precisa começar com \\.\pipe\ e o nome do pipe só pode ter letras,
+// dígitos, ponto, hífen e sublinhado.
+//
+// Existe porque a falha do ListenPipe é fácil de mascarar (o serviço segue
+// subindo em modo somente-leitura) e porque um nome malformado devolve um erro
+// opaco do SO ("Incorrect function"), sem apontar o parâmetro errado.
+func validateIPCPipeName(name string) error {
+	if !strings.HasPrefix(name, ipcPipePrefix) {
+		return fmt.Errorf("nome de pipe inválido %q: deve começar com %q", name, ipcPipePrefix)
+	}
+	leaf := name[len(ipcPipePrefix):]
+	if len(leaf) < ipcPipeLeafMinLen {
+		return fmt.Errorf("nome de pipe inválido %q: nome ausente após o prefixo", name)
+	}
+	if len(leaf) > ipcPipeLeafMaxLen {
+		return fmt.Errorf("nome de pipe inválido %q: nome com %d caracteres (máximo %d)", name, len(leaf), ipcPipeLeafMaxLen)
+	}
+	for _, r := range leaf {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-':
+		default:
+			return fmt.Errorf("nome de pipe inválido %q: caractere %q não permitido no nome", name, r)
+		}
+	}
+	return nil
+}
 
 const (
 	// ipcAuthTokenTTL é a validade do token emitido no hello do pipe admin.
@@ -708,8 +757,12 @@ type ipcAuthMetrics struct {
 	HelloRateLimited     atomic.Int64
 	AdminConnRefused     atomic.Int64
 	AdminIdleClosed      atomic.Int64
-	MutatingSucceeded    atomic.Int64
-	MutatingFailed       atomic.Int64
+	// AdminListenFailed conta as vezes em que o pipe admin NAO pode ser criado
+	// (nome invalido ou ListenPipe falhando). Sem isso a degradacao para
+	// somente-leitura era invisivel em telemetria.
+	AdminListenFailed atomic.Int64
+	MutatingSucceeded atomic.Int64
+	MutatingFailed    atomic.Int64
 }
 
 var ipcAuthStats ipcAuthMetrics

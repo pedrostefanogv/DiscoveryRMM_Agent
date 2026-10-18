@@ -895,7 +895,10 @@ func (a *App) hideSupportChatForCapture() func() {
 			return
 		}
 		shown = true
-		win.Show()
+		// Volta para a frente: durante a captura a janela foi escondida e o
+		// usuário está no meio da conversa — reaparecer atrás do app que ele
+		// acabou de usar (o que estava sendo capturado) esconderia a resposta.
+		a.raiseSupportChatWindow(win, a.supportChatWindowFloat())
 	}
 }
 

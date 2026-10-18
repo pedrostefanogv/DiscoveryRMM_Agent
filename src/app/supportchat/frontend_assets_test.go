@@ -261,3 +261,44 @@ func TestChatWindow_ComentarioComAnexoDeImagemTemMiniatura(t *testing.T) {
 		}
 	}
 }
+
+// REQUISITO (definido pelo usuário): o convite do suporte precisa aparecer por
+// cima de TODOS os aplicativos abertos. O Go garante "sempre no topo" enquanto
+// o convite está pendente (supportChatShouldFloat); a janela precisa AVISAR o
+// usuário disso, senão a janela flutuando sem explicação parece travamento.
+//
+// Também é o convite que dá o título da janela: o tooltip do botão na barra de
+// tarefas mostra o título, e é o que sobra quando o usuário está num app em tela
+// cheia.
+func TestChatWindow_ConviteAvisaQueJanelaFicaNoTopo(t *testing.T) {
+	htmlPath := filepath.Join("..", "..", "frontend", "chat-window.html")
+	html, err := os.ReadFile(htmlPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", htmlPath, err)
+	}
+	htmlText := string(html)
+
+	if !strings.Contains(htmlText, `id="scInviteHint"`) {
+		t.Fatal("chat-window.html deve conter o aviso de que a janela fica acima dos outros apps (scInviteHint)")
+	}
+
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+
+	if !strings.Contains(jsText, "Convite do suporte") {
+		t.Fatal("app-support-chat.js deve dar um título próprio ao convite pendente (document.title)")
+	}
+
+	cssPath := filepath.Join("..", "..", "frontend", "support-chat.css")
+	css, err := os.ReadFile(cssPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", cssPath, err)
+	}
+	if !strings.Contains(string(css), ".sc-modal-hint") {
+		t.Fatal("support-chat.css precisa estilizar o aviso do convite (.sc-modal-hint)")
+	}
+}

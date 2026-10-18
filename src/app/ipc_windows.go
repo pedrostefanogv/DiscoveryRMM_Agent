@@ -29,8 +29,9 @@ import (
 	"discovery/app/core/buildinfo"
 )
 
-// IPCPipeName é o caminho do named pipe do serviço.
-const IPCPipeName = `\\.\pipe\discovery-agent-ipc`
+// IPCPipeName é o caminho do named pipe do serviço. Deriva do prefixo comum
+// (ver ipcPipePrefix) para que nome de pipe inválido seja impossível por typo.
+const IPCPipeName = ipcPipePrefix + "discovery-agent-ipc"
 
 // Liveness das UIs companion conectadas.
 //
@@ -225,6 +226,13 @@ type IPCServer struct {
 // A falha do pipe admin NÃO derruba o pipe de leitura: a UI continua operando
 // em modo somente-leitura (mutações retornam unauthorized tratado).
 func StartIPCServer(onMessage func(net.Conn, IPCMessage)) *IPCServer {
+	// Valida o nome ANTES de chamar o SO: um nome malformado devolve apenas
+	// "Incorrect function" e o erro fica opaco (foi a causa do incidente de
+	// 2026-10-17: o pipe admin nunca foi criado e ninguém viu no log).
+	if nameErr := validateIPCPipeName(IPCPipeName); nameErr != nil {
+		log.Printf("[ipc] ERRO: canal de leitura com nome inválido: %v", nameErr)
+		return nil
+	}
 	l, err := winio.ListenPipe(IPCPipeName, &winio.PipeConfig{
 		SecurityDescriptor: ipcReadPipeSDDL,
 		MessageMode:        false,
@@ -242,12 +250,19 @@ func StartIPCServer(onMessage func(net.Conn, IPCMessage)) *IPCServer {
 	}
 	go s.acceptLoop(l, false)
 
-	adminL, adminErr := winio.ListenPipe(IPCPipeAdminName, &winio.PipeConfig{
+	// Canal admin: se ele não subir, TODAS as mutações da UI ficam bloqueadas
+	// (chamados, comentários, anexos, config, updates, knowledge) enquanto as
+	// leituras seguem funcionando — degradação silenciosa perigosa. Por isso:
+	// valida o nome, loga em nível ERRO e conta a falha na telemetria.
+	if nameErr := validateIPCPipeName(IPCPipeAdminName); nameErr != nil {
+		ipcAuthStats.AdminListenFailed.Add(1)
+		log.Printf("[ipc] ERRO: canal admin com nome inválido: %v — mutações ficarão indisponíveis", nameErr)
+	} else if adminL, adminErr := winio.ListenPipe(IPCPipeAdminName, &winio.PipeConfig{
 		SecurityDescriptor: ipcAdminPipeSDDL,
 		MessageMode:        false,
-	})
-	if adminErr != nil {
-		log.Printf("[ipc] AVISO: falha ao escutar %s: %v — mutações ficarão indisponíveis", IPCPipeAdminName, adminErr)
+	}); adminErr != nil {
+		ipcAuthStats.AdminListenFailed.Add(1)
+		log.Printf("[ipc] ERRO: falha ao escutar %s: %v — mutações ficarão indisponíveis", IPCPipeAdminName, adminErr)
 	} else {
 		s.adminListener = adminL
 		go s.acceptLoop(adminL, true)

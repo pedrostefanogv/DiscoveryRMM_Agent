@@ -794,7 +794,13 @@
       state.ticketId = nextTicketId;
     }
     state.messages = mergeMessages(Array.isArray(next.messages) ? next.messages : []);
-    if (next.supportName || next.ticketTitle) {
+
+    // Convite pendente ganha título próprio: o tooltip do botão na barra de
+    // tarefas mostra o título da janela e é o que sobra quando o usuário está
+    // em outro aplicativo em tela cheia.
+    if (state.status === "waiting") {
+      document.title = "Convite do suporte — responda";
+    } else if (next.supportName || next.ticketTitle) {
       var parts = [];
       if (next.supportName) parts.push("Atendente: " + next.supportName);
       if (next.ticketTitle) parts.push(next.ticketTitle);

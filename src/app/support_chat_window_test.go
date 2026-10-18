@@ -88,3 +88,132 @@ func TestSupportChatWindowSize_CabeNaAreaDeTrabalho(t *testing.T) {
 		t.Fatalf("work area inválida deve manter o tamanho nominal; obtido %dx%d", w, h)
 	}
 }
+
+// REQUISITO (definido pelo usuário em produção): o convite do suporte precisa
+// aparecer POR CIMA de todos os aplicativos. A janela do chat flutua
+// ("sempre no topo") apenas enquanto o convite está pendente de resposta;
+// durante a conversa ela volta ao comportamento normal, porque uma janela
+// sempre no topo atrapalharia o trabalho (e cobriria o app que o suporte
+// precisa ver).
+func TestSupportChatShouldFloat_ApenasDuranteOConvite(t *testing.T) {
+	cases := []struct {
+		status string
+		want   bool
+	}{
+		{"waiting", true},
+		{" active ", false},
+		{"active", false},
+		{"ended", false},
+		{"none", false},
+		{"", false},
+		{"desconhecido", false},
+	}
+
+	for _, tc := range cases {
+		if got := supportChatShouldFloat(tc.status); got != tc.want {
+			t.Fatalf("supportChatShouldFloat(%q) = %v; esperado %v", tc.status, got, tc.want)
+		}
+	}
+}
+
+// REQUISITO: o painel do chat nasce no monitor onde o usuário está trabalhando
+// (cursor) — com dois monitores o convite podia nascer no monitor "errado" e
+// passar despercebido.
+func TestSupportChatPlacementScreen_PrefereCursor(t *testing.T) {
+	primary := &application.Screen{
+		IsPrimary:      true,
+		Bounds:         application.Rect{X: 0, Y: 0, Width: 1920, Height: 1080},
+		PhysicalBounds: application.Rect{X: 0, Y: 0, Width: 1920, Height: 1080},
+	}
+	secondary := &application.Screen{
+		Bounds:         application.Rect{X: 1920, Y: 0, Width: 1280, Height: 1024},
+		PhysicalBounds: application.Rect{X: 1920, Y: 0, Width: 1280, Height: 1024},
+	}
+	screens := []*application.Screen{primary, secondary}
+
+	// Cursor no segundo monitor: a janela nasce lá.
+	cursor := application.Point{X: 2400, Y: 400}
+	if got := supportChatPlacementScreen(screens, &cursor, primary); got != secondary {
+		t.Fatalf("cursor no monitor secundário deveria escolher o secundário; obtido %+v", got)
+	}
+
+	// Cursor no monitor primário.
+	cursor = application.Point{X: 100, Y: 100}
+	if got := supportChatPlacementScreen(screens, &cursor, secondary); got != primary {
+		t.Fatalf("cursor no monitor primário deveria escolher o primário; obtido %+v", got)
+	}
+
+	// Sem cursor (GetCursorPos falhou): usa a tela preferida (janela principal).
+	if got := supportChatPlacementScreen(screens, nil, secondary); got != secondary {
+		t.Fatalf("sem cursor deveria usar a tela preferida; obtido %+v", got)
+	}
+
+	// Sem cursor e sem preferida: primária.
+	if got := supportChatPlacementScreen(screens, nil, nil); got != primary {
+		t.Fatalf("sem cursor/preferida deveria usar a primária; obtido %+v", got)
+	}
+
+	// Cursor fora de qualquer tela (config estranha): cai na preferida.
+	cursor = application.Point{X: -5000, Y: -5000}
+	if got := supportChatPlacementScreen(screens, &cursor, primary); got != primary {
+		t.Fatalf("cursor fora das telas deveria cair na preferida; obtido %+v", got)
+	}
+
+	// Nenhuma tela conhecida: nil (o chamador mantém o comportamento padrão).
+	if got := supportChatPlacementScreen(nil, &cursor, nil); got != nil {
+		t.Fatalf("sem telas o resultado deve ser nil; obtido %+v", got)
+	}
+}
+
+// REQUISITO: além de escolher a tela, a janela precisa NASCER já centralizada
+// nela e já "sempre no topo" quando é o convite. Criar sem AlwaysOnTop deixava
+// um intervalo em que ela aparecia atrás do app em uso.
+func TestSupportChatWindowOptionsOn_PosicionaECentraliza(t *testing.T) {
+	screen := &application.Screen{
+		IsPrimary: true,
+		WorkArea:  application.Rect{X: 1920, Y: 0, Width: 1280, Height: 1024},
+	}
+
+	opts := supportChatWindowOptionsOn(500, 600, screen, true)
+
+	if !opts.AlwaysOnTop {
+		t.Fatal("o convite precisa nascer sempre no topo (AlwaysOnTop)")
+	}
+	if opts.Screen != screen {
+		t.Fatal("a tela escolhida precisa ir nas opções (Screen)")
+	}
+	if opts.InitialPosition != application.WindowXY {
+		t.Fatalf("posição inicial deveria ser WindowXY; obtido %v", opts.InitialPosition)
+	}
+	// X/Y relativos à WorkArea da tela escolhida.
+	if wantX := (1280 - 500) / 2; opts.X != wantX {
+		t.Fatalf("X deveria ser %d; obtido %d", wantX, opts.X)
+	}
+	if wantY := (1024 - 600) / 2; opts.Y != wantY {
+		t.Fatalf("Y deveria ser %d; obtido %d", wantY, opts.Y)
+	}
+
+	// Conversa normal (sem convite): janela sem AlwaysOnTop.
+	if opts := supportChatWindowOptionsOn(500, 600, screen, false); opts.AlwaysOnTop {
+		t.Fatal("sem convite pendente a janela não deve ser AlwaysOnTop")
+	}
+
+	// Sem tela (ScreenManager indisponível): mantém as opções do painel.
+	base := supportChatWindowOptions(500, 600)
+	if opts := supportChatWindowOptionsOn(500, 600, nil, true); opts.Screen != nil ||
+		opts.Width != base.Width || opts.Height != base.Height || !opts.DisableResize {
+		t.Fatal("sem tela as opções do painel precisam ser preservadas")
+	}
+
+	// Área de trabalho inválida: não posiciona (nem gera X/Y negativo).
+	empty := &application.Screen{WorkArea: application.Rect{}}
+	if opts := supportChatWindowOptionsOn(500, 600, empty, false); opts.Screen != nil || opts.X != 0 || opts.Y != 0 {
+		t.Fatalf("work area inválida não deve posicionar a janela; obtido X=%d Y=%d", opts.X, opts.Y)
+	}
+
+	// Painel maior que a área de trabalho: X/Y nunca negativos.
+	tiny := &application.Screen{WorkArea: application.Rect{Width: 200, Height: 200}}
+	if opts := supportChatWindowOptionsOn(500, 600, tiny, false); opts.X < 0 || opts.Y < 0 {
+		t.Fatalf("X/Y não podem ser negativos; obtido X=%d Y=%d", opts.X, opts.Y)
+	}
+}

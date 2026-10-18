@@ -479,8 +479,11 @@ func apiErrorMessage(status int, raw string) string {
 		Message string `json:"message"`
 		Error   string `json:"error"`
 		Title   string `json:"title"`
+		// Code é o código estável do ProblemDetails da API (ex.: "session_not_active").
+		Code string `json:"code"`
 	}
 	message := ""
+	code := ""
 	if json.Unmarshal([]byte(raw), &payload) == nil {
 		message = strings.TrimSpace(payload.Message)
 		if message == "" {
@@ -489,6 +492,7 @@ func apiErrorMessage(status int, raw string) string {
 		if message == "" {
 			message = strings.TrimSpace(payload.Title)
 		}
+		code = strings.TrimSpace(payload.Code)
 	}
 	if message == "" {
 		// Corpo não-JSON (HTML de proxy, texto puro): corta para não estourar a UI.
@@ -498,6 +502,15 @@ func apiErrorMessage(status int, raw string) string {
 		}
 	}
 
+	// O código estável vive no campo code — e NÃO no texto que o usuário lê.
+	// BUG CORRIGIDO: o 409 de "sessão não está mais ativa" era detectado
+	// procurando a string no corpo; a API devolve code=session_not_active com a
+	// mensagem em português, então a tradução nunca casava e a janela mostrava
+	// "operação inválida para o estado atual da conversa".
+	if strings.Contains(strings.ToLower(code), "session_not_active") {
+		return "a conversa não está mais ativa."
+	}
+
 	lower := strings.ToLower(message)
 	if strings.Contains(lower, "object storage") || strings.Contains(lower, "bucketname") ||
 		strings.Contains(lower, "accesskey") || strings.Contains(lower, "endpoint é obrigatório") {
@@ -505,7 +518,7 @@ func apiErrorMessage(status int, raw string) string {
 			"Peça ao administrador para preencher os dados em Configurações > Servidor — " +
 			"enquanto isso, anexos e prints não podem ser enviados."
 	}
-	if status == http.StatusConflict && strings.Contains(lower, "session_not_active") {
+	if status == http.StatusConflict && strings.Contains(strings.ToLower(code+message), "session_not_active") {
 		return "a conversa não está mais ativa."
 	}
 	return message

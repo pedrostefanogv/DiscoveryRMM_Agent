@@ -37,6 +37,9 @@ func (a *App) supportChatService() *supportchat.Service {
 		},
 		Emit: func(name string, data ...any) {
 			a.EmitEvent(name, data...)
+			// Transições de estado do chat também governam o modo da janela:
+			// "sempre no topo" apenas enquanto o convite está pendente.
+			a.syncSupportChatWindowFromEvent(name, data...)
 		},
 	})
 

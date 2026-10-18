@@ -83,17 +83,26 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 		"supportName", invite.SupportName)
 
 	if !a.hasSupportChatUI() {
-		// Sem interface não há como o usuário confirmar: recusa explícita para o
-		// suporte não ficar esperando o convite expirar.
+		// Sem interface NÃO existe onde mostrar o convite — mas a UI pode estar
+		// subindo agora (o watchdog acabou de ser acionado). Antes o convite era
+		// recusado na hora, então uma UI que aparecesse 2 s depois encontrava o
+		// convite já morto: o suporte via "usuário recusou" e o usuário nunca
+		// soube que houve convite.
 		//
-		// ANTES de recusar, pede o relançamento da UI ao watchdog: a ausência de
-		// interface (usuário fechou o agent, UI travou, task de logon não rodou)
-		// é exatamente o caso que deixava a máquina muda para o suporte. A UI
-		// sobe minimizada no tray e o próximo convite já chega na tela.
+		// Agora há uma janela de tolerância: se a UI aparecer dentro dela, o
+		// convite é reemitido e a janela abre flutuando (ver openSupportChatWindow).
+		// Só depois do prazo o agent recusa explicitamente, para o suporte não
+		// ficar esperando o convite expirar.
 		a.requestUIWatchdogSpawn("chat_invite")
-		a.respondSupportChatInvite(invite.SessionID, false, "no_ui")
-		a.clearSupportChatIfCurrent(invite.SessionID)
-		return true, 1, "", "agent sem interface de usuario para confirmar o chat"
+		a.scheduleSupportChatInviteRedelivery(invite)
+
+		body, _ := json.Marshal(map[string]any{
+			"pendingConfirmation": true,
+			"sessionId":           invite.SessionID,
+			"ui":                  "chat-window",
+			"awaitingUi":          true,
+		})
+		return true, 0, string(body), ""
 	}
 
 	body, _ := json.Marshal(map[string]any{
@@ -103,6 +112,67 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 	})
 
 	return true, 0, string(body), ""
+}
+
+// Constantes da janela de tolerância do convite sem UI.
+const (
+	// supportChatInviteUIWait é quanto tempo o agent espera a UI subir antes de
+	// recusar o convite. Cobre a subida do processo de UI + WebView2 depois do
+	// requestUIWatchdogSpawn (tipicamente 2–8 s em máquina fria).
+	supportChatInviteUIWait = 25 * time.Second
+	// supportChatInviteUIPoll é o intervalo de verificação da UI.
+	supportChatInviteUIPoll = 500 * time.Millisecond
+)
+
+// scheduleSupportChatInviteRedelivery espera a UI aparecer e reemite o convite
+// para ela; se a UI não aparecer dentro de supportChatInviteUIWait, recusa o
+// convite (motivo "no_ui") e limpa o estado local.
+//
+// Roda em goroutine: o handler do comando precisa responder ao servidor na hora
+// (o resultado sai como "pendingConfirmation").
+func (a *App) scheduleSupportChatInviteRedelivery(invite supportchat.Invite) {
+	if a == nil || strings.TrimSpace(invite.SessionID) == "" {
+		return
+	}
+
+	go func() {
+		deadline := time.NewTimer(supportChatInviteUIWait)
+		defer deadline.Stop()
+
+		ticker := time.NewTicker(supportChatInviteUIPoll)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-a.supportChatContext().Done():
+				return
+
+			case <-deadline.C:
+				a.Logs.Append("[supportchat] convite sem UI em " + supportChatInviteUIWait.String() +
+					"; recusando para o suporte nao ficar esperando (sessionId=" + invite.SessionID + ")")
+				a.respondSupportChatInvite(invite.SessionID, false, "no_ui")
+				a.clearSupportChatIfCurrent(invite.SessionID)
+				return
+
+			case <-ticker.C:
+				if !a.hasSupportChatUI() {
+					continue
+				}
+
+				// A UI existe agora: reemite o convite (evento + toast) e a janela
+				// abre em primeiro plano. O estado "waiting" já foi registrado por
+				// PrepareInvite no handler do comando.
+				a.Logs.Append("[supportchat] UI disponivel; reemitindo o convite para a tela (sessionId=" + invite.SessionID + ")")
+				a.notifySupportChatInvite(invite)
+				a.EmitEvent("supportchat:invite",
+					"sessionId", invite.SessionID,
+					"ticketId", invite.TicketID,
+					"ticketTitle", invite.TicketTitle,
+					"supportName", invite.SupportName)
+				return
+			}
+		}
+	}()
 }
 
 // hasSupportChatUI informa se existe uma interface capaz de renderizar a janela

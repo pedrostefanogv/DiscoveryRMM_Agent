@@ -485,6 +485,14 @@ func (a *App) startIPCClient() {
 						}
 					}
 				}
+				// Estado do chat de suporte vindo do SERVIÇO: o modo da janela
+				// ("sempre no topo" só com convite pendente) é decidido aqui na
+				// UI, que é quem tem a janela. O serviço não sabe do Wails, então
+				// sem isto a janela do convite ficaria flutuando até o usuário
+				// responder — ou perderia o topo no meio do atendimento.
+				if name == supportChatStateEventName {
+					a.syncSupportChatWindowFromIPCPayload(msg.Payload)
+				}
 				a.EmitEvent(name, eventData...)
 			default:
 			}

@@ -1256,10 +1256,11 @@ func (a *App) ShowMainWindow() {
 	if win == nil {
 		return
 	}
-	win.UnMinimise()
-	win.Show()
-	win.SetAlwaysOnTop(true)
-	win.SetAlwaysOnTop(false)
+	// raiseWindowToFront faz o mesmo "truque" de topmost que existia aqui e
+	// acrescenta o que faltava: restauração explícita, força bruta de primeiro
+	// plano no Windows (foreground lock) e piscar da barra de tarefas quando o
+	// foco é recusado — ver window_foreground*.go.
+	raiseWindowToFront(win, false)
 	a.FitWindowToWorkArea()
 }
 

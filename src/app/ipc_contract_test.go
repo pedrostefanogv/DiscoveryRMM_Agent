@@ -49,8 +49,16 @@ func TestIPCContractConstants(t *testing.T) {
 			t.Fatal("tipo de mensagem vazio no contrato")
 		}
 	}
-	if !strings.HasPrefix(IPCPipeName, `\\.\pipe\`) {
-		t.Fatalf("pipe name inválido: %s", IPCPipeName)
+	// Os DOIS canais precisam de nome válido e distinto. O pipe admin nasceu
+	// malformado na 1.2.1 (faltava o prefixo) e derrubou TODAS as mutações com
+	// "Incorrect function" no ListenPipe — ver ipc_pipe_name_test.go.
+	for _, name := range []string{IPCPipeName, IPCPipeAdminName} {
+		if err := validateIPCPipeName(name); err != nil {
+			t.Fatalf("pipe name inválido: %v", err)
+		}
+	}
+	if IPCPipeName == IPCPipeAdminName {
+		t.Fatal("pipe de leitura e pipe admin não podem usar o mesmo nome")
 	}
 }
 
