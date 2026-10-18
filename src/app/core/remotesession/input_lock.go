@@ -103,6 +103,10 @@ type InputLockManager struct {
 	leaseUntil time.Time
 	hardUntil  time.Time
 	indicator  lockIndicator
+	// indicatorShared indica que o indicador pertence à SESSÃO (ícone da
+	// bandeja criado junto com o banner): o InputLockManager só muda o estado
+	// dele (Show/Hide) e NUNCA o fecha — quem fecha é o Manager da sessão.
+	indicatorShared bool
 	// closed fecha o manager: impede que um applyLock EM VOO (block() já
 	// executado) marque a entrada como bloqueada DEPOIS do Close — sem isso a
 	// máquina remota ficaria sem teclado/mouse, pois o watchdog já parou e
@@ -162,6 +166,36 @@ func newInputLockManager(sessionID string, publish func(InputLockState), opts in
 	}
 	go m.watchdogLoop()
 	return m
+}
+
+// setIndicator injeta o indicador compartilhado da sessão (ícone da bandeja).
+// Deve ser chamado ANTES do primeiro bloqueio; o indicador não é fechado por
+// este manager (indicatorShared).
+func (m *InputLockManager) setIndicator(ind lockIndicator) {
+	if ind == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.indicatorShared {
+		m.mu.Unlock()
+		return
+	}
+	// Corrida possível: um bloqueio chegou antes desta injeção e criou o
+	// indicador próprio. Troca pelo ícone da sessão (e fecha o antigo).
+	old := m.indicator
+	m.indicator = ind
+	m.indicatorShared = true
+	locked := m.locked
+	m.mu.Unlock()
+	if old != nil {
+		old.Close()
+	}
+	if locked {
+		// Estado já está bloqueado: reflete no indicador novo.
+		if err := ind.Show("Teclado e mouse bloqueados pelo suporte remoto"); err != nil {
+			log.Printf("[remote-session][input-lock] indicador da sessão indisponível: %v", err)
+		}
+	}
 }
 
 // HandleCommand processa o payload de inputLock vindo do viewer.
@@ -338,9 +372,11 @@ func (m *InputLockManager) Close() {
 
 		m.mu.Lock()
 		ind := m.indicator
+		shared := m.indicatorShared
 		m.indicator = nil
+		m.indicatorShared = false
 		m.mu.Unlock()
-		if ind != nil {
+		if ind != nil && !shared {
 			ind.Close()
 		}
 	})

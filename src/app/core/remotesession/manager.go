@@ -34,6 +34,9 @@ type Session struct {
 	StartedAt    time.Time `json:"startedAtUtc"`
 	Recording    bool      `json:"recording"`
 	banner       SessionBanner
+	// tray é o ícone da bandeja da sessão (aviso local + Desconectar). Também
+	// serve de indicador do input lock — evita um segundo ícone.
+	tray SessionTray
 
 	// estado interno
 	stopCh chan struct{}
@@ -72,6 +75,7 @@ type Manager struct {
 	consentReporter func(context.Context, string, ConsentDecision) error
 	interactiveUser func() string
 	newBanner       func(BannerOptions) (SessionBanner, error)
+	newTray         func(TrayOptions) (SessionTray, error)
 
 	consentMu        sync.Mutex
 	consentCancel    context.CancelFunc
@@ -120,6 +124,11 @@ func (m *Manager) SetInteractiveUser(fn func() string) {
 // SetBannerFactory injeta o criador do banner local (Win32).
 func (m *Manager) SetBannerFactory(fn func(BannerOptions) (SessionBanner, error)) {
 	m.newBanner = fn
+}
+
+// SetTrayFactory injeta o criador do ícone da bandeja da sessão.
+func (m *Manager) SetTrayFactory(fn func(TrayOptions) (SessionTray, error)) {
+	m.newTray = fn
 }
 
 // StopByUser encerra a sessão a pedido do usuário local (banner).
@@ -266,24 +275,43 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 
 	m.sessions[sessionID] = session
 
-	// Banner local: exibido na sessão interativa e excluído da captura.
-	if (kind == "screen" || kind == "all") {
-		if bannerCfg := ParseBannerConfig(payload); bannerCfg != nil && bannerCfg.Enabled && m.newBanner != nil {
+	// Banner local (click-through) + ícone da bandeja: exibidos na sessão
+	// interativa e excluídos da captura. A desconexão mora no ícone — o banner
+	// não captura cliques (ver screen/session_banner_windows.go).
+	if kind == "screen" || kind == "all" {
+		if bannerCfg := ParseBannerConfig(payload); bannerCfg != nil && bannerCfg.Enabled {
 			monitorIndex := toInt(payload["monitorIndex"], 0)
-			banner, err := m.newBanner(BannerOptions{
-				SessionID:      sessionID,
-				Operator:       bannerCfg.Operator,
-				Text:           bannerCfg.Text,
-				AllowDisconnect: bannerCfg.AllowDisconnect,
-				MonitorIndex:   monitorIndex,
-				OnDisconnect: func() {
-					go m.StopByUser(sessionID, "banner-disconnect")
-				},
-			})
-			if err != nil {
-				log.Printf("[session-banner] não foi possível exibir o banner: %v\n", err)
-			} else {
-				session.banner = banner
+			if m.newTray != nil {
+				tray, err := m.newTray(TrayOptions{
+					Operator:        bannerCfg.Operator,
+					Text:            bannerCfg.Text,
+					AllowDisconnect: bannerCfg.AllowDisconnect,
+					OnDisconnect: func() {
+						go m.StopByUser(sessionID, "banner-disconnect")
+					},
+				})
+				if err != nil {
+					log.Printf("[session-tray] não foi possível criar o ícone da bandeja: %v\n", err)
+				} else {
+					session.tray = tray
+				}
+			}
+			if m.newBanner != nil {
+				// A dica "Para encerrar, clique no ícone do agente na bandeja do
+				// sistema" só faz sentido se o ícone realmente foi criado
+				// (allowDisconnect controla o menu).
+				banner, err := m.newBanner(BannerOptions{
+					SessionID:       sessionID,
+					Operator:        bannerCfg.Operator,
+					Text:            bannerCfg.Text,
+					AllowDisconnect: bannerCfg.AllowDisconnect && session.tray != nil,
+					MonitorIndex:    monitorIndex,
+				})
+				if err != nil {
+					log.Printf("[session-banner] não foi possível exibir o banner: %v\n", err)
+				} else {
+					session.banner = banner
+				}
 			}
 		}
 	}
@@ -509,6 +537,11 @@ func (m *Manager) closeSessionLocked(sessionID, reason string) bool {
 	if s.banner != nil {
 		s.banner.Close()
 		s.banner = nil
+	}
+	if s.tray != nil {
+		// Não zera o campo: runScreenSession pode ler session.tray na
+		// inicialização (o campo só é escrito antes da goroutine começar).
+		s.tray.Close()
 	}
 	delete(m.sessions, sessionID)
 	delete(m.screenSessions, sessionID) // limpa referencia da SessionScreen
@@ -885,6 +918,11 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 		m.sendControl(session, ControlTypeInputLockChanged, state.Payload())
 	})
 	screenSession.SetInputLock(lockMgr)
+	// O ícone da bandeja da sessão também é o indicador do input lock: um único
+	// ícone (sem duplicar quando o viewer bloqueia teclado/mouse).
+	if session.tray != nil {
+		lockMgr.setIndicator(session.tray)
+	}
 	// Estado inicial (destravado) para viewers que já estejam assinando; quem
 	// conectar depois manda query e recebe a resposta pelo .control.
 	lockMgr.PublishCurrent("session_start")

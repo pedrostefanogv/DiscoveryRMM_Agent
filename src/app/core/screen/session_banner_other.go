@@ -8,7 +8,7 @@ type BannerOptions struct {
 	Operator        string
 	Text            string
 	AllowDisconnect bool
-	OnDisconnect    func()
+	MonitorIndex    int
 }
 
 type SessionBanner struct{}

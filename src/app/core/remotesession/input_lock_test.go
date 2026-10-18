@@ -499,3 +499,35 @@ func TestInputLockStatePayload(t *testing.T) {
 		t.Fatalf("method vazio nao deveria ir no payload: %+v", empty)
 	}
 }
+
+// TestInputLockSharedIndicatorNaoEFechado garante que o indicador da SESSÃO
+// (ícone da bandeja criado junto com o banner) recebe Show/Hide do bloqueio,
+// mas NÃO é fechado pelo InputLockManager — quem o fecha é o Manager da sessão.
+func TestInputLockSharedIndicatorNaoEFechado(t *testing.T) {
+	rig := newLockRig(t)
+	rig.mgr.setIndicator(&fakeLockIndicator{rig: rig})
+
+	rig.mgr.HandleCommand(map[string]any{"locked": true, "leaseSeconds": float64(60)})
+	rig.mu.Lock()
+	showCalls := rig.showCalls
+	rig.mu.Unlock()
+	if showCalls == 0 {
+		t.Fatal("bloqueio deveria atualizar o indicador compartilhado (Show)")
+	}
+
+	rig.mgr.Release("teste")
+	rig.mu.Lock()
+	hideCalls := rig.hideCalls
+	rig.mu.Unlock()
+	if hideCalls == 0 {
+		t.Fatal("liberação deveria restaurar o indicador compartilhado (Hide)")
+	}
+
+	rig.mgr.Close()
+	rig.mu.Lock()
+	closeCalls := rig.indCloseCalls
+	rig.mu.Unlock()
+	if closeCalls != 0 {
+		t.Fatalf("indicador compartilhado não deve ser fechado pelo InputLockManager (Close=%d)", closeCalls)
+	}
+}

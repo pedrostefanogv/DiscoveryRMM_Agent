@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -43,25 +44,19 @@ func configureRemoteConsentRuntime(apiBase, token, agentID string) {
 	remoteConsentAgentID = strings.TrimSpace(agentID)
 }
 
-// remoteConsentPrompt tenta o prompt Fluent do PSADT (contagem regressiva) e,
-// se o módulo/estilização falhar, cai para a janela nativa com contagem e
-// cancelamento imediato (remote_consent_native_windows.go).
+// remoteConsentPrompt abre o prompt de consentimento do desktop. Ordem:
+//
+//  1. prompt NATIVO desenhado pelo agente (remote_consent_native_windows.go):
+//     cartão com o tema do Windows do usuário, CONTAGEM REGRESSIVA visível e a
+//     AÇÃO PADRÃO explícita ("o acesso será NEGADO automaticamente"). O
+//     Show-ADTInstallationPrompt do PSADT não mostra contador, por isso ele
+//     deixou de ser o backend principal;
+//  2. prompt PSADT (Fluent, com a identidade visual do toolkit) como fallback
+//     quando a janela nativa não pode ser criada (sem desktop interativo);
+//  3. sem prompt: nega (fail closed).
 func remoteConsentPrompt(ctx context.Context, req remotesession.ConsentRequest) remotesession.ConsentDecision {
-	if deadline, ok := ctx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return remotesession.ConsentDecision{
-				Accepted:      strings.EqualFold(req.TimeoutAction, "approve"),
-				Auto:          true,
-				Outcome:       "timeout-decision",
-				Reason:        "deadline-exceeded",
-				PromptBackend: "timeout",
-				DecidedAt:     time.Now().UTC(),
-			}
-		}
-		if remaining < req.Timeout {
-			req.Timeout = remaining
-		}
+	if decision, expired := clipConsentTimeout(ctx, &req); expired {
+		return decision
 	}
 
 	if runtime.GOOS != "windows" {
@@ -75,26 +70,15 @@ func remoteConsentPrompt(ctx context.Context, req remotesession.ConsentRequest) 
 		}
 	}
 
-	if decision, ok := psadtConsentPrompt(ctx, req); ok {
+	if decision, ok := nativeConsentPrompt(ctx, req); ok {
 		return decision
 	}
-	// O PSADT pode ter consumido parte do prazo antes de falhar: o fallback
-	// nativo nunca pode esperar mais do que o deadline do servidor.
-	if deadline, ok := ctx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return remotesession.ConsentDecision{
-				Accepted:      strings.EqualFold(req.TimeoutAction, "approve"),
-				Auto:          true,
-				Outcome:       "timeout-decision",
-				Reason:        "deadline-exceeded",
-				PromptBackend: "timeout",
-				DecidedAt:     time.Now().UTC(),
-			}
-		}
-		req.Timeout = remaining
+	// O prompt nativo pode ter consumido parte do prazo antes de falhar: o
+	// fallback PSADT nunca pode esperar mais do que o deadline do servidor.
+	if decision, expired := clipConsentTimeout(ctx, &req); expired {
+		return decision
 	}
-	if decision, ok := nativeConsentPrompt(ctx, req); ok {
+	if decision, ok := psadtConsentPrompt(ctx, req); ok {
 		return decision
 	}
 
@@ -106,6 +90,54 @@ func remoteConsentPrompt(ctx context.Context, req remotesession.ConsentRequest) 
 		PromptBackend: "none",
 		DecidedAt:     time.Now().UTC(),
 	}
+}
+
+// clipConsentTimeout reduz req.Timeout ao tempo restante do deadline do
+// servidor e devolve a decisão de timeout quando o prazo já venceu.
+func clipConsentTimeout(ctx context.Context, req *remotesession.ConsentRequest) (remotesession.ConsentDecision, bool) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return remotesession.ConsentDecision{}, false
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return remotesession.ConsentDecision{
+			Accepted:      strings.EqualFold(req.TimeoutAction, "approve"),
+			Auto:          true,
+			Outcome:       "timeout-decision",
+			Reason:        "deadline-exceeded",
+			PromptBackend: "timeout",
+			DecidedAt:     time.Now().UTC(),
+		}, true
+	}
+	if remaining < req.Timeout {
+		req.Timeout = remaining
+	}
+	return remotesession.ConsentDecision{}, false
+}
+
+// consentDefaultActionVerb é o verbo da ação aplicada quando o tempo termina sem
+// resposta ("PERMITIDO"/"NEGADO").
+func consentDefaultActionVerb(timeoutAction string) string {
+	if strings.EqualFold(strings.TrimSpace(timeoutAction), "approve") {
+		return "PERMITIDO"
+	}
+	return "NEGADO"
+}
+
+// consentDefaultActionText explica ao usuário o que acontece ao fim do tempo.
+func consentDefaultActionText(timeoutAction string) string {
+	return "Se você não responder, o acesso será " + consentDefaultActionVerb(timeoutAction) + " automaticamente."
+}
+
+// consentCountdownClock formata o tempo restante como mm:ss arredondando para
+// CIMA (o prompt nunca mostra 00:00 antes de expirar).
+func consentCountdownClock(remaining time.Duration) string {
+	if remaining < 0 {
+		remaining = 0
+	}
+	seconds := int(math.Ceil(remaining.Seconds()))
+	return fmt.Sprintf("%02d:%02d", seconds/60, seconds%60)
 }
 
 // consentDefaultButton mapeia a ação do timeout para o botão padrão do prompt.
@@ -133,6 +165,11 @@ func psadtConsentPrompt(ctx context.Context, req remotesession.ConsentRequest) (
 	if message == "" {
 		message = "O suporte solicita acesso remoto ao seu computador. Você autoriza?"
 	}
+	// O Show-ADTInstallationPrompt NÃO desenha contador (só os diálogos de
+	// Welcome/Restart têm timer): como este é o fallback, a mensagem precisa
+	// dizer qual ação padrão será aplicada e o tempo total para responder.
+	message = message + "\n\n" + consentDefaultActionText(req.TimeoutAction) +
+		" Tempo para responder: " + consentCountdownClock(req.Timeout) + "."
 
 	visualReq := PSADTVisualNotificationRequest{
 		NotifType:       "prompt_yesno",
@@ -328,12 +365,21 @@ func wireRemoteConsentManager(mgr *remotesession.Manager) {
 	mgr.SetConsentPrompt(remoteConsentPrompt)
 	mgr.SetConsentReporter(reportRemoteConsentDecision)
 	mgr.SetInteractiveUser(remoteConsentInteractiveUser)
+	// Banner: informativo e click-through (não captura cliques do app em uso).
 	mgr.SetBannerFactory(func(opts remotesession.BannerOptions) (remotesession.SessionBanner, error) {
 		return screen.NewSessionBanner(screen.BannerOptions{
 			Operator:        opts.Operator,
 			Text:            opts.Text,
 			AllowDisconnect: opts.AllowDisconnect,
 			MonitorIndex:    opts.MonitorIndex,
+		})
+	})
+	// Ícone da bandeja: é onde o usuário local desconecta a sessão.
+	mgr.SetTrayFactory(func(opts remotesession.TrayOptions) (remotesession.SessionTray, error) {
+		return screen.NewSessionTray(screen.SessionTrayOptions{
+			Operator:        opts.Operator,
+			Text:            opts.Text,
+			AllowDisconnect: opts.AllowDisconnect,
 			OnDisconnect:    opts.OnDisconnect,
 		})
 	})

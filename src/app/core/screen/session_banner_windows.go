@@ -5,105 +5,94 @@ package screen
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"discovery/app/core/winui"
 )
 
-// ── Banner local da sessão remota ──
+// ── Banner local da sessão remota (informativo, CLICK-THROUGH) ──
 //
-// Janela topmost no desktop do usuário acessado, com operador, tempo e botão
-// Desconectar. Deve ser EXCLUÍDA da captura (WDA_EXCLUDEFROMCAPTURE): o viewer e
-// a gravação não podem ver o banner. Se a exclusão não for suportada pelo
-// Windows, a janela NÃO é exibida (melhor sem banner do que vazando no stream).
+// Cartão flutuante topmost no desktop do usuário acessado: operador + tempo de
+// sessão. É 100% click-through (WS_EX_LAYERED|WS_EX_TRANSPARENT + HTTRANSPARENT
+// no WM_NCHITTEST): o banner NUNCA captura o mouse.
+//
+// O motivo é direto: o banner é EXCLUÍDO da captura (WDA_EXCLUDEFROMCAPTURE),
+// então o operador remoto vê o app por baixo dele e clica "através" do banner.
+// Quando a janela capturava o clique (comportamento anterior), clicar em abas
+// do navegador — que ficam justamente no topo da tela — simplesmente não
+// funcionava, embora o operador não visse o banner.
+//
+// A ação "Desconectar" saiu do banner e passou para o ícone da bandeja
+// (screen.SessionTray): o usuário local encerra a sessão sem que nenhuma janela
+// fique por cima dos apps.
+//
+// O banner continua excluído da captura: o viewer e a gravação não podem vê-lo.
+// Se a exclusão não for suportada pelo Windows, a janela NÃO é exibida (melhor
+// sem banner do que vazando no stream).
 
 const (
+	// wdaExcludeFromCapture é o SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE).
 	wdaExcludeFromCapture = 0x00000011
 
-	wsPopup        = 0x80000000
-	wsChild        = 0x40000000
-	wsVisible      = 0x10000000
-	wsClipSiblings = 0x04000000
-
-	wsExTopmost    = 0x00000008
-	wsExToolWindow = 0x00000080
-
-	ssCenter = 0x00000001
-
-	bsPushButton = 0x00000000
-
-	wmDestroy        = 0x0002
-	wmTimer          = 0x0113
-	wmCommand        = 0x0111
-	wmCtlColorStatic = 0x0138
-	wmSetFont        = 0x0030
-	wmEraseBkgnd     = 0x0014
-
-	swShow = 5
-
-	smCXScreen = 0
-	smCYScreen = 1
-
-	colorWindowText = 8
-	colorWindowBg   = 5
-	transparent     = 1
-
-	dtCenter     = 0x00000001
-	dtVCenter    = 0x00000004
-	dtSingleLine = 0x00000020
-	dtHidden     = 0x00000100
+	bannerClassName = "DiscoveryRmmSessionBanner"
+	bannerWidth     = 620
+	bannerHeight    = 68
+	bannerRadius    = 14
+	bannerTimerID   = 1
+	bannerRefreshMS = 1000
+	// bannerAlpha: cartão levemente translúcido sem perder contraste.
+	bannerAlpha = 242
 )
 
-var (
-	procSetWindowDisplayAffinity = user32DLL.NewProc("SetWindowDisplayAffinity")
-	procSetWindowTextW           = user32DLL.NewProc("SetWindowTextW")
-	procSetTimer                 = user32DLL.NewProc("SetTimer")
-	procKillTimer                = user32DLL.NewProc("KillTimer")
-	procShowWindow               = user32DLL.NewProc("ShowWindow")
-	procUpdateWindow             = user32DLL.NewProc("UpdateWindow")
-	procSendMessageW             = user32DLL.NewProc("SendMessageW")
-	procPostQuitMessage          = user32DLL.NewProc("PostQuitMessage")
-	procSetBkMode                = gdi32.NewProc("SetBkMode")
-	procSetTextColor             = gdi32.NewProc("SetTextColor")
-	procCreateSolidBrush         = gdi32.NewProc("CreateSolidBrush")
-	procCreateFontW              = gdi32.NewProc("CreateFontW")
-	procFillRect                 = user32DLL.NewProc("FillRect")
-	procGetClientRect            = user32DLL.NewProc("GetClientRect")
-)
+var procSetWindowDisplayAffinity = user32DLL.NewProc("SetWindowDisplayAffinity")
 
+// BannerOptions descreve o banner a criar. Não há botão: a desconexão é feita
+// pelo ícone da bandeja (SessionTray), para não bloquear cliques do app em uso.
 type BannerOptions struct {
 	Operator        string
 	Text            string
 	AllowDisconnect bool
 	MonitorIndex    int
-	OnDisconnect    func()
 }
 
+// bannerFonts agrupa as fontes do banner (liberadas no WM_DESTROY).
+type bannerFonts struct {
+	primary   uintptr
+	secondary uintptr
+}
+
+func (f bannerFonts) release() {
+	winui.DeleteGDIObject(f.primary)
+	winui.DeleteGDIObject(f.secondary)
+}
+
+// SessionBanner é o cartão flutuante exibido durante a sessão de tela.
 type SessionBanner struct {
 	mu       sync.Mutex
 	hwnd     uintptr
-	textHwnd uintptr
-	btnHwnd  uintptr
 	start    time.Time
 	baseText string
-	onClose  func()
+	operator string
+	allow    bool
 	closed   bool
 	ready    chan error
-	stopCh   chan struct{}
 	doneCh   chan struct{}
-	font     uintptr
-	brush    uintptr
+
+	// Estado de desenho (somente thread da janela).
+	theme winui.Theme
+	fonts bannerFonts
 }
 
+// bannerState liga o HWND ao estado Go (o wndproc só recebe uintptrs).
 type bannerState struct {
 	banner *SessionBanner
 }
 
 var bannerStates sync.Map
-
-const bannerClassName = "DiscoveryRmmSessionBanner"
 
 var (
 	bannerClassOnce sync.Once
@@ -112,66 +101,61 @@ var (
 
 func ensureBannerClass() error {
 	bannerClassOnce.Do(func() {
-		className, err := windows.UTF16PtrFromString(bannerClassName)
-		if err != nil {
-			bannerClassErr = err
-			return
-		}
-		wc := wndClassExW{
-			cbSize:        uint32(unsafe.Sizeof(wndClassExW{})),
-			lpfnWndProc:   windows.NewCallback(bannerWndProc),
-			lpszClassName: className,
-			hbrBackground: 0,
-		}
-		ret, _, callErr := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
-		if ret == 0 && errnoOf(callErr) != 1410 {
-			bannerClassErr = fmt.Errorf("RegisterClassExW(banner) falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
-		}
+		bannerClassErr = winui.RegisterWindowClass(
+			bannerClassName,
+			windows.NewCallback(bannerWndProc),
+			winui.ClassStyleDropShadow,
+		)
 	})
 	return bannerClassErr
 }
 
+// bannerThemeLoader lê o tema do usuário; var para testes de pré-visualização.
+var bannerThemeLoader = winui.DetectTheme
+
 func bannerWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
+	raw, ok := bannerStates.Load(hwnd)
+	if !ok {
+		return winui.DefWindowProc(hwnd, msg, wparam, lparam)
+	}
+	state, _ := raw.(*bannerState)
+	banner := state.banner
+
 	switch msg {
-	case wmEraseBkgnd:
-		if raw, ok := bannerStates.Load(hwnd); ok {
-			if state, ok := raw.(*bannerState); ok && state.banner != nil {
-				var rc rect
-				procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
-				procFillRect.Call(wparam, uintptr(unsafe.Pointer(&rc)), state.banner.brush)
-				return 1
-			}
-		}
+	case winui.MsgEraseBkgnd:
+		// Toda a pintura é feita em WM_PAINT (double buffer).
+		return 1
+	case winui.MsgPaint:
+		hdc, paint := winui.BeginPaint(hwnd)
+		banner.paint(hdc)
+		winui.EndPaint(hwnd, &paint)
 		return 0
-	case wmTimer:
-		if raw, ok := bannerStates.Load(hwnd); ok {
-			if state, ok := raw.(*bannerState); ok && state.banner != nil {
-				state.banner.refresh()
-			}
-		}
+	case winui.MsgPrintClient:
+		banner.paint(wparam)
 		return 0
-	case wmCommand:
-		if raw, ok := bannerStates.Load(hwnd); ok {
-			if state, ok := raw.(*bannerState); ok && state.banner != nil && wparam == 1 {
-				state.banner.disconnect()
-			}
-		}
+	case winui.MsgNCHitTest:
+		// Cinto e suspensório do WS_EX_TRANSPARENT: qualquer hit-test que ainda
+		// chegue aqui atravessa para a janela de baixo.
+		return ^uintptr(0) // HTTRANSPARENT
+	case winui.MsgTimer:
+		winui.Invalidate(hwnd)
 		return 0
-	case wmCtlColorStatic:
-		if raw, ok := bannerStates.Load(hwnd); ok {
-			if state, ok := raw.(*bannerState); ok && state.banner != nil {
-				procSetBkMode.Call(lparam, transparent)
-				procSetTextColor.Call(lparam, 0x00FFFFFF)
-				return state.banner.brush
-			}
-		}
-	case wmDestroy:
+	case winui.MsgSettingChange:
+		// O usuário trocou tema/accent com a sessão aberta: relê e repinta.
+		banner.theme = bannerThemeLoader()
+		winui.Invalidate(hwnd)
+		return 0
+	case winui.MsgClose:
+		winui.DestroyWindow(hwnd)
+		return 0
+	case winui.MsgDestroy:
+		banner.fonts.release()
+		banner.fonts = bannerFonts{}
 		bannerStates.Delete(hwnd)
-		procPostQuitMessage.Call(0)
+		winui.PostQuitMessage(0)
 		return 0
 	}
-	ret, _, _ := procDefWindowProcW.Call(hwnd, msg, wparam, lparam)
-	return ret
+	return winui.DefWindowProc(hwnd, msg, wparam, lparam)
 }
 
 // NewSessionBanner cria e exibe o banner na thread dedicada. Retorna erro se a
@@ -183,10 +167,10 @@ func NewSessionBanner(opts BannerOptions) (*SessionBanner, error) {
 
 	banner := &SessionBanner{
 		start:    time.Now(),
-		baseText: opts.Text,
-		onClose:  opts.OnDisconnect,
+		baseText: strings.TrimSpace(opts.Text),
+		operator: strings.TrimSpace(opts.Operator),
+		allow:    opts.AllowDisconnect,
 		ready:    make(chan error, 1),
-		stopCh:   make(chan struct{}),
 		doneCh:   make(chan struct{}),
 	}
 
@@ -195,110 +179,49 @@ func NewSessionBanner(opts BannerOptions) (*SessionBanner, error) {
 		defer runtime.UnlockOSThread()
 		defer close(banner.doneCh)
 
-		className, _ := windows.UTF16PtrFromString(bannerClassName)
-		windowName, _ := windows.UTF16PtrFromString("Discovery RMM — sessão remota")
-		screenW, _, _ := procGetSystemMetrics.Call(smCXScreen)
-		width := uintptr(720)
-		height := uintptr(52)
-
-		// Posiciona no monitor que está sendo compartilhado (monitorIndex do
-		// capturer). Sem geometria disponível, cai para o primário.
-		originX := int64(0)
-		originY := int64(0)
-		monitorWidth := int64(screenW)
-		if monitors, err := GetMonitors(); err == nil && len(monitors) > 0 {
-			index := opts.MonitorIndex
-			if index < 0 || index >= len(monitors) {
-				index = 0
-			}
-			originX = int64(monitors[index].X)
-			originY = int64(monitors[index].Y)
-			monitorWidth = int64(monitors[index].Width)
-		}
-		if int64(width) > monitorWidth-40 {
-			width = uintptr(monitorWidth - 40)
-		}
-		x := uintptr(originX + (monitorWidth-int64(width))/2)
-		y := uintptr(originY + 8)
-
-		hwnd, _, callErr := procCreateWindowExW.Call(
-			wsExTopmost|wsExToolWindow,
-			uintptr(unsafe.Pointer(className)),
-			uintptr(unsafe.Pointer(windowName)),
-			wsPopup|wsClipSiblings,
-			x, y, width, height,
-			0, 0, 0, 0,
+		x, y := bannerPosition(opts.MonitorIndex)
+		hwnd, err := winui.CreateWindow(
+			bannerClassName,
+			"Discovery RMM — sessão remota",
+			winui.ExStyleTopmost|winui.ExStyleToolWindow|winui.ExStyleNoActivate|
+				winui.ExStyleLayered|winui.ExStyleTransparent,
+			winui.WinStylePopup|winui.WinStyleClipSiblings,
+			x, y, bannerWidth, bannerHeight,
 		)
-		if hwnd == 0 {
-			banner.ready <- fmt.Errorf("CreateWindowExW(banner) falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
+		if err != nil {
+			banner.ready <- err
 			return
 		}
+		banner.mu.Lock()
 		banner.hwnd = hwnd
+		banner.mu.Unlock()
 		bannerStates.Store(hwnd, &bannerState{banner: banner})
 
-		// Exclusão da captura: sem isso o banner apareceria no viewer/gravação.
-		ok, _, affinityErr := procSetWindowDisplayAffinity.Call(hwnd, wdaExcludeFromCapture)
-		if ok == 0 {
-			procDestroyWindow.Call(hwnd)
-			banner.ready <- fmt.Errorf("SetWindowDisplayAffinity falhou: %v (errno=%d)", describeErr(affinityErr), errnoOf(affinityErr))
+		// Fora da captura: sem isso o banner apareceria no viewer/gravação.
+		if ok, _, affinityErr := procSetWindowDisplayAffinity.Call(hwnd, wdaExcludeFromCapture); ok == 0 {
+			winui.DestroyWindow(hwnd)
+			banner.ready <- fmt.Errorf("SetWindowDisplayAffinity falhou: %v (errno=%d)", affinityErr, errnoOf(affinityErr))
 			return
 		}
 
-		// Fonte e controles.
-		fontName, _ := windows.UTF16PtrFromString("Segoe UI")
-		banner.font, _, _ = procCreateFontW.Call(
-			uintptr(^uint32(15)+1), 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0,
-			uintptr(unsafe.Pointer(fontName)),
-		)
-		banner.brush, _, _ = procCreateSolidBrush.Call(0x00202020)
-
-		textPtr, _ := windows.UTF16PtrFromString(banner.currentText())
-		textHwnd, _, _ := procCreateWindowExW.Call(
-			0, uintptr(unsafe.Pointer(mustUTF16("STATIC"))), uintptr(unsafe.Pointer(textPtr)),
-			wsChild|wsVisible|ssCenter,
-			12, 12, width-160, 28, hwnd, 0, 0, 0,
-		)
-		banner.textHwnd = textHwnd
-		procSendMessageW.Call(textHwnd, wmSetFont, banner.font, 1)
-
-		if opts.AllowDisconnect {
-			btnPtr, _ := windows.UTF16PtrFromString("Desconectar")
-			btnHwnd, _, _ := procCreateWindowExW.Call(
-				0, uintptr(unsafe.Pointer(mustUTF16("BUTTON"))), uintptr(unsafe.Pointer(btnPtr)),
-				wsChild|wsVisible|bsPushButton,
-				width-140, 12, 124, 28, hwnd, 1, 0, 0,
-			)
-			banner.btnHwnd = btnHwnd
-			procSendMessageW.Call(btnHwnd, wmSetFont, banner.font, 1)
+		// Transparência uniforme (a janela é layered por causa do click-through).
+		winui.SetLayeredAlpha(hwnd, bannerAlpha)
+		winui.SetRoundedRegion(hwnd, bannerWidth, bannerHeight, bannerRadius)
+		banner.theme = bannerThemeLoader()
+		banner.fonts = bannerFonts{
+			primary:   winui.CreateFont(16, 600),
+			secondary: winui.CreateFont(13, 400),
 		}
 
-		procShowWindow.Call(hwnd, swShow)
-		procUpdateWindow.Call(hwnd)
-		procSetTimer.Call(hwnd, 1, 1000, 0)
+		winui.ShowWindow(hwnd, winui.SwShowNormal)
+		winui.UpdateWindow(hwnd)
+		winui.SetTimer(hwnd, bannerTimerID, bannerRefreshMS)
 		banner.ready <- nil
 
-		var msg struct {
-			hwnd    uintptr
-			message uint32
-			wParam  uintptr
-			lParam  uintptr
-			time    uint32
-			pt      struct{ x, y int32 }
-		}
-		for {
-			ret, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
-			if int32(ret) <= 0 {
-				break
-			}
-			procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
-			procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
-		}
-
-		if banner.font != 0 {
-			procDeleteObject.Call(banner.font)
-		}
-		if banner.brush != 0 {
-			procDeleteObject.Call(banner.brush)
+		var msg winui.Msg
+		for winui.NextMessage(&msg) > 0 {
+			winui.TranslateMessage(&msg)
+			winui.DispatchMessage(&msg)
 		}
 	}()
 
@@ -308,36 +231,76 @@ func NewSessionBanner(opts BannerOptions) (*SessionBanner, error) {
 	return banner, nil
 }
 
-func (b *SessionBanner) currentText() string {
+// bannerPosition centraliza o banner no topo do monitor que está sendo
+// compartilhado (monitorIndex do capturer). Sem geometria, usa o primário.
+func bannerPosition(monitorIndex int) (x, y int) {
+	monitors, err := GetMonitors()
+	if err != nil || len(monitors) == 0 {
+		area := winui.WorkArea()
+		return area.X + (area.W-bannerWidth)/2, area.Y + 8
+	}
+	index := monitorIndex
+	if index < 0 || index >= len(monitors) {
+		index = 0
+	}
+	target := monitors[index]
+	return target.X + (target.Width-bannerWidth)/2, target.Y + 8
+}
+
+// primaryText é a linha principal do banner (texto do servidor ou default).
+// Quando o template do servidor não traz o operador, o nome é anexado aqui (e
+// não na linha de baixo) para o texto de encerramento caber inteiro.
+func (b *SessionBanner) primaryText() string {
 	text := b.baseText
 	if text == "" {
 		text = "Sessão remota em andamento"
 	}
+	if b.operator != "" && !strings.Contains(strings.ToLower(text), strings.ToLower(b.operator)) {
+		text += " — " + b.operator
+	}
+	return text
+}
+
+// secondaryText mostra o tempo decorrido e, quando a política permite, como
+// encerrar a sessão — com a mesma instrução que o usuário encontra na bandeja.
+func (b *SessionBanner) secondaryText() string {
 	elapsed := time.Since(b.start)
-	minutes := int(elapsed.Minutes())
-	seconds := int(elapsed.Seconds()) % 60
-	return fmt.Sprintf("%s  •  %02d:%02d", text, minutes, seconds)
+	clock := fmt.Sprintf("%02d:%02d", int(elapsed.Minutes()), int(elapsed.Seconds())%60)
+	if !b.allow {
+		return "Conectado há " + clock
+	}
+	return clock + "  ·  Para encerrar, clique no ícone do agente na bandeja do sistema"
 }
 
-func (b *SessionBanner) refresh() {
-	if b == nil || b.textHwnd == 0 {
-		return
+// paint desenha o cartão inteiro no DC (memória quando disponível).
+func (b *SessionBanner) paint(screenDC uintptr) {
+	memDC, bitmap, oldBitmap := winui.BufferedPaint(screenDC, bannerWidth, bannerHeight)
+	hdc := memDC
+	if hdc == 0 {
+		hdc = screenDC
+	} else {
+		defer winui.FlushBufferedPaint(screenDC, memDC, bitmap, oldBitmap, bannerWidth, bannerHeight)
 	}
-	textPtr, _ := windows.UTF16PtrFromString(b.currentText())
-	procSetWindowTextW.Call(b.textHwnd, uintptr(unsafe.Pointer(textPtr)))
+
+	theme := b.theme
+	card := winui.Rect{W: bannerWidth, H: bannerHeight}
+	// Cartão + borda + faixa de destaque à esquerda.
+	winui.FillRoundRect(hdc, card, bannerRadius, theme.Card)
+	winui.FillRect(hdc, winui.Rect{X: 0, Y: 2, W: 5, H: bannerHeight - 4}, theme.Accent)
+	winui.StrokeRoundRect(hdc, card, bannerRadius, 1, theme.Border)
+
+	// Indicador de sessão ativa.
+	winui.FillEllipse(hdc, winui.Rect{X: 24, Y: 28, W: 12, H: 12}, theme.Accent)
+
+	textWidth := bannerWidth - 48 - 24
+	winui.DrawTextSingle(hdc, b.primaryText(),
+		winui.Rect{X: 48, Y: 12, W: textWidth, H: 22}, b.fonts.primary, theme.Text, winui.AlignLeft)
+	winui.DrawTextSingle(hdc, b.secondaryText(),
+		winui.Rect{X: 48, Y: 37, W: textWidth, H: 18}, b.fonts.secondary, theme.TextMuted, winui.AlignLeft)
 }
 
-func (b *SessionBanner) disconnect() {
-	if b == nil {
-		return
-	}
-	if b.onClose != nil {
-		b.onClose()
-	}
-	b.Close()
-}
-
-// Close encerra a janela (idempotente).
+// Close encerra a janela (idempotente). A destruição roda na thread dona da
+// janela: daqui só é postado um WM_CLOSE.
 func (b *SessionBanner) Close() {
 	if b == nil {
 		return
@@ -352,16 +315,10 @@ func (b *SessionBanner) Close() {
 	b.mu.Unlock()
 
 	if hwnd != 0 {
-		procKillTimer.Call(hwnd, 1)
-		procDestroyWindow.Call(hwnd)
+		winui.PostMessage(hwnd, winui.MsgClose, 0, 0)
 	}
 	select {
 	case <-b.doneCh:
 	case <-time.After(2 * time.Second):
 	}
-}
-
-func mustUTF16(value string) *uint16 {
-	ptr, _ := windows.UTF16PtrFromString(value)
-	return ptr
 }

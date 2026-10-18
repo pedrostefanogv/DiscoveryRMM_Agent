@@ -55,13 +55,31 @@ type SessionBanner interface {
 }
 
 // BannerOptions descreve o banner a criar.
+//
+// O banner é apenas INFORMATIVO e click-through (não captura cliques); a ação de
+// desconectar mora no ícone da bandeja (TrayOptions/OnDisconnect).
 type BannerOptions struct {
 	SessionID       string
 	Operator        string
 	Text            string
 	AllowDisconnect bool
 	MonitorIndex    int
+}
+
+// TrayOptions descreve o ícone da bandeja da sessão (avisos + Desconectar).
+type TrayOptions struct {
+	Operator        string
+	Text            string
+	AllowDisconnect bool
 	OnDisconnect    func()
+}
+
+// SessionTray é o ícone local na bandeja do usuário acessado. Também é usado
+// como indicador do input lock (Show/Hide mudam o estado exibido).
+type SessionTray interface {
+	Show(message string) error
+	Hide() error
+	Close()
 }
 
 // ParseConsentConfig lê o bloco consent do payload do start. Retorna nil quando
