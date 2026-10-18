@@ -105,6 +105,13 @@ func NewSessionScreenMonitor(sessionID string, natsStream *NatsStreamHandler, mo
 	// e o input/cursor do acesso remoto desloca. Idempotente.
 	screen.EnsurePerMonitorDPIAwareness()
 
+	// Diagnóstico de formato de cor: a calibração R↔B dos capturers
+	// (channel_order.go) registra a decisão no log unificado — sem isso não dá
+	// para saber, olhando o log de uma sessão, qual ordem de canais foi usada.
+	screen.SetDebugLogger(func(msg string) {
+		log.Printf("[remote-session-screen] %s\n", msg)
+	})
+
 	// Capturer primário: GDI (padrão MeshAgent). DXGI fica como fallback
 	// dinâmico — só entra se o GDI falhar repetidamente (ver loop de captura).
 	// ORDEM IMPORTA PARA TELA DE LOGON: no desktop seguro (Winlogon) só o GDI

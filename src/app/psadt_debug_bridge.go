@@ -312,6 +312,7 @@ type PSADTVisualNotificationRequest struct {
 	PromptMiddleText string `json:"promptMiddleText"`
 	PromptRightText  string `json:"promptRightText"`
 	PromptIcon       string `json:"promptIcon"`    // DialogSystemIcon: Information | Question | Exclamation | Error | Hand | Shield | Asterisk | Application | WinLogo | (vazio = omitir)
+	PromptDefaultButton string `json:"promptDefaultButton"` // Left | Middle | Right (vazio = default do PSADT)
 	PromptTimeout    int    `json:"promptTimeout"` // segundos, 0 = 120s (nao use o default de 55min do config.psd1)
 	PromptNoWait     bool   `json:"promptNoWait"`
 	PromptNotTopMost bool   `json:"promptNotTopMost"`
@@ -416,6 +417,7 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 		req.BalloonTimeSeconds = 10
 	}
 	req.PromptIcon = normalizePromptIcon(req.PromptIcon)
+	req.PromptDefaultButton = normalizePromptDefaultButton(req.PromptDefaultButton)
 	// Prompts bloqueantes: sem timeout explicito o PSADT usa o
 	// UI.DefaultTimeout do config.psd1 (55min), entao fixamos 120s por padrao
 	// para o teste retornar em tempo previsivel. Limite: UI.DefaultTimeout
@@ -524,6 +526,7 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 		"PSADT_PROMPT_MIDDLE="+req.PromptMiddleText,
 		"PSADT_PROMPT_RIGHT="+req.PromptRightText,
 		"PSADT_PROMPT_ICON="+req.PromptIcon,
+		"PSADT_PROMPT_DEFAULT_BUTTON="+req.PromptDefaultButton,
 		fmt.Sprintf("PSADT_PROMPT_TIMEOUT=%d", req.PromptTimeout),
 		"PSADT_PROMPT_NOWAIT="+boolEnvValue(req.PromptNoWait),
 		"PSADT_PROMPT_NOT_TOPMOST="+boolEnvValue(req.PromptNotTopMost),
@@ -656,6 +659,7 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		"$psadtPromptMiddle = $env:PSADT_PROMPT_MIDDLE\n" +
 		"$psadtPromptRight = $env:PSADT_PROMPT_RIGHT\n" +
 		"$psadtPromptIcon = $env:PSADT_PROMPT_ICON\n" +
+		"$psadtPromptDefaultButton = $env:PSADT_PROMPT_DEFAULT_BUTTON\n" +
 		"$psadtPromptTimeout = [int]$env:PSADT_PROMPT_TIMEOUT\n" +
 		"$psadtPromptNoWait = ($env:PSADT_PROMPT_NOWAIT -eq '1')\n" +
 		"$psadtPromptNotTopMost = ($env:PSADT_PROMPT_NOT_TOPMOST -eq '1')\n" +
@@ -754,6 +758,7 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 			"if ($psadtPromptMiddle) { $promptParams.ButtonMiddleText = $psadtPromptMiddle }\n" +
 			"if ($psadtPromptRight) { $promptParams.ButtonRightText = $psadtPromptRight }\n" +
 			"if ($psadtPromptIcon) { $promptParams.Icon = $psadtPromptIcon }\n" +
+			"if ($psadtPromptDefaultButton) { $promptParams.DefaultButton = $psadtPromptDefaultButton }\n" +
 			"if ($psadtPromptTimeout -gt 0) { $promptParams.Timeout = $psadtPromptTimeout }\n" +
 			// -NoExitOnTimeout: sem isso o PSADT fecha a sessao ADT com o
 			// DefaultExitCode (1618) ao expirar o timeout e o script ainda tenta
@@ -1371,6 +1376,22 @@ func normalizeDialogIcon(raw string) string {
 		return "Information"
 	default:
 		return "None"
+	}
+}
+
+// normalizePromptDefaultButton converte aliases para os valores do enum
+// DialogDefaultButton do PSADT 4.x (Show-ADTInstallationPrompt -DefaultButton).
+// Vazio = omite o parâmetro (o PSADT escolhe o default).
+func normalizePromptDefaultButton(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "left", "first", "primary", "allow", "permitir":
+		return "Left"
+	case "right", "third", "deny", "negar":
+		return "Right"
+	case "middle", "second":
+		return "Middle"
+	default:
+		return ""
 	}
 }
 

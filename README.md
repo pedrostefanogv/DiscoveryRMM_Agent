@@ -121,6 +121,32 @@ Detalhes em [BRANCHING.md](BRANCHING.md).
 
 Requisitos mínimos / Minimum requirements: Windows 10+, Go 1.26+, NSIS no `PATH`.
 
+### Instalador: o serviço é obrigatório no payload
+
+O `project.nsi` **falha em tempo de compilação** se `ARG_SERVICE_AMD64_BINARY` não for passado
+(`!error`), porque um instalador sem `discovery-service.exe` instala a UI em modo standalone,
+escreve `discovery-service.exe ausente — serviço não registrado` no `installer.log` e ainda
+reporta "Instalacao concluida com sucesso". O `File` do serviço fica no `project.nsi` (e **não**
+no `wails_tools.nsh`, que é auto-gerado por `wails build` e perde patches manuais).
+
+```powershell
+# correto (gera e embute os dois binários)
+.\build\scripts\build-install-installer.ps1
+
+# só quando o build somente-UI for intencional (agente sem serviço Windows)
+.\build\scripts\build-install-installer.ps1 -AllowUiOnlyBuild
+```
+
+O instalador também valida os binários **em instalação nova** e refaz a checagem no fim
+(proteção contra quarentena de antivírus/limpeza externa): se algo faltar, o log recebe
+`[ERROR]` e o exit code fica não-zero.
+
+**Windows 7/8/8.1 não são suportados** e a instalação é abortada de propósito
+(`wails.checkArchitecture`, `SetErrorLevel 64`): o toolchain Go ≥1.21 e o WebView2 exigem
+Windows 10/Server 2016+. Pisos internos no Windows 10: WebView2 1803+, `curl.exe` 1803+
+(com fallback `certutil`), `SetProcessDpiAwarenessContext` 1703+ e `CreatePseudoConsole`
+1809+ (ambos com fallback/checagem).
+
 ---
 
 <div align="center">

@@ -24,15 +24,21 @@ import (
 //   - ReleaseFrame imediato
 
 type dxgiGoD3dCapturer struct {
-	dup        *outputduplication.OutputDuplicator
-	device     *d3d11.ID3D11Device
-	deviceCtx  *d3d11.ID3D11DeviceContext
-	img        *image.RGBA
-	width      int
-	height     int
-	originX    int // origem do output no desktop virtual físico (pixels)
-	originY    int
-	drawCursor bool // se true, desenha o cursor no frame (compat); false = cursor separado
+	dup          *outputduplication.OutputDuplicator
+	device       *d3d11.ID3D11Device
+	deviceCtx    *d3d11.ID3D11DeviceContext
+	img          *image.RGBA
+	width        int
+	height       int
+	originX      int // origem do output no desktop virtual físico (pixels)
+	originY      int
+	monitorIndex int
+	drawCursor   bool // se true, desenha o cursor no frame (compat); false = cursor separado
+
+	// calib resolve a ordem dos canais (RGBA vs BGRA) comparando o frame com
+	// uma captura GDI — ver channel_order.go. Padrão RGBA (comportamento
+	// histórico) até a calibração provar o contrário.
+	calib channelCalibrator
 
 	// frameBuf é reutilizado entre frames (otimização de churn de GC: antes
 	// era um make([]byte, w*4*h) por frame — ~8 MB @1080p a 30fps). Contrato:
@@ -107,15 +113,17 @@ func NewDXGIGoD3dCapturerMode(monitorIndex int, drawCursor bool) (Capturer, erro
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 
 	return &dxgiGoD3dCapturer{
-		dup:        dup,
-		device:     device,
-		deviceCtx:  deviceCtx,
-		originX:    originX,
-		originY:    originY,
-		img:        img,
-		width:      width,
-		height:     height,
-		drawCursor: drawCursor,
+		dup:          dup,
+		device:       device,
+		deviceCtx:    deviceCtx,
+		originX:      originX,
+		originY:      originY,
+		img:          img,
+		width:        width,
+		height:       height,
+		monitorIndex: monitorIndex,
+		drawCursor:   drawCursor,
+		calib:        newChannelCalibrator(ChannelOrderRGBA),
 	}, nil
 }
 
@@ -173,10 +181,12 @@ func (c *dxgiGoD3dCapturer) AcquireNextFrame() (*Frame, error) {
 		dst += contentWidth
 	}
 
-	// Normaliza RGBA → BGRA no caminho principal do go-d3d (ver comentário
-	// acima). Swap dos bytes 0 (R) e 2 (B) preservando G e A. Buffer é novo
-	// (alocado acima), então a mutação in-place é segura.
-	swapRB_BGRA(frame.Data)
+	// Normaliza a ordem de canais para BGRA. NÃO assumimos mais que o Snapshot
+	// saiu em RGBA: quando a go-d3d cai no fallback DuplicateOutput, o frame vem
+	// no formato NATIVO do desktop (BGRA) e o swap cego invertia R↔B (bug de
+	// cor relatado em VM Windows 10). O calibrador compara o frame com uma
+	// captura GDI e decide swap/no-swap por máquina — ver channel_order.go.
+	c.calib.apply(frame)
 
 	if c.drawCursor {
 		// Desenha o cursor sobre o frame capturado (BGRA) — igual ao

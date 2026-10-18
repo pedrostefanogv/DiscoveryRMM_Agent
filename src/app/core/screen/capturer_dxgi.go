@@ -161,6 +161,12 @@ type dxgiCapturer struct {
 
 	width, height    int
 	originX, originY int // origem do output no desktop virtual (DesktopCoordinates)
+	monitorIndex     int
+
+	// calib resolve a ordem dos canais (RGBA vs BGRA) contra uma captura GDI
+	// — ver channel_order.go. Aqui o padrão é BGRA: a staging é criada em
+	// B8G8R8A8 e o DuplicateOutput1 normalmente respeita o formato forçado.
+	calib channelCalibrator
 
 	// HDR / Advanced Color: quando o monitor é HDR, captura em scRGB
 	// (R16G16B16A16_FLOAT, 8 bytes/px) e o pipeline aplica tone mapping.
@@ -184,7 +190,7 @@ type dxgiCapturer struct {
 
 func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 	runtime.LockOSThread()
-	c := &dxgiCapturer{}
+	c := &dxgiCapturer{monitorIndex: monitorIndex, calib: newChannelCalibrator(ChannelOrderBGRA)}
 
 	// 1. CreateDXGIFactory1
 	hr, _, _ := procCreateDXGIFactory1.Call(
@@ -427,7 +433,7 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 	comCall(c.d3dContext, slotCtxUnmap, uintptr(c.stagingTex), uintptr(0))
 	c.stagingMapped = false
 
-	return &Frame{
+	frame := &Frame{
 		Data:       frameData,
 		Width:      c.width,
 		Height:     c.height,
@@ -435,7 +441,12 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 		OriginX:    c.originX,
 		OriginY:    c.originY,
 		ColorSpace: c.colorSpace,
-	}, nil
+	}
+	// Normaliza a ordem de canais para BGRA (contrato dos encoders). Quando o
+	// DuplicateOutput1 falha e caímos no DuplicateOutput nativo, o formato pode
+	// ser R8G8B8A8 — a calibração detecta e corrige em vez de inverter R↔B.
+	c.calib.apply(frame)
+	return frame, nil
 }
 
 // Geometry retorna a origem e dimensões do output no desktop virtual físico.

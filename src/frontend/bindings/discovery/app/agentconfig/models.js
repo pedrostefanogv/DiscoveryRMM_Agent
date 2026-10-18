@@ -242,6 +242,24 @@ export class AgentConfiguration {
              */
             this["startupMaxCPUPercent"] = null;
         }
+        if (!("windowsUpdateEnabled" in $$source)) {
+            /**
+             * WindowsUpdateEnabled é o kill switch do gerenciador de patches (WUA).
+             * nil = habilitado (o servidor envia o valor resolvido).
+             * @member
+             * @type {boolean | null}
+             */
+            this["windowsUpdateEnabled"] = null;
+        }
+        if (!("windowsUpdateScanIntervalMinutes" in $$source)) {
+            /**
+             * WindowsUpdateScanIntervalMinutes controla a cadência do scan WUA.
+             * nil = default (360 min, mínimo 60).
+             * @member
+             * @type {number | null}
+             */
+            this["windowsUpdateScanIntervalMinutes"] = null;
+        }
 
         Object.assign(this, $$source);
     }

@@ -114,6 +114,13 @@ func RunRemoteSessionWorker() {
 
 	mgr := remotesession.NewManager(nil)
 	mgr.SetNatsConn(nc, clientID, siteID, agentID)
+	// Prompt/report/banner do consentimento (somente desktop). O token vivo é
+	// injetado para o reporte não depender do token persistido (rotação P2P).
+	configureRemoteConsentRuntime(workerAPIBase(cfg), authToken, agentID)
+	wireRemoteConsentManager(mgr)
+	mgr.SetCallbacks(nil, func(sessionID, reason string) {
+		reportBannerDisconnectIfNeeded(sessionID, reason)
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -370,6 +377,7 @@ func trimSpace(s string) string {
 func loadWorkerDebugConfig() WorkerDebugConfig {
 	cfg := GetDebugConfigForWorker()
 	return WorkerDebugConfig{
+		ApiScheme:    cfg.ApiScheme,
 		ApiServer:    cfg.ApiServer,
 		NatsServer:   cfg.NatsServer,
 		NatsWsServer: cfg.NatsWsServer,
@@ -386,6 +394,7 @@ func loadWorkerAgentConfig() WorkerAgentConfig {
 // WorkerDebugConfig/WorkerAgentConfig: structs simples para o worker (evitam
 // importar os tipos completos dos services no main).
 type WorkerDebugConfig struct {
+	ApiScheme    string
 	ApiServer    string
 	NatsServer   string
 	NatsWsServer string

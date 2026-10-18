@@ -101,18 +101,17 @@ RequestExecutionLevel "${REQUEST_EXECUTION_LEVEL}"
     !ifdef SUPPORTS_AMD64
         ${if} ${IsNativeAMD64}
             File "/oname=${PRODUCT_EXECUTABLE}" "${ARG_WAILS_AMD64_BINARY}"
-            !ifdef ARG_SERVICE_AMD64_BINARY
-                File "/oname=${SERVICE_EXECUTABLE}" "${ARG_SERVICE_AMD64_BINARY}"
-            !endif
+            ; NOTA (Discovery): o discovery-service.exe NÃO é embutido aqui.
+            ; Este arquivo é regenerado por `wails build` e patches manuais se
+            ; perdem. O File do serviço vive em project.nsi (define
+            ; ARG_SERVICE_AMD64_BINARY -> BUILD_HAS_SERVICE). Não mover de volta.
         ${EndIf}
     !endif
 
     !ifdef SUPPORTS_ARM64
         ${if} ${IsNativeARM64}
             File "/oname=${PRODUCT_EXECUTABLE}" "${ARG_WAILS_ARM64_BINARY}"
-            !ifdef ARG_SERVICE_ARM64_BINARY
-                File "/oname=${SERVICE_EXECUTABLE}" "${ARG_SERVICE_ARM64_BINARY}"
-            !endif
+            ; Mesmo motivo do bloco AMD64: serviço embutido em project.nsi.
         ${EndIf}
     !endif
 !macroend

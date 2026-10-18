@@ -33,6 +33,7 @@ type Session struct {
 	ExpiresAt    time.Time `json:"expiresAtUtc"`
 	StartedAt    time.Time `json:"startedAtUtc"`
 	Recording    bool      `json:"recording"`
+	banner       SessionBanner
 
 	// estado interno
 	stopCh chan struct{}
@@ -64,6 +65,17 @@ type Manager struct {
 
 	// started indica se Startup foi chamado com sucesso.
 	started bool
+
+	// Consentimento (somente screen/all). Injetado pelo processo que roda a
+	// sessão: worker (sessão interativa) ou UI standalone.
+	consentPrompt   func(context.Context, ConsentRequest) ConsentDecision
+	consentReporter func(context.Context, string, ConsentDecision) error
+	interactiveUser func() string
+	newBanner       func(BannerOptions) (SessionBanner, error)
+
+	consentMu        sync.Mutex
+	consentCancel    context.CancelFunc
+	consentSessionID string
 }
 
 // NewManager cria um novo gerenciador de sessoes remotas.
@@ -88,6 +100,33 @@ func (m *Manager) SetNatsConn(nc *nats.Conn, tenantID, siteID, agentID string) {
 func (m *Manager) SetCallbacks(onStarted func(sessionID, kind string), onEnded func(sessionID, reason string)) {
 	m.onSessionStarted = onStarted
 	m.onSessionEnded = onEnded
+}
+
+// SetConsentPrompt injeta o renderer do prompt de autorização (PSADT/nativo).
+func (m *Manager) SetConsentPrompt(fn func(context.Context, ConsentRequest) ConsentDecision) {
+	m.consentPrompt = fn
+}
+
+// SetConsentReporter injeta o reporte da decisão ao servidor (HTTP agent-auth).
+func (m *Manager) SetConsentReporter(fn func(context.Context, string, ConsentDecision) error) {
+	m.consentReporter = fn
+}
+
+// SetInteractiveUser injeta o detector de usuário interativo (WTS).
+func (m *Manager) SetInteractiveUser(fn func() string) {
+	m.interactiveUser = fn
+}
+
+// SetBannerFactory injeta o criador do banner local (Win32).
+func (m *Manager) SetBannerFactory(fn func(BannerOptions) (SessionBanner, error)) {
+	m.newBanner = fn
+}
+
+// StopByUser encerra a sessão a pedido do usuário local (banner).
+func (m *Manager) StopByUser(sessionID, reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closeSessionLocked(sessionID, reason)
 }
 
 // HandleCommand processa comandos de sessao remota recebidos via NATS.
@@ -130,6 +169,24 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 
 	log.Printf("[remote-session] handleStart: sessionId=%s kind=%s transport=%s quality=%s codec=%s imageQ=%d maxFps=%d natsSubject=%s\n",
 		sessionID, kind, transport, quality, codec, imageQuality, maxFps, natsSubject)
+
+	// Sem stream NATS não há como iniciar a captura: recusa ANTES de pedir
+	// autorização ao usuário (não faz sentido ele aprovar uma sessão que não
+	// abriria). Mantém o comportamento anterior de não criar sessão fantasma.
+	if m.natsStream == nil {
+		log.Printf("[remote-session] handleStart: natsStream NAO configurado — rejeitando start sessionId=%s kind=%s\n",
+			sessionID, kind)
+		return false, "nats stream not ready"
+	}
+
+	// Consentimento: SOMENTE desktop (screen/all). Terminal, arquivos, proxy e
+	// processos seguem sem prompt, como antes.
+	if (kind == "screen" || kind == "all") && ParseConsentConfig(payload) != nil {
+		if allowed, reason := m.runConsentGate(ctx, sessionID, payload); !allowed {
+			log.Printf("[remote-consent] start recusado sessionId=%s: %s\n", sessionID, reason)
+			return true, reason
+		}
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -194,17 +251,6 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		controlSeqMu:    &sync.Mutex{},
 	}
 
-	// Garante que o NatsStreamHandler esta configurado. Como o comando start
-	// chega via NATS, o natsStream normalmente já está setado (onNatsConnected).
-	// Se não estiver, NÃO criar sessão fantasma: os runners retornariam cedo e
-	// o viewer ficaria preso sem stream. Retorna erro para o backend ANTES de
-	// registrar a sessão no map (evita sessão órfã que nunca seria limpa).
-	if m.natsStream == nil {
-		log.Printf("[remote-session] handleStart: natsStream NAO configurado — rejeitando start sessionId=%s kind=%s\n",
-			sessionID, kind)
-		return false, "nats stream not ready"
-	}
-
 	// Canal .control assinado para TODO kind: carrega a liveness do viewer
 	// (ping/pong) e comandos de dominio (ex. keyframe da tela). Fail-fast: sem
 	// assinatura a sessao nao sabe se o viewer esta vivo; melhor recusar o
@@ -219,6 +265,28 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	session.controlSub = controlSub
 
 	m.sessions[sessionID] = session
+
+	// Banner local: exibido na sessão interativa e excluído da captura.
+	if (kind == "screen" || kind == "all") {
+		if bannerCfg := ParseBannerConfig(payload); bannerCfg != nil && bannerCfg.Enabled && m.newBanner != nil {
+			monitorIndex := toInt(payload["monitorIndex"], 0)
+			banner, err := m.newBanner(BannerOptions{
+				SessionID:      sessionID,
+				Operator:       bannerCfg.Operator,
+				Text:           bannerCfg.Text,
+				AllowDisconnect: bannerCfg.AllowDisconnect,
+				MonitorIndex:   monitorIndex,
+				OnDisconnect: func() {
+					go m.StopByUser(sessionID, "banner-disconnect")
+				},
+			})
+			if err != nil {
+				log.Printf("[session-banner] não foi possível exibir o banner: %v\n", err)
+			} else {
+				session.banner = banner
+			}
+		}
+	}
 
 	m.natsStream.PublishEvent(sessionID, "started", session)
 
@@ -290,9 +358,18 @@ func (m *Manager) handleStop(_ context.Context, payload map[string]any) (bool, s
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	closed := m.closeSessionLocked(sessionID, "stopped-by-server")
+	m.mu.Unlock()
 
-	return m.closeSessionLocked(sessionID, "stopped-by-server"), ""
+	if !closed {
+		// Pode ser um stop durante o prompt de consentimento (a sessão ainda não
+		// foi registrada): cancela a espera e reporta a recusa.
+		if m.cancelPendingConsent() {
+			return true, "consentimento cancelado pelo servidor"
+		}
+		return false, "sessao nao encontrada"
+	}
+	return true, ""
 }
 
 func (m *Manager) handleQuality(_ context.Context, payload map[string]any) (bool, string) {
@@ -428,6 +505,10 @@ func (m *Manager) closeSessionLocked(sessionID, reason string) bool {
 	s, ok := m.sessions[sessionID]
 	if !ok {
 		return false
+	}
+	if s.banner != nil {
+		s.banner.Close()
+		s.banner = nil
 	}
 	delete(m.sessions, sessionID)
 	delete(m.screenSessions, sessionID) // limpa referencia da SessionScreen

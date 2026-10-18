@@ -213,6 +213,75 @@ export class Item {
              */
             this["sourceScope"] = "";
         }
+        if (!("installCommandKind" in $$source)) {
+            /**
+             * ── Pacotes custom: tipo de comando e detecção (contrato §1.2) ──
+             * InstallCommandKind/UninstallCommandKind dizem como o texto do comando
+             * deve ser executado: Command (0) = cmd /C; CmdScript (1) = texto gravado
+             * num .cmd; PowerShellScript (2) = texto gravado num .ps1.
+             * @member
+             * @type {number}
+             */
+            this["installCommandKind"] = 0;
+        }
+        if (!("uninstallCommandKind" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["uninstallCommandKind"] = 0;
+        }
+        if (!("detectionMode" in $$source)) {
+            /**
+             * DetectionMode: None (0) = sem detecção; InventoryLink (1) = casar com o
+             * inventário local por nome/fabricante/versão mínima; Command (2) =
+             * executar DetectionCommand (exit 0 = já instalado).
+             * @member
+             * @type {number}
+             */
+            this["detectionMode"] = 0;
+        }
+        if (!("inventorySoftwareId" in $$source)) {
+            /**
+             * InventorySoftwareID é o softwareId (Guid) do catálogo de inventário do
+             * servidor. Snapshot informativo — o agent casa pelo nome/fabricante.
+             * @member
+             * @type {string}
+             */
+            this["inventorySoftwareId"] = "";
+        }
+        if (!("detectionName" in $$source)) {
+            /**
+             * DetectionName é o nome do app no inventário (obrigatório no modo
+             * InventoryLink) e DetectionPublisher o fabricante (opcional).
+             * @member
+             * @type {string}
+             */
+            this["detectionName"] = "";
+        }
+        if (!("detectionPublisher" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["detectionPublisher"] = "";
+        }
+        if (!("detectionMinVersion" in $$source)) {
+            /**
+             * DetectionMinVersion exige versão instalada >= este valor (opcional).
+             * @member
+             * @type {string}
+             */
+            this["detectionMinVersion"] = "";
+        }
+        if (!("detectionCommand" in $$source)) {
+            /**
+             * DetectionCommand é o PowerShell de detecção (exit 0 = instalado).
+             * @member
+             * @type {string}
+             */
+            this["detectionCommand"] = "";
+        }
 
         Object.assign(this, $$source);
     }

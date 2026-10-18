@@ -38,6 +38,9 @@ import * as mcp$0 from "./core/mcp/models.js";
 import * as models$0 from "./core/models/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as runtimediag$0 from "./core/runtimediag/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as coreagent$0 from "./coreagent/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -241,6 +244,19 @@ export function CancelScreenshotOverlay(sessionID) {
  */
 export function CaptureScreenshotForTool(args) {
     return $Call.ByID(1992578829, args);
+}
+
+/**
+ * CaptureScrollingScreenshot captura uma página longa: esconde a janela do
+ * agente, tira o print inicial, rola com a roda do mouse e recaptura até o
+ * conteúdo parar de mudar ou atingir maxScrolls (1..20). Os frames são
+ * costurados por sobreposição em core/screenshot.
+ * @param {string} reason
+ * @param {number} maxScrolls
+ * @returns {$CancellablePromise<string>}
+ */
+export function CaptureScrollingScreenshot(reason, maxScrolls) {
+    return $Call.ByID(2889498859, reason, maxScrolls);
 }
 
 /**
@@ -460,6 +476,16 @@ export function DeleteP2PArtifact(artifactName) {
 }
 
 /**
+ * DeleteScreenshotImageFile apaga uma imagem da galeria. Idempotente: arquivo
+ * inexistente é sucesso (a UI pode repetir a exclusão sem erro).
+ * @param {string} path
+ * @returns {$CancellablePromise<void>}
+ */
+export function DeleteScreenshotImageFile(path) {
+    return $Call.ByID(581053760, path);
+}
+
+/**
  * DetectApiFeatures testa a conectividade com a API e detecta quais features estão disponíveis.
  * Delega para o apiclient.Service.
  * @returns {$CancellablePromise<apiclient$0.ApiVersionInfo | null>}
@@ -534,6 +560,14 @@ export function EmitPSADTDebugNotification(req) {
  */
 export function EnsureChatSSEServer() {
     return $Call.ByID(3590776436);
+}
+
+/**
+ * EnsureMainWindow garante que a janela principal exista (idempotente).
+ * @returns {$CancellablePromise<void>}
+ */
+export function EnsureMainWindow() {
+    return $Call.ByID(2651337809);
 }
 
 /**
@@ -788,6 +822,16 @@ export function GetHeartbeatMetrics() {
     return $Call.ByID(4184494407).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType28($result);
     }));
+}
+
+/**
+ * GetIPCServiceInfo expõe ao console o par UI × serviço do último handshake
+ * (versão/protocolo) para avisar sobre par misto (A.2.2). Fora do modo
+ * companion (sem serviço/handshake) devolve connected=false.
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetIPCServiceInfo() {
+    return $Call.ByID(2504085195);
 }
 
 /**
@@ -1146,12 +1190,44 @@ export function GetRuntimeFlags() {
 }
 
 /**
+ * GetRuntimeMemory devolve a fotografia atual de memória do runtime Go.
+ * 
+ * Exposto para diagnóstico local (bridge Wails/IPC e chat de suporte): antes
+ * desta função não havia como obter heap/GC do processo em execução. É barato
+ * (runtime.ReadMemStats) e não altera nenhum estado.
+ * @returns {$CancellablePromise<runtimediag$0.Snapshot>}
+ */
+export function GetRuntimeMemory() {
+    return $Call.ByID(4102407577).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType56($result);
+    }));
+}
+
+/**
  * GetScreenshotAuditPanel devolve consentimento + política + uso do limite +
  * auditoria (com miniaturas das últimas capturas) para o painel de privacidade.
  * @returns {$CancellablePromise<string>}
  */
 export function GetScreenshotAuditPanel() {
     return $Call.ByID(955338621);
+}
+
+/**
+ * GetScreenshotEvidence devolve o SHA-256 do binário ORIGINAL da data URL
+ * (sem reencodar), dimensões e instante — base do "modo evidência".
+ * @param {string} dataURL
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetScreenshotEvidence(dataURL) {
+    return $Call.ByID(3044086243, dataURL);
+}
+
+/**
+ * GetScreenshotGalleryFolder devolve (e cria) a pasta da galeria.
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetScreenshotGalleryFolder() {
+    return $Call.ByID(3888627704);
 }
 
 /**
@@ -1216,7 +1292,7 @@ export function GetStartupError() {
  */
 export function GetStatusOverview() {
     return $Call.ByID(4003627099).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType56($result);
+        return $$createType57($result);
     }));
 }
 
@@ -1235,7 +1311,7 @@ export function GetSupportTicketDetails(ticketID) {
  */
 export function GetSupportTickets() {
     return $Call.ByID(2418825250).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType57($result);
+        return $$createType58($result);
     }));
 }
 
@@ -1246,7 +1322,7 @@ export function GetSupportTickets() {
  */
 export function GetSupportTicketsWithStatus() {
     return $Call.ByID(2050019344).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType58($result);
+        return $$createType59($result);
     }));
 }
 
@@ -1258,7 +1334,7 @@ export function GetSupportTicketsWithStatus() {
  */
 export function GetTicketAnswers(ticketID) {
     return $Call.ByID(2116543733, ticketID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType60($result);
+        return $$createType61($result);
     }));
 }
 
@@ -1269,7 +1345,7 @@ export function GetTicketAnswers(ticketID) {
  */
 export function GetTicketAttachments(ticketID) {
     return $Call.ByID(962701780, ticketID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType62($result);
+        return $$createType63($result);
     }));
 }
 
@@ -1279,7 +1355,7 @@ export function GetTicketAttachments(ticketID) {
  */
 export function GetTicketComments(ticketID) {
     return $Call.ByID(3718392116, ticketID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType63($result);
+        return $$createType64($result);
     }));
 }
 
@@ -1292,7 +1368,7 @@ export function GetTicketComments(ticketID) {
  */
 export function GetTicketDepartmentFields(departmentID) {
     return $Call.ByID(2753525893, departmentID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType65($result);
+        return $$createType66($result);
     }));
 }
 
@@ -1306,7 +1382,7 @@ export function GetTicketDepartmentFields(departmentID) {
  */
 export function GetTicketDepartmentFormSchema(departmentID) {
     return $Call.ByID(1010227033, departmentID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType66($result);
+        return $$createType67($result);
     }));
 }
 
@@ -1318,7 +1394,7 @@ export function GetTicketDepartmentFormSchema(departmentID) {
  */
 export function GetTicketFields(ticketID) {
     return $Call.ByID(3134798079, ticketID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType68($result);
+        return $$createType69($result);
     }));
 }
 
@@ -1327,7 +1403,7 @@ export function GetTicketFields(ticketID) {
  */
 export function GetTicketOptions() {
     return $Call.ByID(1795408764).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType69($result);
+        return $$createType70($result);
     }));
 }
 
@@ -1339,7 +1415,7 @@ export function GetTicketOptions() {
  */
 export function GetTicketTemplates() {
     return $Call.ByID(2958474053).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType71($result);
+        return $$createType72($result);
     }));
 }
 
@@ -1348,7 +1424,7 @@ export function GetTicketTemplates() {
  */
 export function GetTicketWorkflowStates() {
     return $Call.ByID(2054776725).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType73($result);
+        return $$createType74($result);
     }));
 }
 
@@ -1362,6 +1438,14 @@ export function GetTicketWorkflowStates() {
  */
 export function HasActiveChatStream() {
     return $Call.ByID(3279695850);
+}
+
+/**
+ * HasMainWindow informa se a janela principal já foi criada.
+ * @returns {$CancellablePromise<boolean>}
+ */
+export function HasMainWindow() {
+    return $Call.ByID(1405798083);
 }
 
 /**
@@ -1519,7 +1603,7 @@ export function ListOpenWindowsJSON(includeUntitled) {
  */
 export function ListP2PArtifacts() {
     return $Call.ByID(1832312099).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType74($result);
+        return $$createType75($result);
     }));
 }
 
@@ -1528,7 +1612,7 @@ export function ListP2PArtifacts() {
  */
 export function ListP2PAuditEvents() {
     return $Call.ByID(2100415322).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType76($result);
+        return $$createType77($result);
     }));
 }
 
@@ -1540,7 +1624,7 @@ export function ListP2PAuditEvents() {
  */
 export function ListP2PAuditEventsFiltered(action, peerAgentID, status) {
     return $Call.ByID(1530405413, action, peerAgentID, status).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType76($result);
+        return $$createType77($result);
     }));
 }
 
@@ -1604,7 +1688,7 @@ export function ListTicketDepartmentsJSON() {
  */
 export function LoadEffectiveAppStorePolicy(forceRefresh) {
     return $Call.ByID(2011064705, forceRefresh).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType77($result);
+        return $$createType78($result);
     }));
 }
 
@@ -1614,7 +1698,7 @@ export function LoadEffectiveAppStorePolicy(forceRefresh) {
  */
 export function LoadInstallerConfig() {
     return $Call.ByID(336072596).then(/** @type {($result: any) => any} */(($result) => {
-        $result[0] = $$createType78($result[0]);
+        $result[0] = $$createType79($result[0]);
         return $result;
     }));
 }
@@ -1640,6 +1724,18 @@ export function Log(line) {
  */
 export function LogFrontend(level, message) {
     return $Call.ByID(3994059524, level, message);
+}
+
+/**
+ * OcrScreenshotImage faz OCR on-device via Windows.Media.Ocr. Quando o motor ou
+ * o idioma não existem, degrada com engineAvailable=false e error descritivo —
+ * nunca falha o binding (a UI mostra o aviso em vez de perder a captura).
+ * @param {string} dataURL
+ * @param {string} language
+ * @returns {$CancellablePromise<string>}
+ */
+export function OcrScreenshotImage(dataURL, language) {
+    return $Call.ByID(2321108955, dataURL, language);
 }
 
 /**
@@ -1804,6 +1900,18 @@ export function ReadFileWithConsent(path, maxBytes, reason) {
 }
 
 /**
+ * ReadScreenshotImageFile lê uma imagem da galeria e devolve data URL. Recusa
+ * caminhos fora da pasta da galeria (inclusive via link simbólico/junção) e
+ * arquivos acima de maxBytes (0 = teto padrão), conferido ANTES de ler.
+ * @param {string} path
+ * @param {number} maxBytes
+ * @returns {$CancellablePromise<string>}
+ */
+export function ReadScreenshotImageFile(path, maxBytes) {
+    return $Call.ByID(2958089429, path, maxBytes);
+}
+
+/**
  * RefreshAgentConfiguration expõe refreshAgentConfiguration via interface.
  * @returns {$CancellablePromise<void>}
  */
@@ -1878,7 +1986,7 @@ export function RefreshKnowledgeBase() {
  */
 export function RefreshListeningPorts() {
     return $Call.ByID(1221992142).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType80($result);
+        return $$createType81($result);
     }));
 }
 
@@ -1887,7 +1995,7 @@ export function RefreshListeningPorts() {
  */
 export function RefreshNetworkConnections() {
     return $Call.ByID(964299066).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType81($result);
+        return $$createType82($result);
     }));
 }
 
@@ -1912,7 +2020,7 @@ export function RefreshPeerArtifactIndex(source) {
  */
 export function RefreshSoftware() {
     return $Call.ByID(2717679924).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType83($result);
+        return $$createType84($result);
     }));
 }
 
@@ -1921,7 +2029,7 @@ export function RefreshSoftware() {
  */
 export function RefreshStartupItems() {
     return $Call.ByID(3800784882).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType85($result);
+        return $$createType86($result);
     }));
 }
 
@@ -2127,7 +2235,7 @@ export function RunOsqueryQueryJSON(sql, limit) {
  */
 export function RunPSADTPreflightChecks() {
     return $Call.ByID(2615823421).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType86($result);
+        return $$createType87($result);
     }));
 }
 
@@ -2146,6 +2254,18 @@ export function RunPSADTPreflightChecks() {
  */
 export function RunPowerAction(action, delaySeconds, message) {
     return $Call.ByID(11236734, action, delaySeconds, message);
+}
+
+/**
+ * SaveScreenshotImage grava a imagem em disco (PNG/JPEG) e devolve os metadados
+ * do arquivo. O diretório padrão é a galeria; optsJSON pode apontar outro
+ * diretório ABSOLUTO para exportações pontuais.
+ * @param {string} dataURL
+ * @param {string} optsJSON
+ * @returns {$CancellablePromise<string>}
+ */
+export function SaveScreenshotImage(dataURL, optsJSON) {
+    return $Call.ByID(1482024848, dataURL, optsJSON);
 }
 
 /**
@@ -2390,6 +2510,16 @@ export function SetUIRuntimeSuspended(suspended, reason) {
 }
 
 /**
+ * SetWindowFactory registra a fábrica da janela principal. Idempotente: a
+ * última registrada vence (main.go registra uma única vez).
+ * @param {any} factory
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetWindowFactory(factory) {
+    return $Call.ByID(3167051848, factory);
+}
+
+/**
  * @returns {$CancellablePromise<boolean>}
  */
 export function ShouldHideOnClose() {
@@ -2416,6 +2546,19 @@ export function StartChatStream(message) {
  */
 export function StartChatStreamWithImages(message, imagesJSON) {
     return $Call.ByID(1392424606, message, imagesJSON);
+}
+
+/**
+ * StartDebugConfigWatcher liga o watcher de alteração externa do
+ * debug_config.json e registra o hook que reaplica os efeitos no App
+ * (invalida cache de identidade, recarrega o agentConn e notifica as UIs via
+ * "debug:config_updated"). Deve ser chamado no startup do processo que roda o
+ * core; é idempotente. Sem esse registro o watcher apenas atualiza o estado
+ * do serviço (comportamento previsto como fallback).
+ * @returns {$CancellablePromise<void>}
+ */
+export function StartDebugConfigWatcher() {
+    return $Call.ByID(1104074313);
 }
 
 /**
@@ -2521,7 +2664,7 @@ export function SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, su
  */
 export function SupportChatRefresh() {
     return $Call.ByID(277848266).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType87($result);
+        return $$createType88($result);
     }));
 }
 
@@ -2776,35 +2919,36 @@ const $$createType52 = models$0.UpgradeItem.createFrom;
 const $$createType53 = $Create.Array($$createType52);
 const $$createType54 = debug$0.RealtimeStatus.createFrom;
 const $$createType55 = coreagent$0.RuntimeFlags.createFrom;
-const $$createType56 = status$0.Overview.createFrom;
-const $$createType57 = $Create.Array($$createType5);
-const $$createType58 = support$0.SupportTicketList.createFrom;
-const $$createType59 = supportmeta$0.TicketAnswer.createFrom;
-const $$createType60 = $Create.Array($$createType59);
-const $$createType61 = supportmeta$0.TicketAttachment.createFrom;
-const $$createType62 = $Create.Array($$createType61);
-const $$createType63 = $Create.Array($$createType1);
-const $$createType64 = supportmeta$0.TicketDepartmentField.createFrom;
-const $$createType65 = $Create.Array($$createType64);
-const $$createType66 = supportmeta$0.TicketFormSchema.createFrom;
-const $$createType67 = supportmeta$0.TicketFieldValue.createFrom;
-const $$createType68 = $Create.Array($$createType67);
-const $$createType69 = supportmeta$0.TicketOptions.createFrom;
-const $$createType70 = supportmeta$0.TicketTemplateOption.createFrom;
-const $$createType71 = $Create.Array($$createType70);
-const $$createType72 = supportmeta$0.APIWorkflowState.createFrom;
-const $$createType73 = $Create.Array($$createType72);
-const $$createType74 = $Create.Array($$createType12);
-const $$createType75 = p2pmeta$0.AuditEvent.createFrom;
-const $$createType76 = $Create.Array($$createType75);
-const $$createType77 = appstore$0.EffectivePolicy.createFrom;
-const $$createType78 = debug$0.InstallerConfig.createFrom;
-const $$createType79 = models$0.ListeningPortInfo.createFrom;
-const $$createType80 = $Create.Array($$createType79);
-const $$createType81 = models$0.NetworkConnectionsReport.createFrom;
-const $$createType82 = models$0.SoftwareItem.createFrom;
-const $$createType83 = $Create.Array($$createType82);
-const $$createType84 = models$0.StartupItem.createFrom;
-const $$createType85 = $Create.Array($$createType84);
-const $$createType86 = $models.PSADTPreflightResult.createFrom;
-const $$createType87 = supportchat$0.State.createFrom;
+const $$createType56 = runtimediag$0.Snapshot.createFrom;
+const $$createType57 = status$0.Overview.createFrom;
+const $$createType58 = $Create.Array($$createType5);
+const $$createType59 = support$0.SupportTicketList.createFrom;
+const $$createType60 = supportmeta$0.TicketAnswer.createFrom;
+const $$createType61 = $Create.Array($$createType60);
+const $$createType62 = supportmeta$0.TicketAttachment.createFrom;
+const $$createType63 = $Create.Array($$createType62);
+const $$createType64 = $Create.Array($$createType1);
+const $$createType65 = supportmeta$0.TicketDepartmentField.createFrom;
+const $$createType66 = $Create.Array($$createType65);
+const $$createType67 = supportmeta$0.TicketFormSchema.createFrom;
+const $$createType68 = supportmeta$0.TicketFieldValue.createFrom;
+const $$createType69 = $Create.Array($$createType68);
+const $$createType70 = supportmeta$0.TicketOptions.createFrom;
+const $$createType71 = supportmeta$0.TicketTemplateOption.createFrom;
+const $$createType72 = $Create.Array($$createType71);
+const $$createType73 = supportmeta$0.APIWorkflowState.createFrom;
+const $$createType74 = $Create.Array($$createType73);
+const $$createType75 = $Create.Array($$createType12);
+const $$createType76 = p2pmeta$0.AuditEvent.createFrom;
+const $$createType77 = $Create.Array($$createType76);
+const $$createType78 = appstore$0.EffectivePolicy.createFrom;
+const $$createType79 = debug$0.InstallerConfig.createFrom;
+const $$createType80 = models$0.ListeningPortInfo.createFrom;
+const $$createType81 = $Create.Array($$createType80);
+const $$createType82 = models$0.NetworkConnectionsReport.createFrom;
+const $$createType83 = models$0.SoftwareItem.createFrom;
+const $$createType84 = $Create.Array($$createType83);
+const $$createType85 = models$0.StartupItem.createFrom;
+const $$createType86 = $Create.Array($$createType85);
+const $$createType87 = $models.PSADTPreflightResult.createFrom;
+const $$createType88 = supportchat$0.State.createFrom;

@@ -151,6 +151,14 @@ export class AgentHeartbeatMetrics {
              */
             this["UIOnline"] = null;
         }
+        if (!("UIOnlineCount" in $$source)) {
+            /**
+             * UIOnlineCount: quantas UIs conectadas (nil = não aplicável)
+             * @member
+             * @type {number | null}
+             */
+            this["UIOnlineCount"] = null;
+        }
         if (!("LoggedUser" in $$source)) {
             /**
              * LoggedUser: usuário da sessão de console ativa ("DOMINIO\usuario"), vazio

@@ -63,6 +63,31 @@ Unicode true
 !endif
 !endif
 
+# ── Serviço Windows embutido no payload (obrigatório por padrão) ──
+# BUILD_HAS_SERVICE=1 quando o makensis recebeu o binário do serviço
+# (ARG_SERVICE_AMD64_BINARY / ARG_SERVICE_ARM64_BINARY). O `File` correspondente
+# fica AQUI no project.nsi, e não no wails_tools.nsh auto-gerado, para que uma
+# regeneração do template (`wails3 build`) não remova o serviço do payload.
+#
+# Build sem o define FALHA em tempo de compilação: um instalador sem
+# discovery-service.exe instala a UI em modo standalone, loga "serviço ausente"
+# e reporta "Instalacao concluida com sucesso" — falha silenciosa já observada
+# em campo (agente sem serviço Windows). Escape hatch explícito para builds
+# deliberadamente somente-UI: /DALLOW_UI_ONLY_BUILD=1.
+!ifdef ARG_SERVICE_AMD64_BINARY
+!define BUILD_HAS_SERVICE "1"
+!else
+!ifdef ARG_SERVICE_ARM64_BINARY
+!define BUILD_HAS_SERVICE "1"
+!endif
+!endif
+!ifndef BUILD_HAS_SERVICE
+!ifndef ALLOW_UI_ONLY_BUILD
+!error "Discovery: ARG_SERVICE_AMD64_BINARY/ARG_SERVICE_ARM64_BINARY nao definido. O instalador sairia SEM discovery-service.exe (agente sem servico Windows). Passe /DARG_SERVICE_AMD64_BINARY=<caminho do discovery-service.exe> ou, para build explicitamente somente-UI, /DALLOW_UI_ONLY_BUILD=1."
+!endif
+!define BUILD_HAS_SERVICE "0"
+!endif
+
 ## Build-time defaults (can be overridden by install-time CLI parameters)
 !ifdef ARG_DEFAULT_URL
 !define BUILD_DEFAULT_URL "${ARG_DEFAULT_URL}"
@@ -221,7 +246,7 @@ Var InstallerLogFile
          # em texto plano no installer.log (diretório acessível a Users).
          # Logamos as flags estruturadas (sem segredos) para diagnóstico.
          FileWrite $R9 "CommandLine: (oculta — A13: nunca logar /KEY em claro)$\r$\n"
-         FileWrite $R9 "Flags: URL='$ServerUrl' AP='$AutoProvisioning' MINIMAL='$MinimalMode' UPDATE='$UpdateMode' GENERIC='$GenericMode' KEY=<oculta>$\r$\n"
+         FileWrite $R9 "Flags: URL='$ServerUrl' AP='$AutoProvisioning' MINIMAL='$MinimalMode' UPDATE='$UpdateMode' GENERIC='$GenericMode' SERVICE='${BUILD_HAS_SERVICE}' KEY=<oculta>$\r$\n"
          FileWrite $R9 "=========================================$\r$\n"
          FileClose $R9
       ${EndIf}
@@ -654,6 +679,23 @@ Section
          !insertmacro wails.webview2runtime
          !insertmacro wails.files
 
+         ; Binário do serviço: embutido AQUI e não no wails_tools.nsh (que é
+         ; auto-gerado por `wails build` e perde patches manuais a cada
+         ; regeneração). Sem esta cópia o $INSTDIR fica sem
+         ; discovery-service.exe e o RegisterAgentService cai em standalone.
+         !if "${BUILD_HAS_SERVICE}" == "1"
+            !ifdef ARG_SERVICE_AMD64_BINARY
+               ${If} ${IsNativeAMD64}
+                  File "/oname=${SERVICE_EXECUTABLE}" "${ARG_SERVICE_AMD64_BINARY}"
+               ${EndIf}
+            !endif
+            !ifdef ARG_SERVICE_ARM64_BINARY
+               ${If} ${IsNativeARM64}
+                  File "/oname=${SERVICE_EXECUTABLE}" "${ARG_SERVICE_ARM64_BINARY}"
+               ${EndIf}
+            !endif
+         !endif
+
          ${IfNot} ${Errors}
             ${InstallerLog} "wails.files concluido com sucesso"
          ${Else}
@@ -682,18 +724,24 @@ Section
          SetErrorLevel 1
          install_binary_ok:
 
-         ; ── Binário do serviço: valida a cópia e descarta o backup ──
-         ; Só entra aqui se PrepareForInPlaceUpdate criou o .bak_update (build
-         ; com discovery-service.exe). Se o novo binário não foi copiado,
-         ; restaura o anterior e marca erro para o self-update reexecutar.
-         ${If} $ServiceBackupCreated == "1"
+         ; ── Binário do serviço: valida a cópia (instalação nova E update) ──
+         ; O gate é o payload, não o backup: quando o build embute o serviço
+         ; (BUILD_HAS_SERVICE=1) o binário TEM de existir em $INSTDIR, senão a
+         ; instalação é inválida — antes só se validava em update in-place,
+         ; então uma instalação limpa podia ficar sem serviço reportando sucesso.
+         ; Em update, se o novo binário não foi copiado, restaura o anterior.
+         ${If} "${BUILD_HAS_SERVICE}" == "1"
             IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}" 0 install_service_binary_missing
             ; O .bak_update é MANTIDO até o health check passar: é dele que sai
             ; o rollback se o serviço não subir com o binário novo.
-            ${InstallerLog} "Binario do servico verificado — backup .bak_update mantido para o health check"
+            ${If} $ServiceBackupCreated == "1"
+               ${InstallerLog} "Binario do servico verificado — backup .bak_update mantido para o health check"
+            ${Else}
+               ${InstallerLog} "Binario do servico verificado: $INSTDIR\${SERVICE_EXECUTABLE} existe"
+            ${EndIf}
             Goto install_service_binary_ok
             install_service_binary_missing:
-            ${InstallerLogError} "Binario do servico NAO encontrado apos copia: $INSTDIR\${SERVICE_EXECUTABLE}"
+            ${InstallerLogError} "Binario do servico NAO encontrado apos copia: $INSTDIR\${SERVICE_EXECUTABLE} (payload embute o servico — verifique quarentena de antivírus, $INSTDIR efetivo e espaço em disco)"
             IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" 0 install_service_binary_no_backup
             Rename "$INSTDIR\${SERVICE_EXECUTABLE}.bak_update" "$INSTDIR\${SERVICE_EXECUTABLE}"
             ${InstallerLogError} "Restaurado .bak_update do servico -> ${SERVICE_EXECUTABLE} (rollback de copia)"
@@ -701,7 +749,7 @@ Section
             SetErrorLevel 1
             Goto install_service_binary_ok
             install_service_binary_no_backup:
-            ${InstallerLogError} "Binario do servico ausente e sem backup — atualizacao INCOMPLETA (exit code nao-zero)"
+            ${InstallerLogError} "Binario do servico ausente e sem backup — instalacao INCOMPLETA (exit code nao-zero)"
             StrCpy $UpdateIncomplete "1"
             SetErrorLevel 1
             install_service_binary_ok:
@@ -774,6 +822,23 @@ Section
             ${InstallerLogError} "Update mode: binario NAO encontrado em $INSTDIR\${PRODUCT_EXECUTABLE} — agente nao reiniciado"
             update_restart_done:
          ${EndIf}
+         ; ── Validação final dos binários (antes de declarar sucesso) ──
+         ; Fecha a janela entre a checagem pós-cópia e o fim da instalação:
+         ; antivírus/quarentena, "Controlled folder access" ou limpeza externa
+         ; podem remover os .exe de $INSTDIR depois da cópia. Sem isso o log
+         ; dizia "Instalacao concluida com sucesso" com a pasta vazia.
+         IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 final_binaries_incomplete
+         !if "${BUILD_HAS_SERVICE}" == "1"
+            IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}" 0 final_binaries_incomplete
+         !endif
+         ${InstallerLog} "Validacao final: binarios presentes em $INSTDIR"
+         Goto final_binaries_ok
+         final_binaries_incomplete:
+         ${InstallerLogError} "Validacao final: binario(s) ausente(s) em $INSTDIR apos a instalacao (possivel quarentena de antivirus ou limpeza externa) — exit code nao-zero"
+         StrCpy $UpdateIncomplete "1"
+         SetErrorLevel 1
+         final_binaries_ok:
+
          ${If} $ServiceRollbackDone == "1"
             ${InstallerLogError} "Instalacao concluida com ROLLBACK do servico (exit code nao-zero)"
             SetErrorLevel 1

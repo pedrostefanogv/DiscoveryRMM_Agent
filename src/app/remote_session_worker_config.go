@@ -21,6 +21,7 @@ const workerDebugConfigFile = "debug_config.json"
 // workerDebugConfigRaw é o subconjunto de debug.Config que o worker precisa.
 // Reusa os mesmos nomes de campo JSON do debug.Config (tags em debug/config.go).
 type workerDebugConfigRaw struct {
+	ApiScheme    string `json:"apiScheme,omitempty"`
 	ApiServer    string `json:"apiServer,omitempty"`
 	NatsServer   string `json:"natsServer"`
 	NatsWsServer string `json:"natsWsServer"`
@@ -46,6 +47,7 @@ func GetDebugConfigForWorker() WorkerDebugConfig {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return out
 	}
+	out.ApiScheme = raw.ApiScheme
 	out.ApiServer = raw.ApiServer
 	out.NatsServer = raw.NatsServer
 	out.NatsWsServer = raw.NatsWsServer

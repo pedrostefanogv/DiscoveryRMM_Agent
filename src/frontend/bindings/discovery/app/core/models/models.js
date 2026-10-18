@@ -131,6 +131,77 @@ export class AppItem {
              */
             this["sourceScope"] = "";
         }
+        if (!("installCommandKind" in $$source)) {
+            /**
+             * ── Pacotes custom: tipo de comando e detecção (contrato §1.2) ──
+             * InstallCommandKind/UninstallCommandKind: 0 = comando único (cmd /C),
+             * 1 = script CMD/BAT, 2 = script PowerShell.
+             * @member
+             * @type {number}
+             */
+            this["installCommandKind"] = 0;
+        }
+        if (!("uninstallCommandKind" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["uninstallCommandKind"] = 0;
+        }
+        if (!("detectionMode" in $$source)) {
+            /**
+             * DetectionMode: 0 = nenhuma, 1 = vinculado a app do inventário,
+             * 2 = comando de detecção (PowerShell, exit 0 = instalado).
+             * @member
+             * @type {number}
+             */
+            this["detectionMode"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["inventorySoftwareId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["detectionName"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["detectionPublisher"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["detectionMinVersion"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["detectionCommand"] = undefined;
+        }
+        if (!("installed" in $$source)) {
+            /**
+             * Installed é um campo de RUNTIME (não vem da API): indica que o app custom
+             * já foi detectado como instalado no host pela detecção configurada.
+             * Alimenta o badge "Já instalado" e o rótulo "Reinstalar" na loja.
+             * @member
+             * @type {boolean}
+             */
+            this["installed"] = false;
+        }
 
         Object.assign(this, $$source);
     }
