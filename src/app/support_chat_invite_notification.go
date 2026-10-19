@@ -63,13 +63,13 @@ func supportChatInviteNotificationHint() string {
 }
 
 // supportChatInviteNotificationRespondingMessage é o texto mostrado entre o
-// clique e a resposta do servidor: o usuário precisa saber que a escolha foi
-// registrada (o cartão só fecha depois de o servidor responder).
+// clique em "Abrir chat" e a confirmação do servidor (só o ACEITE espera: a
+// recusa fecha o cartão na hora — ver resolve em _windows.go).
 func supportChatInviteNotificationRespondingMessage(accepted bool) string {
 	if accepted {
 		return "Abrindo o chat de suporte…"
 	}
-	return "Avisando o suporte de que você não pode atender agora…"
+	return "Avisando o suporte…"
 }
 
 // supportChatInviteNotificationMessage monta a mensagem do cartão a partir do
@@ -312,6 +312,18 @@ func (a *App) runSupportChatInviteNotificationDecision(sessionID string, resultC
 		ok     bool
 	)
 
+	// Rede de segurança do cartão: se o processo nativo falhar em fechar a
+	// janela (thread ocupada, hwnd inválido), o cartão não pode ficar na tela
+	// depois de respondido. Depois do prazo, o cancelador fecha o cartão — ele
+	// não interfere numa decisão já publicada (abort é no-op com done=true).
+	cardGuard := time.AfterFunc(supportChatInviteCardCloseGuard, func() {
+		if a.supportChatNotifyCardPending(sessionID) {
+			a.Logs.Append("[supportchat] cartao do convite ainda na tela apos a resposta; fechando pela rede de seguranca (sessao " + sessionID + ")")
+			a.closeSupportChatInviteNotification(sessionID)
+		}
+	})
+	defer cardGuard.Stop()
+
 	select {
 	case <-a.supportChatContext().Done():
 		a.forgetSupportChatInviteNotification(sessionID)
@@ -357,7 +369,20 @@ func (a *App) runSupportChatInviteNotificationDecision(sessionID string, resultC
 			result.SessionID + " alvo=" + sessionID + ")")
 		return
 	}
-	if state := a.supportChatService().State(); state.Status != supportchat.StatusWaiting || state.SessionID != sessionID {
+	state := a.supportChatService().State()
+	if state.Status == supportchat.StatusActive && state.SessionID == sessionID {
+		// ACEITE CONCLUÍDO: o POST já foi feito pelo cartão (reportSupportChatInviteDecision),
+		// que também já pediu a abertura da janela. Aqui só garantimos a janela —
+		// sem descartar a decisão. Antes este caminho tratava o convite já ativo
+		// como "decisão descartada" e o cartão ficava na tela sem a janela abrir.
+		if result.Accepted && a.app != nil && !a.supportChatWindowOpen() {
+			a.Logs.Append("[supportchat] aceite confirmado apos o cartao; garantindo a janela do chat (sessao " + sessionID + ")")
+			a.hideSupportChatInviteSurface()
+			a.openSupportChatWindow()
+		}
+		return
+	}
+	if state.Status != supportchat.StatusWaiting || state.SessionID != sessionID {
 		a.Logs.Append("[supportchat] decisao do cartao descartada: convite nao esta mais pendente (sessao " + sessionID + ")")
 		return
 	}
@@ -419,8 +444,21 @@ func (a *App) reportSupportChatInviteDecision(result supportChatInviteNotificati
 	var err error
 	if result.Accepted {
 		// Só o convite da sessão CORRENTE pode virar "active".
+		wasPending := false
 		if state := a.supportChatService().State(); state.Status == supportchat.StatusWaiting && state.SessionID == result.SessionID {
+			wasPending = true
 			err = a.supportChatService().RespondInvite(ctx, true, reason)
+		}
+		if err == nil && wasPending {
+			// ACEITE: a janela do chat abre JÁ, sem passar pela rechecagem de
+			// estado do processo de UI (ver runSupportChatInviteNotificationDecision).
+			// Foi essa rechecagem que, numa corrida com o evento do servidor,
+			// descartou o aceite e deixou o cartão na tela sem insistir na
+			// abertura da janela.
+			if a.app != nil {
+				a.hideSupportChatInviteSurface()
+				go a.openSupportChatWindow()
+			}
 		}
 	} else {
 		// A recusa não depende do estado corrente: ela é reportada para a sessão
@@ -557,6 +595,26 @@ func (a *App) adoptSupportChatSession(sessionID string) {
 		}
 		a.openSupportChatWindow()
 	}()
+}
+
+// supportChatInviteCardCloseGuard é o prazo após o qual o processo de UI força
+// o fechamento de um cartão de convite que já foi respondido e continua na tela.
+//
+// RELATO: "cliquei em Agora não e o banner ficou travado". O POST pode demorar
+// (ou o fechamento nativo falhar) e o usuário não pode ficar com o cartão
+// preso: passado o prazo, o cancelador do cartão o fecha de qualquer forma.
+const supportChatInviteCardCloseGuard = 4 * time.Second
+
+// supportChatNotifyCardPending informa se o cartão da sessão ainda está
+// registrado como aberto (o cancelamento o remove do mapa).
+func (a *App) supportChatNotifyCardPending(sessionID string) bool {
+	if a == nil {
+		return false
+	}
+	a.supportChatNotifyMu.Lock()
+	defer a.supportChatNotifyMu.Unlock()
+	_, ok := a.supportChatNotify[strings.TrimSpace(sessionID)]
+	return ok
 }
 
 // supportChatInviteAnswerWindow é por quanto tempo uma resposta recente do
