@@ -46,6 +46,36 @@ func TestConsentLayoutFitsWindow(t *testing.T) {
 	}
 }
 
+// Com os cantos do DWM a janela continua retangular para o mouse: só a área
+// visível do cartão pode capturar cliques (o resto vira HTTRANSPARENT).
+func TestConsentInsideRoundedCard(t *testing.T) {
+	cases := []struct {
+		name string
+		x, y int
+		want bool
+	}{
+		{"centro", consentWidth / 2, consentHeight / 2, true},
+		{"canto superior esquerdo cortado", 0, 0, false},
+		{"quase canto superior esquerdo cortado", 1, 1, false},
+		{"interior do circulo do canto", 4, 4, true},
+		{"borda esquerda no meio", 0, consentHeight / 2, true},
+		{"borda direita no meio", consentWidth - 1, consentHeight / 2, true},
+		{"canto inferior direito cortado", consentWidth - 1, consentHeight - 1, false},
+		{"centro do circulo inferior direito", consentWidth - consentSystemCornerRadius, consentHeight - consentSystemCornerRadius, true},
+		{"fora a esquerda", -1, consentHeight / 2, false},
+		{"fora a direita", consentWidth, consentHeight / 2, false},
+		{"fora acima", consentWidth / 2, -1, false},
+		{"fora abaixo", consentWidth / 2, consentHeight, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := consentInsideRoundedCard(tc.x, tc.y); got != tc.want {
+				t.Fatalf("consentInsideRoundedCard(%d,%d) = %v, want %v", tc.x, tc.y, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestConsentLabelDefaults(t *testing.T) {
 	state := &consentNativeState{}
 	if got := state.titleText(); got != "Autorização de acesso remoto" {

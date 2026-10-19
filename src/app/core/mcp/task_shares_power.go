@@ -34,12 +34,11 @@ func registerScheduledTaskTool(reg *Registry) {
 		Name: "scheduled_task",
 		Description: "Tarefas agendadas do Windows (familia action-based). action: " +
 			"list (nome, caminho, estado e proxima execucao) | " +
-			"run (executa por taskName/taskPath; DESTRUTIVA: exige confirm=true).",
+			"run (executa por taskName/taskPath; DESTRUTIVA: exige autorizacao do usuario no chat).",
 		Params: []ToolParam{
 			{Name: "action", Type: "string", Description: "Acao: list, run", Required: true},
 			{Name: "taskName", Type: "string", Description: "Nome da tarefa (run)", Required: false},
 			{Name: "taskPath", Type: "string", Description: "Caminho da tarefa (ex: \\Microsoft\\Windows\\); padrao \\(run)", Required: false},
-			{Name: "confirm", Type: "boolean", Description: "Confirmacao explicita do usuario (run)", Required: false},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			action, err := requireAction(args, "list", "run")
@@ -114,12 +113,12 @@ func registerSharesTool(reg *Registry) {
 // --- Energia / sessao -----------------------------------------------------
 
 // registerPowerActionTool registra a tool "power_action". TODAS as acoes
-// (restart, shutdown, lock) sao destrutivas e exigem confirm=true.
+// (restart, shutdown, lock) sao destrutivas e exigem autorizacao do usuario.
 func registerPowerActionTool(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name: "power_action",
 		Description: "Energia/sessao do computador (familia action-based). action: " +
-			"restart | shutdown | lock. TODAS DESTRUTIVAS: exigem confirm=true apos aprovacao do usuario. " +
+			"restart | shutdown | lock. TODAS DESTRUTIVAS: exigem autorizacao do usuario no chat. " +
 			"restart/shutdown exibem um AVISO AO USUARIO com contador (padrao 30s, minimo 10s) e botao CANCELAR " +
 			"(PSADT; fallback no aviso nativo do Windows) — se o usuario cancelar, NADA e executado. " +
 			"Informe sempre o atraso e que ele pode cancelar. " +
@@ -128,7 +127,6 @@ func registerPowerActionTool(reg *Registry, app AppBridge) {
 			"nem pedir nova confirmacao. lock e imediato.",
 		Params: []ToolParam{
 			{Name: "action", Type: "string", Description: "Acao: restart, shutdown, lock", Required: true},
-			{Name: "confirm", Type: "boolean", Description: "Confirmacao explicita do usuario", Required: false},
 			{Name: "delaySeconds", Type: "integer", Description: "Segundos de contagem antes de reiniciar/desligar (minimo 10, maximo 300; padrao 30)", Required: false},
 			{Name: "message", Type: "string", Description: "Mensagem exibida ao usuario no aviso (explique o motivo do reinicio/desligamento)", Required: false},
 		},

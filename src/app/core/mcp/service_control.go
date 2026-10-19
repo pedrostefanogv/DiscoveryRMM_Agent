@@ -12,11 +12,10 @@ func registerServiceControlTool(reg *Registry) {
 		Name: "service_control",
 		Description: "Servicos do Windows (familia action-based). action: " +
 			"list (todos os servicos) | get (um servico por nome/displayName) | " +
-			"start | stop | restart. start/stop/restart sao DESTRUTIVAS e exigem confirm=true.",
+			"start | stop | restart. start/stop/restart sao DESTRUTIVAS e exigem autorizacao do usuario no chat.",
 		Params: []ToolParam{
 			{Name: "action", Type: "string", Description: "Acao: list, get, start, stop, restart", Required: true},
 			{Name: "name", Type: "string", Description: "Nome (ou display name) do servico (get, start, stop, restart)", Required: false},
-			{Name: "confirm", Type: "boolean", Description: "Confirmacao explicita do usuario (start, stop, restart)", Required: false},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			action, err := requireAction(args, "list", "get", "start", "stop", "restart")

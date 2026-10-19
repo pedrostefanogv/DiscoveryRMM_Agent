@@ -97,10 +97,11 @@ func TestInvalidActionReturnsClearError(t *testing.T) {
 	}
 }
 
-// TestDestructiveActionsRequireConfirm garante o gate M31 em TODAS as acoes
-// destrutivas novas/consolidadas: sem confirm=true o handler falha antes de
-// tocar no AppBridge.
-func TestDestructiveActionsRequireConfirm(t *testing.T) {
+// TestDestructiveActionsRequireConsent garante que TODA acao destrutiva tem
+// pedido de consentimento por acao (mcp.ToolConsentFor). O parametro confirm
+// NAO e mais exposto no schema ao LLM: o gate do chat injeta confirm=true
+// somente depois da aprovacao do usuario.
+func TestDestructiveActionsRequireConsent(t *testing.T) {
 	cases := []struct {
 		name string
 		tool string
@@ -119,15 +120,22 @@ func TestDestructiveActionsRequireConfirm(t *testing.T) {
 		{"power_action_shutdown", "power_action", map[string]any{"action": "shutdown"}},
 		{"power_action_lock", "power_action", map[string]any{"action": "lock"}},
 	}
-	reg := newTestRegistry()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := callTool(t, reg, tc.tool, tc.args)
-			if err == nil {
-				t.Fatalf("%s sem confirm deveria falhar", tc.name)
+			if req := ToolConsentFor(tc.tool, tc.args); req == nil {
+				t.Fatalf("%s deveria exigir consentimento (ToolConsentFor)", tc.name)
 			}
-			if !strings.Contains(err.Error(), "confirm") {
-				t.Fatalf("%s: erro deveria exigir confirm, got=%v", tc.name, err)
+			// O schema exposto ao LLM nao deve conter confirm (P0-2): o gate
+			// injeta o marcador interno apenas apos a aprovacao.
+			reg := newTestRegistry()
+			tool := reg.Find(tc.tool)
+			if tool == nil {
+				t.Fatalf("%s nao registrada", tc.tool)
+			}
+			for _, p := range tool.Params {
+				if p.Name == "confirm" {
+					t.Fatalf("%s: confirm nao deve aparecer no schema do LLM", tc.tool)
+				}
 			}
 		})
 	}
@@ -210,9 +218,11 @@ func TestRegisteredToolCount(t *testing.T) {
 	for _, name := range names {
 		t.Logf("  %s", name)
 	}
-	// 49 apos a consolidacao das familias + read_file (leitura com autorizacao)
-	// + open_folder/open_app (abrir pasta/app com autorizacao por acao).
-	if len(names) != 53 {
-		t.Fatalf("total de tools = %d, esperado 53", len(names))
+	// 53 apos a consolidacao das familias + read_file, open_folder/open_app,
+	// 3 tools de anexo de imagem (attach_images_to_ticket,
+	// attach_images_to_ticket_comment e list_ticket_attachments) e
+	// view_ticket_attachment.
+	if len(names) != 57 {
+		t.Fatalf("total de tools = %d, esperado 56", len(names))
 	}
 }

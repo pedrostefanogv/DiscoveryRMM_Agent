@@ -38,6 +38,7 @@ var (
 	procReleaseCapture   = user32.NewProc("ReleaseCapture")
 	procSetWindowPos     = user32.NewProc("SetWindowPos")
 	procSetLayeredAttrs  = user32.NewProc("SetLayeredWindowAttributes")
+	procScreenToClient   = user32.NewProc("ScreenToClient")
 
 	procCreateRoundRectRgn = gdi32.NewProc("CreateRoundRectRgn")
 )
@@ -83,6 +84,10 @@ const (
 	ClassStyleDropShadow = 0x00020000
 	// SwShowNormal mostra a janela no estado normal.
 	SwShowNormal = 5
+
+	// HtTransparent é o HTTRANSPARENT do WM_NCHITTEST: o clique atravessa a
+	// janela e atinge o app de baixo.
+	HtTransparent = ^uintptr(0)
 
 	// VkReturn/VkEscape/VkTab/VkSpace/VkLeft/VkRight são teclas virtuais.
 	VkReturn = 0x0D
@@ -323,6 +328,20 @@ func SetCursorHand() {
 func SetCursorArrow() {
 	arrow, _, _ := procLoadCursorW.Call(0, cursorArrow)
 	procSetCursor.Call(arrow)
+}
+
+// screenPoint espelha POINT.
+type screenPoint struct {
+	X int32
+	Y int32
+}
+
+// ScreenToClient converte coordenadas de tela em coordenadas de cliente da
+// janela (usado no WM_NCHITTEST, cujo LPARAM vem em coordenadas de tela).
+func ScreenToClient(hwnd uintptr, x, y int) (int, int) {
+	pt := screenPoint{X: int32(x), Y: int32(y)}
+	procScreenToClient.Call(hwnd, uintptr(unsafe.Pointer(&pt)))
+	return int(pt.X), int(pt.Y)
 }
 
 // NextMessage lê a próxima mensagem da fila. Retorna <= 0 para encerrar o loop.

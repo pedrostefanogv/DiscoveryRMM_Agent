@@ -38,6 +38,14 @@ func TestToolConsentForPolicy(t *testing.T) {
 		{"power_action", map[string]any{"action": "restart"}, "power_restart", false},
 		{"power_action", map[string]any{"action": "shutdown"}, "power_shutdown", false},
 		{"power_action", map[string]any{"action": "lock"}, "power_lock", false},
+		{"attach_images_to_ticket", map[string]any{"ticketId": "t1", "imageRefs": "turn:1"}, "attach_ticket_images", false},
+		{"attach_images_to_ticket_comment", map[string]any{"ticketId": "t1", "commentId": "c1", "imageRefs": "shot:last"}, "attach_ticket_comment_images", false},
+		{"create_ticket", map[string]any{"attachImageRefs": "turn:1"}, "create_ticket_with_images", false},
+		{"add_ticket_comment", map[string]any{"ticketId": "t1", "attachImageRefs": "shot:last"}, "comment_ticket_with_images", false},
+
+		// Sem imagens: comportamento antigo, sem consentimento de anexo.
+		{"create_ticket", map[string]any{"title": "x"}, "", true},
+		{"add_ticket_comment", map[string]any{"ticketId": "t1", "content": "x"}, "", true},
 
 		// Leitura/diagnóstico: nunca pede consentimento.
 		{"get_inventory", nil, "", true},
@@ -75,6 +83,18 @@ func TestToolConsentForTargets(t *testing.T) {
 	job := ToolConsentFor("printer", map[string]any{"action": "cancel_job", "name": "HP", "jobId": float64(7)})
 	if job == nil || !strings.Contains(job.Target, "HP") || !strings.Contains(job.Target, "7") {
 		t.Fatalf("alvo do cancel_job incompleto: %#v", job)
+	}
+
+	attach := ToolConsentFor("attach_images_to_ticket", map[string]any{"ticketId": "ticket-abc", "imageRefs": "turn:1,turn:2"})
+	if attach == nil || !strings.Contains(attach.Target, "2 imagens") || !strings.Contains(attach.Target, "ticket-abc") {
+		t.Fatalf("alvo do attach_images_to_ticket incompleto: %#v", attach)
+	}
+	if len(attach.Extra) == 0 || !strings.Contains(strings.Join(attach.Extra, " "), "servidor") {
+		t.Fatalf("consentimento de anexo deveria explicar o envio ao servidor: %#v", attach)
+	}
+	commentAttach := ToolConsentFor("attach_images_to_ticket_comment", map[string]any{"ticketId": "ticket-abc", "commentId": "comment-1", "imageRefs": "turn:1"})
+	if commentAttach == nil || !strings.Contains(commentAttach.Target, "1 imagem") || !strings.Contains(commentAttach.Target, "comment-1") {
+		t.Fatalf("alvo do attach_images_to_ticket_comment incompleto: %#v", commentAttach)
 	}
 
 	power := ToolConsentFor("power_action", map[string]any{"action": "restart", "delaySeconds": float64(30), "message": "manutencao"})

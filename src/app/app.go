@@ -162,6 +162,12 @@ type App struct {
 	supportChatPolicy        supportchat.AttachmentPolicy
 	supportChatPolicyExpires time.Time
 	supportChatPolicyReady   bool
+	// Cache da política de anexos do CHAT IA (GET /me/ai-chat/attachment-settings),
+	// compartilhada entre a validação no Go e o binding da UI.
+	aiChatPolicyMu      sync.Mutex
+	aiChatPolicy        appsupport.AIAttachmentSettings
+	aiChatPolicyExpires time.Time
+	aiChatPolicyReady   bool
 	// logStore é o banco unificado de logs do processo (nil quando indisponível).
 	logStore *logstore.Store
 	// commandDedupe é o dedupe persistido de comandos (sobrevive ao reboot no
@@ -431,6 +437,16 @@ func NewApp(opts AppStartupOptions) *App {
 		// Gate de consentimento das tools com efeito no computador
 		// (core/mcp.ToolConsentFor) — pergunta localizada no chat, por ação.
 		RequestToolConsent: a.RequestToolConsent,
+		// Política UNIFICADA de anexos do chat IA (allowlist/tamanho), consultada
+		// no servidor e cacheada; a validação das imagens anexadas usa isto.
+		GetAttachmentPolicy: func() chat.AttachmentPolicy {
+			settings := a.cachedAIChatAttachmentSettings()
+			return chat.AttachmentPolicy{
+				Enabled:             settings.Enabled,
+				AllowedContentTypes: settings.AllowedContentTypes,
+				MaxFileSizeBytes:    settings.MaxFileSizeBytes,
+			}
+		},
 	})
 	a.psadtSvc = psadt.New(psadt.Deps{
 		Logf: func(line string) {

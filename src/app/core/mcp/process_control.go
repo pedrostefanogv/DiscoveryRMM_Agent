@@ -12,13 +12,12 @@ func registerProcessControlTool(reg *Registry) {
 		Name: "process_control",
 		Description: "Controla processos no Windows (familia action-based). action: " +
 			"list (todos os processos) | top (N processos por CPU ou memoria) | " +
-			"kill (encerra pelo PID; DESTRUTIVA: exige confirm=true).",
+			"kill (encerra pelo PID; DESTRUTIVA: exige autorizacao do usuario no chat).",
 		Params: []ToolParam{
 			{Name: "action", Type: "string", Description: "Acao: list, top, kill", Required: true},
 			{Name: "top", Type: "integer", Description: "Numero de processos no 'top' (1-50, padrao 10)", Required: false},
 			{Name: "orderBy", Type: "string", Description: "'top': cpu ou memory (padrao cpu)", Required: false},
 			{Name: "pid", Type: "integer", Description: "PID do processo a encerrar (kill)", Required: false},
-			{Name: "confirm", Type: "boolean", Description: "Confirmacao explicita do usuario (kill)", Required: false},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			action, err := requireAction(args, "list", "top", "kill")

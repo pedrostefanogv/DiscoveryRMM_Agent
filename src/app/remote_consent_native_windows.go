@@ -39,6 +39,15 @@ const (
 	consentTimerID   = 1
 	// consentTickMS: ~5 repinturas por segundo mantêm a barra suave sem custo.
 	consentTickMS = 200
+	// consentScreenMargin é o recuo do cartão em relação às bordas direita e
+	// inferior da área útil: o prompt nasce no canto inferior direito (como um
+	// toast do Windows/PSADT), sem cobrir o centro da tela do usuário.
+	consentScreenMargin = 24
+	// consentSystemCornerRadius é o raio (px físicos) com que o DWM arredonda a
+	// janela no Windows 11. Serve ao hit-testing: sem região de recorte, a
+	// janela continua retangular para o mouse e os cantos transparentes
+	// precisam deixar o clique atravessar (ver consentInsideRoundedCard).
+	consentSystemCornerRadius = 8
 	// consentWMAppCancel é a mensagem usada para fechar o prompt de outra
 	// goroutine (cancelamento do servidor/worker).
 	consentWMAppCancel = 0x8000 + 42
@@ -115,6 +124,10 @@ type consentNativeState struct {
 	hover   consentButton
 	pressed consentButton
 	focus   consentButton
+	// systemCorners: o DWM arredonda a janela com antialiasing (Windows 11).
+	// Quando true, o cartão é pintado reto e o compositor recorta os cantos —
+	// evita o serrilhado da região binária do SetWindowRgn.
+	systemCorners bool
 }
 
 // consentTimeoutDecision aplica a ação de timeout da política do servidor.
@@ -319,6 +332,18 @@ func consentWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 			winui.SetCursorArrow()
 		}
 		return 1
+	case winui.MsgNCHitTest:
+		// Com os cantos do DWM o recorte é só visual: a janela segue
+		// retangular para o mouse. Nos cantos transparentes devolve
+		// HTTRANSPARENT para o clique atingir o app de baixo (antes a região
+		// do SetWindowRgn fazia esse recorte de input).
+		if state.systemCorners {
+			x, y := winui.ScreenToClient(hwnd, consentLParamX(lparam), consentLParamY(lparam))
+			if !consentInsideRoundedCard(x, y) {
+				return winui.HtTransparent
+			}
+		}
+		return winui.DefWindowProc(hwnd, msg, wparam, lparam)
 	case winui.MsgKeyDown:
 		return state.handleKey(hwnd, wparam)
 	case consentWMAppCancel:
@@ -369,6 +394,35 @@ func (s *consentNativeState) handleKey(hwnd, key uintptr) uintptr {
 func consentLParamX(lparam uintptr) int { return int(int16(lparam & 0xFFFF)) }
 func consentLParamY(lparam uintptr) int { return int(int16((lparam >> 16) & 0xFFFF)) }
 
+// consentInsideRoundedCard informa se o ponto (coordenadas de cliente) está
+// dentro do cartão visível. Os cantos são os do arredondamento do DWM no
+// Windows 11: um ponto na região cortada do canto não deve capturar o clique.
+func consentInsideRoundedCard(x, y int) bool {
+	if x < 0 || y < 0 || x >= consentWidth || y >= consentHeight {
+		return false
+	}
+	r := consentSystemCornerRadius
+	left, top := x < r, y < r
+	right, bottom := x >= consentWidth-r, y >= consentHeight-r
+	if !left && !right && !top && !bottom {
+		return true
+	}
+	// Centro do círculo do canto correspondente.
+	cx, cy := x, y
+	if left {
+		cx = r
+	} else if right {
+		cx = consentWidth - r
+	}
+	if top {
+		cy = r
+	} else if bottom {
+		cy = consentHeight - r
+	}
+	dx, dy := x-cx, y-cy
+	return dx*dx+dy*dy <= r*r
+}
+
 // drawConsentBadge desenha o selo do cabeçalho: um "monitor" no cartão, com
 // fundo levemente tingido pelo accent do Windows (funciona em claro e escuro).
 func drawConsentBadge(hdc uintptr, rect winui.Rect, theme winui.Theme) {
@@ -402,10 +456,17 @@ func (s *consentNativeState) paint(screenDC uintptr) {
 		actionColor = theme.Success
 	}
 
-	// Cartão: fundo, faixa de destaque do Windows e borda.
-	winui.FillRoundRect(hdc, card, consentRadius, theme.Card)
+	// Cartão: fundo, faixa de destaque do Windows e borda. Com os cantos do
+	// DWM o desenho é reto: o próprio compositor recorta/antialiasa o canto
+	// (um canto desenhado com raio fixo deixaria uma cunha sem pintura entre o
+	// desenho e o recorte do sistema).
+	cardRadius := consentRadius
+	if s.systemCorners {
+		cardRadius = 0
+	}
+	winui.FillRoundRect(hdc, card, cardRadius, theme.Card)
 	winui.FillRect(hdc, winui.Rect{X: 0, Y: 2, W: 5, H: consentHeight - 4}, theme.Accent)
-	winui.StrokeRoundRect(hdc, card, consentRadius, 1, theme.Border)
+	winui.StrokeRoundRect(hdc, card, cardRadius, 1, theme.Border)
 
 	// Selo do acesso remoto (desenhado no tema; independe de asset externo).
 	drawConsentBadge(hdc, logo, theme)
@@ -534,7 +595,10 @@ func runNativeConsentWindow(ctx context.Context, req remotesession.ConsentReques
 	if title == "" {
 		title = "Autorização de acesso remoto"
 	}
-	x, y := winui.CenteredOnWorkArea(consentWidth, consentHeight)
+	// Canto inferior direito da área útil (acima da barra de tarefas), como os
+	// toasts do Windows — e não no centro da tela, que cobre o trabalho do
+	// usuário no momento do pedido de acesso remoto.
+	x, y := winui.BottomRightOnActiveWorkArea(consentWidth, consentHeight, consentScreenMargin)
 	hwnd, err := winui.CreateWindow(
 		consentClassName,
 		title,
@@ -547,7 +611,12 @@ func runNativeConsentWindow(ctx context.Context, req remotesession.ConsentReques
 	}
 	consentStates.Store(hwnd, state)
 
-	winui.SetRoundedRegion(hwnd, consentWidth, consentHeight, consentRadius)
+	// Cantos: no Windows 11 o DWM arredonda com antialiasing (contorno suave);
+	// sem suporte, cai na região binária (serrilhada) como antes.
+	state.systemCorners = winui.SetSystemRoundedCorners(hwnd)
+	if !state.systemCorners {
+		winui.SetRoundedRegion(hwnd, consentWidth, consentHeight, consentRadius)
+	}
 	state.theme = consentThemeLoader()
 	state.fonts = consentFonts{
 		title:         winui.CreateFont(25, 600),

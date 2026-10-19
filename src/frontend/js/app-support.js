@@ -2658,10 +2658,18 @@ async function loadTicketAttachmentSettings() {
   }
 }
 
+// Limite dos anexos criados NA ABERTURA do chamado pelo agent.
+//
+// Diferente do console (aba Anexos, que usa PUT direto no storage e suporta o
+// limite grande de maxLargeFileSizeBytes, padrão 2 GB), este fluxo transporta o
+// arquivo INTEIRO em base64 pelo binding do Wails (FileReader -> data URL ->
+// UploadTicketAttachment). Aceitar 2 GB aqui estouraria a memória do webview e
+// o limite de mensagem do IPC. Por isso usa o limite de CONVERSA
+// (maxFileSizeBytes, 10 MB padrão); arquivos grandes devem ser anexados pela
+// aba Anexos do console, que faz upload direto/resumível.
+// O backend continua sendo a autoridade sobre o limite efetivo.
 function ticketAttachmentLimitBytes() {
   var max = ticketAttachmentSettings && Number(ticketAttachmentSettings.maxFileSizeBytes);
-  // Sem policy conhecida: teto local generoso (10 MB) só para a mensagem; o
-  // backend continua sendo a autoridade.
   return max > 0 ? max : 10 * 1024 * 1024;
 }
 

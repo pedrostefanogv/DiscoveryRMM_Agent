@@ -56,6 +56,17 @@ type AppBridge interface {
 	ListTicketDepartmentsJSON() (json.RawMessage, error)
 	ListDepartmentFieldsJSON(departmentID string) (json.RawMessage, error)
 
+	// Anexos de imagem: turno do chat e capturas de tela.
+	// GetLastTurnImage devolve a data URL da N-ésima imagem (1-based) enviada
+	// pelo usuário no último turno do chat.
+	GetLastTurnImage(index int) (string, error)
+	AttachImagesToTicket(ticketID string, images []TicketImageUpload) ([]string, error)
+	AttachImagesToComment(ticketID, commentID string, images []TicketImageUpload) ([]string, error)
+	ListAgentTicketAttachments(ticketID string) (json.RawMessage, error)
+	// DownloadAgentTicketAttachment baixa um anexo (do chamado ou, quando
+	// commentID != "", do comentário) para a IA visualizar como imagem.
+	DownloadAgentTicketAttachment(ticketID, attachmentID, commentID string) (json.RawMessage, error)
+
 	// Chat — pergunta interativa ao usuario
 	AskUserChat(question, optionsJSON, allowText string) (string, error)
 	// AskUserChatWithContext é a variante consciente de contexto: o
@@ -174,10 +185,9 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	reg.Register(Tool{
 		Name:        "uninstall_package",
-		Description: "Desinstala um pacote via winget pelo seu ID. DESTRUTIVA: exige confirm=true (obtido do usuario).",
+		Description: "Desinstala um pacote via winget pelo seu ID. DESTRUTIVA: exige autorizacao do usuario no chat.",
 		Params: []ToolParam{
 			{Name: "id", Type: "string", Description: "ID do pacote winget", Required: true},
-			{Name: "confirm", Type: "boolean", Description: "Confirmação explícita do usuário (M31)", Required: true},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			if err := requireConfirm(args); err != nil {
@@ -226,10 +236,8 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	reg.Register(Tool{
 		Name:        "upgrade_all_packages",
-		Description: "Atualiza todos os pacotes que possuem atualizacao disponivel via winget. DESTRUTIVA em massa: exige confirm=true.",
-		Params: []ToolParam{
-			{Name: "confirm", Type: "boolean", Description: "Confirmação explícita do usuário (M31)", Required: true},
-		},
+		Description: "Atualiza todos os pacotes que possuem atualizacao disponivel via winget. DESTRUTIVA em massa: exige autorizacao do usuario no chat.",
+		Params:      []ToolParam{},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			if err := requireConfirm(args); err != nil {
 				return nil, err
@@ -457,12 +465,165 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		},
 	})
 
+	// ========== ANEXOS DE IMAGEM EM CHAMADOS ==========
+	// As refs apontam para imagens que o usuário já enviou no chat (turn:N) ou
+	// para capturas de tela da própria IA (shot:last/shot:<hash>). O envio ao
+	// servidor exige consentimento por ação (ver ToolConsentFor).
 	reg.Register(Tool{
-		Name:        "add_ticket_comment",
-		Description: "Adiciona um comentário PÚBLICO em um chamado do agente autenticado. Notas internas são exclusivas do portal.",
+		Name: "attach_images_to_ticket",
+		Description: "Anexa imagens ao REPOSITÓRIO de um chamado do agente autenticado. " +
+			"Use SOMENTE quando o usuario pedir ou confirmar explicitamente que quer anexar a imagem ao chamado; " +
+			"a acao ENVIA a imagem do usuario ao servidor e exige autorizacao dele no chat. " +
+			"imageRefs aceita uma string separada por virgula ou array JSON. Refs: turn:N = N-esima imagem que o usuario " +
+			"mandou no chat no ultimo turno (1-based); shot:last = ultima captura de tela feita por capture_screenshot; " +
+			"shot:<sha256> = captura especifica (o capture_screenshot devolve image_ref). " +
+			"Formatos: png, jpeg, webp, gif; maximo 6 MiB por imagem e 32 MiB no total.",
+		Params: []ToolParam{
+			{Name: "ticketId", Type: "string", Description: "GUID do chamado", Required: true},
+			{Name: "imageRefs", Type: "string", Description: "Refs das imagens: turn:1; turn:1,turn:2; shot:last; ou array JSON com essas refs", Required: true},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			if err := requireConfirm(args); err != nil {
+				return nil, err
+			}
+			ticketID, err := requiredStringArg(args, "ticketId")
+			if err != nil {
+				return nil, err
+			}
+			refs, err := requiredStringArg(args, "imageRefs")
+			if err != nil {
+				return nil, err
+			}
+			images, err := resolveImageRefs(refs, app)
+			if err != nil {
+				return nil, err
+			}
+			ids, err := app.AttachImagesToTicket(ticketID, images)
+			if err != nil {
+				// Upload parcial: devolve os IDs já criados para a IA não
+				// reenviar/anexar duplicado ao repetir a operação.
+				return map[string]any{
+					"ok":          false,
+					"ticketId":    ticketID,
+					"attachments": attachmentMetadata(images, ids),
+					"error":       fmt.Sprintf("falha ao anexar imagens ao chamado %s: %v", ticketID, err),
+				}, nil
+			}
+			return map[string]any{
+				"ok":          true,
+				"ticketId":    ticketID,
+				"attachments": attachmentMetadata(images, ids),
+			}, nil
+		},
+	})
+
+	reg.Register(Tool{
+		Name: "attach_images_to_ticket_comment",
+		Description: "Anexa imagens a um COMENTARIO de chamado do agente autenticado (a conversa do chamado). " +
+			"Use SOMENTE quando o usuario pedir ou confirmar explicitamente que quer anexar a imagem ao comentario; " +
+			"a acao ENVIA a imagem do usuario ao servidor e exige autorizacao dele no chat. " +
+			"imageRefs aceita string separada por virgula ou array JSON. Refs: turn:N = N-esima imagem que o usuario " +
+			"mandou no chat no ultimo turno (1-based); shot:last = ultima captura de tela; shot:<sha256> = captura especifica. " +
+			"O comentario precisa existir antes (add_ticket_comment devolve commentId).",
+		Params: []ToolParam{
+			{Name: "ticketId", Type: "string", Description: "GUID do chamado", Required: true},
+			{Name: "commentId", Type: "string", Description: "GUID do comentario que recebera as imagens", Required: true},
+			{Name: "imageRefs", Type: "string", Description: "Refs das imagens (turn:N, shot:last, shot:<sha256>)", Required: true},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			if err := requireConfirm(args); err != nil {
+				return nil, err
+			}
+			ticketID, err := requiredStringArg(args, "ticketId")
+			if err != nil {
+				return nil, err
+			}
+			commentID, err := requiredStringArg(args, "commentId")
+			if err != nil {
+				return nil, err
+			}
+			refs, err := requiredStringArg(args, "imageRefs")
+			if err != nil {
+				return nil, err
+			}
+			images, err := resolveImageRefs(refs, app)
+			if err != nil {
+				return nil, err
+			}
+			ids, err := app.AttachImagesToComment(ticketID, commentID, images)
+			if err != nil {
+				return map[string]any{
+					"ok":          false,
+					"ticketId":    ticketID,
+					"commentId":   commentID,
+					"attachments": attachmentMetadata(images, ids),
+					"error":       fmt.Sprintf("falha ao anexar imagens ao comentario %s do chamado %s: %v", commentID, ticketID, err),
+				}, nil
+			}
+			return map[string]any{
+				"ok":          true,
+				"ticketId":    ticketID,
+				"commentId":   commentID,
+				"attachments": attachmentMetadata(images, ids),
+			}, nil
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "list_ticket_attachments",
+		Description: "Lista os anexos de um chamado do agente autenticado (repositorio + conversa) apenas com METADADOS: id, fileName, contentType, sizeBytes, origin, commentId e datas. Nao baixa os bytes. Use antes de anexar/imprimir para conferir o que ja existe.",
+		Params: []ToolParam{
+			{Name: "ticketId", Type: "string", Description: "GUID do chamado", Required: true},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			ticketID, err := requiredStringArg(args, "ticketId")
+			if err != nil {
+				return nil, err
+			}
+			return app.ListAgentTicketAttachments(ticketID)
+		},
+	})
+
+	reg.Register(Tool{
+		Name: "view_ticket_attachment",
+		Description: "Visualiza uma IMAGEM anexada a um chamado (ou a um comentario) para analisar o conteudo com visao. " +
+			"Use quando o usuario pedir para ver/analisar um print/anexo do chamado; o anexo e baixado do servidor e a imagem " +
+			"segue para o modelo. Aceita apenas png, jpeg, webp ou gif de ate 10 MiB; outros tipos/arquivos devolvem erro claro. " +
+			"O download ENVIA o pedido ao servidor e exige autorizacao do usuario no chat. Para listar os IDs use list_ticket_attachments; " +
+			"informe commentId quando o anexo for da conversa (origin=comment).",
+		Params: []ToolParam{
+			{Name: "ticketId", Type: "string", Description: "GUID do chamado", Required: true},
+			{Name: "attachmentId", Type: "string", Description: "GUID do anexo (obtido em list_ticket_attachments)", Required: true},
+			{Name: "commentId", Type: "string", Description: "GUID do comentario quando o anexo for da conversa (opcional; vazio = anexo do repositorio do chamado)", Required: false},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			if err := requireConfirm(args); err != nil {
+				return nil, err
+			}
+			ticketID, err := requiredStringArg(args, "ticketId")
+			if err != nil {
+				return nil, err
+			}
+			attachmentID, err := requiredStringArg(args, "attachmentId")
+			if err != nil {
+				return nil, err
+			}
+			commentID := optionalStringArg(args, "commentId")
+			return app.DownloadAgentTicketAttachment(ticketID, attachmentID, commentID)
+		},
+	})
+
+	reg.Register(Tool{
+		Name: "add_ticket_comment",
+		Description: "Adiciona um comentário PÚBLICO em um chamado do agente autenticado. Notas internas são exclusivas do portal. " +
+			"Opcionalmente, attachImageRefs anexa imagens AO COMENTARIO: aceita string separada por virgula ou array JSON com " +
+			"turn:N (N-esima imagem que o usuario mandou no chat no ultimo turno, 1-based), shot:last (ultima captura de tela) " +
+			"ou shot:<sha256>. Use somente quando o usuario pedir/confirmar anexar; o envio das imagens ao servidor exige " +
+			"autorizacao dele no chat. O comentario e criado primeiro; se o upload falhar, o comentario NAO e perdido.",
 		Params: []ToolParam{
 			{Name: "ticketId", Type: "string", Description: "GUID do chamado", Required: true},
 			{Name: "content", Type: "string", Description: "Conteudo do comentario", Required: true},
+			{Name: "attachImageRefs", Type: "string", Description: "Opcional: refs das imagens para anexar ao comentario (turn:N, shot:last, shot:<sha256>)", Required: false},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			ticketID, _ := args["ticketId"].(string)
@@ -474,7 +635,56 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 				return nil, fmt.Errorf("content nao pode ser vazio")
 			}
 			// Opção de produto (a): o agente nunca cria nota interna.
-			return app.AddAgentTicketComment(ticketID, content)
+			attachRefs := optionalStringArg(args, "attachImageRefs")
+			if attachRefs == "" {
+				return app.AddAgentTicketComment(ticketID, content)
+			}
+			if err := requireConfirm(args); err != nil {
+				return nil, err
+			}
+			raw, err := app.AddAgentTicketComment(ticketID, content)
+			if err != nil {
+				return nil, err
+			}
+			// Daqui em diante o comentario JA EXISTE: qualquer falha de anexo
+			// precisa preservar o commentId no resultado.
+			commentID := extractJSONID(raw)
+			if commentID == "" {
+				return map[string]any{
+					"ok":       false,
+					"ticketId": ticketID,
+					"comment":  raw,
+					"error":    "comentario criado, mas nao foi possivel extrair o commentId da resposta; imagens nao anexadas",
+				}, nil
+			}
+			images, err := resolveImageRefs(attachRefs, app)
+			if err != nil {
+				return map[string]any{
+					"ok":        false,
+					"ticketId":  ticketID,
+					"commentId": commentID,
+					"comment":   raw,
+					"error":     fmt.Sprintf("comentario criado, mas as imagens nao foram anexadas: %v", err),
+				}, nil
+			}
+			ids, err := app.AttachImagesToComment(ticketID, commentID, images)
+			if err != nil {
+				return map[string]any{
+					"ok":          false,
+					"ticketId":    ticketID,
+					"commentId":   commentID,
+					"comment":     raw,
+					"attachments": attachmentMetadata(images, ids),
+					"error":       fmt.Sprintf("comentario criado, mas o upload das imagens falhou: %v", err),
+				}, nil
+			}
+			return map[string]any{
+				"ok":          true,
+				"ticketId":    ticketID,
+				"commentId":   commentID,
+				"comment":     raw,
+				"attachments": attachmentMetadata(images, ids),
+			}, nil
 		},
 	})
 
@@ -510,8 +720,9 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	})
 
 	reg.Register(Tool{
-		Name:        "create_ticket",
-		Description: "ABRE um novo chamado de suporte vinculado a esta maquina. PRÉ-REQUISITO ANTIDUPLICIDADE (OBRIGATORIO): antes de abrir, chame list_tickets e confirme que NAO existe chamado aberto (ClosedAt nulo) sobre o mesmo assunto; se existir, NAO abra um chamado novo — avise o usuario e ofereca complementar o existente com add_ticket_comment. Só abra um chamado novo se o usuario confirmar explicitamente que e um problema diferente. Use SEMPRE que o usuario pedir para abrir ticket, chamado, reportar problema ou solicitar suporte, apos a verificacao. O chamado e automaticamente associado ao agente/maquina. Chame get_agent_info antes para enriquecer o titulo e descricao com dados da maquina. Chame get_department_fields para conhecer os campos personalizados obrigatorios do departamento (eles valem mesmo sem template) e envie os valores em customFields (definitionId->valor). Quando um template foi escolhido, envie templateId + answers (respostas do mini questionario, key->valor). NUNCA oriente o usuario a acessar portais web externos.",
+		Name: "create_ticket",
+		Description: "ABRE um novo chamado de suporte vinculado a esta maquina. PRÉ-REQUISITO ANTIDUPLICIDADE (OBRIGATORIO): antes de abrir, chame list_tickets e confirme que NAO existe chamado aberto (ClosedAt nulo) sobre o mesmo assunto; se existir, NAO abra um chamado novo — avise o usuario e ofereca complementar o existente com add_ticket_comment. Só abra um chamado novo se o usuario confirmar explicitamente que e um problema diferente. Use SEMPRE que o usuario pedir para abrir ticket, chamado, reportar problema ou solicitar suporte, apos a verificacao. O chamado e automaticamente associado ao agente/maquina. Chame get_agent_info antes para enriquecer o titulo e descricao com dados da maquina. Chame get_department_fields para conhecer os campos personalizados obrigatorios do departamento (eles valem mesmo sem template) e envie os valores em customFields (definitionId->valor). Quando um template foi escolhido, envie templateId + answers (respostas do mini questionario, key->valor). NUNCA oriente o usuario a acessar portais web externos. " +
+			"Opcionalmente, attachImageRefs anexa imagens ao chamado criado (turn:N = N-esima imagem que o usuario mandou no chat no ultimo turno, shot:last = ultima captura de tela, shot:<sha256> = captura especifica); use somente quando o usuario pedir/confirmar anexar e o envio ao servidor exige autorizacao dele no chat.",
 		Params: []ToolParam{
 			{Name: "title", Type: "string", Description: "Titulo do chamado", Required: true},
 			{Name: "description", Type: "string", Description: "Descricao detalhada do problema", Required: true},
@@ -521,6 +732,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "departmentId", Type: "string", Description: "GUID do departamento responsavel (obrigatorio; obtenha em list_departments e escolha o que melhor se enquadra ou pergunte ao usuario)", Required: true},
 			{Name: "customFields", Type: "string", Description: "JSON objeto com os valores dos CAMPOS do departamento, mapeando definitionId para valor (opcional)", Required: false},
 			{Name: "answers", Type: "string", Description: "JSON objeto com as respostas do mini QUESTIONARIO do template, mapeando a chave da pergunta (key) para o valor (opcional)", Required: false},
+			{Name: "attachImageRefs", Type: "string", Description: "Opcional: refs das imagens para anexar ao chamado criado (turn:N, shot:last, shot:<sha256>)", Required: false},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			title, _ := args["title"].(string)
@@ -570,7 +782,51 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 				}
 			}
 
-			return app.CreateAgentTicket(title, description, priority, category, templateID, departmentID, customFieldsJSON, answersJSON)
+			attachRefs := optionalStringArg(args, "attachImageRefs")
+			if attachRefs == "" {
+				return app.CreateAgentTicket(title, description, priority, category, templateID, departmentID, customFieldsJSON, answersJSON)
+			}
+			if err := requireConfirm(args); err != nil {
+				return nil, err
+			}
+			raw, err := app.CreateAgentTicket(title, description, priority, category, templateID, departmentID, customFieldsJSON, answersJSON)
+			if err != nil {
+				return nil, err
+			}
+			// O chamado JA EXISTE: falhas de anexo precisam preservar o ticketId.
+			ticketID := extractJSONID(raw)
+			if ticketID == "" {
+				return map[string]any{
+					"ok":     false,
+					"ticket": raw,
+					"error":  "chamado criado, mas nao foi possivel extrair o ticketId da resposta; imagens nao anexadas",
+				}, nil
+			}
+			images, err := resolveImageRefs(attachRefs, app)
+			if err != nil {
+				return map[string]any{
+					"ok":       false,
+					"ticketId": ticketID,
+					"ticket":   raw,
+					"error":    fmt.Sprintf("chamado criado, mas as imagens nao foram anexadas: %v", err),
+				}, nil
+			}
+			ids, err := app.AttachImagesToTicket(ticketID, images)
+			if err != nil {
+				return map[string]any{
+					"ok":          false,
+					"ticketId":    ticketID,
+					"ticket":      raw,
+					"attachments": attachmentMetadata(images, ids),
+					"error":       fmt.Sprintf("chamado criado, mas o upload das imagens falhou: %v", err),
+				}, nil
+			}
+			return map[string]any{
+				"ok":          true,
+				"ticketId":    ticketID,
+				"ticket":      raw,
+				"attachments": attachmentMetadata(images, ids),
+			}, nil
 		},
 	})
 
@@ -847,7 +1103,26 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "maxDimension", Type: "integer", Description: "Reduz o lado maior da imagem (200-3840). OMITA para manter a resolucao ORIGINAL da captura (padrao); use 1280-1920 para economizar tokens quando o alvo for so confirmar um estado de tela", Required: false},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return app.CaptureScreenshotForTool(ctx, args)
+			raw, err := app.CaptureScreenshotForTool(ctx, args)
+			if err != nil {
+				return nil, err
+			}
+			// Cacheia a captura consentida e devolve uma ref curta (shot:<sha256>)
+			// para a IA reutilizar a MESMA imagem em attach_images_to_ticket /
+			// attach_images_to_ticket_comment sem recapturar a tela. O
+			// image_base64 continua no payload (contrato de visão da API).
+			var payload map[string]any
+			if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil {
+				return raw, nil
+			}
+			b64, _ := payload["image_base64"].(string)
+			mime, _ := payload["mime"].(string)
+			if strings.TrimSpace(b64) != "" && strings.TrimSpace(mime) != "" {
+				if ref := cacheScreenshotImage("data:" + mime + ";base64," + b64); ref != "" {
+					payload["image_ref"] = ref
+				}
+			}
+			return payload, nil
 		},
 	})
 
@@ -875,6 +1150,37 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	registerSharesTool(reg)
 	registerPowerActionTool(reg, app)
 	registerSendNotificationTool(reg, app)
+}
+
+// attachmentMetadata monta a lista de metadados dos anexos devolvida à IA,
+// sempre SEM os bytes da imagem.
+func attachmentMetadata(images []TicketImageUpload, attachmentIDs []string) []map[string]any {
+	out := make([]map[string]any, 0, len(attachmentIDs))
+	for i, id := range attachmentIDs {
+		item := map[string]any{"attachmentId": id}
+		if i < len(images) {
+			item["fileName"] = images[i].FileName
+			item["contentType"] = images[i].ContentType
+			item["sizeBytes"] = imageUploadSizeBytes(images[i])
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// extractJSONID extrai o campo "id" de uma resposta JSON do suporte (chamado
+// ou comentário). Devolve "" quando o payload não tem id utilizável.
+func extractJSONID(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var parsed struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.ID)
 }
 
 func requiredStringArg(args map[string]any, name string) (string, error) {
@@ -916,13 +1222,14 @@ func requiredIntArg(args map[string]any, name string) (int, error) {
 
 // ── M31: gate de confirmação para tools destrutivas ────────────────────────
 
-// requireConfirm valida o parâmetro confirm=true nas tools destrutivas do MCP.
-// Sem isso, ações como uninstall/upgrade_all/restart_spooler dependiam do LLM
-// usar ask_user voluntariamente — agora o servidor exige a confirmação
-// explícita no payload da chamada (o LLM precisa ter obtido o ok do usuário).
+// requireConfirm valida o marcador interno confirm=true nas tools destrutivas.
+// O parâmetro NÃO é exposto no schema ao LLM: o gate de consentimento do chat
+// (services/chat.mcpExecuteForChat) injeta confirm=true SOMENTE depois de o
+// usuário aprovar a ação. Mantê-lo fora do schema evita que o modelo se
+// autoconfirme e reduz o custo de tokens do tools/list.
 func requireConfirm(args map[string]any) error {
 	if v, ok := args["confirm"].(bool); ok && v {
 		return nil
 	}
-	return fmt.Errorf("acao destrutiva: exige confirmacao explicita do usuario — envie \"confirm\": true no payload da tool apos o usuario aprovar")
+	return fmt.Errorf("acao destrutiva sem autorizacao do usuario: o gate de consentimento do chat nao marcou confirm=true")
 }

@@ -324,3 +324,37 @@ func CenteredOnWorkArea(width, height int) (x, y int) {
 	}
 	return x, y
 }
+
+// bottomRightInArea calcula a posição ancorada no canto inferior direito de
+// area, recuada por margin pixels das bordas direita/inferior.
+func bottomRightInArea(area Rect, width, height, margin int) (x, y int) {
+	if margin < 0 {
+		margin = 0
+	}
+	x = area.Right() - width - margin
+	y = area.Bottom() - height - margin
+	if x < area.X {
+		x = area.X
+	}
+	if y < area.Y {
+		y = area.Y
+	}
+	return x, y
+}
+
+// BottomRightOnWorkArea devolve a posição para ancorar uma janela no canto
+// inferior direito do monitor primário, acima da barra de tarefas — o mesmo
+// canto das notificações/toasts do Windows (comportamento adotado no prompt de
+// consentimento remoto para não cobrir o centro da tela do usuário).
+func BottomRightOnWorkArea(width, height, margin int) (x, y int) {
+	return bottomRightInArea(WorkArea(), width, height, margin)
+}
+
+// BottomRightOnActiveWorkArea ancora a janela no canto inferior direito do
+// monitor em que o usuário está trabalhando (janela em primeiro plano), e não
+// necessariamente no primário: em setup multi-monitor o prompt precisa nascer
+// no monitor ativo para ser visto antes do timeout. Sem janela em primeiro
+// plano, usa o primário.
+func BottomRightOnActiveWorkArea(width, height, margin int) (x, y int) {
+	return bottomRightInArea(ActiveWorkArea(), width, height, margin)
+}

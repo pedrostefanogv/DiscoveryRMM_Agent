@@ -90,6 +90,10 @@ type Deps struct {
 	// ação com efeito no computador (ver core/mcp.ToolConsentFor). nil =
 	// indisponível: tools que exigem consentimento são recusadas por segurança.
 	RequestToolConsent func(ctx context.Context, req consent.Request) (bool, error)
+	// GetAttachmentPolicy devolve a política de anexos do chat IA (allowlist de
+	// MIME/tamanho) consultada no servidor e cacheada pelo App. nil = usa o
+	// default local (10 MB, imagens).
+	GetAttachmentPolicy func() AttachmentPolicy
 }
 
 // DebugConfig is a minimal view of the debug config used by chat.
@@ -124,6 +128,7 @@ type Service struct {
 	safeGo                      func(func())
 	chatConfigFile              string
 	requestToolConsent          func(ctx context.Context, req consent.Request) (bool, error)
+	getAttachmentPolicy         func() AttachmentPolicy
 
 	// notifyPreview é a preferência de privacidade do toast (padrão true).
 	notifyPreviewMu sync.RWMutex
@@ -150,6 +155,7 @@ func New(reg *mcp.Registry, deps Deps) *Service {
 		safeGo:                      deps.SafeGo,
 		chatConfigFile:              deps.ChatConfigFile,
 		requestToolConsent:          deps.RequestToolConsent,
+		getAttachmentPolicy:         deps.GetAttachmentPolicy,
 		// Padrão de privacidade: mostrar prévia (comportamento anterior). O
 		// installer/config do chat pode desligar.
 		notifyPreview: true,
@@ -450,16 +456,23 @@ func (s *Service) StartStream(message string) {
 	})
 }
 
-// maxAttachedImageBytes limita o tamanho de cada data URL anexada (base64).
-// Um print PNG grande é redimensionado pelo backend antes de virar anexo.
-// Alinhado ao teto do servidor (AiChatHelpers.MaxImageBase64Chars = 6 MiB):
-// acima disso o servidor descarta a imagem silenciosamente.
-const maxAttachedImageBytes = 6 << 20
+// currentAttachmentPolicy devolve a política cacheada pelo App (consulta no
+// servidor) ou o default local quando o binding ainda não foi injetado.
+func (s *Service) currentAttachmentPolicy() AttachmentPolicy {
+	if s.getAttachmentPolicy == nil {
+		return DefaultAttachmentPolicy()
+	}
+	return normalizeAttachmentPolicy(s.getAttachmentPolicy())
+}
 
 // StartStreamWithImages envia uma mensagem com imagens anexadas (data URLs) —
-// usado pelo ícone de captura de tela do chat. As imagens são validadas
-// (prefixo data:image/ e tamanho) e enviadas ao servidor no primeiro round,
-// onde viram conteúdo multimodal para o LLM.
+// usado pelo ícone de captura de tela do chat e por imagens coladas. Cada
+// imagem é validada contra a política UNIFICADA de anexos consultada no
+// servidor (enabled, MIME na allowlist e tamanho DECODIFICADO <= limite).
+// A captura de tela continua com o orçamento próprio (~6 MiB de data URL); o
+// limite configurável vale para os anexos do chat IA.
+// Não há descarte por quantidade: TODAS as imagens válidas do turno seguem
+// para o LLM (o limite antigo de 3 no core/ai foi removido).
 func (s *Service) StartStreamWithImages(message string, imagesJSON string) {
 	images := []string{}
 	if strings.TrimSpace(imagesJSON) != "" {
@@ -468,17 +481,16 @@ func (s *Service) StartStreamWithImages(message string, imagesJSON string) {
 			images = nil
 		}
 	}
+	policy := s.currentAttachmentPolicy()
 	filtered := make([]string, 0, len(images))
 	for _, img := range images {
 		img = strings.TrimSpace(img)
-		if !strings.HasPrefix(img, "data:image/") {
-			s.logf("[chat] anexo ignorado: nao e uma data URL de imagem")
+		if reason := validateChatImage(img, policy); reason != "" {
+			s.logf("[chat] anexo ignorado: " + reason)
 			continue
 		}
-		if len(img) > maxAttachedImageBytes {
-			s.logf(fmt.Sprintf("[chat] anexo ignorado: %d bytes excede o limite de %d", len(img), maxAttachedImageBytes))
-			continue
-		}
+		// Validação por imagem apenas (formato/tamanho). Nenhum corte por
+		// quantidade: todas as imagens válidas do turno são mantidas.
 		filtered = append(filtered, img)
 	}
 	s.chatSvc.SetPendingImages(filtered)
@@ -488,6 +500,13 @@ func (s *Service) StartStreamWithImages(message string, imagesJSON string) {
 // StopStream interrupts the active streamed AI response, if running.
 func (s *Service) StopStream() bool {
 	return s.chatSvc.StopStream()
+}
+
+// LastTurnImages expõe (cópia segura) as imagens em data URL enviadas pelo
+// usuário no último turno. As tools MCP de anexo usam isso para transformar
+// turn:N em uma imagem anexável ao chamado.
+func (s *Service) LastTurnImages() []string {
+	return s.chatSvc.LastTurnImages()
 }
 
 // HasActiveStream retorna true se há um turno de chat em execução (B1: o

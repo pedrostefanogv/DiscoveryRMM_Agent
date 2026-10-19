@@ -91,9 +91,15 @@ type Service struct {
 	// pendingImagesMu protege as imagens (data URLs) que o usuário anexou ao
 	// chat (ex.: print da tela). São consumidas pelo próximo turno multi-round
 	// e enviadas ao servidor no campo "images" — o servidor as converte em
-	// conteúdo multimodal para o LLM.
+	// conteúdo multimodal para o LLM. Não há limite de quantidade: todas as
+	// imagens anexadas no turno devem chegar ao LLM.
 	pendingImagesMu sync.Mutex
 	pendingImages   []string
+	// lastTurnImages é o cache (somente leitura externa) das imagens enviadas
+	// no ÚLTIMO turno. Sobrevive ao consumo de pendingImages para que a UI e
+	// diagnósticos ainda possam consultar o que foi anexado depois que o turno
+	// começou. Protegido por pendingImagesMu.
+	lastTurnImages []string
 
 	// budgetObserver recebe os eventos de orçamento de rounds do agent loop
 	// (esgotado / renovado) para a UI explicar por que uma ação ainda não
@@ -126,11 +132,10 @@ func (s *Service) notifyBudget(state, message string, round, maxRounds int) {
 	fn(state, message, round, maxRounds)
 }
 
-// maxPendingImages limita quantos prints entram em um único turno.
-const maxPendingImages = 3
-
 // SetPendingImages registra imagens (data URLs) anexadas pelo usuário para o
-// próximo turno. Substitui qualquer anexo anterior (evita acúmulo silencioso).
+// próximo turno. Substitui qualquer anexo anterior (evita acúmulo silencioso)
+// e NÃO trunca por quantidade: todas as imagens anexadas devem ser enviadas
+// ao LLM (o limite antigo de 3 cortava prints silenciosamente).
 func (s *Service) SetPendingImages(images []string) {
 	s.pendingImagesMu.Lock()
 	defer s.pendingImagesMu.Unlock()
@@ -138,13 +143,12 @@ func (s *Service) SetPendingImages(images []string) {
 		s.pendingImages = nil
 		return
 	}
-	if len(images) > maxPendingImages {
-		images = images[:maxPendingImages]
-	}
 	s.pendingImages = append([]string(nil), images...)
 }
 
-// takePendingImages consome (e limpa) as imagens pendentes do turno.
+// takePendingImages consome (e limpa) as imagens pendentes do turno. Antes de
+// limpar, guarda uma cópia em lastTurnImages: o cache do último turno deve
+// sobreviver ao consumo (a UI pode consultá-lo depois do início do turno).
 func (s *Service) takePendingImages() []string {
 	s.pendingImagesMu.Lock()
 	defer s.pendingImagesMu.Unlock()
@@ -152,8 +156,21 @@ func (s *Service) takePendingImages() []string {
 		return nil
 	}
 	out := s.pendingImages
+	s.lastTurnImages = append([]string(nil), s.pendingImages...)
 	s.pendingImages = nil
 	return out
+}
+
+// LastTurnImages devolve uma cópia segura das imagens (data URLs) enviadas no
+// último turno. Não expõe o slice interno: o chamador pode modificar o
+// resultado sem corromper o cache nem correr risco de data race.
+func (s *Service) LastTurnImages() []string {
+	s.pendingImagesMu.Lock()
+	defer s.pendingImagesMu.Unlock()
+	if len(s.lastTurnImages) == 0 {
+		return nil
+	}
+	return append([]string(nil), s.lastTurnImages...)
 }
 
 // A2uiAction representa uma ação do usuário em uma surface A2UI.
@@ -403,6 +420,13 @@ func (s *Service) ClearHistory() {
 	s.a2uiActionMu.Lock()
 	s.a2uiActions = nil
 	s.a2uiActionMu.Unlock()
+	// Limpa também as imagens anexadas (pendentes e último turno): sem isso,
+	// "limpar chat" deixava data URLs de prints em memória e uma tool de anexo
+	// poderia reutilizar uma imagem de uma conversa já apagada.
+	s.pendingImagesMu.Lock()
+	s.pendingImages = nil
+	s.lastTurnImages = nil
+	s.pendingImagesMu.Unlock()
 }
 
 func (s *Service) registerStreamCancel(cancel context.CancelFunc) uint64 {

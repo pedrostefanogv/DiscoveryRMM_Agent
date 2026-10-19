@@ -128,8 +128,10 @@ type AttachmentPolicy struct {
 	MaxFileSizeBytes    int64    `json:"maxFileSizeBytes"`
 }
 
-// DefaultAttachmentPolicy é o espelho da política padrão do servidor
-// (TicketAttachmentSettings), usado quando a consulta falha.
+// DefaultAttachmentPolicy é o espelho da política padrão UNIFICADA do servidor
+// (TicketAttachmentSettings: 10 MB e allowlist MIME; sem executáveis), usado
+// quando a consulta falha. O limite maior de "parte dedicada do chamado"
+// (maxLargeFileSizeBytes) NÃO se aplica ao chat de suporte.
 func DefaultAttachmentPolicy() AttachmentPolicy {
 	return AttachmentPolicy{
 		Enabled:             true,

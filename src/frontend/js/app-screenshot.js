@@ -176,18 +176,152 @@ function screenshotTakePendingImages() {
   return images;
 }
 
-function screenshotAttach(result) {
-  if (!result || !result.dataUrl) return;
-  if (screenshotAttachments.length >= 3) {
-    screenshotFeedback(screenshotT("chat.screenshotLimit"), true);
-    return;
+// ── Política UNIFICADA de anexos do chat IA ──────────────────────────────
+//
+// A configuração de Anexos do servidor vale também para o chat IA/LLM:
+// enabled, allowlist MIME e limite (padrão 10 MB) vêm de
+// GET /me/ai-chat/attachment-settings via binding AIChatAttachmentPolicy.
+// A UI usa a política apenas para evitar erro previsível — o Go e o servidor
+// revalidam (enabled/MIME/tamanho decodificado) no envio.
+var screenshotAttachmentPolicy = null;
+var screenshotAttachmentPolicyLoaded = false;
+var screenshotAttachmentPolicyPending = null;
+
+function screenshotDefaultAttachmentPolicy() {
+  return {
+    enabled: true,
+    allowedContentTypes: ["image/png", "image/jpeg", "image/webp", "image/gif"],
+    maxFileSizeBytes: 10 * 1024 * 1024,
+  };
+}
+
+function screenshotParseAttachmentPolicy(raw) {
+  var parsed = raw;
+  if (typeof raw === "string") {
+    try { parsed = JSON.parse(raw); } catch (_) { parsed = null; }
   }
-  screenshotAttachments.push({
-    dataUrl: result.dataUrl,
-    label: result.label || ((result.width || 0) + "x" + (result.height || 0)),
-  });
+  if (!parsed || typeof parsed !== "object") return null;
+  var defaults = screenshotDefaultAttachmentPolicy();
+  var types = Array.isArray(parsed.allowedContentTypes)
+    ? parsed.allowedContentTypes
+        .map(function (item) { return String(item || "").toLowerCase(); })
+        .filter(function (item) { return !!item; })
+    : [];
+  var max = Number(parsed.maxFileSizeBytes);
+  return {
+    enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : defaults.enabled,
+    allowedContentTypes: types.length ? types : defaults.allowedContentTypes,
+    maxFileSizeBytes: max > 0 ? max : defaults.maxFileSizeBytes,
+  };
+}
+
+// screenshotEnsureAttachmentPolicy busca a política uma vez (falha/rota ausente
+// cai no default local; o servidor continua sendo a autoridade).
+function screenshotEnsureAttachmentPolicy() {
+  if (screenshotAttachmentPolicyLoaded) return Promise.resolve(screenshotAttachmentPolicy);
+  if (screenshotAttachmentPolicyPending) return screenshotAttachmentPolicyPending;
+  screenshotAttachmentPolicyPending = Promise.resolve()
+    .then(function () {
+      var api = screenshotApi();
+      if (!api || typeof api.AIChatAttachmentPolicy !== "function") return null;
+      return api.AIChatAttachmentPolicy();
+    })
+    .then(function (raw) {
+      screenshotAttachmentPolicy = screenshotParseAttachmentPolicy(raw);
+      screenshotAttachmentPolicyLoaded = true;
+      screenshotAttachmentPolicyPending = null;
+      return screenshotAttachmentPolicy;
+    })
+    .catch(function () {
+      screenshotAttachmentPolicy = screenshotDefaultAttachmentPolicy();
+      screenshotAttachmentPolicyLoaded = true;
+      screenshotAttachmentPolicyPending = null;
+      return screenshotAttachmentPolicy;
+    });
+  return screenshotAttachmentPolicyPending;
+}
+
+function screenshotEffectiveAttachmentPolicy() {
+  return screenshotAttachmentPolicy || screenshotDefaultAttachmentPolicy();
+}
+
+function screenshotAttachmentMimeFromDataUrl(dataUrl) {
+  var match = /^data:([^;,]+)/i.exec(String(dataUrl || ""));
+  return match ? String(match[1]).toLowerCase() : "";
+}
+
+function screenshotAttachmentDataUrlBytes(dataUrl) {
+  var raw = String(dataUrl || "");
+  var comma = raw.indexOf(",");
+  var base64 = comma >= 0 ? raw.substring(comma + 1) : "";
+  return Math.floor(base64.length * 3 / 4);
+}
+
+function screenshotAttachmentTypeAllowed(contentType, policy) {
+  var list = (policy && policy.allowedContentTypes) || [];
+  if (!list.length) return true;
+  var wanted = String(contentType || "").toLowerCase();
+  for (var i = 0; i < list.length; i += 1) {
+    if (String(list[i]).toLowerCase() === wanted) return true;
+  }
+  return false;
+}
+
+// Devolve "" quando o anexo pode entrar na fila ou a chave do motivo.
+function screenshotAttachmentCheck(contentType, sizeBytes) {
+  var policy = screenshotEffectiveAttachmentPolicy();
+  if (!policy.enabled) return "disabled";
+  if (!screenshotAttachmentTypeAllowed(contentType, policy)) return "type";
+  if (Number(sizeBytes) > Number(policy.maxFileSizeBytes)) return "size";
+  return "";
+}
+
+function screenshotAttachmentLimitLabel(bytes) {
+  if (typeof commentAttachmentSizeLabel === "function") return commentAttachmentSizeLabel(bytes);
+  var value = Number(bytes) || 0;
+  if (value >= 1048576) return (value / 1048576).toFixed(1) + " MB";
+  if (value >= 1024) return (value / 1024).toFixed(1) + " KB";
+  return value + " B";
+}
+
+function screenshotAttachmentBlockedMessage(reason, sizeBytes) {
+  var policy = screenshotEffectiveAttachmentPolicy();
+  if (reason === "disabled") return screenshotT("chat.screenshotAttachmentsDisabled");
+  if (reason === "size") {
+    return screenshotT("chat.screenshotAttachmentTooLarge", {
+      limit: screenshotAttachmentLimitLabel(policy.maxFileSizeBytes),
+      size: screenshotAttachmentLimitLabel(sizeBytes),
+    });
+  }
+  return screenshotT("chat.screenshotAttachmentTypeBlocked");
+}
+
+// screenshotPushAttachment valida (enabled/MIME/tamanho) e enfileira o data URL.
+function screenshotPushAttachment(dataUrl, label, sizeBytes) {
+  var contentType = screenshotAttachmentMimeFromDataUrl(dataUrl);
+  var bytes = Number(sizeBytes) > 0 ? Number(sizeBytes) : screenshotAttachmentDataUrlBytes(dataUrl);
+  var reason = screenshotAttachmentCheck(contentType, bytes);
+  if (reason) {
+    screenshotFeedback(screenshotAttachmentBlockedMessage(reason, bytes), true);
+    return false;
+  }
+  // Sem limite de quantidade: todas as imagens válidas vão para o LLM.
+  screenshotAttachments.push({ dataUrl: dataUrl, label: label || "print" });
   screenshotRenderAttachments();
   screenshotFeedback(screenshotT("chat.screenshotAttached"), false);
+  return true;
+}
+
+function screenshotAttach(result) {
+  if (!result || !result.dataUrl) return;
+  // Política ainda não carregada: usa o default para validar agora e busca em
+  // segundo plano para os próximos anexos (o backend revalida no envio).
+  if (!screenshotAttachmentPolicyLoaded) void screenshotEnsureAttachmentPolicy();
+  screenshotPushAttachment(
+    result.dataUrl,
+    result.label || ((result.width || 0) + "x" + (result.height || 0)),
+    0
+  );
 }
 
 // screenshotRestoreAttachments devolve anexos que não puderam ser enviados
@@ -195,7 +329,7 @@ function screenshotAttach(result) {
 function screenshotRestoreAttachments(images) {
   if (!images || !images.length) return;
   images.forEach(function (src) {
-    if (!src || screenshotAttachments.length >= 3) return;
+    if (!src) return;
     screenshotAttachments.push({ dataUrl: src, label: "print" });
   });
   screenshotRenderAttachments();
@@ -293,27 +427,31 @@ function screenshotPrepareClipboardImage(file, done) {
   img.src = url;
 }
 
-// screenshotPasteImages anexa as imagens coladas respeitando o teto do composer.
-function screenshotPasteImages(files) {
+// screenshotPasteImages anexa as imagens coladas no composer. Sem teto de
+// quantidade: TODAS as imagens válidas são mantidas e enviadas ao LLM. A
+// política unificada (enabled/MIME/tamanho) é consultada ANTES de codificar:
+// não adianta reduzir uma imagem que o servidor recusaria pelo tipo.
+async function screenshotPasteImages(files) {
   if (!files || !files.length) return;
+  await screenshotEnsureAttachmentPolicy();
   for (var i = 0; i < files.length; i += 1) {
-    if (screenshotAttachments.length >= 3) {
-      screenshotFeedback(screenshotT("chat.screenshotLimit"), true);
-      return;
-    }
     (function (file) {
+      var declaredType = String(file.type || "").toLowerCase();
+      var earlyReason = declaredType
+        ? screenshotAttachmentCheck(declaredType, Number(file.size) || 0)
+        : "";
+      if (earlyReason) {
+        screenshotFeedback(screenshotAttachmentBlockedMessage(earlyReason, Number(file.size) || 0), true);
+        return;
+      }
       screenshotPrepareClipboardImage(file, function (dataUrl, label) {
         if (!dataUrl) {
           screenshotFeedback(screenshotT("chat.pasteImageFailed"), true);
           return;
         }
-        if (screenshotAttachments.length >= 3) {
-          screenshotFeedback(screenshotT("chat.screenshotLimit"), true);
-          return;
-        }
-        screenshotAttachments.push({ dataUrl: dataUrl, label: label || "print" });
-        screenshotRenderAttachments();
-        screenshotFeedback(screenshotT("chat.screenshotAttached"), false);
+        // Revalida o data URL final: o redimensionamento pode ter mudado o MIME
+        // (PNG -> JPEG) e o tamanho em bytes.
+        screenshotPushAttachment(dataUrl, label || "print", 0);
       });
     })(files[i]);
   }

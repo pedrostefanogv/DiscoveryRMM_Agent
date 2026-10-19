@@ -547,13 +547,12 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				// exige autorização por leitura: o timer de 60s mataria a
 				// interação/espera pela resposta do usuário.
 				//
-				// Toda tool que pede AUTORIZAÇÃO ao usuário (gravação, instalar,
-				// desinstalar, parar serviço, reiniciar...) fica na mesma regra:
-				// o timeout de 60s mataria a pergunta antes do clique. A lista é
+				// Tools que pedem AUTORIZAÇÃO ao usuário (gravação, instalar,
+				// desinstalar, parar serviço, reiniciar...) não podem usar o
+				// timeout curto: ele mataria a pergunta antes do clique. A lista é
 				// derivada de mcp.ToolConsentFor, então acompanha a política.
-				// Timeout padrão de 60s; a política de escopo do servidor pode definir
-				// um valor por tool (pendingToolCall.TimeoutSeconds) — ex.: ações
-				// pesadas precisam de mais tempo.
+				// Ainda assim há um TETO DURO (30 min), para que uma execução
+				// travada após a aprovação não prenda o turno para sempre.
 				execTimeout := 60 * time.Second
 				if tc.TimeoutSeconds > 0 {
 					execTimeout = time.Duration(tc.TimeoutSeconds) * time.Second
@@ -561,7 +560,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				var execCtx context.Context
 				var execCancel context.CancelFunc
 				if interactiveToolRequiresUser(tc.Name, tc.Args) {
-					execCtx, execCancel = context.WithCancel(streamCtx)
+					execCtx, execCancel = context.WithTimeout(streamCtx, interactiveToolTimeout)
 				} else {
 					execCtx, execCancel = context.WithTimeout(streamCtx, execTimeout)
 				}
@@ -1197,6 +1196,12 @@ func roundTimeout(round int) time.Duration {
 // limites do servidor e degradar o contexto do LLM.
 const maxToolResultBytes = 16 * 1024
 
+// interactiveToolTimeout é o teto DURO de uma tool que aguarda/executa após
+// consentimento do usuário. Sem ele, uma ação aprovada que travasse (winget,
+// spooler) prendia o turno até o usuário clicar em Parar. O teto é folgado
+// porque inclui a espera pela decisão do usuário.
+const interactiveToolTimeout = 30 * time.Minute
+
 // maxScreenshotToolResultBytes é o teto para tool results que carregam IMAGEM
 // (contrato "image_base64", usado por capture_screenshot). Cortar em 16 KB
 // destruía a imagem de forma SILENCIOSA: o fechamento de JSON produzia um
@@ -1276,10 +1281,40 @@ func truncateToolResult(toolName, result string) string {
 	}
 	// Só usa a versão fechada se for JSON válido; caso contrário, texto cru
 	// com marcador (o LLM entende ambos, mas JSON quebrado quebraria o parse).
+	// P0-4: o JSON fechado também recebe um marcador explícito — antes o payload
+	// parecia completo e o LLM concluía errado sobre inventário/listas cortadas.
 	if json.Valid([]byte(closed)) {
-		return closed
+		return markTruncatedJSON(closed, len(result))
 	}
 	return cut + "\n...[resultado truncado pela limitação de tamanho]"
+}
+
+// markTruncatedJSON acrescenta _truncated/_originalBytes a um resultado JSON
+// que foi cortado. Objetos recebem os campos no próprio objeto; arrays são
+// envolvidos em {"items":[...]} para não quebrar o contrato. Tipos escalares
+// (string/número) não são alterados.
+func markTruncatedJSON(raw string, originalBytes int) string {
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(raw), &obj); err == nil {
+		obj["_truncated"] = true
+		obj["_originalBytes"] = originalBytes
+		if b, err := json.Marshal(obj); err == nil {
+			return string(b)
+		}
+		return raw
+	}
+	var arr []any
+	if err := json.Unmarshal([]byte(raw), &arr); err == nil {
+		wrapped := map[string]any{
+			"_truncated":     true,
+			"_originalBytes": originalBytes,
+			"items":          arr,
+		}
+		if b, err := json.Marshal(wrapped); err == nil {
+			return string(b)
+		}
+	}
+	return raw
 }
 
 // hasScreenshotImagePayload identifica tool results que carregam a imagem da

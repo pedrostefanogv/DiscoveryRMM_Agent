@@ -576,9 +576,15 @@ var APP_I18N_DICTIONARY = {
     "chat.screenshotHint": "Tirar print da tela, de uma área ou de uma janela",
     "chat.screenshotAttached": "Print anexado — será enviado com a próxima mensagem",
     "chat.screenshotRemove": "Remover anexo",
-    "chat.screenshotLimit": "Máximo de 3 prints por mensagem",
+    "chat.screenshotLimit": "Sem limite de prints por mensagem — todos são enviados",
     "chat.onlyImages": "Só é possível colar imagens no chat (outros arquivos ainda não são aceitos)",
     "chat.pasteImageFailed": "Não foi possível ler a imagem colada",
+    "chat.screenshotAttachmentTypeBlocked":
+      "Este tipo de imagem não está permitido nas configurações de anexos do servidor",
+    "chat.screenshotAttachmentTooLarge":
+      "Imagem acima do limite de anexos do chat ({limit}) — tamanho: {size}",
+    "chat.screenshotAttachmentsDisabled":
+      "Anexos de imagem estão desabilitados nas configurações de anexos do servidor",
     "chat.a2uiJsonToggle": "JSON da interface (clique para exibir)",
     "chat.a2uiUnsupported": "⚠ Componente não suportado por esta versão do aplicativo: {components}",
     "chat.a2uiIncomplete":
@@ -1420,9 +1426,15 @@ var APP_I18N_DICTIONARY = {
     "chat.screenshotHint": "Take a screenshot of the screen, an area or a window",
     "chat.screenshotAttached": "Screenshot attached — it will be sent with the next message",
     "chat.screenshotRemove": "Remove attachment",
-    "chat.screenshotLimit": "At most 3 screenshots per message",
+    "chat.screenshotLimit": "No screenshot limit per message — all are sent",
     "chat.onlyImages": "Only images can be pasted into the chat (other file types are not accepted yet)",
     "chat.pasteImageFailed": "Could not read the pasted image",
+    "chat.screenshotAttachmentTypeBlocked":
+      "This image type is not allowed by the server attachment settings",
+    "chat.screenshotAttachmentTooLarge":
+      "Image exceeds the chat attachment limit ({limit}) — size: {size}",
+    "chat.screenshotAttachmentsDisabled":
+      "Image attachments are disabled by the server attachment settings",
     "chat.a2uiJsonToggle": "Interface JSON (click to show)",
     "chat.a2uiUnsupported": "⚠ Component not supported by this app version: {components}",
     "chat.a2uiIncomplete":

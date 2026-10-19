@@ -45,6 +45,40 @@ func ToolConsentFor(toolName string, args map[string]any) *consent.Request {
 			Target: "relatorio de inventario completo em PDF (.pdf)",
 			Extra:  []string{exportDestinationHint},
 		}
+	case "attach_images_to_ticket":
+		// Envia ao servidor imagens do usuário (turno do chat) ou capturas da
+		// tela: consentimento por ação, com o alvo descritivo.
+		return destructive("attach_ticket_images",
+			fmt.Sprintf("anexar %s ao chamado %s", imageCountLabel(optionalStringArg(args, "imageRefs")), optionalStringArg(args, "ticketId")),
+			imageConsentExtra()...)
+	case "attach_images_to_ticket_comment":
+		return destructive("attach_ticket_comment_images",
+			fmt.Sprintf("anexar %s ao comentario %s do chamado %s",
+				imageCountLabel(optionalStringArg(args, "imageRefs")),
+				optionalStringArg(args, "commentId"),
+				optionalStringArg(args, "ticketId")),
+			imageConsentExtra()...)
+	case "view_ticket_attachment":
+		// Baixar o anexo e envia-lo ao modelo de visao: consentimento por acao.
+		target := fmt.Sprintf("visualizar o anexo %s do chamado %s", optionalStringArg(args, "attachmentId"), optionalStringArg(args, "ticketId"))
+		if commentID := optionalStringArg(args, "commentId"); commentID != "" {
+			target = fmt.Sprintf("visualizar o anexo %s do comentario %s do chamado %s", optionalStringArg(args, "attachmentId"), commentID, optionalStringArg(args, "ticketId"))
+		}
+		return destructive("view_ticket_attachment", target,
+			"A imagem do anexo sera baixada do servidor e enviada ao modelo de IA para analise.")
+	case "create_ticket":
+		// Só pede consentimento quando o chamado nasce com imagens anexadas.
+		if refs := optionalStringArg(args, "attachImageRefs"); refs != "" {
+			return destructive("create_ticket_with_images",
+				fmt.Sprintf("abrir chamado com %s anexada(s)", imageCountLabel(refs)),
+				imageConsentExtra()...)
+		}
+	case "add_ticket_comment":
+		if refs := optionalStringArg(args, "attachImageRefs"); refs != "" {
+			return destructive("comment_ticket_with_images",
+				fmt.Sprintf("comentar o chamado %s com %s anexada(s)", optionalStringArg(args, "ticketId"), imageCountLabel(refs)),
+				imageConsentExtra()...)
+		}
 	case "install_package":
 		return destructive("install_package", optionalStringArg(args, "id"))
 	case "uninstall_package":
@@ -124,6 +158,24 @@ func ToolConsentFor(toolName string, args map[string]any) *consent.Request {
 	}
 
 	return nil
+}
+
+// imageCountLabel descreve quantas imagens o pedido de anexo contém, para o
+// usuário decidir no pedido de consentimento.
+func imageCountLabel(refs string) string {
+	count := countImageRefs(refs)
+	if count == 1 {
+		return "1 imagem"
+	}
+	if count > 1 {
+		return fmt.Sprintf("%d imagens", count)
+	}
+	return "imagem(ns)"
+}
+
+// imageConsentExtra explica para onde a imagem vai.
+func imageConsentExtra() []string {
+	return []string{"A imagem selecionada pelo usuario sera enviada ao servidor de suporte."}
 }
 
 // reasonExtra devolve o motivo informado pela IA (quando houver) para o usuário

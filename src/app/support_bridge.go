@@ -4,7 +4,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 
+	"discovery/app/core/mcp"
 	appsupport "discovery/app/support"
 )
 
@@ -479,6 +481,153 @@ func (a *App) AddAgentTicketComment(ticketID, content string) (json.RawMessage, 
 	}
 	return supportWriteOrLocal(a, "support:agent_comment_add", map[string]any{"ticketId": ticketID, "content": content}, func() (json.RawMessage, error) {
 		return a.SupportSvc.AddAgentTicketComment(ticketID, content)
+	})
+}
+
+// GetLastTurnImage devolve a data URL da imagem de índice 1-based enviada pelo
+// usuário no último turno do chat. Usado pelas tools MCP de anexo (turn:N).
+func (a *App) GetLastTurnImage(index int) (string, error) {
+	if index <= 0 {
+		return "", fmt.Errorf("indice de imagem invalido: %d (use turn:N com N >= 1)", index)
+	}
+	if a == nil || a.chatSvc == nil {
+		return "", fmt.Errorf("servico de chat indisponivel")
+	}
+	images := a.chatSvc.LastTurnImages()
+	if index > len(images) {
+		return "", fmt.Errorf("imagem turn:%d indisponivel: o ultimo turno do chat tem %d imagem(ns)", index, len(images))
+	}
+	return images[index-1], nil
+}
+
+// AttachImagesToTicket sobe imagens ao REPOSITÓRIO do chamado e devolve os
+// attachmentIds na mesma ordem das imagens.
+func (a *App) AttachImagesToTicket(ticketID string, images []mcp.TicketImageUpload) ([]string, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return nil, err
+	}
+	if len(images) == 0 {
+		return nil, fmt.Errorf("nenhuma imagem para anexar")
+	}
+	ids := make([]string, 0, len(images))
+	for i, img := range images {
+		data, err := base64.StdEncoding.DecodeString(img.DataBase64)
+		if err != nil {
+			return ids, fmt.Errorf("imagem %d (%s) invalida: %w", i+1, img.FileName, err)
+		}
+		id, err := a.SupportSvc.UploadTicketAttachment(ticketID, img.FileName, img.ContentType, data)
+		if err != nil {
+			return ids, fmt.Errorf("falha ao anexar imagem %d (%s): %w", i+1, img.FileName, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// AttachImagesToComment sobe imagens ao COMENTÁRIO e devolve os attachmentIds
+// na mesma ordem das imagens.
+func (a *App) AttachImagesToComment(ticketID, commentID string, images []mcp.TicketImageUpload) ([]string, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return nil, err
+	}
+	if len(images) == 0 {
+		return nil, fmt.Errorf("nenhuma imagem para anexar")
+	}
+	ids := make([]string, 0, len(images))
+	for i, img := range images {
+		data, err := base64.StdEncoding.DecodeString(img.DataBase64)
+		if err != nil {
+			return ids, fmt.Errorf("imagem %d (%s) invalida: %w", i+1, img.FileName, err)
+		}
+		id, err := a.SupportSvc.UploadTicketCommentAttachment(ticketID, commentID, img.FileName, img.ContentType, data)
+		if err != nil {
+			return ids, fmt.Errorf("falha ao anexar imagem %d (%s): %w", i+1, img.FileName, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// ListAgentTicketAttachments devolve os metadados dos anexos do chamado
+// (repositório + conversa), SEM os bytes.
+func (a *App) ListAgentTicketAttachments(ticketID string) (json.RawMessage, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return nil, err
+	}
+	return supportReadOrLocal(a, "support:ticket_attachments_all", map[string]any{"ticketId": ticketID},
+		func() (json.RawMessage, error) {
+			attachments, err := a.SupportSvc.GetTicketAttachments(ticketID)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(map[string]any{
+				"ticketId":    ticketID,
+				"attachments": attachments,
+			})
+		})
+}
+
+// maxViewAttachmentBytes limita o anexo que a IA pode "ver". O arquivo vira
+// image_base64 no resultado da tool e é enviado ao modelo de visão; acima de
+// 10 MiB o custo/limite do provedor não compensa e o pedido é recusado.
+const maxViewAttachmentBytes = 10 << 20
+
+// DownloadAgentTicketAttachment baixa um anexo de imagem do chamado (repositório)
+// ou do comentário (commentID != "") para a IA visualizar. Só devolve png,
+// jpeg, webp ou gif — validados por magic bytes — e no máximo 10 MiB.
+func (a *App) DownloadAgentTicketAttachment(ticketID, attachmentID, commentID string) (json.RawMessage, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	attachmentID = strings.TrimSpace(attachmentID)
+	commentID = strings.TrimSpace(commentID)
+	if ticketID == "" || attachmentID == "" {
+		return nil, fmt.Errorf("ticketId e attachmentId sao obrigatorios")
+	}
+	if err := a.requireSupportSvc(); err != nil {
+		return nil, err
+	}
+
+	// O endpoint de download não devolve o nome do arquivo: busca os metadados
+	// na lista consolidada (repositório + conversa). Falha aqui não impede o
+	// download — o fileName cai para o id do anexo.
+	fileName := ""
+	if attachments, err := a.GetTicketAttachments(ticketID); err == nil {
+		for _, att := range attachments {
+			if strings.EqualFold(att.ID, attachmentID) {
+				fileName = att.FileName
+				break
+			}
+		}
+	}
+
+	var downloaded map[string]string
+	var err error
+	if commentID == "" {
+		downloaded, err = a.DownloadTicketAttachment(ticketID, attachmentID)
+	} else {
+		downloaded, err = a.DownloadTicketCommentAttachment(ticketID, commentID, attachmentID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	data, err := base64.StdEncoding.DecodeString(downloaded["base64"])
+	if err != nil {
+		return nil, fmt.Errorf("anexo invalido: %w", err)
+	}
+	if len(data) > maxViewAttachmentBytes {
+		return nil, fmt.Errorf("anexo grande demais para visualizacao: %d bytes (maximo %d bytes = 10 MiB)", len(data), maxViewAttachmentBytes)
+	}
+	mime := mcp.ImageMagicContentType(data)
+	if mime == "" {
+		return nil, fmt.Errorf("anexo nao e uma imagem suportada (png, jpeg, webp ou gif); nao e possivel visualizar")
+	}
+	if fileName == "" {
+		fileName = attachmentID
+	}
+	return json.Marshal(map[string]any{
+		"image_base64": downloaded["base64"],
+		"mime":         mime,
+		"fileName":     fileName,
+		"bytes":        len(data),
 	})
 }
 

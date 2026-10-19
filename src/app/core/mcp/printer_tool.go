@@ -13,7 +13,7 @@ func registerPrinterTool(reg *Registry, app AppBridge) {
 		Name: "printer",
 		Description: "Gerencia impressoras no Windows (familia action-based). action: " +
 			"list | install | install_shared | remove | config | jobs | cancel_job | spooler | restart_spooler | clear_queue | drivers. " +
-			"DESTRUTIVAS (exigem confirm=true apos aprovacao do usuario): remove, cancel_job, restart_spooler, clear_queue.",
+			"DESTRUTIVAS (exigem autorizacao do usuario no chat): remove, cancel_job, restart_spooler, clear_queue.",
 		Params: []ToolParam{
 			{Name: "action", Type: "string", Description: "Acao: list, install, install_shared, remove, config, jobs, cancel_job, spooler, restart_spooler, clear_queue, drivers", Required: true},
 			{Name: "name", Type: "string", Description: "Nome da impressora (install, remove, config, jobs, cancel_job, clear_queue)", Required: false},
@@ -23,7 +23,6 @@ func registerPrinterTool(reg *Registry, app AppBridge) {
 			{Name: "jobId", Type: "integer", Description: "ID numerico do job de impressao (cancel_job)", Required: false},
 			{Name: "connectionPath", Type: "string", Description: "Caminho UNC da impressora compartilhada (install_shared)", Required: false},
 			{Name: "setDefault", Type: "boolean", Description: "Se true, define a impressora como padrao (install_shared)", Required: false},
-			{Name: "confirm", Type: "boolean", Description: "Confirmacao explicita do usuario para acoes destrutivas", Required: false},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			action, err := requireAction(args, "list", "install", "install_shared", "remove", "config", "jobs", "cancel_job", "spooler", "restart_spooler", "clear_queue", "drivers")

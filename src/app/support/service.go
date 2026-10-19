@@ -1945,10 +1945,51 @@ func ticketAPIErrorMessage(status int, raw string) string {
 // o anexo no CHAMADO (EntityType "Ticket").
 
 // TicketAttachmentSettings espelha a policy devolvida pela API.
+//
+// MaxFileSizeBytes é o limite geral (chat IA/LLM, anexos de comentário e chat
+// de suporte). MaxLargeFileSizeBytes é o limite da "parte dedicada" do chamado
+// (anexos do repositório do Ticket) — antes era um teto fixo no agent e ficava
+// desalinhado do console. Servidores antigos não devolvem o campo novo (zero):
+// a UI cai em MaxFileSizeBytes nesse caso.
 type TicketAttachmentSettings struct {
+	Enabled               bool     `json:"enabled"`
+	AllowedContentTypes   []string `json:"allowedContentTypes"`
+	MaxFileSizeBytes      int64    `json:"maxFileSizeBytes"`
+	MaxLargeFileSizeBytes int64    `json:"maxLargeFileSizeBytes"`
+	PresignedUploadURLTTL int      `json:"presignedUploadUrlTtlMinutes"`
+}
+
+// AIAttachmentSettings é a policy de anexos do chat IA/LLM
+// (GET /me/ai-chat/attachment-settings). Mesma auth de agent; a autoridade da
+// validação continua sendo o servidor.
+type AIAttachmentSettings struct {
 	Enabled             bool     `json:"enabled"`
 	AllowedContentTypes []string `json:"allowedContentTypes"`
 	MaxFileSizeBytes    int64    `json:"maxFileSizeBytes"`
+}
+
+// DefaultAIAttachmentSettings é o espelho da política padrão do servidor para
+// o chat IA, usado quando a consulta falha (servidor antigo/rede). Não inclui
+// executáveis: apenas imagens que o LLM consegue interpretar.
+func DefaultAIAttachmentSettings() AIAttachmentSettings {
+	return AIAttachmentSettings{
+		Enabled:             true,
+		AllowedContentTypes: []string{"image/png", "image/jpeg", "image/webp", "image/gif"},
+		MaxFileSizeBytes:    10 * 1024 * 1024,
+	}
+}
+
+// normalizeAIAttachmentSettings preenche resposta vazia/parcial com o padrão,
+// sem ligar o seletor à força: um "enabled=false" explícito do servidor vale.
+func normalizeAIAttachmentSettings(settings AIAttachmentSettings) AIAttachmentSettings {
+	defaults := DefaultAIAttachmentSettings()
+	if len(settings.AllowedContentTypes) == 0 {
+		settings.AllowedContentTypes = defaults.AllowedContentTypes
+	}
+	if settings.MaxFileSizeBytes <= 0 {
+		settings.MaxFileSizeBytes = defaults.MaxFileSizeBytes
+	}
+	return settings
 }
 
 type ticketPresignedUpload struct {
@@ -2076,6 +2117,36 @@ func (s *Service) UploadTicketAttachment(ticketID, fileName, contentType string,
 
 	s.markReachable()
 	return prepared.AttachmentID, nil
+}
+
+// GetAIChatAttachmentSettings devolve a policy de anexos do CHAT IA/LLM.
+// Mesma autenticação de agent do restante de /agent-auth/me; o endpoint novo
+// ainda pode não existir em servidores antigos (erro => fallback no chamador).
+func (s *Service) GetAIChatAttachmentSettings() (AIAttachmentSettings, error) {
+	cfg := s.debugConfig()
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/ai-chat/attachment-settings"
+	req, err := http.NewRequestWithContext(s.ctxOrBackground(), http.MethodGet, target, nil)
+	if err != nil {
+		return AIAttachmentSettings{}, err
+	}
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return AIAttachmentSettings{}, err
+	}
+	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
+	if err != nil {
+		return AIAttachmentSettings{}, s.transportError("ler configuração de anexos do chat IA", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return AIAttachmentSettings{}, fmt.Errorf("%s", ticketAPIErrorMessage(resp.StatusCode, string(body)))
+	}
+	var settings AIAttachmentSettings
+	if err := json.Unmarshal(body, &settings); err != nil {
+		return AIAttachmentSettings{}, fmt.Errorf("resposta inválida de configuração de anexos do chat: %w", err)
+	}
+	s.markReachable()
+	return normalizeAIAttachmentSettings(settings), nil
 }
 
 // ── Anexos de COMENTÁRIO (conversa) ───────────────────────────────────────
