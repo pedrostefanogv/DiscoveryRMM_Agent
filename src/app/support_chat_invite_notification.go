@@ -364,6 +364,11 @@ func (a *App) runSupportChatInviteNotificationDecision(sessionID string, resultC
 
 	if result.Accepted {
 		a.Logs.Append("[supportchat] convite aceito no cartao nativo (sessao " + sessionID + ")")
+		// Fluxo FALLBACK (janela do chat com o modal de aceite): a janela que
+		// apresentava o convite sai de cena ANTES de abrir a nova. Sem isto o
+		// usuário ficava com DUAS janelas iguais na tela (a antiga, já respondida,
+		// e a conversa), e a reconciliação podia reabrir a antiga.
+		a.hideSupportChatInviteSurface()
 		// Estado local -> active e snapshot da conversa. Roda em goroutine: a
 		// janela do chat precisa abrir JÁ (a abertura é independente do REST) e
 		// o carregamento das mensagens não pode atrasar a janela.
@@ -492,6 +497,10 @@ func (a *App) replaySupportChatInviteAfterUIReconnect() {
 		}
 		return
 	}
+
+	// Aceite CONCLUÍDO (o servidor já abriu a sessão): a marca de "já respondido"
+	// cumpriu o papel e não pode ficar barrando a próxima pergunta.
+	a.clearSupportChatInviteNotificationAnswered(state.SessionID)
 
 	// Já respondido no cartão (resposta recente): não reabre.
 	if a.supportChatInviteNotificationWasAnswered(state.SessionID) {

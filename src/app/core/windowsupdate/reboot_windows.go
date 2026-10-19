@@ -36,11 +36,11 @@ const (
 // ImageState values ("SYSTEM\Setup" -> ImageState) que indicam trabalho de
 // servicing pendente de reboot.
 const (
-	imageStateNone              = 0
-	imageStateImageBeingOffline = 1
-	imageStateImageBeingApplied = 2
-	imageStateImageBootable      = 3
-	imageStateImageRetryingBoot  = 4
+	imageStateNone                = 0
+	imageStateImageBeingOffline   = 1
+	imageStateImageBeingApplied   = 2
+	imageStateImageBootable       = 3
+	imageStateImageRetryingBoot   = 4
 	imageStateImagePendingRemoval = 5
 )
 

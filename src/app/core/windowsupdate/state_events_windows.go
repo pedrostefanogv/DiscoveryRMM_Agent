@@ -28,7 +28,7 @@ const (
 	// Quantidade de eventos mais recentes lidos por sonda.
 	windowsUpdateEventMaxResults = 64
 
-	evtQueryChannelPath     = 0x1
+	evtQueryChannelPath      = 0x1
 	evtQueryReverseDirection = 0x100
 
 	evtRenderEventXML = 1
@@ -38,11 +38,11 @@ const (
 )
 
 var (
-	wevtapiDLL            = syscall.NewLazyDLL("wevtapi.dll")
-	procEvtQuery          = wevtapiDLL.NewProc("EvtQuery")
-	procEvtNext           = wevtapiDLL.NewProc("EvtNext")
-	procEvtClose          = wevtapiDLL.NewProc("EvtClose")
-	procEvtRender         = wevtapiDLL.NewProc("EvtRender")
+	wevtapiDLL    = syscall.NewLazyDLL("wevtapi.dll")
+	procEvtQuery  = wevtapiDLL.NewProc("EvtQuery")
+	procEvtNext   = wevtapiDLL.NewProc("EvtNext")
+	procEvtClose  = wevtapiDLL.NewProc("EvtClose")
+	procEvtRender = wevtapiDLL.NewProc("EvtRender")
 
 	windowsUpdateEventCacheMu sync.Mutex
 	windowsUpdateEventCache   struct {

@@ -78,10 +78,10 @@ func TestDecodeWindowsUpdateLogUTF16(t *testing.T) {
 
 func TestKBFromServicingPackageName(t *testing.T) {
 	cases := map[string]string{
-		"Package_for_KB5127690~31bf3856ad364e35~amd64~~26120.1.1.0": "KB5127690",
-		"Package_for_RollupFix~31bf3856ad364e35~amd64~~19041.1.1.0": "",
+		"Package_for_KB5127690~31bf3856ad364e35~amd64~~26120.1.1.0":  "KB5127690",
+		"Package_for_RollupFix~31bf3856ad364e35~amd64~~19041.1.1.0":  "",
 		"Microsoft-Windows-Foo-Package~31bf3856ad364e35~amd64~~10.0": "",
-		"package_for_kb005034441~x~amd64~~1": "KB5034441",
+		"package_for_kb005034441~x~amd64~~1":                         "KB5034441",
 	}
 	for name, want := range cases {
 		if got := kbFromServicingPackageName(name); got != want {

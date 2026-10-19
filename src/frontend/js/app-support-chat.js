@@ -287,6 +287,13 @@
     if (els.inviteAccept) els.inviteAccept.disabled = true;
     if (els.inviteReject) els.inviteReject.disabled = true;
 
+    // Convite respondido AQUI (fluxo fallback da janela: agente local, sem o
+    // cartão nativo): a janela do chat é a superfície do convite e precisa
+    // SAIR DE CENA assim que o aceite for reportado. Sem isto ela ficava na
+    // tela logo depois do aceite — por cima da nova janela do chat, que o Go
+    // abre em seguida.
+    var hideAfterAccept = accepted && state.status === "waiting";
+
     call("SupportChatRespondInvite", accepted, accepted ? "" : "user_denied")
       .then(function () {
         if (els.invite) els.invite.hidden = true;
@@ -295,6 +302,12 @@
         // Aceite: recarrega a conversa (com novas tentativas se o servidor ainda
         // não confirmou o status). A janela do chat NÃO é aberta por aqui: no
         // caminho normal ela é criada pelo Go no aceite do cartão nativo.
+        if (hideAfterAccept) {
+          state.closing = true;
+          return call("HideSupportChatInviteWindow")
+            .catch(function () { /* o Go também esconde no aceite */ })
+            .then(function () { return null; });
+        }
         if (accepted) return refresh();
         // Recusa: o Go descarta o estado e fecha a janela.
         return null;

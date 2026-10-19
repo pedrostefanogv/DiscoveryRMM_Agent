@@ -2138,9 +2138,12 @@ func (a *App) runStagedStartup(ctx context.Context) {
 
 	// Sonda de reinício pendente: barata (somente registro), reportada só em
 	// mudança. Alimenta o badge "Reinício pendente" em /agents.
+	// O atraso inicial é diferente do scan completo (10-15 min + jitter) e da
+	// sonda de estado (2 min): se coincidirem, o WUClient/TrustedInstaller é
+	// consultado três vezes em poucos segundos.
 	a.safeGo(func() {
 		const pendingRebootInterval = 10 * time.Minute
-		initialDelay := 3 * time.Minute
+		initialDelay := 7 * time.Minute
 		select {
 		case <-ctx.Done():
 			return

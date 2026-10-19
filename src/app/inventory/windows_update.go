@@ -293,6 +293,13 @@ func windowsUpdateUploadForced(current agentWindowsUpdateEnvelope, cachedPayload
 	if previous.State.Signature != current.State.Signature {
 		return true
 	}
+	// As duas sessoes de log/reboot podem estar mais velhas que a sonda leve: se
+	// o Windows instalou algo desde o ultimo upload, reenvia so pela data (a
+	// lista de KBs pode nao ter mudado — QFE/Event Log ainda nao atualizados).
+	if previous.State.LastInstallTime != current.State.LastInstallTime ||
+		previous.State.LastInstallSuccess != current.State.LastInstallSuccess {
+		return true
+	}
 	return false
 }
 
@@ -381,12 +388,13 @@ func (s *Service) scanAndSync(ctx context.Context, _ string) (*windowsupdate.Sca
 	}
 	if result != nil {
 		s.SyncWindowsUpdatesWithError(ctx, result, err)
-		if result.PendingReboot.Pending {
-			// O envelope ja levou a sonda; apenas persiste o estado local.
-			if _, cache, _ := s.wuDeps(); cache != nil {
-				if cfgAgentID := strings.TrimSpace(s.debugConfig().AgentID); cfgAgentID != "" {
-					_ = cache.SaveWindowsUpdateRebootState(cfgAgentID, result.PendingReboot.Reasons, result.PendingReboot.CheckedAt, true)
-				}
+		// O envelope ja levou a sonda de reboot; persiste o estado local nos DOIS
+		// sentidos. Antes so gravavamos pending=true: a transicao true->false
+		// (reinicio feito ou limpo pelo Windows) ficava com pipe antigo e a sonda
+		// leve continuava anunciando "reinicio pendente" na UI.
+		if _, cache, _ := s.wuDeps(); cache != nil {
+			if cfgAgentID := strings.TrimSpace(s.debugConfig().AgentID); cfgAgentID != "" {
+				_ = cache.SaveWindowsUpdateRebootState(cfgAgentID, result.PendingReboot.Reasons, result.PendingReboot.CheckedAt, true)
 			}
 		}
 		return result, err
@@ -403,6 +411,7 @@ func (s *Service) scanAndSync(ctx context.Context, _ string) (*windowsupdate.Sca
 	}
 	return nil, err
 }
+
 // InstallWindowsUpdates instala os alvos informados (ja revalidados no WUA pelo
 // cliente) e, em seguida, atualiza o inventario local/servidor.
 func (s *Service) InstallWindowsUpdates(ctx context.Context, targets []windowsupdate.InstallTarget) (*windowsupdate.InstallResult, error) {

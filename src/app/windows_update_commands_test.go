@@ -32,9 +32,9 @@ func TestParseWindowsUpdateInstallPayload(t *testing.T) {
 				"kbIds":     []any{"KB5034441"},
 			},
 		},
-		"postAction":   "restart",
-		"ttlSeconds":   float64(600),
-		"issuedAtUtc":  issued,
+		"postAction":  "restart",
+		"ttlSeconds":  float64(600),
+		"issuedAtUtc": issued,
 	}
 
 	parsed, err := parseWindowsUpdateInstallPayload(payload)
@@ -90,11 +90,11 @@ func TestInstallPayloadExpires(t *testing.T) {
 func TestParseWindowsUpdatePolicySettings(t *testing.T) {
 	settings, err := parseWindowsUpdatePolicySettings(map[string]any{
 		"settings": map[string]any{
-			"noAutoUpdate":                 float64(0),
-			"auOptions":                    float64(2),
-			"deferQualityUpdates":          float64(1),
+			"noAutoUpdate":                    float64(0),
+			"auOptions":                       float64(2),
+			"deferQualityUpdates":             float64(1),
 			"deferQualityUpdatesPeriodInDays": float64(7),
-			"pauseQualityUpdates":          float64(0),
+			"pauseQualityUpdates":             float64(0),
 		},
 	})
 	if err != nil {

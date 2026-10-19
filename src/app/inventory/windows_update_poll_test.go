@@ -13,12 +13,12 @@ import (
 )
 
 type fakeWUClient struct {
-	mu       sync.Mutex
-	state    windowsupdate.WindowsUpdateState
-	probes   int
-	scans    int
-	scanErr  error
-	result   *windowsupdate.ScanResult
+	mu      sync.Mutex
+	state   windowsupdate.WindowsUpdateState
+	probes  int
+	scans   int
+	scanErr error
+	result  *windowsupdate.ScanResult
 }
 
 func (c *fakeWUClient) Probe(context.Context) windowsupdate.ProbeInfo {
@@ -67,11 +67,11 @@ func resetWindowsUpdatePollState() {
 }
 
 func newWindowsUpdateTestService(client windowsupdate.Client) *Service {
-	svc := NewService(Options{});
+	svc := NewService(Options{})
 	svc.SetWindowsUpdateDeps(WindowsUpdateDeps{
 		Client:  client,
 		Enabled: func() bool { return true },
-	});
+	})
 	// Sem credenciais: o upload e ignorado (logado), mas o scan roda.
 	svc.debugConfig = func() debug.Config { return debug.Config{AgentID: "agent-1"} }
 	return svc

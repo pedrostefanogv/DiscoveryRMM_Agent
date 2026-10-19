@@ -1523,6 +1523,20 @@ export function HasMainWindow() {
 }
 
 /**
+ * HideSupportChatInviteWindow esconde a janela que serviu de superfície do
+ * convite (fluxo FALLBACK: janela do chat com o modal de aceite).
+ * 
+ * BUG RELATADO (agente local): depois de clicar em "Abrir chat" no modal,
+ * apareciam DUAS janelas do chat — a antiga (do convite) e a nova aberta pelo
+ * Go no aceite. Esta chamada fecha a superfície do convite assim que o aceite é
+ * reportado; é idempotente e sem efeito depois do encerramento.
+ * @returns {$CancellablePromise<void>}
+ */
+export function HideSupportChatInviteWindow() {
+    return $Call.ByID(2038786574);
+}
+
+/**
  * Install/Uninstall/Upgrade/UpgradeAll são as ações da loja.
  * 
  * COMPANION: a operação é PEDIDA ao serviço (SYSTEM) via IPC admin, porque a UI

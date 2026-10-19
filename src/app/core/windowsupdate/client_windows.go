@@ -194,13 +194,13 @@ func unavailableScanResult() *ScanResult {
 	state := ProbeLocalState()
 	reboot := RebootInfo{Pending: state.RebootPending, Reasons: state.RebootReasons, CheckedAt: now}
 	return &ScanResult{
-		Updates:        []Update{},
-		Partial:        true,
-		PendingReboot:  reboot,
-		State:          state,
-		StartedAt:      now,
-		DurationMs:     0,
-		Source:         SourceWUA,
+		Updates:       []Update{},
+		Partial:       true,
+		PendingReboot: reboot,
+		State:         state,
+		StartedAt:     now,
+		DurationMs:    0,
+		Source:        SourceWUA,
 	}
 }
 

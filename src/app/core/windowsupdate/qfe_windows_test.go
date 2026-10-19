@@ -53,15 +53,15 @@ func TestBuildsInstalledUpdatesFromRows(t *testing.T) {
 
 func TestParseWMIInstalledOn(t *testing.T) {
 	cases := map[string]bool{
-		"20261016":                       true,
-		"2026-10-16":                     true,
-		"2026-10-16 21:09:57":            true,
-		"16/10/2026":                     true,
-		"10/16/2026":                     true,
-		"20261016210957.000000-180":      true,
-		"2026-10-16T21:09:57Z":           true,
-		"":                              false,
-		"ontem":                         false,
+		"20261016":                  true,
+		"2026-10-16":                true,
+		"2026-10-16 21:09:57":       true,
+		"16/10/2026":                true,
+		"10/16/2026":                true,
+		"20261016210957.000000-180": true,
+		"2026-10-16T21:09:57Z":      true,
+		"":                          false,
+		"ontem":                     false,
 	}
 	for raw, ok := range cases {
 		got := parseWMIInstalledOn(raw)

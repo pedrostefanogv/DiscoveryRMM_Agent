@@ -38,13 +38,17 @@ type WindowsUpdatePollResult struct {
 	Trigger string
 }
 
+// Estado da sonda compartilhado pelo processo. As assinaturas ficam por
+// agente: o mesmo processo tambem roda testes/agentes re-identificados, e uma
+// referencia de outro agentId faria o primeiro ciclo disparar um scan extra.
 var (
-	wuPollMu         sync.Mutex
-	wuLastSign       string
-	wuLastSignAt     time.Time
-	wuLastPollAt     time.Time
+	wuPollMu           sync.Mutex
+	wuLastSign         string
+	wuLastSignAgentID  string
+	wuLastSignAt       time.Time
+	wuLastPollAt       time.Time
 	wuLastChangeScanAt time.Time
-	wuLastPollInfo   WindowsUpdatePollResult
+	wuLastPollInfo     WindowsUpdatePollResult
 )
 
 // LastWindowsUpdatePoll devolve o ultimo resultado da sonda (diagnostico/UI).
@@ -76,8 +80,14 @@ func (s *Service) PollWindowsUpdateChanges(ctx context.Context, minScanGap time.
 	state := client.ProbeState(ctx)
 	signature := windowsupdate.WindowsUpdateStateSignature(state)
 
+	agentID := strings.TrimSpace(s.debugConfig().AgentID)
 	wuPollMu.Lock()
 	previous := wuLastSign
+	// Referencia de OUTRO agente (processo re-registrado) nao vale.
+	if wuLastSignAgentID != "" && agentID != "" && wuLastSignAgentID != agentID {
+		previous = ""
+		wuLastChangeScanAt = time.Time{}
+	}
 	first := previous == ""
 	changed := previous != signature
 	lastScanAt := wuLastChangeScanAt
@@ -122,6 +132,7 @@ func (s *Service) PollWindowsUpdateChanges(ctx context.Context, minScanGap time.
 	// A referencia avanca JA: se o scan falhar, a proxima mudanca real volta a
 	// disparar (a assinatura de falha inclui serviceState/policyError).
 	wuLastSign = signature
+	wuLastSignAgentID = agentID
 	wuLastSignAt = wuLastChangeScanAt
 	wuPollMu.Unlock()
 
@@ -146,8 +157,13 @@ func (s *Service) SetWindowsUpdateBaseline(signature string) {
 	if strings.TrimSpace(signature) == "" {
 		return
 	}
+	agentID := ""
+	if s != nil {
+		agentID = strings.TrimSpace(s.debugConfig().AgentID)
+	}
 	wuPollMu.Lock()
 	wuLastSign = signature
+	wuLastSignAgentID = agentID
 	wuLastSignAt = time.Now()
 	wuPollMu.Unlock()
 }

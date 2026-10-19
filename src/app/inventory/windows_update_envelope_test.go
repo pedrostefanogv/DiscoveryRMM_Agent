@@ -83,10 +83,10 @@ func TestBuildWindowsUpdateEnvelopeOK(t *testing.T) {
 func TestBuildWindowsUpdateEnvelopeServiceDisabled(t *testing.T) {
 	// Servico desabilitado: cliente devolve resultado parcial + ErrServiceDisabled.
 	result := &windowsupdate.ScanResult{
-		Updates:     []windowsupdate.Update{},
-		Partial:     true,
-		StartedAt:   time.Now().UTC(),
-		State:       windowsupdate.WindowsUpdateState{Supported: true, ServiceState: "disabled", CheckedAt: time.Now().UTC()},
+		Updates:       []windowsupdate.Update{},
+		Partial:       true,
+		StartedAt:     time.Now().UTC(),
+		State:         windowsupdate.WindowsUpdateState{Supported: true, ServiceState: "disabled", CheckedAt: time.Now().UTC()},
 		PendingReboot: windowsupdate.RebootInfo{CheckedAt: time.Now().UTC()},
 	}
 	envelope := buildWindowsUpdateEnvelope("agent-1", result, ScanErrorCode(windowsupdate.ErrServiceDisabled))

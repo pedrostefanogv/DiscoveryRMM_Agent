@@ -1197,6 +1197,39 @@ func (a *App) SupportChatRespondInvite(accepted bool, reason string) error {
 	return nil
 }
 
+// HideSupportChatInviteWindow esconde a janela que serviu de superfície do
+// convite (fluxo FALLBACK: janela do chat com o modal de aceite).
+//
+// BUG RELATADO (agente local): depois de clicar em "Abrir chat" no modal,
+// apareciam DUAS janelas do chat — a antiga (do convite) e a nova aberta pelo
+// Go no aceite. Esta chamada fecha a superfície do convite assim que o aceite é
+// reportado; é idempotente e sem efeito depois do encerramento.
+func (a *App) HideSupportChatInviteWindow() error {
+	a.hideSupportChatInviteSurface()
+	return nil
+}
+
+// hideSupportChatInviteSurface fecha a janela que apenas apresentava o convite.
+//
+// Só age quando a conversa NÃO está mais em "waiting": com o convite pendente a
+// janela é a única superfície de aceite e não pode desaparecer.
+func (a *App) hideSupportChatInviteSurface() {
+	if a == nil {
+		return
+	}
+	if status := a.supportChatService().State().Status; supportChatShouldFloat(status) {
+		return
+	}
+	a.supportChatMu.Lock()
+	win := a.supportChatWin
+	a.supportChatMu.Unlock()
+	if win == nil {
+		return
+	}
+	a.Logs.Append("[supportchat] convite respondido; fechando a janela que apresentava o convite")
+	a.closeSupportChatWindow()
+}
+
 // SupportChatEnd encerra a sessão pelo usuário.
 func (a *App) SupportChatEnd(reason string) error {
 	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)

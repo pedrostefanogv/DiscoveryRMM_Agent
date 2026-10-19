@@ -12,6 +12,7 @@ package windowsupdate
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -25,11 +26,15 @@ import (
 const (
 	// windowsUpdateLogPath e o log textual dos eventos do WUClient (o mesmo
 	// fonte do Visualizador de Eventos "WindowsUpdateClient").
-	windowsUpdateLogPath = `C:WindowsLogsWindowsUpdateWindowsUpdate.log`
+	windowsUpdateLogPath = `C:\Windows\Logs\WindowsUpdate\WindowsUpdate.log`
 	// windowsUpdateLogMaxBytes limita a leitura (log pode passar de 10 MB).
 	windowsUpdateLogMaxBytes = 4 << 20
-	// lastSuccessTimeMaxAge acima disso nao e "wuOnline" (maquina parada ha dias).
-	lastSuccessTimeMaxAge = 7 * 24 * time.Hour
+	// wuOnlineMaxAge acima disso a ultima instalacao nao diz nada sobre a
+	// conectividade ATUAL do Windows Update (maquina parada ha dias).
+	// IMPORTANTE: esta janela participa da assinatura do estado — um valor
+	// curto faria a assinatura mudar sozinha com o passar do tempo e disparar
+	// scans em rajada sem mudanca real no Windows Update.
+	wuOnlineMaxAge = 7 * 24 * time.Hour
 	// logActivityWindow: janela para considerar o WUClient "online" (baixando
 	// ou instalando agora).
 	logActivityWindow = 30 * time.Minute
@@ -91,10 +96,10 @@ func ProbeLocalState() WindowsUpdateState {
 	}
 
 	// WuOnline: log com atividade recente ou LastSuccessTime recente.
-	if state.LastInstallTime != nil && now.Sub(*state.LastInstallTime) <= lastSuccessTimeMaxAge {
+	if state.LastInstallTime != nil && now.Sub(*state.LastInstallTime) <= wuOnlineMaxAge {
 		state.WuOnline = true
 	}
-	if state.LastInstallSuccess != nil && now.Sub(*state.LastInstallSuccess) <= lastSuccessTimeMaxAge {
+	if state.LastInstallSuccess != nil && now.Sub(*state.LastInstallSuccess) <= wuOnlineMaxAge {
 		state.WuOnline = true
 	}
 	return state
@@ -220,8 +225,13 @@ func readWindowsUpdateLogActivity() WindowsUpdateLogActivity {
 		}
 	}
 	raw := make([]byte, size-offset)
-	read, err := file.Read(raw)
-	if err != nil && read == 0 {
+	// io.ReadFull: um read unico pode devolver menos que size-offset e o parse
+	// perderia justamente o fim do arquivo (onde ficam os eventos recentes).
+	read, err := io.ReadFull(file, raw)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return WindowsUpdateLogActivity{}
+	}
+	if read == 0 {
 		return WindowsUpdateLogActivity{}
 	}
 	text := decodeWindowsUpdateLog(raw[:read])

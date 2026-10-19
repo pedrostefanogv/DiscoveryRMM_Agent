@@ -14,7 +14,7 @@ import (
 func TestReadWMIRowsExtractsRealStrings(t *testing.T) {
 	result := withWMITestThread(func() ([]map[string]any, error) {
 		return queryWMI("root\\cimv2", "SELECT HotFixID, Caption, Description FROM Win32_QuickFixEngineering")
-	});
+	})
 	if result.err != nil {
 		t.Skipf("WMI indisponivel nesta maquina: %v", result.err)
 	}
