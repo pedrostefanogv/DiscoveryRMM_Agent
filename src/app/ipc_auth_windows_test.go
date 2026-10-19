@@ -640,7 +640,7 @@ func TestIPCClientAdminRequestInjectsToken(t *testing.T) {
 		closedCh:        make(chan struct{}),
 		adminHelloCh:    make(chan IPCServiceHelloAck, 1),
 	}
-	go client.adminReadLoop(clientEnd, client.adminRx)
+	go client.adminReadLoop(clientEnd, client.adminRx, make(chan struct{}))
 	defer client.Close()
 
 	seen := make(chan map[string]any, 1)

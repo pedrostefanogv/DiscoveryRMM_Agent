@@ -5,6 +5,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -106,15 +108,14 @@ func TestHandleIPCRequestStoreActionRequiresInventorySvc(t *testing.T) {
 	}
 }
 
-func TestHandleIPCRequestStoreInstallRequiresPackageID(t *testing.T) {
-	// id vazio não pode chegar ao InventorySvc. InventorySvc nil já retorna
-	// antes; este teste cobre o guard de payload com serviço presente seria
-	// redundante — validamos só o contrato de erro do guard de id via
-	// ipcRPCStorePackageAction direto.
+func TestIPCRPCStorePackageActionWithoutInventorySvc(t *testing.T) {
+	// App sem InventorySvc: ok=false com erro (nunca panic). O guard de id
+	// vazio vive depois do requireInventorySvc, então é coberto pela mesma
+	// pré-condição — testado aqui o contrato de erro.
 	a := &App{}
 	resp := a.ipcRPCStorePackageAction(map[string]any{}, "install")
 	if resp["ok"] != false {
-		t.Fatal("id vazio deveria retornar ok=false")
+		t.Fatal("sem InventorySvc deveria retornar ok=false")
 	}
 }
 
@@ -134,6 +135,78 @@ func TestIPCRPCDataOutput(t *testing.T) {
 	}
 	if got := ipcRPCDataOutput(map[string]any{"data": map[string]any{"output": "ok"}}); got != "ok" {
 		t.Fatalf("output: %q", got)
+	}
+}
+
+// ── Decisão de fallback local da loja (segurança: nunca UAC p/ usuário) ─────
+
+func TestStoreRPCNotSupported(t *testing.T) {
+	unknown := map[string]any{"ok": false, "error": "método desconhecido: store:install"}
+	wrongChannel := map[string]any{"ok": false, "code": "ipc_wrong_channel", "error": "método de leitura não permitido no canal admin"}
+	domain := map[string]any{"ok": false, "error": "pacote não autorizado"}
+
+	if !storeRPCNotSupported(unknown, errors.New("ipc request store:install falhou: método desconhecido: store:install")) {
+		t.Fatal("método desconhecido deveria ser 'não suportado'")
+	}
+	if !storeRPCNotSupported(wrongChannel, errors.New("ipc request store:install falhou: método de leitura não permitido no canal admin")) {
+		t.Fatal("ipc_wrong_channel (serviço antigo classificava store:install como leitura) deveria ser 'não suportado'")
+	}
+	if storeRPCNotSupported(domain, errors.New("pacote não autorizado")) {
+		t.Fatal("erro de domínio NÃO é 'não suportado'")
+	}
+	if storeRPCNotSupported(nil, nil) {
+		t.Fatal("sem erro não é 'não suportado'")
+	}
+}
+
+func TestStoreActionFallbackAllowed(t *testing.T) {
+	domainResp := map[string]any{"ok": false, "error": "pacote não autorizado"}
+	unknownResp := map[string]any{"ok": false, "error": "método desconhecido: store:install"}
+	wrongChanResp := map[string]any{"ok": false, "code": "ipc_wrong_channel", "error": "método de leitura não permitido no canal admin"}
+
+	cases := []struct {
+		name     string
+		resp     map[string]any
+		err      error
+		elevated bool
+		want     bool
+	}{
+		{"sucesso não é fallback", nil, nil, true, false},
+		{"erro de domínio é definitivo (admin)", domainResp, errors.New("pacote não autorizado"), true, false},
+		{"erro de domínio é definitivo (usuário)", domainResp, errors.New("pacote não autorizado"), false, false},
+		{"serviço antigo + admin cai no local", unknownResp, errors.New("método desconhecido: store:install"), true, true},
+		{"serviço antigo + usuário NÃO cai no local", unknownResp, errors.New("método desconhecido: store:install"), false, false},
+		{"canal errado (serviço antigo) + admin cai no local", wrongChanResp, errors.New("método de leitura não permitido no canal admin"), true, true},
+		{"canal errado (serviço antigo) + usuário NÃO cai no local", wrongChanResp, errors.New("método de leitura não permitido no canal admin"), false, false},
+		{"canal admin caiu no meio: definitivo mesmo p/ admin", nil, fmt.Errorf("ipc request store:install: %w", errIPCAdminConnClosed), true, false},
+		{"timeout: definitivo mesmo p/ admin (pode ter instalado)", nil, errors.New("ipc request store:install timeout (45m0s)"), true, false},
+		{"transporte sem envio + admin: pode tentar local", nil, errors.New("ipc request store:install: canal admin indisponível (serviço sem autenticação?)"), true, true},
+		{"transporte sem envio + usuário: NUNCA local", nil, errors.New("ipc request store:install: canal admin indisponível (serviço sem autenticação?)"), false, false},
+	}
+	for _, tc := range cases {
+		if got := storeActionFallbackAllowed(tc.resp, tc.err, tc.elevated); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestPackageActionLocalAllowed(t *testing.T) {
+	orig := isProcessElevated
+	defer func() { isProcessElevated = orig }()
+
+	a := &App{} // sem ipcClient (standalone/testes) → local permitido
+	if !a.packageActionLocalAllowed() {
+		t.Fatal("sem cliente IPC o caminho local deve continuar permitido")
+	}
+
+	a.ipcClient = &IPCClient{}
+	isProcessElevated = func() bool { return false }
+	if a.packageActionLocalAllowed() {
+		t.Fatal("UI companion NÃO elevada jamais pode instalar localmente (UAC)")
+	}
+	isProcessElevated = func() bool { return true }
+	if !a.packageActionLocalAllowed() {
+		t.Fatal("UI elevada pode usar o caminho local (standalone/retrocompat)")
 	}
 }
 

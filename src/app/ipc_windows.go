@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -102,6 +103,11 @@ const IPCRequestTimeout = 30 * time.Second
 // a UI compara com a versão informada pelo serviço para decidir entre
 // operar em modo compatível ou reclamar (drift durante updates).
 const IPCProtocolVersion = 2
+
+// errIPCAdminConnClosed indica que a conexão do canal admin caiu com um
+// request mutante ainda em voo (o serviço pode ter executado a operação e
+// perdido a resposta). Quem chama NÃO deve repetir a operação localmente.
+var errIPCAdminConnClosed = errors.New("canal admin encerrado antes da resposta")
 
 // IPCMessage é o envelope do contrato JSON-lines.
 type IPCMessage struct {
@@ -337,17 +343,6 @@ func (s *IPCServer) sweepIdleConns(now time.Time) int {
 		conn.Close()
 	}
 	return len(idle)
-}
-
-// connClient devolve o estado da conexão (nil quando ela já saiu do mapa).
-// Usado pelo dispatch para marcar request em voo (sweep de ociosidade).
-func (s *IPCServer) connClient(conn net.Conn) *ipcClientConn {
-	if s == nil || conn == nil {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.conns[conn]
 }
 
 // adminIdle devolve o teto de ociosidade do canal admin (injetável em teste).
@@ -1193,6 +1188,11 @@ type IPCClient struct {
 	adminToken   string
 	adminExpires time.Time
 	adminHelloCh chan IPCServiceHelloAck
+	// adminDown é fechado quando a conexão admin da vez morre. Um Request
+	// mutante pendente (ex.: instalação de vários minutos) acorda na hora com
+	// errIPCAdminConnClosed em vez de esperar o timeout inteiro sem saber que
+	// a conexão sumiu.
+	adminDown    chan struct{}
 	adminRenewMu sync.Mutex
 	// serviceVersion é a versão reportada pelo serviço no hello_ack (A.2.2).
 	// Comparada com buildinfo.Version para avisar sobre par UI×serviço misto.
@@ -1307,10 +1307,12 @@ func (c *IPCClient) connectAdmin(timeout time.Duration) bool {
 	}
 	conn.SetDeadline(time.Time{})
 
+	down := make(chan struct{})
 	c.adminMu.Lock()
 	old := c.adminConn
 	c.adminConn = conn
 	c.adminRx = reader
+	c.adminDown = down
 	c.adminToken = ack.Token
 	c.adminExpires = ack.ExpiresAt
 	c.adminMu.Unlock()
@@ -1318,23 +1320,28 @@ func (c *IPCClient) connectAdmin(timeout time.Duration) bool {
 	if old != nil {
 		old.Close()
 	}
-	go c.adminReadLoop(conn, reader)
+	go c.adminReadLoop(conn, reader, down)
 	log.Printf("[ipc] canal admin autenticado (token expira em %s)", ack.ExpiresAt.Format(time.RFC3339))
 	return true
 }
 
 // adminReadLoop roteia respostas de RPC do canal admin e hello_ack de renovação.
-func (c *IPCClient) adminReadLoop(conn net.Conn, rx *bufio.Reader) {
+func (c *IPCClient) adminReadLoop(conn net.Conn, rx *bufio.Reader, down chan struct{}) {
 	defer func() {
 		c.adminMu.Lock()
 		if c.adminConn == conn {
 			c.adminConn = nil
 			c.adminRx = nil
+			c.adminDown = nil
 			c.adminToken = ""
 			c.adminExpires = time.Time{}
 		}
 		c.adminMu.Unlock()
 		conn.Close()
+		// Acorda Requests mutantes pendentes: sem isso eles esperariam o
+		// timeout inteiro (45 min na instalação da loja) por uma resposta que
+		// nunca chegará.
+		close(down)
 		log.Printf("[ipc] canal admin encerrado")
 	}()
 	for {
@@ -1373,34 +1380,36 @@ func (c *IPCClient) routeResponse(msg IPCMessage) {
 }
 
 // adminAuth devolve uma conexão admin com token válido, renovando via hello
-// quando necessário. Nunca segura adminMu durante I/O.
-func (c *IPCClient) adminAuth() (net.Conn, string, error) {
+// quando necessário, e o canal "down" daquela conexão. Nunca segura adminMu
+// durante I/O.
+func (c *IPCClient) adminAuth() (net.Conn, string, <-chan struct{}, error) {
 	c.adminMu.Lock()
 	conn := c.adminConn
 	token := c.adminToken
 	expires := c.adminExpires
+	down := c.adminDown
 	c.adminMu.Unlock()
 
 	if conn == nil {
 		if !c.connectAdmin(3 * time.Second) {
-			return nil, "", fmt.Errorf("canal admin indisponível (serviço sem autenticação?)")
+			return nil, "", nil, fmt.Errorf("canal admin indisponível (serviço sem autenticação?)")
 		}
 		c.adminMu.Lock()
-		conn, token, expires = c.adminConn, c.adminToken, c.adminExpires
+		conn, token, expires, down = c.adminConn, c.adminToken, c.adminExpires, c.adminDown
 		c.adminMu.Unlock()
 	}
 	if strings.TrimSpace(token) == "" || (!expires.IsZero() && time.Until(expires) < time.Minute) {
 		if err := c.renewAdminToken(); err != nil {
-			return nil, "", err
+			return nil, "", nil, err
 		}
 		c.adminMu.Lock()
-		conn, token = c.adminConn, c.adminToken
+		conn, token, down = c.adminConn, c.adminToken, c.adminDown
 		c.adminMu.Unlock()
 	}
 	if conn == nil || strings.TrimSpace(token) == "" {
-		return nil, "", fmt.Errorf("canal admin sem token válido")
+		return nil, "", nil, fmt.Errorf("canal admin sem token válido")
 	}
-	return conn, token, nil
+	return conn, token, down, nil
 }
 
 // renewAdminToken envia hello no canal admin e aguarda o novo hello_ack.
@@ -1608,7 +1617,7 @@ func (c *IPCClient) readLoop(conn net.Conn, rx *bufio.Reader) {
 // canal ADMIN com token — o serviço só spawna worker para chamador autenticado.
 func (c *IPCClient) Send(msg IPCMessage) error {
 	if msg.Type == IPCMsgRemoteSession {
-		conn, token, err := c.adminAuth()
+		conn, token, _, err := c.adminAuth()
 		if err != nil {
 			return err
 		}
@@ -1652,14 +1661,18 @@ func (c *IPCClient) Request(ctx context.Context, method string, payload map[stri
 	}()
 
 	reqMsg := IPCMessage{Type: IPCMsgRequest, Payload: payload, CorrelationID: cid, Timestamp: time.Now().UnixMilli()}
+	// adminDown só é preenchido no caminho mutante: se a conexão admin cair
+	// antes da resposta, o select abaixo acorda com errIPCAdminConnClosed.
+	var adminDown <-chan struct{}
 	if isIPCMutatingRequest(method, payload) {
 		// Mutações vão pelo canal admin com token de sessão; se o serviço for
 		// antigo (sem canal admin) devolvemos erro tratado — nunca caímos para
 		// o pipe de leitura.
-		conn, token, err := c.adminAuth()
+		conn, token, down, err := c.adminAuth()
 		if err != nil {
 			return nil, fmt.Errorf("ipc request %s: %w", method, err)
 		}
+		adminDown = down
 		reqMsg.Payload = c.applyAdminToken(reqMsg.Payload, token)
 		if err := c.sendOn(conn, &c.adminWriteMu, reqMsg); err != nil {
 			return nil, err
@@ -1681,6 +1694,11 @@ func (c *IPCClient) Request(ctx context.Context, method string, payload map[stri
 			return resp.Payload, fmt.Errorf("ipc request %s falhou: %s", method, errMsg)
 		}
 		return resp.Payload, nil
+	case <-adminDown:
+		// A conexão admin morreu com o request em voo. NÃO esperar o timeout
+		// (45 min na loja): o serviço pode estar executando a operação; a UI
+		// recebe erro definitivo em vez de ficar pendurada.
+		return nil, fmt.Errorf("ipc request %s: %w", method, errIPCAdminConnClosed)
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("ipc request %s timeout (%s)", method, timeout)
 	case <-ctx.Done():

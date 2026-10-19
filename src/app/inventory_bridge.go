@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 
 	"discovery/app/core/models"
 )
@@ -35,17 +36,37 @@ func (a *App) RefreshCatalog() (models.Catalog, error) {
 	return a.InventorySvc.RefreshCatalog()
 }
 
+// errPackageActionNeedsService é o erro devolvido quando a UI companion NÃO é
+// administradora e o serviço não pode executar a ação da loja. Preferimos um
+// erro claro a cair no instalador local: sem admin ele abre o prompt UAC de
+// credenciais — exatamente o sintoma que esta mudança elimina.
+var errPackageActionNeedsService = errors.New("o serviço DiscoveryAgent não está disponível para executar a instalação; aguarde o serviço iniciar e tente novamente (executar pela interface exigiria credenciais de administrador)")
+
+// packageActionLocalAllowed decide se a UI pode executar a ação da loja no
+// próprio processo. Sem cliente IPC (standalone/testes) mantém o caminho
+// local; com serviço, só um processo ELEVADO pode instalar localmente — a UI
+// comum (Medium IL) nunca mais dispara UAC/UAC-credenciais por clique da loja.
+func (a *App) packageActionLocalAllowed() bool {
+	if a == nil || a.ipcClient == nil {
+		return true
+	}
+	return isProcessElevated()
+}
+
 // Install/Uninstall/Upgrade/UpgradeAll são as ações da loja.
 //
 // COMPANION: a operação é PEDIDA ao serviço (SYSTEM) via IPC admin, porque a UI
 // roda na sessão do usuário (Medium IL, sem admin) e instaladores machine-scope
 // exigem elevação — executados na UI, caem no prompt UAC de credenciais. O
 // serviço já executa instalações (automação/updates) e aplica o policy da loja.
-// Se não houver serviço (ou ele for antigo e não conhecer o RPC), cai no
-// caminho local de sempre (standalone/retrocompatibilidade).
+// O caminho local sobrevive apenas como retrocompatibilidade para processo
+// elevado (UI antiga standalone/serviço antigo) — nunca para usuário comum.
 func (a *App) Install(id string) (string, error) {
 	if out, handled, err := a.packageActionViaService("store:install", id); handled {
 		return out, err
+	}
+	if !a.packageActionLocalAllowed() {
+		return "", errPackageActionNeedsService
 	}
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err
@@ -57,6 +78,9 @@ func (a *App) Uninstall(id string) (string, error) {
 	if out, handled, err := a.packageActionViaService("store:uninstall", id); handled {
 		return out, err
 	}
+	if !a.packageActionLocalAllowed() {
+		return "", errPackageActionNeedsService
+	}
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err
 	}
@@ -67,6 +91,9 @@ func (a *App) Upgrade(id string) (string, error) {
 	if out, handled, err := a.packageActionViaService("store:upgrade", id); handled {
 		return out, err
 	}
+	if !a.packageActionLocalAllowed() {
+		return "", errPackageActionNeedsService
+	}
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err
 	}
@@ -76,6 +103,9 @@ func (a *App) Upgrade(id string) (string, error) {
 func (a *App) UpgradeAll() (string, error) {
 	if out, handled, err := a.packageActionViaService("store:upgrade_all", ""); handled {
 		return out, err
+	}
+	if !a.packageActionLocalAllowed() {
+		return "", errPackageActionNeedsService
 	}
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err

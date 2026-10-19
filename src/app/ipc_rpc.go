@@ -306,7 +306,9 @@ func (a *App) ipcRPCUpdatesScan() map[string]any {
 // credenciais — que um usuário padrão não consegue responder. O serviço já
 // roda como SYSTEM e já executa instalações (automação/updates), então a UI
 // apenas PEDE a operação; o policy da loja (resolveAllowed) continua sendo
-// aplicado aqui, no serviço, antes de qualquer execução.
+// aplicado aqui, no serviço, antes de qualquer execução para install/uninstall/
+// upgrade. upgrade_all ("atualizar tudo") não tem allowlist — é o mesmo
+// comportamento do botão que já existia na UI, agora executado pelo serviço.
 //
 // Escopo do RPC: só o id do pacote (sem comando livre) — não é um "exec as
 // SYSTEM" genérico. A autenticação é do canal admin (só a UI instalada).

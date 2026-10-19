@@ -12,12 +12,15 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"discovery/app/agentconfig"
 	"discovery/app/core/database"
 	"discovery/app/core/models"
+	"discovery/app/core/platform"
 )
 
 // ipcRequest executa um RPC ao serviço quando em modo companion.
@@ -114,29 +117,34 @@ func (a *App) ipcRPCStoreCatalog(payload map[string]any) map[string]any {
 // storePackageActionRPCTimeout é o teto de espera da UI por uma ação da loja
 // executada no serviço. Instalações reais (download + MSI de centenas de MB)
 // levam minutos — muito acima do timeout padrão de 10s dos RPCs de leitura.
-const storePackageActionRPCTimeout = 30 * time.Minute
+//
+// 45 min cobre o PIOR caso do router: espera de readiness P2P (45s) + winget
+// download (5 min) + execução direta do instalador (orçamento de 12 min para
+// MSI / 6 min para exe) + fallback winget install (5 min) + verificações
+// posteriores (2 × winget list / upgrade, 5 min cada). Se o cliente estourar
+// este prazo o serviço CONTINUA instalando (o ctx do serviço é independente),
+// mas a UI perde a resposta — por isso o teto é folgado.
+const storePackageActionRPCTimeout = 45 * time.Minute
+
+// isProcessElevated é injetável em teste (evita depender do token do runner).
+var isProcessElevated = platform.IsElevated
 
 // packageActionViaService roteia install/uninstall/upgrade/upgrade_all da loja
 // para o SERVIÇO (SYSTEM) via canal admin do IPC.
 //
 // Contrato de retorno:
-//   - handled=false: não há serviço (UI sem IPC) ou o serviço é ANTIGO e não
-//     conhece o método (método desconhecido) — o caller segue no caminho
-//     local, preservando o comportamento anterior.
-//   - handled=true:  o serviço respondeu (sucesso ou erro de domínio). NUNCA
-//     repetir localmente nesse caso: a operação já foi executada/pedida lá.
+//   - handled=true:  o serviço respondeu (sucesso) OU a operação é definitiva
+//     (erro de domínio / resposta perdida). O caller NUNCA repete localmente.
+//   - handled=false: não há serviço a quem pedir (UI sem IPC, serviço fora,
+//     serviço ANTIGO sem o RPC). O caller pode tentar o caminho local — mas
+//     SOMENTE se o processo for elevado (ver packageActionLocalAllowed).
 //
-// Falha de transporte (timeout, pipe caído, canal admin indisponível) também
-// NÃO cai no fallback local: repetir às cegas poderia instalar duas vezes, e
-// o caminho local é justamente o que exige UAC para usuário não-admin.
+// A decisão não depende de ServiceHandshake: aquele valor só é preenchido no
+// hello do canal admin e, se o primeiro handshake falhasse, o fallback local
+// ficaria valendo para a sessão inteira (UAC de novo). Tentamos o RPC sempre;
+// adminAuth reconecta o canal quando necessário.
 func (a *App) packageActionViaService(method, id string) (string, bool, error) {
 	if a == nil || a.ipcClient == nil {
-		return "", false, nil
-	}
-	// Sem serviço conectado (UI antiga standalone ou boot antes do primeiro
-	// handshake): mantém o caminho local de sempre. Com serviço conectado a
-	// ação NUNCA cai no local — lá o policy é aplicado e a execução é SYSTEM.
-	if _, _, ok := a.ipcClient.ServiceHandshake(); !ok {
 		return "", false, nil
 	}
 	payload := map[string]any{}
@@ -152,18 +160,71 @@ func (a *App) packageActionViaService(method, id string) (string, bool, error) {
 
 	resp, err := a.ipcClient.Request(ctx, method, payload)
 	out := ipcRPCDataOutput(resp)
-	if err != nil {
-		// Serviço ANTIGO (UI nova após update parcial): o método ainda não
-		// existe. Fallback local é seguro porque nada foi executado lá.
-		if strings.Contains(err.Error(), "método desconhecido") {
-			return "", false, nil
-		}
-		// Qualquer outro erro (domínio OU transporte) é definitivo: o serviço
-		// pode ter executado a operação e perdido a resposta; repetir local
-		// duplicaria a instalação — e o caminho local é o que pede UAC.
-		return out, true, err
+	if err == nil {
+		return out, true, nil
 	}
-	return out, true, nil
+	if storeActionFallbackAllowed(resp, err, isProcessElevated()) {
+		a.Logs.Append("[ipc-rpc] " + method + ": fallback local (processo elevado) motivo=" + err.Error())
+		return "", false, nil
+	}
+	a.Logs.Append("[ipc-rpc] " + method + ": " + err.Error())
+	if storeRPCNotSupported(resp, err) {
+		// Serviço antigo (método ainda não existia): sem fallback local porque
+		// a UI não é elevada — mensagem clara em vez do erro de canal/leitura.
+		return out, true, fmt.Errorf("o serviço DiscoveryAgent em execução não suporta a instalação pela loja (versão antiga); atualize o agente: %w", err)
+	}
+	if resp == nil && !errors.Is(err, errIPCAdminConnClosed) &&
+		!errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) &&
+		!strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		// Serviço ausente/pipe indisponível ANTES do envio: mensagem acionável
+		// (sem admin o caminho local é proibido).
+		return out, true, fmt.Errorf("%w (detalhe: %v)", errPackageActionNeedsService, err)
+	}
+	return out, true, err
+}
+
+// storeRPCNotSupported detecta serviço ANTIGO sem os RPCs da loja. Duas
+// respostas são possíveis conforme a versão:
+//   - "método desconhecido" (dispatch novo, tabela antiga);
+//   - "ipc_wrong_channel" (versão em que store:install era classificado como
+//     LEITURA e o canal admin recusava com "método de leitura não permitido").
+func storeRPCNotSupported(resp map[string]any, err error) bool {
+	if err == nil {
+		return false
+	}
+	if resp != nil {
+		if code, _ := resp["code"].(string); code == "ipc_wrong_channel" {
+			return true
+		}
+	}
+	return strings.Contains(err.Error(), "método desconhecido")
+}
+
+// storeActionFallbackAllowed decide se a UI pode executar a ação localmente
+// depois de um erro do RPC. Regra de segurança: só processo ELEVADO (admin/
+// SYSTEM) pode cair no caminho local — usuário comum nunca deve disparar
+// instalador/UAC. Erros que podem significar "o serviço já executou" também
+// são definitivos mesmo para admin, para não duplicar a instalação.
+func storeActionFallbackAllowed(resp map[string]any, err error, elevated bool) bool {
+	if err == nil {
+		return false
+	}
+	if storeRPCNotSupported(resp, err) {
+		return elevated
+	}
+	if resp != nil {
+		return false // resposta de domínio (ok=false): definitiva
+	}
+	if errors.Is(err, errIPCAdminConnClosed) {
+		return false // request em voo: o serviço pode ter executado
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		return false // idem: pode ter executado e a resposta se perdeu
+	}
+	return elevated // transporte sem envio (serviço ausente/pipe indisponível)
 }
 
 // ipcRPCDataOutput extrai data.output de uma resposta RPC ("" quando ausente).

@@ -46,6 +46,14 @@ type automationPackageManagerRouter struct {
 	app      *App
 	fallback *services.AppsService
 	logf     func(format string, args ...any)
+
+	// pkgActionMu serializa install/upgrade/uninstall DENTRO do processo
+	// (loja + automação + comandos remotos). O Windows Installer já é
+	// serializado globalmente e devolve 1618 ("outra instalação em
+	// andamento") quando há concorrência; o mutex transforma a corrida em
+	// fila. Antes, dois cliques da loja (ou loja + task de automação)
+	// podiam falhar um ao outro.
+	pkgActionMu sync.Mutex
 }
 
 func newAutomationPackageManagerRouter(app *App, fallback *services.AppsService) *automationPackageManagerRouter {
@@ -59,6 +67,8 @@ func newAutomationPackageManagerRouter(app *App, fallback *services.AppsService)
 }
 
 func (m *automationPackageManagerRouter) Install(ctx context.Context, id string) (string, error) {
+	m.pkgActionMu.Lock()
+	defer m.pkgActionMu.Unlock()
 	// Switches silenciosos do catálogo da loja (silent → silentWithProgress).
 	// Usados tanto no instalador local (P2P) quanto no winget direto (--custom).
 	catSilent, catSilentWithProgress := m.catalogSilentSwitches(id)
@@ -101,11 +111,38 @@ func (m *automationPackageManagerRouter) Install(ctx context.Context, id string)
 	return fallbackOut, nil
 }
 
+// Uninstall remove o pacote e, se a remoção como SYSTEM falhar, tenta na
+// IDENTIDADE do usuário logado.
+//
+// Por que: desde que a loja passou a executar no SERVIÇO (SYSTEM), um pacote
+// USER-scope instalado no perfil do usuário (ex.: Brave per-user) NÃO aparece
+// para o winget do SYSTEM — a remoção falharia ou removeria a cópia errada.
+// No modelo antigo (UI) a remoção rodava na identidade do usuário. O fallback
+// preserva esse comportamento sem perder a remoção de apps machine-scope
+// (msiexec do SYSTEM), que é a maioria.
 func (m *automationPackageManagerRouter) Uninstall(ctx context.Context, id string) (string, error) {
-	return m.fallback.Uninstall(ctx, id)
+	m.pkgActionMu.Lock()
+	defer m.pkgActionMu.Unlock()
+	out, err := m.fallback.Uninstall(ctx, id)
+	if err == nil {
+		return out, nil
+	}
+	userCtx, cleanup, ok := activeUserTokenFn(ctx)
+	if !ok {
+		return out, err
+	}
+	defer cleanup()
+	m.logf("[automation][p2p] uninstall como SYSTEM falhou, tentando na sessao do usuario logado packageId=%s motivo=%v", strings.TrimSpace(id), err)
+	userOut, userErr := m.fallback.Uninstall(userCtx, id)
+	if userErr != nil {
+		return out, fmt.Errorf("%w (uninstall na sessao do usuario tambem falhou: %v)", err, userErr)
+	}
+	return userOut, nil
 }
 
 func (m *automationPackageManagerRouter) Upgrade(ctx context.Context, id string) (string, error) {
+	m.pkgActionMu.Lock()
+	defer m.pkgActionMu.Unlock()
 	// Switches silenciosos do catálogo também no upgrade (paridade com o install):
 	// o winget anexa via --custom e o guard de MSI evita switches exe-only.
 	catSilent, catSilentWithProgress := m.catalogSilentSwitches(id)
@@ -260,6 +297,8 @@ func (m *automationPackageManagerRouter) installInUserSession(ctx context.Contex
 }
 
 func (m *automationPackageManagerRouter) UpgradeAll(ctx context.Context) (string, error) {
+	m.pkgActionMu.Lock()
+	defer m.pkgActionMu.Unlock()
 	return m.fallback.UpgradeAll(ctx)
 }
 

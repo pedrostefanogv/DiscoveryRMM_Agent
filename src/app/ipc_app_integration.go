@@ -171,11 +171,16 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 		// derrubá-la no meio da operação. O touch no fim renova a janela.
 		var inflightClient *ipcClientConn
 		if a.ipcServer != nil {
-			if inflightClient = a.ipcServer.connClient(conn); inflightClient != nil {
+			// clientFor já devolve o estado da conexão (nil-safe).
+			if inflightClient = a.ipcServer.clientFor(conn); inflightClient != nil {
 				inflightClient.inFlight.Add(1)
 				defer func() {
-					inflightClient.inFlight.Add(-1)
+					// touch ANTES de zerar o contador: o sweep decide pela
+					// ociosidade, e zerar primeiro abriria uma janela em que a
+					// conexão parece ociosa há minutos e seria fechada logo
+					// depois da resposta.
 					inflightClient.touch()
+					inflightClient.inFlight.Add(-1)
 				}()
 			}
 		}
