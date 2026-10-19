@@ -157,6 +157,10 @@ type App struct {
 	// refresh) o REST só é consultado de vez em quando — ver
 	// reconcileSupportChat em support_chat_window.go.
 	supportChatReconcileTicks atomic.Int64
+	// Dedupe do verify em background por sessionId: event/JS/IPC/reentrega podem
+	// pedir a mesma validação várias vezes; cada verify faz até 20 GETs.
+	supportChatVerifyMu  sync.Mutex
+	supportChatVerifying map[string]bool
 	// Cache da política de anexos do chat (allowlist/tamanho vindos do servidor).
 	supportChatPolicyMu      sync.Mutex
 	supportChatPolicy        supportchat.AttachmentPolicy
@@ -1301,6 +1305,15 @@ func (a *App) ShowMainWindow() {
 	// foco é recusado — ver window_foreground*.go.
 	raiseWindowToFront(win, false)
 	a.FitWindowToWorkArea()
+
+	// Abrir a interface é o "despertar" natural do usuário: confere se existe
+	// convite de chat pendente que se perdeu (canal unicast sem replay). O atraso
+	// curto deixa o webview carregar. Não roda quando já existe sessão/janela
+	// local: o Refresh poderia apagar um convite "waiting" numa oscilação do
+	// servidor antes de o usuário responder.
+	if !a.supportChatWindowOpen() && !a.supportChatService().State().HasSession {
+		go a.resumeSupportChatIfActive(500 * time.Millisecond)
+	}
 }
 
 // EmitEvent emite um evento customizado para o frontend (v3).

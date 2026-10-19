@@ -26,5 +26,8 @@ func (t *SessionTray) Show(string) error { return nil }
 // Hide é um no-op no stub.
 func (t *SessionTray) Hide() error { return nil }
 
+// RequestClose é um no-op no stub.
+func (t *SessionTray) RequestClose() {}
+
 // Close é um no-op no stub.
 func (t *SessionTray) Close() {}

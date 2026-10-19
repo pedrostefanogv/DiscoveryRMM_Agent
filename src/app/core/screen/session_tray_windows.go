@@ -330,8 +330,10 @@ func (t *SessionTray) Hide() error {
 	return nil
 }
 
-// Close remove o ícone e encerra a thread. Idempotente.
-func (t *SessionTray) Close() {
+// RequestClose pede a remoção do ícone/encerramento da thread sem bloquear
+// (idempotente). É o método usado pelo manager de sessões: Close() espera até
+// 2s e o closeSessionLocked roda com o mutex do manager preso.
+func (t *SessionTray) RequestClose() {
 	if t == nil {
 		return
 	}
@@ -345,6 +347,18 @@ func (t *SessionTray) Close() {
 	t.mu.Unlock()
 	if hwnd != 0 {
 		procPostMessageW.Call(hwnd, trayWMClose, 0, 0)
+	}
+}
+
+// Close remove o ícone e encerra a thread, esperando até 2s. Idempotente.
+func (t *SessionTray) Close() {
+	if t == nil {
+		return
+	}
+	t.RequestClose()
+	if t.doneCh == nil {
+		// Tray montado manualmente (sem thread de janela): nada a aguardar.
+		return
 	}
 	select {
 	case <-t.doneCh:

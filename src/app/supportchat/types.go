@@ -168,7 +168,7 @@ func (i Invite) ExpiredAt(now time.Time) bool {
 // inviteExpiryGrace é a folga aplicada ao vencimento do convite.
 //
 // O filtro AUTORITATIVO é o estado da sessão no servidor (ver
-// SupportChatOpenInviteWindow); aqui é só um corte barato de convites
+// verifySupportChatInviteWindow); aqui é só um corte barato de convites
 // claramente velhos. A reentrega que motivou a guarda chegou ~6 min depois de
 // criada — quase 4 min após o vencimento, bem acima desta folga — e nenhum
 // relógio razoavelmente sincronizado erra 2 minutos.

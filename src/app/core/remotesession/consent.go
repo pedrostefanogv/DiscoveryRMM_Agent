@@ -51,6 +51,9 @@ type ConsentRequest struct {
 
 // SessionBanner é o banner local exibido durante a sessão de tela.
 type SessionBanner interface {
+	// RequestClose pede o encerramento sem bloquear a thread chamadora.
+	RequestClose()
+	// Close encerra e espera a thread da janela (até 2s).
 	Close()
 }
 
@@ -79,6 +82,9 @@ type TrayOptions struct {
 type SessionTray interface {
 	Show(message string) error
 	Hide() error
+	// RequestClose pede o encerramento sem bloquear a thread chamadora.
+	RequestClose()
+	// Close encerra e espera a thread da janela (até 2s).
 	Close()
 }
 

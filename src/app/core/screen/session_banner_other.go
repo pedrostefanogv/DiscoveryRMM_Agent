@@ -17,4 +17,6 @@ func NewSessionBanner(BannerOptions) (*SessionBanner, error) {
 	return nil, fmt.Errorf("banner de sessão disponível apenas no Windows")
 }
 
+func (b *SessionBanner) RequestClose() {}
+
 func (b *SessionBanner) Close() {}

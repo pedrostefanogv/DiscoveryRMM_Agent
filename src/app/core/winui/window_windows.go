@@ -38,6 +38,7 @@ var (
 	procReleaseCapture   = user32.NewProc("ReleaseCapture")
 	procSetWindowPos     = user32.NewProc("SetWindowPos")
 	procSetLayeredAttrs  = user32.NewProc("SetLayeredWindowAttributes")
+	procGetDpiForWindow  = user32.NewProc("GetDpiForWindow")
 	procScreenToClient   = user32.NewProc("ScreenToClient")
 
 	procCreateRoundRectRgn = gdi32.NewProc("CreateRoundRectRgn")
@@ -242,6 +243,37 @@ func SetLayeredAlpha(hwnd uintptr, alpha byte) {
 	procSetLayeredAttrs.Call(hwnd, 0, uintptr(alpha), lwaAlpha)
 }
 
+// DpiForWindow devolve o DPI efetivo do monitor da janela (96 = 100%).
+// GetDpiForWindow existe desde o Windows 10 1607; em sistemas sem a API o
+// fallback é 96 (comportamento antigo, sem escala).
+func DpiForWindow(hwnd uintptr) int {
+	if hwnd == 0 {
+		return 96
+	}
+	if err := procGetDpiForWindow.Find(); err != nil {
+		return 96
+	}
+	dpi, _, _ := procGetDpiForWindow.Call(hwnd)
+	if dpi < 48 || dpi > 480 {
+		return 96
+	}
+	return int(dpi)
+}
+
+// MoveResizeWindow reposiciona e redimensiona a janela sem ativá-la nem mudar
+// a ordem Z (usado pelo banner depois de descobrir o DPI do monitor).
+func MoveResizeWindow(hwnd uintptr, x, y, width, height int) {
+	if hwnd == 0 {
+		return
+	}
+	const (
+		swpNoZOrder   = 0x0004
+		swpNoActivate = 0x0010
+	)
+	procSetWindowPos.Call(hwnd, 0, uintptr(x), uintptr(y),
+		uintptr(width), uintptr(height), swpNoZOrder|swpNoActivate)
+}
+
 // EnsureTopMost recoloca a janela no topo da ordem Z sem alterar posição/tamanho.
 func EnsureTopMost(hwnd uintptr) {
 	const (
@@ -276,12 +308,19 @@ func EndPaint(hwnd uintptr, paint *PaintStruct) {
 }
 
 // SetRoundedRegion recorta a janela em um retângulo arredondado.
+//
+// A região usa width/height exatos (right/bottom são exclusivos no GDI): o
+// "+1" antigo deslocava os centros dos arcos do canto inferior/direito em 1px.
+// O cartão do banner desenha a borda 1px para dentro com raio radius-1 e
+// centros (radius, radius) e (width-radius, height-radius); sem o ajuste, a
+// borda ficava 2px afastada do recorte nesses cantos (e sobrava uma faixa sem
+// pintura no consentimento em fallback).
 func SetRoundedRegion(hwnd uintptr, width, height, radius int) {
 	if hwnd == 0 {
 		return
 	}
 	region, _, _ := procCreateRoundRectRgn.Call(
-		0, 0, uintptr(width+1), uintptr(height+1),
+		0, 0, uintptr(width), uintptr(height),
 		uintptr(radius*2), uintptr(radius*2),
 	)
 	if region == 0 {

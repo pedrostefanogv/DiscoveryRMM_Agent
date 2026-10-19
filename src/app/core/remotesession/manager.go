@@ -575,14 +575,17 @@ func (m *Manager) closeSessionLocked(sessionID, reason string) bool {
 	if !ok {
 		return false
 	}
+	// RequestClose (não Close): este método roda com m.mu preso e Close espera
+	// até 2s pela thread da janela — uma janela travada segurava o mutex do
+	// manager e bloqueava TODAS as sessões/comandos.
 	if s.banner != nil {
-		s.banner.Close()
+		s.banner.RequestClose()
 		s.banner = nil
 	}
 	if s.tray != nil {
 		// Não zera o campo: runScreenSession pode ler session.tray na
 		// inicialização (o campo só é escrito antes da goroutine começar).
-		s.tray.Close()
+		s.tray.RequestClose()
 	}
 	delete(m.sessions, sessionID)
 	delete(m.screenSessions, sessionID) // limpa referencia da SessionScreen

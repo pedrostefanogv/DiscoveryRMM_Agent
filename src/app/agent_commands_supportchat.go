@@ -48,8 +48,9 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 	//
 	// NÃO respondemos "recusado" ao servidor aqui: a decisão usa o relógio da
 	// máquina (que pode estar adiantado) e responder reescreveria o estado de
-	// uma sessão que o servidor ainda considera pendente. O filtro autoritativo
-	// é o estado no servidor, checado em SupportChatOpenInviteWindow.
+	// uma sessão que o servidor ainda considera pendente. O estado no servidor é
+	// conferido em BACKGROUND por verifySupportChatInviteWindow (a janela abre
+	// imediatamente para não depender da latência/consistência do REST).
 	if invite.ExpiredAt(time.Now()) {
 		a.Logs.Append("[supportchat] convite ignorado: expirado em " + invite.ExpiresAt + " (sessionId=" + invite.SessionID + ")")
 		return true, 1, "", "convite de chat expirado"
@@ -153,6 +154,9 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 	// reconciliação de 60s. Abrir no Go elimina essa dependência.
 	if a.app != nil {
 		go a.openSupportChatWindow()
+		// O caminho standalone não passa pelo IPC/JS: a validação em background
+		// (e o fechamento de convite-eco) precisa ser iniciada aqui também.
+		a.startSupportChatInviteVerification(invite.SessionID)
 	}
 
 	body, _ := json.Marshal(map[string]any{

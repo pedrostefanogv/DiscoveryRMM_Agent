@@ -682,9 +682,63 @@ func (s *Service) PrepareInviteIfIdle(invite Invite) InviteDecision {
 	return decision
 }
 
-// Refresh faz o snapshot REST do estado (usado ao abrir a janela e na
-// reconciliação após queda de NATS). Não é polling.
+// ClearStateIfWaiting limpa o estado SOMENTE se ele ainda é o convite
+// "waiting" da sessão informada — checagem atômica sob o lock do serviço.
+//
+// Evita o TOCTOU do verify: entre "state==waiting" e o ClearState o usuário
+// pode aceitar (status vira active) e o clear apagaria a conversa recém-aberta.
+func (s *Service) ClearStateIfWaiting(sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	s.mu.Lock()
+	if s.state.Status != StatusWaiting || s.state.SessionID != sessionID {
+		s.mu.Unlock()
+		return false
+	}
+	s.state = State{Status: StatusNone, Messages: []Message{}}
+	s.mu.Unlock()
+	s.emitState("clear-waiting")
+	return true
+}
+
+// ActiveSessionID consulta o servidor APENAS para saber qual sessão está
+// pendente/ativa nesta máquina, sem tocar no estado local.
+//
+// Existe para validar um convite aberto sem o efeito colateral do Refresh:
+// Refresh zera o estado "waiting" quando o servidor (temporariamente) responde
+// sem sessão — o que apagava o pedido de aceite da janela recém-aberta.
+func (s *Service) ActiveSessionID(ctx context.Context) (string, bool, error) {
+	var response struct {
+		HasSession bool `json:"hasSession"`
+		Session    *struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}
+	if err := s.doJSON(ctx, http.MethodGet, "/active", nil, &response); err != nil {
+		return "", false, err
+	}
+	if !response.HasSession || response.Session == nil {
+		return "", false, nil
+	}
+	return strings.TrimSpace(response.Session.ID), true, nil
+}
+
+// Refresh faz o snapshot REST do estado (usado na reconciliação).
 func (s *Service) Refresh(ctx context.Context) (State, error) {
+	return s.refresh(ctx, false)
+}
+
+// RefreshKeepingInvite é o snapshot usado pela JANELA ao abrir: quando o
+// servidor responde sem sessão ele PRESERVA um convite "waiting" local.
+//
+// O boot da janela depende desse snapshot para aprender o convite (o evento
+// supportchat:state chega antes de a janela existir). O Refresh destrutivo
+// apagava o convite numa inconsistência de leitura e a janela abria "SEM
+// CONVERSA" — o verify em background então não tinha o que validar.
+func (s *Service) RefreshKeepingInvite(ctx context.Context) (State, error) {
+	return s.refresh(ctx, true)
+}
+
+func (s *Service) refresh(ctx context.Context, preserveWaiting bool) (State, error) {
 	var response struct {
 		HasSession bool `json:"hasSession"`
 		Session    *struct {
@@ -710,7 +764,13 @@ func (s *Service) Refresh(ctx context.Context) (State, error) {
 		// apagava da tela, na primeira reconciliação depois do fim, exatamente
 		// o que o usuário ainda estava lendo — inclusive a nota de quem
 		// encerrou. O agent continua sem histórico: nada é persistido.
-		if s.state.Status != StatusEnded || s.state.SessionID == "" {
+		//
+		// preserveWaiting: o boot da janela do convite não pode destruir o
+		// "waiting" por uma leitura transitória; quem decide se o convite é
+		// válido é o verify em background (ActiveSessionID + tolerância).
+		if preserveWaiting && s.state.Status == StatusWaiting && s.state.SessionID != "" {
+			// Mantém o convite local intacto.
+		} else if s.state.Status != StatusEnded || s.state.SessionID == "" {
 			// Sessão que MORREU no servidor sem evento de fim (expiração por
 			// inatividade): o resumo também precisa sair, senão exatamente o caso
 			// mais silencioso ficava sem registro no log do agent.
@@ -758,7 +818,7 @@ func (s *Service) Refresh(ctx context.Context) (State, error) {
 	// agent reiniciado no meio de uma conversa (consumer durável já com os
 	// offsets acked) reabriria a janela com a conversa VAZIA.
 	s.mu.Lock()
-	shouldLoadMessages := s.state.HasSession && s.state.SessionID != ""
+	shouldLoadMessages := response.HasSession && s.state.HasSession && s.state.SessionID != ""
 	s.mu.Unlock()
 
 	if shouldLoadMessages {

@@ -518,6 +518,34 @@ func (a *App) resumeSupportChatIfActive(delay time.Duration) {
 	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
 	defer cancel()
 
+	// Convite "waiting" NUNCA usa Refresh destrutivo aqui: uma falha transitória
+	// de leitura apagaria o pedido na tela e fecharia a janela. O verify em
+	// background é quem decide se o convite morreu (com tolerância).
+	if previous.Status == supportchat.StatusWaiting && previous.SessionID != "" {
+		if a.supportChatWindowOpen() {
+			return
+		}
+		activeID, hasSession, err := svc.ActiveSessionID(ctx)
+		if err != nil {
+			a.Logs.Append("[supportchat] retomada de convite: servidor indisponível — " + err.Error())
+			return
+		}
+		if !hasSession {
+			// Sem sessão no servidor, mas sem confirmação repetida: mantém o
+			// convite em memória e tenta de novo no próximo tick/reconexão. O
+			// verify (quando houver janela) é quem fecha o eco velho.
+			return
+		}
+		if activeID == previous.SessionID {
+			a.Logs.Append("[supportchat] convite pendente sem janela; abrindo o chat")
+			a.openSupportChatWindow()
+			a.startSupportChatInviteVerification(previous.SessionID)
+			return
+		}
+		// O servidor tem OUTRA sessão: o convite antigo não vale mais. Refresh
+		// traz a sessão atual e a janela abre para ela.
+	}
+
 	state, err := svc.Refresh(ctx)
 	if err != nil {
 		a.Logs.Append("[supportchat] retomada no startup: servidor indisponível — " + err.Error())
@@ -556,9 +584,11 @@ func (a *App) resumeSupportChatIfActive(delay time.Duration) {
 // depois de ~2 min, e o usuário não pode ficar esperando. Também cobre a
 // retomada após suspensão da máquina.
 func (a *App) runSupportChatReconcileLoop() {
-	// Piso de 30s: é uma consulta pequena, mas não precisa ser frequente — o
-	// caminho normal (evento supportchat:invite) continua sendo imediato.
-	const interval = 60 * time.Second
+	// Piso de 30s: é uma consulta pequena. O caminho normal (evento
+	// supportchat:invite) continua sendo imediato; este loop é a rede de
+	// segurança para convite perdido no canal unicast (sem replay) — 30s reduz
+	// pela metade o pior caso anterior (60s) sem custo relevante.
+	const interval = 30 * time.Second
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -574,8 +604,9 @@ func (a *App) runSupportChatReconcileLoop() {
 }
 
 // supportChatActiveReconcileEvery é de quantos em quantos ticks a reconciliação
-// consulta o REST quando há conversa ATIVA com a janela aberta (60s * 5 = 5 min).
-const supportChatActiveReconcileEvery = 5
+// consulta o REST quando há conversa ATIVA com a janela aberta (30s * 10 = 5 min).
+// Mantém a cadência efetiva anterior (60s * 5) mesmo com o tick de 30s.
+const supportChatActiveReconcileEvery = 10
 
 // reconcileSupportChat é o tick periódico (ver runSupportChatReconcileLoop).
 //
@@ -618,12 +649,17 @@ func (a *App) SupportChatAttachmentPolicyJSON() map[string]any {
 	return a.supportChatAttachmentPolicy()
 }
 
-// SupportChatRefresh faz o snapshot REST (abertura da janela / reconciliação).
+// SupportChatRefresh faz o snapshot REST para a JANELA (boot/reconexão).
+//
+// Usa RefreshKeepingInvite: se o servidor responder sem sessão numa oscilação
+// de leitura, o convite "waiting" local é preservado e a janela continua
+// mostrando o pedido de aceite. A validade é conferida pelo verify em
+// background, não por este snapshot.
 func (a *App) SupportChatRefresh() (supportchat.State, error) {
 	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
 	defer cancel()
 
-	return a.supportChatService().Refresh(ctx)
+	return a.supportChatService().RefreshKeepingInvite(ctx)
 }
 
 // SupportChatSendMessage envia uma mensagem do usuário final.
@@ -711,6 +747,15 @@ func (a *App) SupportChatDownloadAttachment(attachmentID string) (map[string]str
 //
 // Chamado pelo processo de UI quando recebe `supportchat:invite` (o serviço, que
 // recebe o comando do servidor, não tem Wails para abrir janela).
+//
+// IMPORTANTE (latência): a janela abre IMEDIATAMENTE com o convite recebido.
+// Antes havia um Refresh REST síncrono aqui como "confirmação"; numa janela de
+// inconsistência de leitura o Refresh respondia sem sessão, o convite era
+// descartado e a janela só aparecia na reconciliação de 60s — o sintoma
+// "o pedido só aparece quando abro a interface do agent". O processo de
+// serviço já validou vencimento/estado antes de emitir o IPC; aqui a validação
+// do servidor é feita em BACKGROUND, sem bloquear a abertura e sem apagar o
+// estado "waiting".
 func (a *App) SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, supportName string) error {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -725,39 +770,146 @@ func (a *App) SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, supp
 		return errSupportChatBusy
 	}
 
-	// Um convite só abre a janela depois de o SERVIDOR confirmar que esta sessão
-	// ainda existe (pendente/ativa). A reentrega de comandos do servidor pode
-	// entregar o convite minutos depois: sem esta checagem, o eco de uma sessão
-	// já encerrada abria a janela vazia ("SEM CONVERSA") sozinho.
-	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
-	defer cancel()
-
-	state, err := svc.Refresh(ctx)
-	if err != nil {
-		a.Logs.Append("[supportchat] convite ignorado: falha ao confirmar a sessão no servidor — " + err.Error())
-		return err
-	}
-	if !state.HasSession || state.SessionID == "" {
-		a.Logs.Append("[supportchat] convite ignorado: sessão " + sessionID + " não está mais pendente/ativa no servidor")
-		return errSupportChatInviteStale
-	}
-	if state.SessionID != sessionID {
-		a.Logs.Append("[supportchat] convite ignorado: o servidor tem outra sessão ativa (" + state.SessionID + ")")
-		return errSupportChatBusy
+	// Mesmo convite já registrado (reentrega/IPC + JS): NÃO re-prepara (isso
+	// reiniciaria waitingSince/transcript e reemitiria estado) — só garante a
+	// janela na frente e o verify (deduplicado por sessão).
+	if state := svc.State(); state.Status == supportchat.StatusWaiting && state.SessionID == sessionID {
+		a.openSupportChatWindow()
+		a.startSupportChatInviteVerification(sessionID)
+		return nil
 	}
 
-	svc.PrepareInvite(supportchat.Invite{
+	decision := svc.PrepareInviteIfIdle(supportchat.Invite{
 		SessionID:   sessionID,
 		TicketID:    ticketID,
 		TicketTitle: ticketTitle,
 		SupportName: supportName,
 	})
+	if !decision.Accepted {
+		switch decision.Reason {
+		case supportchat.InviteReasonAlreadyActive:
+			// Reentrega de um convite já aceito: só garante a janela na frente.
+			a.openSupportChatWindow()
+			return nil
+		case supportchat.InviteReasonAlreadyFinished:
+			return errSupportChatInviteStale
+		case supportchat.InviteReasonBusy:
+			return errSupportChatBusy
+		default:
+			return errSupportChatInvalidInvite
+		}
+	}
 
 	// A janela do convite SEMPRE nasce flutuando e em primeiro plano: é o pedido
 	// de aceite do usuário, não pode passar despercebido atrás de outro app.
 	a.openSupportChatWindow()
 	a.Logs.Append("[supportchat] janela do convite aberta em primeiro plano (sessao " + sessionID + ")")
+	a.startSupportChatInviteVerification(sessionID)
 	return nil
+}
+
+// startSupportChatInviteVerification inicia (uma única vez por sessão) a
+// validação em background do convite. Eventos IPC/reentrega e o caminho
+// standalone podem chamar isto; o mapa evita dois loops de 20 GETs competindo
+// pelo mesmo estado.
+func (a *App) startSupportChatInviteVerification(sessionID string) {
+	if a == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	a.supportChatVerifyMu.Lock()
+	if a.supportChatVerifying == nil {
+		a.supportChatVerifying = make(map[string]bool)
+	}
+	if a.supportChatVerifying[sessionID] {
+		a.supportChatVerifyMu.Unlock()
+		return
+	}
+	a.supportChatVerifying[sessionID] = true
+	a.supportChatVerifyMu.Unlock()
+
+	go func() {
+		defer func() {
+			a.supportChatVerifyMu.Lock()
+			delete(a.supportChatVerifying, sessionID)
+			a.supportChatVerifyMu.Unlock()
+		}()
+		a.verifySupportChatInviteWindow(sessionID)
+	}()
+}
+
+// verifySupportChatInviteWindow confere em BACKGROUND se a sessão do convite
+// realmente existe no servidor. Usa ActiveSessionID (somente leitura, não mexe
+// no estado) e tolera uma janela de inconsistência de leitura: só fecha a
+// janela quando o servidor responde explicitamente que a sessão não existe
+// depois de várias tentativas (convite-eco de uma conversa já removida).
+func (a *App) verifySupportChatInviteWindow(sessionID string) {
+	const (
+		interval     = 3 * time.Second
+		checkTimeout = 5 * time.Second
+		// Fecha somente no FIM da janela de tolerância (60s) e com pelo menos 2
+		// leituras "sem sessão" consecutivas. Fechar logo nas primeiras leituras
+		// mataria um convite válido numa inconsistência que durasse alguns
+		// segundos (o atraso observado em homolog foi de ~24s).
+		confirmations = 2
+		maxDuration   = 60 * time.Second
+	)
+
+	deadline := time.Now().Add(maxDuration)
+	noSessionStreak := 0
+
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		wait := interval
+		if remaining < wait {
+			wait = remaining
+		}
+		select {
+		case <-a.supportChatContext().Done():
+			return
+		case <-time.After(wait):
+		}
+
+		state := a.supportChatService().State()
+		// O usuário já aceitou/recusou, ou outro convite assumiu: nada a validar.
+		if state.Status != supportchat.StatusWaiting || state.SessionID != sessionID {
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(a.supportChatContext(), checkTimeout)
+		activeID, hasSession, err := a.supportChatService().ActiveSessionID(ctx)
+		cancel()
+		if err != nil {
+			// Leitura desconhecida: reseta a confirmação e nunca fecha por isso.
+			noSessionStreak = 0
+			continue
+		}
+		if hasSession && activeID == sessionID {
+			return
+		}
+		if hasSession && activeID != "" && activeID != sessionID {
+			a.Logs.Append("[supportchat] convite de " + sessionID + " substituído no servidor por " + activeID)
+			// Limpa/fecha SÓ se o estado ainda for o waiting desta sessão.
+			if a.supportChatService().ClearStateIfWaiting(sessionID) {
+				a.closeSupportChatWindow()
+			}
+			return
+		}
+		noSessionStreak++
+	}
+
+	if noSessionStreak < confirmations {
+		return
+	}
+	// Ausência confirmada por duas leituras consecutivas: era eco de conversa
+	// removida. O clear atômico impede fechar uma conversa que o usuário aceitou
+	// entre a última leitura e este ponto.
+	if a.supportChatService().ClearStateIfWaiting(sessionID) {
+		a.Logs.Append("[supportchat] convite " + sessionID + " não existe mais no servidor; fechando a janela")
+		a.closeSupportChatWindow()
+	}
 }
 
 // SupportChatRespondInvite responde ao convite DENTRO da janela do chat.
