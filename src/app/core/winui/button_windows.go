@@ -33,12 +33,18 @@ func PaintButton(hdc uintptr, r Rect, label string, font uintptr, style ButtonSt
 	if radius <= 0 {
 		radius = 8
 	}
-	FillRoundRect(hdc, r, radius, style.fillFor(hover, pressed))
+	fill := style.fillFor(hover, pressed)
 	if style.HasBorder {
-		StrokeRoundRect(hdc, r, radius, 1, style.Border)
+		// Borda + preenchimento em uma passada antialiased (GDI+): o GDI puro
+		// deixava o canto arredondado serrilhado nos botões.
+		FillRoundRectBorderAA(hdc, r, radius, fill, style.Border)
+	} else {
+		FillRoundRectAA(hdc, r, radius, fill)
 	}
 	if focused {
-		StrokeRoundRect(hdc, r.InsetUniform(-3), radius+3, 2, focusColor)
+		// Anel de 2px com 2px de folga em relação ao botão (mesma geometria do
+		// desenho GDI anterior), agora com cantos antialiased.
+		StrokeRoundRectAA(hdc, r.InsetUniform(-4), radius+4, 2, focusColor)
 	}
 	DrawTextSingle(hdc, label, r, font, style.Label, AlignCenter)
 }

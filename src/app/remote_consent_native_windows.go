@@ -32,11 +32,13 @@ import (
 
 const (
 	consentClassName = "DiscoveryRmmConsentPrompt"
-	consentWidth     = 640
-	consentHeight    = 400
-	consentRadius    = 16
-	consentPad       = 28
-	consentTimerID   = 1
+	// 560x336: o cartão anterior (640x400) ocupava espaço demais no canto da
+	// tela. O layout abaixo é a versão compacta (~12% menor na largura).
+	consentWidth   = 560
+	consentHeight  = 336
+	consentRadius  = 16
+	consentPad     = 24
+	consentTimerID = 1
 	// consentTickMS: ~5 repinturas por segundo mantêm a barra suave sem custo.
 	consentTickMS = 200
 	// consentScreenMargin é o recuo do cartão em relação às bordas direita e
@@ -88,21 +90,21 @@ func (f *consentFonts) release() {
 // consentLayout devolve os retângulos do cartão (coordenadas fixas do desenho).
 func consentLayout() (logo, title, subtitle, divider, messageBox, messageText,
 	countLabel, countValue, defaultAction, progressTrack, allow, deny, hint winui.Rect) {
-	logo = winui.Rect{X: consentPad, Y: 26, W: 44, H: 44}
-	headerLeft := logo.Right() + 16
+	logo = winui.Rect{X: consentPad, Y: 20, W: 40, H: 40}
+	headerLeft := logo.Right() + 14
 	headerWidth := consentWidth - headerLeft - consentPad
-	title = winui.Rect{X: headerLeft, Y: 26, W: headerWidth, H: 32}
-	subtitle = winui.Rect{X: headerLeft, Y: 60, W: headerWidth, H: 20}
-	divider = winui.Rect{X: consentPad, Y: 104, W: consentWidth - 2*consentPad, H: 1}
-	messageBox = winui.Rect{X: consentPad, Y: 120, W: consentWidth - 2*consentPad, H: 88}
-	messageText = messageBox.Inset(16, 12)
-	countLabel = winui.Rect{X: consentPad, Y: 220, W: 240, H: 18}
-	countValue = winui.Rect{X: consentPad, Y: 238, W: 120, H: 40}
-	defaultAction = winui.Rect{X: consentPad + 128, Y: 244, W: consentWidth - 2*consentPad - 128, H: 40}
-	progressTrack = winui.Rect{X: consentPad, Y: 292, W: consentWidth - 2*consentPad, H: 8}
-	deny = winui.Rect{X: consentWidth - consentPad - 140, Y: 316, W: 140, H: 42}
-	allow = winui.Rect{X: deny.X - 12 - 140, Y: 316, W: 140, H: 42}
-	hint = winui.Rect{X: consentPad, Y: 330, W: allow.X - consentPad - 16, H: 18}
+	title = winui.Rect{X: headerLeft, Y: 20, W: headerWidth, H: 28}
+	subtitle = winui.Rect{X: headerLeft, Y: 52, W: headerWidth, H: 18}
+	divider = winui.Rect{X: consentPad, Y: 86, W: consentWidth - 2*consentPad, H: 1}
+	messageBox = winui.Rect{X: consentPad, Y: 98, W: consentWidth - 2*consentPad, H: 84}
+	messageText = messageBox.Inset(14, 10)
+	countLabel = winui.Rect{X: consentPad, Y: 194, W: 200, H: 16}
+	countValue = winui.Rect{X: consentPad, Y: 210, W: 100, H: 34}
+	defaultAction = winui.Rect{X: consentPad + 110, Y: 216, W: consentWidth - 2*consentPad - 110, H: 34}
+	progressTrack = winui.Rect{X: consentPad, Y: 256, W: consentWidth - 2*consentPad, H: 7}
+	deny = winui.Rect{X: consentWidth - consentPad - 128, Y: 274, W: 128, H: 38}
+	allow = winui.Rect{X: deny.X - 10 - 128, Y: 274, W: 128, H: 38}
+	hint = winui.Rect{X: consentPad, Y: 284, W: allow.X - consentPad - 12, H: 16}
 	return
 }
 
@@ -426,13 +428,13 @@ func consentInsideRoundedCard(x, y int) bool {
 // drawConsentBadge desenha o selo do cabeçalho: um "monitor" no cartão, com
 // fundo levemente tingido pelo accent do Windows (funciona em claro e escuro).
 func drawConsentBadge(hdc uintptr, rect winui.Rect, theme winui.Theme) {
-	winui.FillRoundRectBorder(hdc, rect, 12,
+	winui.FillRoundRectBorderAA(hdc, rect, 12,
 		theme.Card.Blend(theme.Accent, 16),
 		theme.Card.Blend(theme.Accent, 40))
-	screen := winui.Rect{X: rect.X + 10, Y: rect.Y + 12, W: rect.W - 20, H: 17}
-	winui.StrokeRoundRect(hdc, screen, 4, 2, theme.Accent)
+	screen := winui.Rect{X: rect.X + 10, Y: rect.Y + 10, W: rect.W - 20, H: 15}
+	winui.StrokeRoundRectAA(hdc, screen, 4, 2, theme.Accent)
 	winui.FillRect(hdc, winui.Rect{X: rect.X + rect.W/2 - 4, Y: screen.Bottom() + 3, W: 8, H: 2}, theme.Accent)
-	winui.FillRoundRect(hdc, winui.Rect{X: rect.X + rect.W/2 - 8, Y: screen.Bottom() + 8, W: 16, H: 3}, 1, theme.Accent)
+	winui.FillRoundRectAA(hdc, winui.Rect{X: rect.X + rect.W/2 - 8, Y: screen.Bottom() + 7, W: 16, H: 3}, 1, theme.Accent)
 }
 
 // paint desenha o cartão inteiro.
@@ -464,9 +466,13 @@ func (s *consentNativeState) paint(screenDC uintptr) {
 	if s.systemCorners {
 		cardRadius = 0
 	}
-	winui.FillRoundRect(hdc, card, cardRadius, theme.Card)
-	winui.FillRect(hdc, winui.Rect{X: 0, Y: 2, W: 5, H: consentHeight - 4}, theme.Accent)
-	winui.StrokeRoundRect(hdc, card, cardRadius, 1, theme.Border)
+	winui.FillRoundRectAA(hdc, card, cardRadius, theme.Card)
+	// Faixa accent como pílula com margem: recortada nos cantos ela deixava
+	// degraus serrilhados (mesmo ajuste feito no banner da sessão).
+	winui.FillRoundRectAA(hdc,
+		winui.Rect{X: 3, Y: 10, W: 4, H: consentHeight - 20},
+		2, theme.Accent)
+	winui.StrokeRoundRectAA(hdc, card, cardRadius, 1, theme.Border)
 
 	// Selo do acesso remoto (desenhado no tema; independe de asset externo).
 	drawConsentBadge(hdc, logo, theme)
@@ -476,7 +482,7 @@ func (s *consentNativeState) paint(screenDC uintptr) {
 	winui.FillRect(hdc, divider, theme.Border)
 
 	// Caixa da mensagem (mesma hierarquia do diálogo Fluent do PSADT).
-	winui.FillRoundRectBorder(hdc, messageBox, 8, theme.Surface, theme.Border)
+	winui.FillRoundRectBorderAA(hdc, messageBox, 8, theme.Surface, theme.Border)
 	winui.DrawTextWrapped(hdc, s.messageText(), messageText, s.fonts.body, theme.Text, winui.AlignLeft)
 
 	// Contagem regressiva + ação padrão.
@@ -486,7 +492,7 @@ func (s *consentNativeState) paint(screenDC uintptr) {
 		s.fonts.defaultAction, actionColor, winui.AlignLeft)
 
 	// Barra de progresso do tempo restante.
-	winui.FillRoundRect(hdc, progressTrack, 4, theme.Border)
+	winui.FillRoundRectAA(hdc, progressTrack, 4, theme.Border)
 	progress := progressTrack
 	progress.W = int(float64(progressTrack.W) * s.progressRatio())
 	if progress.W < 8 {
@@ -495,7 +501,7 @@ func (s *consentNativeState) paint(screenDC uintptr) {
 	if progress.W > progressTrack.W {
 		progress.W = progressTrack.W
 	}
-	winui.FillRoundRect(hdc, progress, 4, actionColor)
+	winui.FillRoundRectAA(hdc, progress, 4, actionColor)
 
 	// Dica de teclado (a ação padrão também é o Enter).
 	winui.DrawTextSingle(hdc, "Enter confirma a ação padrão · Esc recusa", hint, s.fonts.hint, theme.TextMuted, winui.AlignLeft)
@@ -619,14 +625,14 @@ func runNativeConsentWindow(ctx context.Context, req remotesession.ConsentReques
 	}
 	state.theme = consentThemeLoader()
 	state.fonts = consentFonts{
-		title:         winui.CreateFont(25, 600),
-		subtitle:      winui.CreateFont(15, 400),
-		body:          winui.CreateFont(16, 400),
-		countLabel:    winui.CreateFont(13, 400),
-		countValue:    winui.CreateFont(36, 600),
-		defaultAction: winui.CreateFont(14, 600),
-		button:        winui.CreateFont(15, 600),
-		hint:          winui.CreateFont(12, 400),
+		title:         winui.CreateFont(22, 600),
+		subtitle:      winui.CreateFont(14, 400),
+		body:          winui.CreateFont(15, 400),
+		countLabel:    winui.CreateFont(12, 400),
+		countValue:    winui.CreateFont(30, 600),
+		defaultAction: winui.CreateFont(13, 600),
+		button:        winui.CreateFont(14, 600),
+		hint:          winui.CreateFont(11, 400),
 	}
 
 	winui.ShowWindow(hwnd, winui.SwShowNormal)

@@ -401,18 +401,18 @@ func (b *SessionBanner) paint(screenDC uintptr) {
 	// falhada. O raio acompanha o recorte da janela (radius-1).
 	inset := sw(1)
 	card := winui.Rect{X: inset, Y: inset, W: width - 2*inset, H: height - 2*inset}
-	winui.StrokeRoundRect(hdc, card, radius-inset, sw(1), theme.Border)
+	winui.StrokeRoundRectAA(hdc, card, radius-inset, sw(1), theme.Border)
 
 	// Faixa de destaque à esquerda: pílula arredondada com margem vertical.
 	// Antes ela ia de ponta a ponta e era recortada pelo canto arredondado,
 	// deixando degraus de accent (pixels "serrilhados") nos cantos.
 	accentMargin := sw(10)
-	winui.FillRoundRect(hdc,
+	winui.FillRoundRectAA(hdc,
 		winui.Rect{X: sw(3), Y: accentMargin, W: sw(4), H: height - 2*accentMargin},
 		sw(2), theme.Accent)
 
 	// Indicador de sessão ativa.
-	winui.FillEllipse(hdc, winui.Rect{X: sw(24), Y: sw(28), W: sw(12), H: sw(12)}, theme.Accent)
+	winui.FillEllipseAA(hdc, winui.Rect{X: sw(24), Y: sw(28), W: sw(12), H: sw(12)}, theme.Accent)
 
 	textLeft := sw(48)
 	textWidth := width - textLeft - sw(24)
