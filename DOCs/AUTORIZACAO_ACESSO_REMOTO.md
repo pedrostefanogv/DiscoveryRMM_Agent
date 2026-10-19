@@ -21,6 +21,19 @@
 - Se ambos falharem, **nega** (fail closed).
 - Decisão enviada por HTTP com `SetAgentAuthHeadersWithAgentID`; falha de reporte
   impede o início da sessão.
+- **Worker não é relançado após saída intencional**: quando o start é recusado
+  (consentimento negado/timeout, falha de reporte) o worker imprime um marcador
+  (`[remote-session-worker] exit-ok`) e encerra; o watchdog do serviço NÃO
+  relança nesse caso (antes ele interpretava a saída como crash, replayava o
+  start e o prompt de consentimento reaparecia em loop).
+- **Replay do worker (crash/logoff) consulta o status no servidor**: o payload do
+  relançamento leva `respawn=true`; o worker faz
+  `GET /agent-auth/me/remote-sessions/{id}` e decide sem reabrir o prompt —
+  sessão `active` prossegue (consentimento já autorizado), `pending_consent`
+  mostra o prompt, `denied/closed/expired` recusa o start sem prompt. Se a
+  consulta falhar, segue o fluxo normal (prompt), validado pelo servidor.
+- O servidor também envia `RemoteSessionStop` ao agente quando a decisão é
+  negada (best-effort), encerrando qualquer worker/prompt pendente.
 
 ## Tema (claro/escuro + accent)
 - O worker da sessão remota roda como **SYSTEM** na sessão interativa: `HKCU` é o

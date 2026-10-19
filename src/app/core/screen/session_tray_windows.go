@@ -4,6 +4,7 @@ package screen
 
 import (
 	"fmt"
+	"log"
 	"runtime"
 	"strings"
 	"sync"
@@ -38,31 +39,35 @@ const (
 	trayMenuDisconnect = 2
 
 	// Mensagens/estilos usados pelo ícone e pelo menu.
-	trayWMDestroy        = 0x0002
-	trayWMClose          = 0x0010
-	trayWMCommand        = 0x0111
-	trayWMTimer          = 0x0113
-	trayWMRButtonUp      = 0x0205
-	trayWMLButtonUp      = 0x0202
-	trayWMContextMenu    = 0x007B
-	trayNIFMessage       = 0x00000001
-	trayNIFIcon          = 0x00000002
-	trayNIFTip           = 0x00000004
-	trayNIFInfo          = 0x00000010
-	trayNIMAdd           = 0x00000000
-	trayNIMModify        = 0x00000001
-	trayNIMDelete        = 0x00000002
-	trayNIIFInfo         = 0x00000001
-	trayMFString         = 0x00000000
-	trayMFGrayed         = 0x00000001
-	trayMFSeparator      = 0x00000800
-	trayTPMReturnCmd     = 0x0100
-	trayTPMRightButton   = 0x0002
-	trayTPMNoNotify      = 0x0080
-	trayBalloonTitle     = "Acesso remoto Discovery"
-	trayDisconnectLabel  = "Desconectar sessão remota"
-	trayIconTipMaxRunes  = 120
-	trayBalloonOnStartup = "Sessão remota iniciada"
+	trayWMDestroy          = 0x0002
+	trayWMClose            = 0x0010
+	trayWMCommand          = 0x0111
+	trayWMTimer            = 0x0113
+	trayWMRButtonUp        = 0x0205
+	trayWMLButtonUp        = 0x0202
+	trayWMContextMenu      = 0x007B
+	trayNIFMessage         = 0x00000001
+	trayNIFIcon            = 0x00000002
+	trayNIFTip             = 0x00000004
+	trayNIFInfo            = 0x00000010
+	trayNIMAdd             = 0x00000000
+	trayNIMModify          = 0x00000001
+	trayNIMDelete          = 0x00000002
+	trayNIIFInfo           = 0x00000001
+	trayMFString           = 0x00000000
+	trayMFGrayed           = 0x00000001
+	trayMFSeparator        = 0x00000800
+	trayTPMReturnCmd       = 0x0100
+	trayTPMRightButton     = 0x0002
+	trayTPMNoNotify        = 0x0080
+	trayBalloonTitle       = "Acesso remoto Discovery"
+	trayDisconnectLabel    = "Desconectar sessão remota"
+	trayIconTipMaxRunes    = 100
+	trayMenuHeaderMaxRunes = 80
+	// trayMenuReopenGuardMS evita que um duplo-clique reabra o menu duas vezes
+	// (o primeiro clique abre o menu modal e o segundo WM_LBUTTONUP chega depois).
+	trayMenuReopenGuardMS = 300
+	trayBalloonOnStartup  = "Sessão remota iniciada"
 )
 
 var (
@@ -116,8 +121,9 @@ type SessionTray struct {
 	override string
 	balloon  string
 
-	added  bool
-	closed bool
+	added          bool
+	closed         bool
+	lastMenuClosed time.Time
 
 	taskbarCreatedMessage uint32
 
@@ -263,7 +269,9 @@ func sessionTrayWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		}
 		return 0
 	case trayWMClose:
-		_ = tray.removeIcon()
+		if err := tray.removeIcon(); err != nil {
+			log.Printf("[session-tray] falha ao remover ícone da bandeja: %v", err)
+		}
 		procDestroyWindow.Call(hwnd)
 		return 0
 	case trayWMDestroy:
@@ -452,7 +460,7 @@ func (t *SessionTray) menuHeaderText() string {
 	}
 	clock := trayElapsedClock(time.Since(t.start))
 	if t.text != "" {
-		return t.text + " · " + clock
+		return truncateRunes(t.text+" · "+clock, trayMenuHeaderMaxRunes)
 	}
 	if t.operator != "" {
 		return "Sessão remota: " + t.operator + " · " + clock
@@ -512,8 +520,11 @@ func (t *SessionTray) showMenu() {
 	t.mu.Lock()
 	hwnd := t.hwnd
 	allow := t.allowDisconnect
+	// Duplo-clique: o primeiro clique abre o menu (modal) e o segundo
+	// WM_LBUTTONUP é entregue depois — sem o guard o menu reabriria sozinho.
+	recent := !t.lastMenuClosed.IsZero() && time.Since(t.lastMenuClosed) < trayMenuReopenGuardMS*time.Millisecond
 	t.mu.Unlock()
-	if hwnd == 0 {
+	if hwnd == 0 || recent {
 		return
 	}
 
@@ -543,6 +554,9 @@ func (t *SessionTray) showMenu() {
 	)
 	// Workaround clássico: fecha o menu se o usuário clicar fora.
 	procPostMessageW.Call(hwnd, 0, 0, 0)
+	t.mu.Lock()
+	t.lastMenuClosed = time.Now()
+	t.mu.Unlock()
 	if int32(cmd) == trayMenuDisconnect {
 		t.disconnect()
 	}

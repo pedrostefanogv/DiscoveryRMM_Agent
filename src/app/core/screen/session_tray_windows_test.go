@@ -3,6 +3,7 @@
 package screen
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -111,5 +112,29 @@ func TestSessionTrayDisconnectRespeitaPolitica(t *testing.T) {
 	case <-called:
 		t.Fatal("allowDisconnect=false não pode desconectar")
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestSessionTrayCloseIdempotente(t *testing.T) {
+	tray, err := NewSessionTray(SessionTrayOptions{Operator: "Pedro", Text: "Sessão remota", AllowDisconnect: true})
+	if err != nil {
+		t.Skipf("bandeja indisponível neste ambiente: %v", err)
+	}
+	tray.Close()
+	tray.Close() // idempotente
+	// Métodos usados pelo input lock não podem panicar/lock depois do Close.
+	if err := tray.Show("bloqueado"); err != nil {
+		t.Fatalf("Show após Close: %v", err)
+	}
+	if err := tray.Hide(); err != nil {
+		t.Fatalf("Hide após Close: %v", err)
+	}
+}
+
+func TestSessionTrayMenuHeaderTruncado(t *testing.T) {
+	tray := &SessionTray{text: strings.Repeat("x", 300), start: time.Now()}
+	header := tray.menuHeaderText()
+	if len([]rune(header)) > trayMenuHeaderMaxRunes {
+		t.Fatalf("header do menu sem truncamento: %d runes", len([]rune(header)))
 	}
 }

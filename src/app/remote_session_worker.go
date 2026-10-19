@@ -180,6 +180,9 @@ func RunRemoteSessionWorker() {
 	handled, errMsg := mgr.HandleCommand(ctx, cmd)
 	if !handled {
 		fmt.Fprintf(os.Stderr, "[remote-session-worker] comando não tratado: %v\n", errMsg)
+		// Comando inválido não é recuperável por relançamento: sinaliza saída
+		// intencional para o watchdog não replayar o mesmo start.
+		fmt.Fprintf(os.Stderr, "%s\n", remoteSessionWorkerExitMarker)
 		os.Exit(5)
 	}
 	if errMsg != "" {
@@ -209,6 +212,11 @@ func RunRemoteSessionWorker() {
 			break
 		}
 	}
+
+	// Sinaliza ao serviço que esta saída é INTENCIONAL (start recusado, sessão
+	// encerrada, stop): o watchdog não deve relançar/replayar o start (senão o
+	// prompt de consentimento reaparece depois de o usuário negar).
+	fmt.Fprintf(os.Stderr, "%s\n", remoteSessionWorkerExitMarker)
 
 	// Encerra sessões ativas graciosamente.
 	_ = mgr.Shutdown()

@@ -190,3 +190,49 @@ func toBool(value any) bool {
 func (c *ConsentConfig) WithTimeoutContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithDeadline(parent, c.DeadlineUTC.Add(2*time.Second))
 }
+
+// ── Status autoritativo da sessão (respawn do worker) ──
+
+// RemoteSessionStatus é o estado da sessão no SERVIDOR. Usado no replay do
+// worker (watchdog) para decidir se o prompt de consentimento deve ser
+// reexibido: sessão já ACTIVE não pergunta de novo; sessão negada/encerrada não
+// inicia (e não reabre prompt).
+type RemoteSessionStatus struct {
+	Status         string
+	ConsentOutcome string
+}
+
+// RemoteSessionStatusFetcher consulta o estado de UMA sessão no servidor
+// (agent-auth). Injetado pelo processo que roda a sessão (worker/UI).
+type RemoteSessionStatusFetcher func(ctx context.Context, sessionID string) (RemoteSessionStatus, error)
+
+// respawnConsentAction é o que o gate de consentimento faz no REPLAY do worker.
+type respawnConsentAction int
+
+const (
+	// respawnConsentPrompt: sessão ainda aguardando decisão (ou status
+	// desconhecido) — fluxo normal de prompt.
+	respawnConsentPrompt respawnConsentAction = iota
+	// respawnConsentSkip: sessão já ACTIVE — consentimento já autorizado; não
+	// reexibe o prompt.
+	respawnConsentSkip
+	// respawnConsentRefuse: sessão negada/encerrada/expirada — recusa o start
+	// sem abrir prompt.
+	respawnConsentRefuse
+)
+
+// classifyRespawnSessionStatus mapeia o status do servidor para a ação do gate
+// no replay do worker. Status desconhecido/vazio cai no prompt (fail-safe: o
+// servidor ainda valida a decisão e recusa sessão encerrada).
+func classifyRespawnSessionStatus(status string) respawnConsentAction {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "active":
+		return respawnConsentSkip
+	case "pending_consent":
+		return respawnConsentPrompt
+	case "denied", "closed", "expired":
+		return respawnConsentRefuse
+	default:
+		return respawnConsentPrompt
+	}
+}

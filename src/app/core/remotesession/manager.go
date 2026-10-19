@@ -76,6 +76,9 @@ type Manager struct {
 	interactiveUser func() string
 	newBanner       func(BannerOptions) (SessionBanner, error)
 	newTray         func(TrayOptions) (SessionTray, error)
+	// sessionStatus consulta o estado autoritativo da sessão no servidor
+	// (usado no replay do worker para não repetir/ressuscitar consentimento).
+	sessionStatus RemoteSessionStatusFetcher
 
 	consentMu        sync.Mutex
 	consentCancel    context.CancelFunc
@@ -129,6 +132,24 @@ func (m *Manager) SetBannerFactory(fn func(BannerOptions) (SessionBanner, error)
 // SetTrayFactory injeta o criador do ícone da bandeja da sessão.
 func (m *Manager) SetTrayFactory(fn func(TrayOptions) (SessionTray, error)) {
 	m.newTray = fn
+}
+
+// respawnStatusQueryTimeout limita a consulta de status no replay do worker
+// (o start está no caminho crítico; sem resposta, cai no prompt normal).
+const respawnStatusQueryTimeout = 8 * time.Second
+
+// queryRespawnSessionStatus consulta o status autoritativo da sessão.
+func (m *Manager) queryRespawnSessionStatus(ctx context.Context, sessionID string) (RemoteSessionStatus, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, respawnStatusQueryTimeout)
+	defer cancel()
+	return m.sessionStatus(queryCtx, sessionID)
+}
+
+// SetSessionStatusFetcher injeta o consultor do estado da sessão no servidor
+// (agent-auth). Usado no REPLAY do worker: sessão já ACTIVE não reexibe o prompt
+// de consentimento; sessão negada/encerrada não inicia.
+func (m *Manager) SetSessionStatusFetcher(fn RemoteSessionStatusFetcher) {
+	m.sessionStatus = fn
 }
 
 // StopByUser encerra a sessão a pedido do usuário local (banner).
@@ -190,10 +211,30 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 
 	// Consentimento: SOMENTE desktop (screen/all). Terminal, arquivos, proxy e
 	// processos seguem sem prompt, como antes.
-	if (kind == "screen" || kind == "all") && ParseConsentConfig(payload) != nil {
-		if allowed, reason := m.runConsentGate(ctx, sessionID, payload); !allowed {
-			log.Printf("[remote-consent] start recusado sessionId=%s: %s\n", sessionID, reason)
-			return true, reason
+	if consentCfg := ParseConsentConfig(payload); consentCfg != nil && (kind == "screen" || kind == "all") {
+		skipConsent := false
+		// REPLAY do worker (watchdog de crash/logoff): a sessão pode JÁ ter sido
+		// autorizada (ou já ter sido negada/encerrada) no servidor. Consulta o
+		// estado autoritativo para NÃO reexibir o prompt em sessão aprovada e NÃO
+		// "ressuscitar" sessão negada (o prompt reaparecia no replay).
+		if consentCfg.Mode == "prompt" && toBool(payload["respawn"]) && m.sessionStatus != nil {
+			status, statusErr := m.queryRespawnSessionStatus(ctx, sessionID)
+			switch {
+			case statusErr != nil:
+				log.Printf("[remote-session] respawn %s: consulta de status falhou (%v) — seguindo com prompt normal\n", sessionID, statusErr)
+			case classifyRespawnSessionStatus(status.Status) == respawnConsentSkip:
+				log.Printf("[remote-session] respawn %s: sessão já ACTIVE no servidor — consentimento já autorizado, sem novo prompt\n", sessionID)
+				skipConsent = true
+			case classifyRespawnSessionStatus(status.Status) == respawnConsentRefuse:
+				log.Printf("[remote-session] respawn %s: sessão não está aguardando/ativa (status=%s) — start recusado sem prompt\n", sessionID, status.Status)
+				return true, "respawn: sessão já encerrada no servidor (status=" + status.Status + ")"
+			}
+		}
+		if !skipConsent {
+			if allowed, reason := m.runConsentGate(ctx, sessionID, payload); !allowed {
+				log.Printf("[remote-consent] start recusado sessionId=%s: %s\n", sessionID, reason)
+				return true, reason
+			}
 		}
 	}
 

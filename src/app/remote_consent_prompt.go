@@ -169,7 +169,7 @@ func psadtConsentPrompt(ctx context.Context, req remotesession.ConsentRequest) (
 	// Welcome/Restart têm timer): como este é o fallback, a mensagem precisa
 	// dizer qual ação padrão será aplicada e o tempo total para responder.
 	message = message + "\n\n" + consentDefaultActionText(req.TimeoutAction) +
-		" Tempo para responder: " + consentCountdownClock(req.Timeout) + "."
+		" Tempo para responder: " + consentCountdownClock(time.Duration(timeoutSeconds)*time.Second) + "."
 
 	visualReq := PSADTVisualNotificationRequest{
 		NotifType:       "prompt_yesno",
@@ -365,6 +365,8 @@ func wireRemoteConsentManager(mgr *remotesession.Manager) {
 	mgr.SetConsentPrompt(remoteConsentPrompt)
 	mgr.SetConsentReporter(reportRemoteConsentDecision)
 	mgr.SetInteractiveUser(remoteConsentInteractiveUser)
+	// Estado autoritativo da sessão no servidor (usado no replay do worker).
+	mgr.SetSessionStatusFetcher(fetchRemoteSessionStatus)
 	// Banner: informativo e click-through (não captura cliques do app em uso).
 	mgr.SetBannerFactory(func(opts remotesession.BannerOptions) (remotesession.SessionBanner, error) {
 		return screen.NewSessionBanner(screen.BannerOptions{
@@ -402,6 +404,44 @@ func reportBannerDisconnectIfNeeded(sessionID, reason string) {
 // logon/lock sem usuário ativo -> ação de timeout imediata).
 func remoteConsentInteractiveUser() string {
 	return strings.TrimSpace(native.CollectPrimaryLoggedInUser())
+}
+
+// fetchRemoteSessionStatus consulta o estado autoritativo da sessão no servidor
+// (agent-auth). Usado no REPLAY do worker: se a sessão já está ACTIVE o prompt
+// de consentimento NÃO é reexibido; se foi negada/encerrada, o start é recusado
+// sem prompt. Falha de consulta NÃO bloqueia: o fluxo normal (prompt) segue.
+func fetchRemoteSessionStatus(ctx context.Context, sessionID string) (remotesession.RemoteSessionStatus, error) {
+	apiBase, token := remoteConsentEndpoint()
+	if apiBase == "" || token == "" {
+		return remotesession.RemoteSessionStatus{}, fmt.Errorf("endpoint/token de consentimento indisponível")
+	}
+	url := strings.TrimRight(apiBase, "/") + "/api/v1/agent-auth/me/remote-sessions/" + sessionID
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return remotesession.RemoteSessionStatus{}, err
+	}
+	_ = netutil.SetAgentAuthHeadersWithAgentID(req, token, remoteConsentAgent())
+	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
+	if err != nil {
+		return remotesession.RemoteSessionStatus{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return remotesession.RemoteSessionStatus{}, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var body struct {
+		Status  string `json:"status"`
+		Consent struct {
+			Outcome string `json:"outcome"`
+		} `json:"consent"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return remotesession.RemoteSessionStatus{}, err
+	}
+	return remotesession.RemoteSessionStatus{
+		Status:         strings.TrimSpace(body.Status),
+		ConsentOutcome: strings.TrimSpace(body.Consent.Outcome),
+	}, nil
 }
 
 // reportRemoteConsentDecision envia a decisão ao servidor (agent-auth).

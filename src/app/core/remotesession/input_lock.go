@@ -176,18 +176,19 @@ func (m *InputLockManager) setIndicator(ind lockIndicator) {
 		return
 	}
 	m.mu.Lock()
-	if m.indicatorShared {
+	if m.indicatorShared || m.closed {
 		m.mu.Unlock()
 		return
 	}
 	// Corrida possível: um bloqueio chegou antes desta injeção e criou o
-	// indicador próprio. Troca pelo ícone da sessão (e fecha o antigo).
+	// indicador próprio. Troca pelo ícone da sessão (e fecha o antigo — nunca
+	// se for o próprio objeto injetado, senão o ícone da sessão sumiria).
 	old := m.indicator
 	m.indicator = ind
 	m.indicatorShared = true
 	locked := m.locked
 	m.mu.Unlock()
-	if old != nil {
+	if old != nil && old != ind {
 		old.Close()
 	}
 	if locked {

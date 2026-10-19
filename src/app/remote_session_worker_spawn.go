@@ -47,6 +47,23 @@ var remoteSessionWorkers struct {
 // uma mesma sessão dentro do serviço (evita loop em caso de falha persistente).
 const maxRemoteSessionRespawns = 3
 
+// remoteSessionWorkerExitMarker é impresso no stderr pelo worker quando ele
+// encerra de forma INTENCIONAL (start recusado — incluindo consentimento
+// negado/timeout —, stop, sessão encerrada). O watchdog NÃO pode relançar nesse
+// caso: relançar replayaria o start e REABRIRIA o prompt de consentimento.
+//
+// Bug de campo (18/10/2026): usuário clicava em Negar, o servidor encerrava a
+// sessão, mas o watchdog interpretava a saída normal do worker como "morreu com
+// sessão ativa" e relançava — o prompt reaparecia até esgotar o orçamento de
+// relançamentos (e os reportes seguintes davam HTTP 409).
+const remoteSessionWorkerExitMarker = "[remote-session-worker] exit-ok"
+
+// workerLineSignalsIntentionalExit informa se a linha de stderr é o marcador de
+// saída intencional do worker.
+func workerLineSignalsIntentionalExit(line string) bool {
+	return strings.HasPrefix(line, remoteSessionWorkerExitMarker)
+}
+
 // respawnBudgetStore conta, por sessão, quantos relançamentos o watchdog ainda
 // pode fazer. Zerado quando chega um start explícito novo.
 type respawnBudgetStore struct {
@@ -95,6 +112,9 @@ type remoteSessionWorkerProc struct {
 	// stopping marca encerramento explícito (stop/teardown) — o watchdog não
 	// relança nesse caso.
 	stopping atomic.Bool
+	// intentionalExit marca que o PRÓPRIO worker terminou de forma intencional
+	// (marcador no stderr). Também impede o relançamento.
+	intentionalExit atomic.Bool
 	// stderrDrainDone é fechado quando a goroutine de dreno do stderr termina.
 	stderrDrainDone chan struct{}
 	// handshake é fechado quando o worker confirma no stderr que entrou no
@@ -127,6 +147,11 @@ func spawnRemoteSessionWorkerAttempt(parent context.Context, payload map[string]
 	sessionID, _ := payload["sessionId"].(string)
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("payload sem sessionId")
+	}
+	if isRespawn {
+		// Replay do watchdog: marca o payload para o worker consultar o status
+		// da sessão no servidor antes de reexibir o prompt de consentimento.
+		payload = markWorkerRespawnPayload(payload)
 	}
 
 	remoteSessionWorkers.mu.Lock()
@@ -196,30 +221,7 @@ func spawnRemoteSessionWorkerAttempt(parent context.Context, payload map[string]
 	// falhas de startup do worker eram invisíveis.
 	go func() {
 		defer close(w.stderrDrainDone)
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" {
-				continue
-			}
-			log.Printf("[remote-session-worker] %s", line)
-			w.rememberStderr(line)
-			// Handshake: RunRemoteSessionWorker imprime "iniciando sessão <id>"
-			// no stderr imediatamente após ler o payload do stdin — ANTES de
-			// conectar o NATS. Se esta linha nunca chegar, o binário não está
-			// rodando o modo worker (flag não tratada / binário errado).
-			if w.handshake != nil && strings.Contains(line, "iniciando sessão ") {
-				select {
-				case <-w.handshake:
-				default:
-					close(w.handshake)
-				}
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			log.Printf("[remote-session-worker] stderr interrompido: %v", err)
-		}
-		_ = stderr.Close()
+		w.drainStderr(stderr)
 	}()
 
 	go func() {
@@ -446,6 +448,48 @@ func setHandleNonInheritable(h windows.Handle) error {
 	return windows.SetHandleInformation(h, windows.HANDLE_FLAG_INHERIT, 0)
 }
 
+// markWorkerRespawnPayload devolve uma CÓPIA do payload marcada como replay do
+// watchdog. O worker usa o flag para consultar o estado autoritativo da sessão
+// (sessão já ACTIVE não reexibe prompt; negada/encerrada não inicia).
+func markWorkerRespawnPayload(payload map[string]any) map[string]any {
+	clone := cloneWorkerPayload(payload)
+	clone["respawn"] = true
+	return clone
+}
+
+// drainStderr lê o stderr do worker linha a linha, registra no log do serviço,
+// guarda as últimas linhas para diagnóstico, fecha o handshake e marca saída
+// intencional (marcador remotoSessionWorkerExitMarker). Fecha stderr no fim.
+func (w *remoteSessionWorkerProc) drainStderr(stderr *os.File) {
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		log.Printf("[remote-session-worker] %s", line)
+		w.rememberStderr(line)
+		if workerLineSignalsIntentionalExit(line) {
+			w.intentionalExit.Store(true)
+		}
+		// Handshake: RunRemoteSessionWorker imprime "iniciando sessão <id>"
+		// no stderr imediatamente após ler o payload do stdin — ANTES de
+		// conectar o NATS. Se esta linha nunca chegar, o binário não está
+		// rodando o modo worker (flag não tratada / binário errado).
+		if w.handshake != nil && strings.Contains(line, "iniciando sessão ") {
+			select {
+			case <-w.handshake:
+			default:
+				close(w.handshake)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("[remote-session-worker] stderr interrompido: %v", err)
+	}
+	_ = stderr.Close()
+}
+
 // writeWorkerPayload envia um comando framed ao stdin do worker.
 func writeWorkerPayload(w *remoteSessionWorkerProc, payload map[string]any) error {
 	data, err := json.Marshal(payload)
@@ -495,6 +539,22 @@ func cloneWorkerPayload(payload map[string]any) map[string]any {
 // serviço NÃO está encerrando. Limitado por maxRemoteSessionRespawns por sessão.
 func (w *remoteSessionWorkerProc) maybeRespawn() {
 	if w.stopping.Load() || w.parent == nil || w.parent.Err() != nil {
+		return
+	}
+
+	// A linha do marcador de saída intencional pode chegar ao dreno DEPOIS do
+	// Wait do processo: espera o dreno terminar antes de decidir relançar.
+	if w.stderrDrainDone != nil {
+		select {
+		case <-w.stderrDrainDone:
+		case <-time.After(2 * time.Second):
+		}
+	}
+	if w.stopping.Load() {
+		return
+	}
+	if w.intentionalExit.Load() {
+		log.Printf("[remote-session] watchdog: worker encerrou de forma intencional (sessionId=%s) — não relança", w.sessionID)
 		return
 	}
 

@@ -531,3 +531,20 @@ func TestInputLockSharedIndicatorNaoEFechado(t *testing.T) {
 		t.Fatalf("indicador compartilhado não deve ser fechado pelo InputLockManager (Close=%d)", closeCalls)
 	}
 }
+
+// TestInputLockSetIndicatorIgnoraManagerFechado garante que uma injeção tardia
+// (depois do Close) não deixa o ícone registrado sem dono.
+func TestInputLockSetIndicatorIgnoraManagerFechado(t *testing.T) {
+	rig := newLockRig(t)
+	rig.mgr.Close()
+
+	rig.mgr.setIndicator(&fakeLockIndicator{rig: rig})
+
+	rig.mgr.mu.Lock()
+	indicator := rig.mgr.indicator
+	shared := rig.mgr.indicatorShared
+	rig.mgr.mu.Unlock()
+	if indicator != nil || shared {
+		t.Fatal("indicador não pode ser registrado depois do Close do manager")
+	}
+}

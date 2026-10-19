@@ -244,7 +244,12 @@ func bannerPosition(monitorIndex int) (x, y int) {
 		index = 0
 	}
 	target := monitors[index]
-	return target.X + (target.Width-bannerWidth)/2, target.Y + 8
+	x = target.X + (target.Width-bannerWidth)/2
+	// Monitor mais estreito que o banner: não sai pela esquerda.
+	if x < target.X {
+		x = target.X
+	}
+	return x, target.Y + 8
 }
 
 // primaryText é a linha principal do banner (texto do servidor ou default).
