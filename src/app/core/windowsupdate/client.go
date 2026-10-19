@@ -43,7 +43,13 @@ func (o Options) normalized() Options {
 type Client interface {
 	// Probe reporta suporte/servico/politica sem rodar um scan.
 	Probe(ctx context.Context) ProbeInfo
+	// ProbeState devolve a sonda BARATA do estado local (registro/log/SCM, sem
+	// COM). E o gatilho do scan sob demanda: quando a assinatura
+	// (WindowsUpdateStateSignature) muda, o agente roda Scan + upload.
+	ProbeState(ctx context.Context) WindowsUpdateState
 	// Scan lista updates pendentes (WUA) e instalados (QFE) + sonda de reboot.
+	// Em falha (servico desabilitado, WUA ausente) pode devolver um resultado
+	// PARCIAL junto com o erro, para o envelope ainda explicar a maquina.
 	Scan(ctx context.Context, opts ScanOptions) (*ScanResult, error)
 	// Install instala SOMENTE os targets que existirem no catalogo atual.
 	Install(ctx context.Context, targets []InstallTarget) (*InstallResult, error)
@@ -60,6 +66,15 @@ func New(opts Options) Client {
 // plataforma; em SO sem suporte retorna Pending=false.
 func ProbePendingReboot() RebootInfo {
 	return probePendingReboot()
+}
+
+// WindowsUpdateStateSignatureFromClient devolve a assinatura da sonda barata
+// pelo cliente (helper para o loop do agente).
+func WindowsUpdateStateSignatureFromClient(client Client, ctx context.Context) string {
+	if client == nil {
+		return ""
+	}
+	return WindowsUpdateStateSignature(client.ProbeState(ctx))
 }
 
 // ReadPolicy le a politica de Windows Update efetiva (best-effort).

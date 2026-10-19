@@ -33,12 +33,24 @@ func ComputeFileSHA256(path string) (string, error) {
 }
 
 // ListenInRange opens a TCP listener on the first available port in [start, end].
+// Escuta somente em loopback: o servidor HTTP local de transferência aceita o
+// onboarding por deploy key (/p2p/config/onboard) e não deve ficar exposto à
+// sub-rede (achado C4).
 func ListenInRange(start, end int) (net.Listener, int, error) {
+	return listenInRangeOn(p2pTransferListenHost, start, end)
+}
+
+// p2pTransferListenHost é o endereço em que o servidor HTTP local escuta.
+const p2pTransferListenHost = "127.0.0.1"
+
+// listenInRangeOn abre um listener TCP em host:port para a primeira porta livre
+// do intervalo [start, end].
+func listenInRangeOn(host string, start, end int) (net.Listener, int, error) {
 	if start <= 0 || end <= 0 || start > end {
 		return nil, 0, errors.New("range de portas invalida")
 	}
 	for port := start; port <= end; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 		if err == nil {
 			return ln, port, nil
 		}

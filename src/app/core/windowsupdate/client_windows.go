@@ -153,12 +153,55 @@ func (c *wuaClient) Probe(ctx context.Context) ProbeInfo {
 }
 
 func (c *wuaClient) Scan(ctx context.Context, opts ScanOptions) (*ScanResult, error) {
+	// Servico desabilitado: sem WUA, mas a UI precisa de explicacao. Devolve um
+	// resultado valido (parcial) com a sonda de estado e o erro tipado — o
+	// chamador sobe o envelope com scan.status=error/errorCode.
 	if strings.EqualFold(windowsUpdateServiceState(), "disabled") {
-		return nil, ErrServiceDisabled
+		return unavailableScanResult(), ErrServiceDisabled
 	}
-	return withOp(c, ctx, c.opts.ScanTimeout, func() (*ScanResult, error) {
+	result, err := withOp(c, ctx, c.opts.ScanTimeout, func() (*ScanResult, error) {
 		return scanWUA(opts)
 	})
+	if err != nil && result == nil {
+		partial := unavailableScanResult()
+		switch {
+		case errors.Is(err, ErrWuaUnavailable):
+			partial.State.PolicyErrorCode = ScanErrorWuaUnavailable
+		case errors.Is(err, ErrTimeout):
+			partial.State.PolicyErrorCode = ScanErrorTimeout
+		default:
+			partial.State.PolicyErrorCode = ScanErrorFailed
+		}
+		return partial, err
+	}
+	return result, err
+}
+
+// ProbeState devolve a sonda barata do estado local (sem WUA/COM).
+func (c *wuaClient) ProbeState(ctx context.Context) WindowsUpdateState {
+	state := ProbeLocalState()
+	if ctx != nil && ctx.Err() != nil {
+		state.PolicyErrorCode = ScanErrorTimeout
+	}
+	return state
+}
+
+// unavailableScanResult monta o ScanResult de uma maquina onde o WUA nao pode
+// rodar. Partial=true impede o servidor de interpretar a lista vazia como
+// remocao do inventario.
+func unavailableScanResult() *ScanResult {
+	now := time.Now().UTC()
+	state := ProbeLocalState()
+	reboot := RebootInfo{Pending: state.RebootPending, Reasons: state.RebootReasons, CheckedAt: now}
+	return &ScanResult{
+		Updates:        []Update{},
+		Partial:        true,
+		PendingReboot:  reboot,
+		State:          state,
+		StartedAt:      now,
+		DurationMs:     0,
+		Source:         SourceWUA,
+	}
 }
 
 func (c *wuaClient) Install(ctx context.Context, targets []InstallTarget) (*InstallResult, error) {
@@ -269,7 +312,7 @@ func pendingCriteria(includeHidden, includeDrivers bool) []string {
 
 // searchPending executa a busca de pendentes tentando variantes de criterio
 // (BrowseOnly pode nao existir em WUA antigo).
-func searchPending(searcher *ole.IDispatch, includeHidden, includeDrivers bool) ([]Update, error) {
+func searchPending(searcher *ole.IDispatch, includeHidden, includeDrivers bool) ([]Update, ScanCounters, error) {
 	var lastErr error
 	for _, criteria := range pendingCriteria(includeHidden, includeDrivers) {
 		collection, err := searchUpdatesCollection(searcher, criteria)
@@ -279,22 +322,44 @@ func searchPending(searcher *ole.IDispatch, includeHidden, includeDrivers bool) 
 			if errors.As(err, &oleErr) && oleErr.Code() == hresultInvalidCriteria {
 				continue
 			}
-			return nil, err
+			return nil, ScanCounters{}, err
 		}
-		updates, err := readUpdates(collection, includeDrivers)
+		updates, counters, readErr := readUpdates(collection, includeDrivers)
 		collection.Release()
-		if err != nil {
-			return nil, err
+		if readErr != nil {
+			return nil, ScanCounters{}, readErr
 		}
-		return updates, nil
+		return updates, counters, nil
 	}
-	return nil, lastErr
+	return nil, ScanCounters{}, lastErr
 }
 
-func readUpdates(collection *ole.IDispatch, includeDrivers bool) ([]Update, error) {
+// ScanCounters contabiliza o que ficou fora do inventario, por motivo. O
+// objetivo e NUNCA descartar em silencio: "Windows 11 Insider Preview Quality
+// Update" (categoria Upgrades) era descartado e o servico REAL instalado nesta
+// frota sumia da aba de atualizacoes.
+type ScanCounters struct {
+	Read     int
+	Included int
+	Skipped  map[string]int
+	SkippedN int
+	Upgrades int
+	Drivers  int
+}
+
+func (c *ScanCounters) addSkipped(reason string) {
+	if c.Skipped == nil {
+		c.Skipped = make(map[string]int, 4)
+	}
+	c.Skipped[reason]++
+	c.SkippedN++
+}
+
+func readUpdates(collection *ole.IDispatch, includeDrivers bool) ([]Update, ScanCounters, error) {
+	counters := ScanCounters{}
 	countRaw, err := oleutil.GetProperty(collection, "Count")
 	if err != nil {
-		return nil, err
+		return nil, counters, err
 	}
 	count := variantInt(countRaw)
 	countRaw.Clear()
@@ -305,24 +370,41 @@ func readUpdates(collection *ole.IDispatch, includeDrivers bool) ([]Update, erro
 	for i := 0; i < count; i++ {
 		itemRaw, err := oleutil.CallMethod(collection, "Item", i)
 		if err != nil {
+			counters.Read++
+			counters.addSkipped(SkipReasonUnreadable)
 			continue
 		}
 		item := itemRaw.ToIDispatch()
 		if item == nil {
 			itemRaw.Clear()
+			counters.Read++
+			counters.addSkipped(SkipReasonUnreadable)
 			continue
 		}
+		counters.Read++
 		update, skip := readUpdate(item)
 		item.Release()
 		if skip {
+			counters.addSkipped(SkipReasonNoIdentity)
 			continue
 		}
-		if !includeDrivers && isDriverOrUpgrade(update) {
+		// Upgrades (feature updates / "Windows 11 Insider Preview Quality
+		// Update") SAO inventariados: e exatamente o tipo de pacote que o
+		// Windows Update baixa e instala nesta frota. Somente drivers ficam de
+		// fora, e apenas quando o chamador pediu (IncludeDrivers=false), com
+		// contabilizacao explicita.
+		if isUpgradeCategory(update) {
+			counters.Upgrades++
+		}
+		if !includeDrivers && isDriverUpdate(update) {
+			counters.Drivers++
+			counters.addSkipped(SkipReasonDriver)
 			continue
 		}
+		counters.Included++
 		out = append(out, update)
 	}
-	return out, nil
+	return out, counters, nil
 }
 
 func readUpdate(update *ole.IDispatch) (Update, bool) {
@@ -434,10 +516,21 @@ func readUpdate(update *ole.IDispatch) (Update, bool) {
 	return u, false
 }
 
-func isDriverOrUpgrade(u Update) bool {
+// isDriverUpdate informa se o update e um driver (fora do escopo do modulo).
+func isDriverUpdate(u Update) bool {
 	for _, category := range u.Categories {
-		name := strings.ToLower(strings.TrimSpace(category))
-		if name == "upgrades" || name == "drivers" {
+		if strings.EqualFold(strings.TrimSpace(category), "drivers") {
+			return true
+		}
+	}
+	return strings.EqualFold(strings.TrimSpace(u.Classification), "drivers")
+}
+
+// isUpgradeCategory informa se o update pertence a categoria Upgrades. Usado
+// APENAS para diagnostico/metrica: nao descarta nada.
+func isUpgradeCategory(u Update) bool {
+	for _, category := range u.Categories {
+		if strings.EqualFold(strings.TrimSpace(category), "upgrades") {
 			return true
 		}
 	}
@@ -534,7 +627,7 @@ func scanWUA(opts ScanOptions) (*ScanResult, error) {
 	}
 	defer searcher.Release()
 
-	pending, err := searchPending(searcher, opts.IncludeHidden, opts.IncludeDrivers)
+	pending, counters, err := searchPending(searcher, opts.IncludeHidden, opts.IncludeDrivers)
 	if err != nil {
 		return nil, err
 	}
@@ -547,6 +640,13 @@ func scanWUA(opts ScanOptions) (*ScanResult, error) {
 	for _, update := range pending {
 		if update.IsPending {
 			res.PendingCount++
+		}
+	}
+	// Nada e descartado em silencio: cada motivo aparece no SkippedReasons e
+	// no log do chamador (inventory).
+	for reason, count := range counters.Skipped {
+		for i := 0; i < count; i++ {
+			res.AddSkipped(reason)
 		}
 	}
 
@@ -563,6 +663,9 @@ func scanWUA(opts ScanOptions) (*ScanResult, error) {
 	}
 
 	res.PendingReboot = probePendingReboot()
+	res.State = ProbeLocalState()
+	res.State.RebootPending = res.PendingReboot.Pending
+	res.State.RebootReasons = append([]string(nil), res.PendingReboot.Reasons...)
 	res.DurationMs = time.Since(started).Milliseconds()
 	return res, nil
 }

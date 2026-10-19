@@ -292,6 +292,9 @@
         if (els.invite) els.invite.hidden = true;
         if (els.inviteAccept) els.inviteAccept.disabled = false;
         if (els.inviteReject) els.inviteReject.disabled = false;
+        // Aceite: recarrega a conversa (com novas tentativas se o servidor ainda
+        // não confirmou o status). A janela do chat NÃO é aberta por aqui: no
+        // caminho normal ela é criada pelo Go no aceite do cartão nativo.
         if (accepted) return refresh();
         // Recusa: o Go descarta o estado e fecha a janela.
         return null;
@@ -961,9 +964,57 @@
     els.banner.textContent = text;
   }
 
-  function refresh() {
+  /**
+   * Carrega a conversa do servidor.
+   *
+   * BUG RELATADO: "a janela do chat não abre depois do aceite". Quando a janela
+   * nasce no aceite, o primeiro snapshot pode chegar ANTES de o servidor
+   * confirmar a mudança Pending -> Active (o POST do aceite e este GET correm em
+   * paralelo) ou numa leitura transitória que devolve "sem sessão". O estado
+   * caía em "none" e a janela ficava "Sem conversa" — sem mensagens, com o
+   * campo travado — até um evento de estado novo.
+   *
+   * Agora um snapshot vazio (sem sessão) NUNCA é aceito como resposta final:
+   * tenta de novo algumas vezes com um pequeno intervalo. O serviço preserva o
+   * "waiting" local (SupportChatRefresh usa RefreshKeepingInvite), então a
+   * tentativa extra não apaga um convite pendente.
+   */
+  var REFRESH_EMPTY_RETRIES = 4;
+  var REFRESH_EMPTY_DELAY_MS = 900;
+
+  function isBlankSnapshot(next) {
+    return !next || (!next.hasSession && (!next.status || next.status === "none"));
+  }
+
+  /**
+   * A janela está no estado "vazia por enquanto" (sem sessão ainda)?
+   *
+   * Serve para as re-tentativas: uma janela recém-aberta pelo aceite nasce
+   * "none" e PRECISA de novas tentativas; uma janela já carregada (conversa
+   * encerrada vinda do snapshot do boot, ou estado ainda desconhecido) NÃO deve
+   * rivalizar com a interface principal — ela já está cuidando do aviso.
+   */
+  function isUnsettled() {
+    return state.status === "none" && !state.messages.length && !state.ticketTitle;
+  }
+
+  function refresh(attempt) {
+    attempt = attempt || 0;
+    var wasSettled = !isUnsettled();
+
     return call("SupportChatRefresh")
-      .then(function (next) { applyState(next); })
+      .then(function (next) {
+        var blank = isBlankSnapshot(next);
+        // Re-tenta quando o snapshot voltou vazio E a janela ainda não tinha
+        // nada carregado (corrida do aceite × /active). Janela já preenchida
+        // não entra no ciclo (evita URL/estado "vazia" reaparecendo).
+        if (blank && !wasSettled && attempt < REFRESH_EMPTY_RETRIES && !state.closing) {
+          return new Promise(function (resolve) {
+            setTimeout(resolve, REFRESH_EMPTY_DELAY_MS);
+          }).then(function () { return refresh(attempt + 1); });
+        }
+        applyState(next);
+      })
       .catch(function (err) {
         // Snapshot falhou (rede): mantém o estado em memória do NATS.
         showBanner("Não foi possível atualizar a conversa: " + describe(err));

@@ -41,7 +41,20 @@ type Config struct {
 	// (0 = usa o valor adaptativo padrão, teto 8).
 	MaxParallelChunks int             `json:"maxParallelChunks,omitempty"`
 	BootstrapConfig   BootstrapConfig `json:"bootstrapConfig,omitempty"`
+	// ArtifactServeMode controla se os streams libp2p servidos por este agente
+	// (artifact/get, artifact/manifest e discovery/peers) exigem token de
+	// acesso emitido por /artifact/access/1.0.0:
+	//   "require" (default): token obrigatório e validado.
+	//   "legacy":            aceita peers sem token (agentes antigos).
+	// Pode ser forçado pela variável DISCOVERY_P2P_ARTIFACT_SERVE_MODE.
+	ArtifactServeMode string `json:"artifactServeMode,omitempty"`
 }
+
+// ArtifactServeModes lista os valores aceitos em ArtifactServeMode.
+const (
+	ArtifactServeModeRequire = "require"
+	ArtifactServeModeLegacy  = "legacy"
+)
 
 // TCPOnlyEnabled retorna true quando o transporte deve ser restrito ao TCP.
 // Default true quando o campo está ausente (nil) — configs antigos sem o

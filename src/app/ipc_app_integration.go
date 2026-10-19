@@ -513,6 +513,12 @@ func (a *App) startIPCClient() {
 				if name == "supportchat:invite" {
 					a.openSupportChatInviteFromIPC(msg.Payload)
 				}
+				// Sessão VIVA que o serviço conhece e esta UI não (aceite feito
+				// enquanto a UI estava desconectada): adota na hora, sem esperar
+				// a reconciliação (ver adoptSupportChatSession).
+				if name == "supportchat:replay" {
+					a.adoptSupportChatSession(supportChatField(msg.Payload, "sessionId"))
+				}
 				// Estado do chat de suporte vindo do SERVIÇO: o modo da janela
 				// ("sempre no topo" só com convite pendente) é decidido aqui na
 				// UI, que é quem tem a janela. O serviço não sabe do Wails, então
@@ -533,6 +539,12 @@ func (a *App) startIPCClient() {
 			a.Logs.Append("[ipc] " + state + " ao serviço")
 			a.EmitEvent("service:ipc_state", map[string]any{"connected": connected})
 			if connected {
+				// Convite pendente + UI que acabou de (re)conectar: o evento IPC
+				// original pode ter caído no intervalo da conexão (pipe ainda
+				// subindo). Reapresenta o cartão e confirma no servidor se a
+				// sessão continua pendente — ver
+				// replaySupportChatInviteAfterUIReconnect.
+				go a.replaySupportChatInviteAfterUIReconnect()
 				// Adota a configuração do agente resolvida no serviço (clientId/
 				// siteId): a UI companion nasce com AgentConfig zero e sem DB.
 				go a.hydrateAgentConfigurationCompanion()

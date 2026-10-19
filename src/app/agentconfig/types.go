@@ -132,6 +132,10 @@ type AgentConfiguration struct {
 	// WindowsUpdateScanIntervalMinutes controla a cadência do scan WUA.
 	// nil = default (360 min, mínimo 60).
 	WindowsUpdateScanIntervalMinutes *int `json:"windowsUpdateScanIntervalMinutes"`
+	// WindowsUpdateStateIntervalMinutes controla a sonda BARATA de estado
+	// (registro/log/serviço, sem WUA) que dispara o scan quando a assinatura
+	// muda. nil = default (5 min, mínimo 30s — abaixo de 1 min é arredondado).
+	WindowsUpdateStateIntervalMinutes *int `json:"windowsUpdateStateIntervalMinutes"`
 }
 
 // ServerConfiguration representa a configuração global do servidor (API v1).

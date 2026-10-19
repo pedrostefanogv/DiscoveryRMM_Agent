@@ -60,7 +60,19 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 	// resposta ao servidor é uma chamada de rede e, nesse intervalo, o estado
 	// local ainda é "waiting". Repreparar aqui reemitiria o convite (e poderia
 	// limpar o transcript) para uma sessão que o usuário já respondeu.
-	if a.supportChatInviteNotificationWasAnswered(invite.SessionID) {
+	//
+	// Se o convite AINDA é o pendente, a reentrega é INTENCIONAL (o console
+	// reenviou o convite para uma sessão que segue Pending): a pergunta precisa
+	// chegar de novo à máquina — antes a resposta era "alreadyAnswered" e o
+	// cartão nunca reaparecia para o usuário.
+	intentionalRetry := a.supportChatInviteIsCurrentPending(invite.SessionID)
+	if intentionalRetry {
+		// O servidor ainda considera este convite PENDENTE: uma resposta antiga
+		// do usuário (marca de "já respondido") não pode suprimir a pergunta —
+		// se o POST dela não chegou, é agora que o usuário decide de novo.
+		a.clearStaleSupportChatInviteAnswer(invite.SessionID)
+	}
+	if !intentionalRetry && a.supportChatInviteNotificationWasAnswered(invite.SessionID) {
 		a.Logs.Append("[supportchat] convite reentregue apos resposta no cartao; ignorado (sessionId=" + invite.SessionID + ")")
 		body, _ := json.Marshal(map[string]any{
 			"alreadyAnswered": true,
@@ -98,7 +110,8 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 			// Reentrega do convite de uma conversa JÁ ACEITA: nada de reabrir o
 			// pedido de confirmação (o modal aparecia em cima da conversa em curso).
 			// Só garante que a janela está aberta e na frente.
-			if a.app != nil {
+			if a.app != nil && !a.supportChatWindowOpen() {
+				a.Logs.Append("[supportchat] conversa ja ativa sem janela (convite reentregue); abrindo o chat")
 				go a.openSupportChatWindow()
 			}
 			body, _ := json.Marshal(map[string]any{
@@ -174,7 +187,7 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 	if a.app != nil {
 		// Cartão nativo (sem ação padrão) ou, se indisponível, a janela antiga.
 		// presentSupportChatInvite também inicia a validação em background.
-		go a.presentSupportChatInvite(invite)
+		go a.presentSupportChatInviteWithRetry(invite, intentionalRetry)
 	}
 
 	body, _ := json.Marshal(map[string]any{
@@ -330,6 +343,21 @@ func (a *App) notifySupportChatInvite(invite supportchat.Invite) {
 	if err := ns.SendNotification(opts); err != nil {
 		a.Logs.Append("[supportchat] toast nativo indisponível: " + err.Error())
 	}
+}
+
+// supportChatInviteIsCurrentPending informa se a sessão ainda é o CONVITE
+// pendente registrado no serviço (status "waiting").
+//
+// É o discriminador entre uma reentrega por atraso/redundância (ignorar) e um
+// REENVIO feito pelo suporte para uma sessão que continua Pending (apresentar
+// de novo).
+func (a *App) supportChatInviteIsCurrentPending(sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if a == nil || sessionID == "" {
+		return false
+	}
+	state := a.supportChatService().State()
+	return state.Status == supportchat.StatusWaiting && state.SessionID == sessionID
 }
 
 // clearSupportChatIfCurrent só limpa o estado quando ele pertence à sessão

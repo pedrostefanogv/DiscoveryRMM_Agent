@@ -111,25 +111,92 @@ type ScanOptions struct {
 	IncludeDrivers bool
 }
 
+// Motivos de descarte de um update no scan (estaveis para log/API). Nunca
+// descartamos em silencio: todo update fora do inventario aparece aqui.
+const (
+	SkipReasonDriver     = "driver"
+	SkipReasonNoIdentity = "no_identity"
+	SkipReasonUnreadable = "unreadable"
+)
+
 // ScanResult e o resultado de um scan.
 type ScanResult struct {
 	Updates        []Update `json:"updates"`
 	PendingCount   int      `json:"pendingCount"`
 	InstalledCount int      `json:"installedCount"`
 	SkippedCount   int      `json:"skippedCount"`
+	// SkippedReasons detalha o SkippedCount por motivo (driver, no_identity...).
+	SkippedReasons map[string]int `json:"skippedReasons,omitempty"`
 	// Partial indica que uma das fontes falhou (ex.: QFE) e o resultado é
 	// incompleto — o servidor não deve tratar listas vazias como remoção.
 	Partial       bool       `json:"partial,omitempty"`
 	PendingReboot RebootInfo `json:"pendingReboot"`
-	StartedAt     time.Time  `json:"startedAt"`
-	DurationMs    int64      `json:"durationMs"`
-	Source        string     `json:"source"`
+	// State e a sonda barata do estado local (reboot, ultima instalacao,
+	// download em andamento, servico). Alimenta a assinatura que dispara o scan.
+	State      WindowsUpdateState `json:"state,omitempty"`
+	StartedAt  time.Time          `json:"startedAt"`
+	DurationMs int64              `json:"durationMs"`
+	Source     string             `json:"source"`
+}
+
+// AddSkipped contabiliza um update descartado com o motivo estavel.
+func (r *ScanResult) AddSkipped(reason string) {
+	if r == nil {
+		return
+	}
+	r.SkippedCount++
+	if r.SkippedReasons == nil {
+		r.SkippedReasons = make(map[string]int, 4)
+	}
+	r.SkippedReasons[reason]++
 }
 
 // RebootInfo e o resultado da sonda de reinício pendente.
 type RebootInfo struct {
 	Pending   bool      `json:"pending"`
 	Reasons   []string  `json:"reasons,omitempty"`
+	CheckedAt time.Time `json:"checkedAt"`
+}
+
+// WindowsUpdateState e a sonda BARATA do estado local do Windows Update.
+// Nao toca no WUA (nenhum objeto COM, nenhuma busca): le registro, servico e
+// o log de instalacao. Serve para (a) decidir quando um scan completo e
+// necessario (quando a assinatura muda) e (b) explicar a UI mesmo quando o
+// scan WUA nao pode rodar (servico desabilitado, WUA ausente).
+type WindowsUpdateState struct {
+	// Supported=false em plataformas/maquinas sem WUA.
+	Supported bool `json:"supported"`
+	// ServiceState: running, stopped, disabled, manual, automatic, unknown.
+	ServiceState string `json:"serviceState,omitempty"`
+	// WuOnline: o log de instalacao mostra atividade recente (download/install).
+	WuOnline bool `json:"wuOnline"`
+	// PolicyManaged / WSUSServer: politica corporativa detectada.
+	PolicyManaged bool   `json:"policyManaged"`
+	WSUSServer    string `json:"wsusServer,omitempty"`
+
+	RebootPending bool     `json:"rebootPending"`
+	RebootReasons []string `json:"rebootReasons,omitempty"`
+
+	// LastInstallSuccess: ultima atualizacao instalada com sucesso (UTC).
+	LastInstallSuccess *time.Time `json:"lastInstallSuccess,omitempty"`
+	// LastInstallTime: ultima linha de instalacao do WindowsUpdate.log (UTC),
+	// inclusive falhas — muda durante o download/instalacao.
+	LastInstallTime *time.Time `json:"lastInstallTime,omitempty"`
+	// DownloadInProgress: o log mostra download em andamento sem instalacao
+	// concluida depois dele.
+	DownloadInProgress bool `json:"downloadInProgress"`
+
+	// Agregado de KBs instaladas lido do registro (barato: sem WMI).
+	QFEInstalledCount int      `json:"qfeInstalledCount"`
+	RecentQFEs        []string `json:"recentQfes,omitempty"`
+
+	AuOptions        int    `json:"auOptions,omitempty"`
+	NoAutoUpdate     bool   `json:"noAutoUpdate"`
+	DeferralDays     int    `json:"deferralDays,omitempty"`
+	ActiveHoursStart *int   `json:"activeHoursStart,omitempty"`
+	ActiveHoursEnd   *int   `json:"activeHoursEnd,omitempty"`
+	PolicyErrorCode  string `json:"policyErrorCode,omitempty"`
+
 	CheckedAt time.Time `json:"checkedAt"`
 }
 

@@ -157,6 +157,10 @@ type App struct {
 	// refresh) o REST só é consultado de vez em quando — ver
 	// reconcileSupportChat em support_chat_window.go.
 	supportChatReconcileTicks atomic.Int64
+	// supportChatResumeRequested deduplica o "resumo após abertura negada" de
+	// openSupportChatWindow: várias tentativas de abertura no mesmo instante
+	// pediam vários resumos (e vários GET /active) para o mesmo evento.
+	supportChatResumeRequested atomic.Bool
 	// Dedupe do verify em background por sessionId: event/JS/IPC/reentrega podem
 	// pedir a mesma validação várias vezes; cada verify faz até 20 GETs.
 	supportChatVerifyMu  sync.Mutex
@@ -2087,8 +2091,9 @@ func (a *App) runStagedStartup(ctx context.Context) {
 	})
 
 	// ── Gerenciador de Patches do Windows (WUA) ─────────────────────────
-	// Scan periódico: atraso inicial com jitter (evita tempestade de scans de
-	// WUA na frota logo após o boot) e ciclo configurável (default 6h).
+	// Scan completo periódico: atraso inicial com jitter (evita tempestade de
+	// scans de WUA na frota logo após o boot) e ciclo configurável (default 6h).
+	// É a REDE DE SEGURANÇA: o caminho rápido é a sonda de estado abaixo.
 	a.safeGo(func() {
 		initialDelay := windowsUpdateInitialDelay(ctx, a)
 		select {
@@ -2107,11 +2112,35 @@ func (a *App) runStagedStartup(ctx context.Context) {
 		}
 	})
 
+	// Sonda BARATA de estado do Windows Update (~5 min, configurável). Lê
+	// registro/log/SCM em poucos ms e, quando a assinatura muda — download
+	// concluído, reboot pendente, KB instalada, serviço caiu — dispara scan
+	// completo + upload na hora. Sem isso o servidor ficava até 6h com dado
+	// velho ("Baixando - 0%", "Instalação pendente").
+	a.safeGo(func() {
+		initialDelay := 2 * time.Minute
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(initialDelay):
+		}
+		a.runWindowsUpdateStateProbe(ctx)
+		for {
+			interval := a.windowsUpdateStateInterval()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(interval):
+			}
+			a.runWindowsUpdateStateProbe(ctx)
+		}
+	})
+
 	// Sonda de reinício pendente: barata (somente registro), reportada só em
 	// mudança. Alimenta o badge "Reinício pendente" em /agents.
 	a.safeGo(func() {
 		const pendingRebootInterval = 10 * time.Minute
-		initialDelay := 2 * time.Minute
+		initialDelay := 3 * time.Minute
 		select {
 		case <-ctx.Done():
 			return

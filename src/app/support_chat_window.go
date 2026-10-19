@@ -48,6 +48,18 @@ func supportChatShouldFloat(status string) bool {
 	return strings.TrimSpace(status) == supportchat.StatusWaiting
 }
 
+// ────── REGRA DE FLUXO (correção do "aceitei e o chat não abriu") ──────
+//
+// 1. O convite chega e é registrado no serviço (status "waiting");
+// 2. a ÚNICA superfície é o cartão nativo (ou, em plataformas sem cartão, a
+//    janela do chat com o modal — fluxo fallback);
+// 3. a janela do chat NUNCA é criada em "waiting" (ver supportChatWindowMayOpen
+//    e openSupportChatWindow): reentregas do evento IPC, o handler de JS da
+//    janela principal e a reconciliação de startup são idempotentes e só
+//    garantem o cartão;
+// 4. no ACEITE o cartão reporta ao servidor e o Go cria a janela já com o
+//    estado vindo de svc.Refresh (active + mensagens).
+
 // supportChatWindowOptions monta as opções da janela do chat.
 //
 // A janela é um PAINEL, não uma janela comum:
@@ -228,6 +240,34 @@ func (a *App) supportChatPlacementScreen(wailsApp *application.App) *application
 	return supportChatPlacementScreen(screens, cursor, preferred)
 }
 
+// supportChatWindowMayOpen informa se o estado do chat já permite criar o
+// painel do chat. "waiting" NÃO permite: o convite ainda não foi respondido.
+func supportChatWindowMayOpen(status string) bool {
+	switch strings.TrimSpace(status) {
+	case supportchat.StatusActive, supportchat.StatusEnded:
+		return true
+	default:
+		return false
+	}
+}
+
+// supportChatLegacyInviteWindowMode informa se o fluxo FALLBACK (plataformas
+// sem cartão nativo de convite) está em uso — nele a janela do chat É a
+// superfície do convite (modal dentro do chat) e pode existir em "waiting".
+//
+// No Windows o cartão nativo existe (support_chat_invite_notification_windows.go):
+// é ele quem coleta o aceite e a janela só nasce depois. Nas demais plataformas
+// startSupportChatInviteNotification devolve false e o fluxo antigo (janela com
+// modal) continua valendo — por isso a variável abaixo; ela existe para os
+// testes poderem exercitar o fallback.
+var supportChatNativeInviteCard = true
+
+// supportChatLegacyInviteWindowMode é true quando a janela do chat pode existir
+// com o convite pendente (fluxo fallback sem cartão nativo).
+func (a *App) supportChatLegacyInviteWindowMode() bool {
+	return !supportChatNativeInviteCard
+}
+
 // supportChatWindowFloat devolve o estado "sempre no topo" que a janela deve ter
 // AGORA, lido do serviço do chat.
 func (a *App) supportChatWindowFloat() bool {
@@ -303,6 +343,8 @@ func (a *App) syncSupportChatWindowFromEvent(name string, data ...any) {
 		return
 	}
 
+	a.ensureSupportChatInviteSurface(state)
+
 	// Convite respondido/encerrado por qualquer caminho: o cartão nativo sai de
 	// cena junto com a transição de estado. Um estado sem sessão (ex.: limpeza
 	// local) não tem id para casar, então fecha qualquer cartão pendente.
@@ -338,6 +380,20 @@ func (a *App) syncSupportChatWindowFromIPCPayload(payload map[string]any) {
 	if strings.TrimSpace(status) == "" {
 		return
 	}
+
+	// Rede de segurança da superfície do convite (ver ensureSupportChatInviteSurface):
+	// um estado "waiting" que chega sem cartão na tela não pode desligar o
+	// convite nem esperar a reconciliação de 30 s.
+	//
+	// O payload de IPC traz o estado CRU (campos espalhados): monta-se o
+	// mínimo necessário para a checagem.
+	a.ensureSupportChatInviteSurface(supportchat.State{
+		Status:      status,
+		SessionID:   supportChatField(source, "sessionId"),
+		TicketID:    supportChatField(source, "ticketId"),
+		TicketTitle: supportChatField(source, "ticketTitle"),
+		SupportName: supportChatField(source, "supportName"),
+	})
 
 	if status != supportchat.StatusWaiting {
 		// Fecha pelo sessionId do evento: um evento atrasado de sessão antiga
@@ -417,10 +473,35 @@ func (a *App) openSupportChatInviteFromIPC(payload map[string]any) {
 // lock do Windows; agora a janela nasce no monitor em que o usuário está
 // (cursor), já com "sempre no topo" quando o convite está pendente e é forçada
 // ao primeiro plano (ver window_foreground*.go).
+//
+// REGRA DE OURO: a janela só nasce quando a conversa foi ACEITA.
+//
+// Criar o painel com o convite ainda pendente ("waiting") fazia o aceite
+// seguinte apenas reexibir uma janela VAZIA — e o painel topmost ficava por
+// cima do cartão de aceite. Por isso a abertura é recusada enquanto não houver
+// sessão ativa; o único caminho legítimo antes disso é o fluxo fallback de
+// plataformas sem cartão nativo (que roda com "waiting" de propósito).
 func (a *App) openSupportChatWindow() {
 	app := a.app
 	if app == nil {
 		a.Logs.Append("[supportchat] aplicação Wails indisponível; janela do chat não pode ser aberta")
+		return
+	}
+
+	if status := a.supportChatService().State().Status; !supportChatWindowMayOpen(status) && !a.supportChatLegacyInviteWindowMode() {
+		a.Logs.Append("[supportchat] janela do chat nao aberta: conversa ainda nao foi aceita (status=" + status + ")")
+		// A chamada pode ser a última da ação do usuário (binding do cartão):
+		// não deixa a superfície do convite perdida só porque o estado local
+		// ainda não refletiu o aceite. O pedido é único por janela de tempo —
+		// sem isto, N tentativas concorrentes de abertura disparavam N resumos,
+		// cada um com um GET /active.
+		if a.supportChatResumeRequested.CompareAndSwap(false, true) {
+			go func() {
+				a.resumeSupportChatIfActive(350 * time.Millisecond)
+				// Libera para uma próxima necessidade (ex.: outro convite).
+				a.supportChatResumeRequested.Store(false)
+			}()
+		}
 		return
 	}
 
@@ -594,23 +675,37 @@ func (a *App) resumeSupportChatIfActive(delay time.Duration) {
 		return
 	}
 
-	if a.supportChatWindowOpen() {
-		// Janela já aberta: o snapshot REST também serve para corrigir o
-		// "sempre no topo" (convite pendente = flutua; ativo = normal). Sem isso
-		// um estado perdido no NATS deixava a janela flutuando durante toda a
-		// conversa — ou um convite pendente sem a proteção do topo.
-		a.applySupportChatWindowMode(state.Status)
-		return
-	}
-
 	if state.Status == supportchat.StatusWaiting {
-		a.Logs.Append("[supportchat] convite pendente encontrado sem janela aberta; apresentando o cartão")
+		// REGRA: durante o convite a ÚNICA superfície é o cartão nativo (ou a
+		// janela fallback). A janela do chat nasce no ACEITE — aqui ela não é
+		// criada nem "trazida para a frente" quando já existe: abrir a janela
+		// vazia numa reconciliação fazia o aceite seguinte apenas reexibir uma
+		// janela sem conversa ("o chat não abriu").
+		if a.supportChatWindowOpen() {
+			// Janela aberta durante o convite: só o "sempre no topo" é
+			// corrigido; o cartão continua sendo quem coleta o aceite.
+			a.applySupportChatWindowMode(state.Status)
+			return
+		}
+		if a.supportChatInviteNotificationPending(state.SessionID) {
+			return
+		}
+		a.Logs.Append("[supportchat] convite pendente encontrado sem cartão/janela; apresentando o cartão")
 		a.presentSupportChatInvite(supportchat.Invite{
 			SessionID:   state.SessionID,
 			TicketID:    state.TicketID,
 			TicketTitle: state.TicketTitle,
 			SupportName: state.SupportName,
 		})
+		return
+	}
+
+	if a.supportChatWindowOpen() {
+		// Janela já aberta: o snapshot REST também serve para corrigir o
+		// "sempre no topo" (convite pendente = flutua; ativo = normal). Sem isso
+		// um estado perdido no NATS deixava a janela flutuando durante toda a
+		// conversa — ou um convite pendente sem a proteção do topo.
+		a.applySupportChatWindowMode(state.Status)
 		return
 	}
 
@@ -784,18 +879,20 @@ func (a *App) SupportChatDownloadAttachment(attachmentID string) (map[string]str
 	}, nil
 }
 
-// SupportChatOpenInviteWindow abre a janela do chat já com o convite pendente.
+// SupportChatOpenInviteWindow apresenta o CONVITE (cartão nativo) e é chamado
+// pelo processo de UI quando recebe `supportchat:invite` (o serviço, que recebe
+// o comando do servidor, não tem Wails para abrir janela).
 //
-// Chamado pelo processo de UI quando recebe `supportchat:invite` (o serviço, que
-// recebe o comando do servidor, não tem Wails para abrir janela).
+// REGRA DO RECURSO: durante o convite a janela do chat NÃO abre — ela nasce no
+// ACEITE (openSupportChatWindow). O nome é mantido por compatibilidade com os
+// bindings gerados (o handler de JS da janela principal ainda o chama); a
+// função é idempotente e só garante o cartão na tela.
 //
-// IMPORTANTE (latência): a janela abre IMEDIATAMENTE com o convite recebido.
-// Antes havia um Refresh REST síncrono aqui como "confirmação"; numa janela de
-// inconsistência de leitura o Refresh respondia sem sessão, o convite era
-// descartado e a janela só aparecia na reconciliação de 60s — o sintoma
-// "o pedido só aparece quando abro a interface do agent". O processo de
-// serviço já validou vencimento/estado antes de emitir o IPC; aqui a validação
-// do servidor é feita em BACKGROUND, sem bloquear a abertura e sem apagar o
+// LATÊNCIA: nenhum Refresh REST bloqueia este caminho. Antes havia um Refresh
+// síncrono como "confirmação"; numa janela de inconsistência de leitura ele
+// respondia sem sessão, o convite era descartado e o cartão só aparecia na
+// reconciliação — o sintoma "o pedido só aparece quando abro a interface do
+// agent". A validação do servidor é feita em BACKGROUND (verify), sem apagar o
 // estado "waiting".
 func (a *App) SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, supportName string) error {
 	sessionID = strings.TrimSpace(sessionID)
@@ -820,12 +917,24 @@ func (a *App) SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, supp
 	}
 
 	// Mesmo convite já registrado (reentrega/IPC + JS): NÃO re-prepara (isso
-	// reiniciaria waitingSince/transcript e reemitiria estado) — só garante a
-	// janela na frente e o verify (deduplicado por sessão).
+	// reiniciaria waitingSince/transcript e reemitiria estado) — só garante o
+	// cartão na tela e o verify (deduplicado por sessão).
 	if state := svc.State(); state.Status == supportchat.StatusWaiting && state.SessionID == sessionID {
-		// Reentrega do mesmo convite: o cartão nativo já está na tela (ou é
-		// recriado se o usuário o fechou); a janela do chat NÃO abre antes do
-		// aceite.
+		// BUG CORRIGIDO: aqui a janela do chat NÃO pode ser criada. O aceite no
+		// cartão nativo é justamente o que abre a janela; abrir por um caminho
+		// paralelo (evento IPC + handler de JS da janela principal + reentrega
+		// do convite, todos idempotentes) criava a janela ANTES do aceite. A
+		// janela nascia vazia ("Sem conversa"/"aguardando"), roubava a frente do
+		// cartão e, como openSupportChatWindow reusa a janela existente, o
+		// aceite seguinte só a trazia para frente sem carregar a conversa — o
+		// sintoma "aceito e a janela do chat não abre/não mostra o chat".
+		//
+		// O estado "waiting" é a ÚNICA fonte de verdade: como o backend limita
+		// isto a uma janela, ela só nasce no aceite.
+		if a.supportChatWindowOpen() {
+			a.Logs.Append("[supportchat] janela do chat ja aberta durante o convite; mantida (sessao " + sessionID + ")")
+			return nil
+		}
 		a.presentSupportChatInvite(supportchat.Invite{
 			SessionID:   state.SessionID,
 			TicketID:    state.TicketID,
@@ -844,7 +953,8 @@ func (a *App) SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, supp
 	if !decision.Accepted {
 		switch decision.Reason {
 		case supportchat.InviteReasonAlreadyActive:
-			// Reentrega de um convite já aceito: só garante a janela na frente.
+			// Conversa JÁ aceita (ex.: a janela fechou e a reconciliação achou a
+			// sessão ativa): aqui a janela deve existir e ir para a frente.
 			a.openSupportChatWindow()
 			return nil
 		case supportchat.InviteReasonAlreadyFinished:
@@ -868,6 +978,54 @@ func (a *App) SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, supp
 	})
 	a.Logs.Append("[supportchat] convite apresentado ao usuario (sessao " + sessionID + ")")
 	return nil
+}
+
+// supportChatField lê um campo string de um mapa JSON (vazio quando ausente).
+// Usado para reconstruir o convite a partir do payload de IPC.
+func supportChatField(source map[string]any, key string) string {
+	if source == nil {
+		return ""
+	}
+	value, _ := source[key].(string)
+	return strings.TrimSpace(value)
+}
+
+// ensureSupportChatInviteSurface garante que TODO estado "waiting" tenha uma
+// superfície visível de aceite: o cartão nativo (ou a janela fallback).
+//
+// BUG RELATADO: "a notificação aparece, mas quando mando abrir o agent a
+// janela do chat não abre". O convite é registrado no serviço e depois
+// apresentado pela UI; quando a transição de estado chegava por um caminho que
+// não passava pela apresentação (evento IPC perdido durante a reconexão do
+// pipe, reentrada da UI, redelivery do comando) o convite existia sem cartão —
+// e o aceite nunca acontecia porque não havia onde clicar. Antes essa situação
+// só era corrigida pela reconciliação periódica (30 s) ou pelo verify.
+//
+// É idempotente e barato: com o cartão já na tela não faz nada.
+func (a *App) ensureSupportChatInviteSurface(state supportchat.State) {
+	if a == nil || a.app == nil {
+		// Serviço (sem Wails): a superfície é a UI companion.
+		return
+	}
+	if strings.TrimSpace(state.Status) != supportchat.StatusWaiting || strings.TrimSpace(state.SessionID) == "" {
+		return
+	}
+	if a.supportChatInviteNotificationPending(state.SessionID) || a.supportChatInviteNotificationWasAnswered(state.SessionID) {
+		return
+	}
+	// Fluxo fallback: a janela do chat já É a superfície do convite.
+	if a.supportChatWindowOpen() && a.supportChatLegacyInviteWindowMode() {
+		return
+	}
+
+	invite := supportchat.Invite{
+		SessionID:   strings.TrimSpace(state.SessionID),
+		TicketID:    state.TicketID,
+		TicketTitle: state.TicketTitle,
+		SupportName: state.SupportName,
+	}
+	a.Logs.Append("[supportchat] estado waiting sem cartao na tela; reapresentando o convite (sessao " + invite.SessionID + ")")
+	go a.presentSupportChatInvite(invite)
 }
 
 // startSupportChatInviteVerification inicia (uma única vez por sessão) a
@@ -976,6 +1134,21 @@ func (a *App) verifySupportChatInviteWindow(sessionID string) {
 	}
 }
 
+// logSupportChatInviteResponse registra a decisão do usuário sobre o convite
+// com o chamado e o atendente, para o log do agent explicar sozinho o que o
+// suporte viu no console ("recusado" x "aceito").
+func (a *App) logSupportChatInviteResponse(invite supportchat.Invite, accepted bool) {
+	if a == nil {
+		return
+	}
+	decision := "recusado"
+	if accepted {
+		decision = "aceito"
+	}
+	a.Logs.Append("[supportchat] convite " + decision + " pelo usuario (sessao=" + invite.SessionID +
+		" chamado=\"" + invite.TicketTitle + "\" atendente=\"" + invite.SupportName + "\")")
+}
+
 // SupportChatRespondInvite responde ao convite DENTRO da janela do chat.
 //
 //   - aceite: reporta ao servidor, transita o estado e carrega a conversa;
@@ -985,8 +1158,14 @@ func (a *App) SupportChatRespondInvite(accepted bool, reason string) error {
 
 	// A resposta pode vir do cartão nativo (já fechado), mas também da janela
 	// fallback: em qualquer caminho o cartão pendente desta sessão sai de cena.
-	sessionID := svc.State().SessionID
+	state := svc.State()
+	sessionID := state.SessionID
 	a.closeSupportChatInviteNotification(sessionID)
+	a.logSupportChatInviteResponse(supportchat.Invite{
+		SessionID:   sessionID,
+		TicketTitle: state.TicketTitle,
+		SupportName: state.SupportName,
+	}, accepted)
 	// A chamada de rede abaixo mantém o estado local em "waiting": marca a
 	// sessão como respondida para uma reentrega/evento atrasado NÃO reabrir o
 	// pedido de confirmação enquanto a resposta está em voo.
@@ -1010,6 +1189,9 @@ func (a *App) SupportChatRespondInvite(accepted bool, reason string) error {
 		return err
 	}
 
+	// Recusa por QUALQUER caminho fecha a janela (quando existir) e descarta o
+	// estado. Sem isto uma janela aberta em paralelo (ou a do fluxo fallback)
+	// seguia na tela com o convite já respondido.
 	svc.ClearState()
 	a.closeSupportChatWindow()
 	return nil

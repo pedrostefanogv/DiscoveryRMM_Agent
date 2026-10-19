@@ -44,12 +44,42 @@ type TransferServer struct {
 	tokenTTL     time.Duration
 	sharedSecret []byte
 	peerSnapshot func() []P2PPeerView
+	serveMode    string
 }
 
 type p2pTokenPayload struct {
 	Artifact string `json:"a"`
 	PeerID   string `json:"p"`
 	Exp      int64  `json:"e"`
+}
+
+// Modos de serviço de artifacts (P2PConfig.ArtifactServeMode / variável de
+// ambiente DISCOVERY_P2P_ARTIFACT_SERVE_MODE).
+const (
+	// p2pArtifactServeRequire exige token de acesso válido em TODO stream de
+	// artifact servido por este agente (get/manifest) e no gossip de peers.
+	p2pArtifactServeRequire = "require"
+	// p2pArtifactServeLegacy aceita streams sem token (compatibilidade com
+	// agentes antigos que ainda não enviam o cabeçalho token). Tokens
+	// presentes continuam sendo validados.
+	p2pArtifactServeLegacy = "legacy"
+)
+
+func normalizeP2PArtifactServeMode(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), p2pArtifactServeLegacy) {
+		return p2pArtifactServeLegacy
+	}
+	return p2pArtifactServeRequire
+}
+
+// artifactServeMode retorna o modo de serviço configurado (default: require).
+func (s *TransferServer) artifactServeMode() string {
+	if s == nil {
+		return p2pArtifactServeRequire
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return normalizeP2PArtifactServeMode(s.serveMode)
 }
 
 func NewTransferServer(deps AppDeps, coord *Coordinator) *TransferServer {
@@ -98,15 +128,22 @@ func (s *TransferServer) Start(ctx context.Context, cfg P2PConfig, agentID, temp
 		return err
 	}
 
-	host := detectLocalAddressForPeers()
-	if host == "" {
-		host = "127.0.0.1"
-	}
-	baseURL := fmt.Sprintf("http://%s:%d", host, port)
+	// C4: o servidor HTTP local expõe /p2p/config/onboard (registro por deploy
+	// key) e o download de artifacts com token. Escutando em todas as
+	// interfaces, QUALQUER host da sub-rede alcança o onboarding. Agora o
+	// listener é loopback-only (ListenInRange), então o endereço anunciado
+	// (baseURL) também precisa ser loopback — caso contrário peers da LAN
+	// receberiam uma URL inalcançável. O tráfego de artifacts entre agentes
+	// segue pelo transporte libp2p.
+	baseURL := fmt.Sprintf("http://%s:%d", p2pTransferListenHost, port)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/p2p/config/onboard", s.handleP2POnboard)
 	mux.HandleFunc("/p2p/health", s.handleP2PHealth)
+	// Download HTTP direto do artifact com token de acesso emitido por
+	// BuildArtifactAccess (peer/receipt ligados ao token). Antes esta rota não
+	// existia e o token nunca era verificado nesta superfície.
+	mux.HandleFunc("/p2p/artifact/", s.handleArtifactDownload)
 
 	httpServer := &http.Server{
 		Handler:           mux,
@@ -123,6 +160,7 @@ func (s *TransferServer) Start(ctx context.Context, cfg P2PConfig, agentID, temp
 	s.tempDir = tempDir
 	s.agentID = strings.TrimSpace(agentID)
 	s.tokenTTL = time.Duration(cfg.AuthTokenRotationMinutes) * time.Minute
+	s.serveMode = normalizeP2PArtifactServeMode(cfg.ArtifactServeMode)
 	if strings.TrimSpace(cfg.SharedSecret) != "" {
 		s.sharedSecret = []byte(strings.TrimSpace(cfg.SharedSecret))
 	}
@@ -147,6 +185,54 @@ func (s *TransferServer) BaseURL() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.baseURL
+}
+
+// handleArtifactDownload serve o conteúdo de um artifact para peers que
+// apresentem o token emitido por BuildArtifactAccess (query params peer e
+// token). Ranges via header Range são suportados para retomada.
+func (s *TransferServer) handleArtifactDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := SanitizeArtifactName(strings.TrimPrefix(r.URL.Path, "/p2p/artifact/"))
+	if name == "" {
+		http.Error(w, "artifact inválido", http.StatusBadRequest)
+		return
+	}
+	peerID := strings.TrimSpace(r.URL.Query().Get("peer"))
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" {
+		http.Error(w, "token obrigatório", http.StatusUnauthorized)
+		return
+	}
+	if err := s.verifyToken(name, peerID, token, time.Now()); err != nil {
+		http.Error(w, "token inválido", http.StatusUnauthorized)
+		return
+	}
+
+	s.mu.RLock()
+	tempDir := s.tempDir
+	s.mu.RUnlock()
+	if tempDir == "" {
+		http.Error(w, "servidor não iniciado", http.StatusServiceUnavailable)
+		return
+	}
+	path := filepath.Join(tempDir, name)
+	f, err := os.Open(path)
+	if err != nil {
+		http.Error(w, "artifact no encontrado", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.IsDir() {
+		http.Error(w, "artifact no encontrado", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	http.ServeContent(w, r, name, info.ModTime(), f)
 }
 
 func (s *TransferServer) handleP2PHealth(w http.ResponseWriter, _ *http.Request) {
@@ -363,6 +449,42 @@ func (s *TransferServer) verifyToken(artifactName, peerID, token string, now tim
 		return errors.New("artifact nao confere")
 	}
 	if strings.TrimSpace(payload.PeerID) != "" && strings.TrimSpace(payload.PeerID) != strings.TrimSpace(peerID) {
+		return errors.New("peer nao autorizado")
+	}
+	if now.Unix() > payload.Exp {
+		return errors.New("token expirado")
+	}
+	return nil
+}
+
+// verifyTokenAny valida a assinatura/expiração de um token emitido por este
+// agente sem exigir um artifact específico. Usado pelo gossip de peers
+// (/discovery/peers/1.0.0), cujo stream não transfere bytes de artifact.
+func (s *TransferServer) verifyTokenAny(peerID, token string, now time.Time) error {
+	s.mu.RLock()
+	secret := s.secret
+	s.mu.RUnlock()
+
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return errors.New("token inválido")
+	}
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte(parts[0]))
+	expectedSig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(expectedSig), []byte(parts[1])) {
+		return errors.New("assinatura invalida")
+	}
+	body, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return err
+	}
+	var payload p2pTokenPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return err
+	}
+	peerID = strings.TrimSpace(peerID)
+	if peerID != "" && strings.TrimSpace(payload.PeerID) != "" && strings.TrimSpace(payload.PeerID) != peerID {
 		return errors.New("peer nao autorizado")
 	}
 	if now.Unix() > payload.Exp {

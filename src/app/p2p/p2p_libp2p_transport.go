@@ -19,11 +19,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"discovery/app/core/platform"
@@ -97,6 +100,36 @@ func (rr *rollingDeadlineStreamReader) Read(p []byte) (int, error) {
 
 // "—"— Request / Response types "—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—
 
+// libp2pPeersRequest é o frame opcional enviado pelo cliente antes do gossip.
+// Peers antigos não enviam nada: o handler trata EOF como "sem credencial".
+type libp2pPeersRequest struct {
+	RequesterID string `json:"requesterId,omitempty"`
+	Token       string `json:"token,omitempty"`
+}
+
+// validateDiscoveryAccessToken aplica a política de acesso do gossip de peers.
+// O token de acesso é emitido por artifact (P2PArtifactAccess); para o gossip
+// aceitamos qualquer token emitido por este agente para o requester informado.
+func validateDiscoveryAccessToken(transfer *TransferServer, requesterID, token string) error {
+	if transfer == nil {
+		return errors.New("servidor de transferência indisponível")
+	}
+	mode := normalizeP2PArtifactServeMode(transfer.artifactServeMode())
+	if strings.TrimSpace(token) == "" {
+		if mode == p2pArtifactServeRequire {
+			return errors.New("token de acesso obrigatorio: negocie /artifact/access/1.0.0")
+		}
+		return nil
+	}
+	if len(token) > maxLibp2pTokenLen {
+		return errors.New("token inválido")
+	}
+	if err := transfer.verifyTokenAny(strings.TrimSpace(requesterID), token, time.Now()); err != nil {
+		return fmt.Errorf("token de acesso inválido: %w", err)
+	}
+	return nil
+}
+
 type libp2pPeersResponse struct {
 	AgentID       string            `json:"agentId"`
 	KnownPeers    []P2PPeerView     `json:"knownPeers"`
@@ -113,6 +146,8 @@ type libp2pAccessRequest struct {
 type libp2pManifestRequest struct {
 	ArtifactName string `json:"artifactName"`
 	RequesterID  string `json:"requesterId"`
+	// Token: idem libp2pGetRequest.Token (BearerHMAC de /artifact/access/1.0.0).
+	Token string `json:"token,omitempty"`
 }
 
 type libp2pGetRequest struct {
@@ -120,6 +155,136 @@ type libp2pGetRequest struct {
 	RequesterID  string `json:"requesterId"`
 	RangeStart   int64  `json:"rangeStart"`
 	RangeEnd     int64  `json:"rangeEnd"` // -1 = até o fim
+	// Token é o BearerHMAC emitido por /artifact/access/1.0.0 (BuildArtifactAccess)
+	// ligado ao artifact e ao RequesterID. Sem ele o chunk serve.LEGACY (peers
+	// antigos) ou é recusado quando serve.REQUIRE (modelo seguro).
+	Token string `json:"token,omitempty"`
+}
+
+// maxLibp2pTokenLen limita o tamanho do token aceito em streams libp2p. O token
+// legítimo tem ~200 caracteres (payload base64 + HMAC); o teto evita que um peer
+// envie payloads gigantes antes do decode.
+const maxLibp2pTokenLen = 2048
+
+// validateArtifactAccessToken aplica a política de acesso de artifacts aos
+// streams libp2p SERVIDOS por este agente.
+//
+// Antes desta validação os protocolos /artifact/get, /artifact/manifest e
+// /discovery/peers respondiam para QUALQUER peer da LAN sem autenticação: o
+// token HMAC emitido por BuildArtifactAccess nunca era conferido do lado que
+// serve. Agora:
+//
+//   - serve.REQUIRE: token obrigatório e válido (artifact + requester).
+//   - serve.LEGACY:  sem token => aceita (compatibilidade com agentes antigos);
+//     com token => precisa ser válido (impede token errado/adulterado).
+//
+// Retorna nil quando o acesso é permitido.
+func validateArtifactAccessToken(transfer *TransferServer, artifactName, requesterID, token string) error {
+	if transfer == nil {
+		return errors.New("servidor de transferência indisponível")
+	}
+	token = strings.TrimSpace(token)
+	mode := normalizeP2PArtifactServeMode(transfer.artifactServeMode())
+	if token == "" {
+		if mode == p2pArtifactServeRequire {
+			return errors.New("token de acesso obrigatorio: negocie /artifact/access/1.0.0")
+		}
+		return nil
+	}
+	if len(token) > maxLibp2pTokenLen {
+		return errors.New("token inválido")
+	}
+	if err := transfer.verifyToken(artifactName, requesterID, token, time.Now()); err != nil {
+		return fmt.Errorf("token de acesso inválido: %w", err)
+	}
+	return nil
+}
+
+// artifactAccessTokenCache guarda o token de acesso emitido por um peer para um
+// artifact, evitando um round-trip /artifact/access por chunk (um download de
+// 6 GB pode ter centenas de chunks). Renova sozinho antes do vencimento.
+type artifactAccessTokenCache struct {
+	mu      sync.Mutex
+	entries map[peer.ID]cachedArtifactAccess
+}
+
+type cachedArtifactAccess struct {
+	token     string
+	expiresAt time.Time
+}
+
+// accessTokenRenewMargin é a antecedência com que o token é renovado antes do
+// vencimento, para não expirar no meio de um chunk.
+const accessTokenRenewMargin = 2 * time.Minute
+
+// defaultAccessTokenTTL é usado quando o peer não informa ExpiresAtUTC.
+const defaultAccessTokenTTL = 15 * time.Minute
+
+func newArtifactAccessTokenCache() *artifactAccessTokenCache {
+	return &artifactAccessTokenCache{entries: make(map[peer.ID]cachedArtifactAccess)}
+}
+
+// token devolve o token do peer, negociando quando ausente/expirado. Falha de
+// negociação não é fatal aqui: devolve "" e o servidor decide conforme o modo
+// (segue no "legacy" ou recusa no "require" — o erro aparece no chunk).
+func (c *artifactAccessTokenCache) token(ctx context.Context, h host.Host, peerID peer.ID, artifactName, requesterID string, logf func(string)) string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	entry, ok := c.entries[peerID]
+	c.mu.Unlock()
+	if ok && entry.token != "" && time.Now().Add(accessTokenRenewMargin).Before(entry.expiresAt) {
+		return entry.token
+	}
+	access, err := libp2pRequestAccess(ctx, h, peerID, artifactName, requesterID)
+	if err != nil {
+		if logf != nil {
+			logf(fmt.Sprintf("[p2p][access] negociação de token falhou para artifact=%s peer=%s: %v",
+				artifactName, peerID.String(), err))
+		}
+		return ""
+	}
+	token := tokenFromAccessURL(access.URL)
+	expiresAt := time.Now().Add(defaultAccessTokenTTL)
+	if parsed, perr := time.Parse(time.RFC3339, strings.TrimSpace(access.ExpiresAtUTC)); perr == nil {
+		expiresAt = parsed
+	}
+	c.mu.Lock()
+	c.entries[peerID] = cachedArtifactAccess{token: token, expiresAt: expiresAt}
+	c.mu.Unlock()
+	return token
+}
+
+// invalidate remove o token cacheado do peer (ex.: token expirado/adulterado).
+func (c *artifactAccessTokenCache) invalidate(peerID peer.ID) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	delete(c.entries, peerID)
+	c.mu.Unlock()
+}
+
+// tokenFromAccessURL extrai o token do campo URL devolvido pelo handler
+// /artifact/access (formato .../p2p/artifact/<nome>?peer=<id>&token=<token>).
+func tokenFromAccessURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get("token")
+}
+
+// isArtifactAccessAuthError indica que a falha do chunk veio de credencial
+// (token ausente/inválido/expirado) e não de rede/manifest.
+func isArtifactAccessAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "token de acesso") || strings.Contains(msg, "token inválido") ||
+		strings.Contains(msg, "token expirado") || strings.Contains(msg, "assinatura invalida")
 }
 
 type libp2pGetResponse struct {
@@ -190,6 +355,18 @@ func handleStreamPeers(s network.Stream, coord *Coordinator, transfer *TransferS
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
 
+	// O gossip de peers não tem artifact associado; ainda assim, quando o peer
+	// envia credencial ela precisa ser válida (defesa contra catálogo servido a
+	// quem reaproveita token adulterado) e, no modo REQUIRE, é obrigatória.
+	req := libp2pPeersRequest{}
+	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil && err != io.EOF {
+		req = libp2pPeersRequest{} // frame inválido do requester = sem credencial
+	}
+	if err := validateDiscoveryAccessToken(transfer, strings.TrimSpace(req.RequesterID), strings.TrimSpace(req.Token)); err != nil {
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error()})
+		return
+	}
+
 	enc := json.NewEncoder(s)
 	peers := coord.GetPeers()
 	artifacts := transfer.localArtifactsSnapshot()
@@ -245,6 +422,10 @@ func handleStreamArtifactManifest(s network.Stream, transfer *TransferServer) {
 	req.RequesterID = strings.TrimSpace(req.RequesterID)
 	if req.ArtifactName == "" {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
+		return
+	}
+	if err := validateArtifactAccessToken(transfer, req.ArtifactName, req.RequesterID, req.Token); err != nil {
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error()})
 		return
 	}
 	transfer.mu.RLock()
@@ -350,8 +531,13 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 		return
 	}
 	req.ArtifactName = SanitizeArtifactName(req.ArtifactName)
+	req.RequesterID = strings.TrimSpace(req.RequesterID)
 	if req.ArtifactName == "" {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
+		return
+	}
+	if err := validateArtifactAccessToken(transfer, req.ArtifactName, req.RequesterID, req.Token); err != nil {
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error()})
 		return
 	}
 	transfer.mu.RLock()
@@ -740,7 +926,9 @@ func readPayloadExact(reader io.Reader, expected int64) ([]byte, error) {
 // libp2pDownloadChunk abre um stream /artifact/get/1.0.0, solicita um range e
 // salva os bytes no destFile. Verifica SHA256 do chunk após receber.
 // onProgress é opcional —" quando != nil, chamado com (bytesLidosNoChunk, tamanhoDoChunk).
-func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artifactName, requesterID string, chunk P2PChunk, destFile string, onProgress func(readSoFar, total int64)) error {
+// accessToken é o token emitido por /artifact/access/1.0.0 para (artifact, requesterID).
+// Vazio = peer legado/negociação falhou: servidores em modo "require" recusam.
+func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artifactName, requesterID, accessToken string, chunk P2PChunk, destFile string, onProgress func(readSoFar, total int64)) error {
 	if chunk.Size <= 0 {
 		return fmt.Errorf("chunk %d: tamanho inválido", chunk.Index)
 	}
@@ -760,6 +948,7 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 		RequesterID:  requesterID,
 		RangeStart:   chunk.Offset,
 		RangeEnd:     chunk.Offset + chunk.Size - 1,
+		Token:        accessToken,
 	}
 	if err := json.NewEncoder(s).Encode(req); err != nil {
 		return fmt.Errorf("encode get req: %w", err)
@@ -865,6 +1054,7 @@ func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, ac
 		RequesterID:  "peer-local",
 		RangeStart:   0,
 		RangeEnd:     -1,
+		Token:        tokenFromAccessURL(access.URL),
 	}
 	if err := json.NewEncoder(s).Encode(req); err != nil {
 		return "", 0, fmt.Errorf("encode get req: %w", err)

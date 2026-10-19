@@ -17,6 +17,8 @@ var kbImageJsCacheMaxChars = 3 * 1024 * 1024;
 var kbImageInflight = new Map();
 
 function showKBList() {
+  // O zoom é fixed e ficaria aberto por cima da lista ao voltar do artigo.
+  if (typeof kbZoomIsOpen === "function" && kbZoomIsOpen()) kbZoomClose();
   if (kbListViewEl) kbListViewEl.classList.remove("hidden");
   if (kbDetailViewEl) kbDetailViewEl.classList.add("hidden");
   if (kbSearchInputEl) kbSearchInputEl.classList.remove("hidden");
@@ -119,6 +121,9 @@ function renderKnowledgeArticleDetail(article) {
     return;
   // Novo render invalida hidratações de imagem em voo do render anterior.
   kbRenderToken++;
+  // O zoom aponta para uma imagem do render anterior (o innerHTML abaixo a
+  // descarta): fechar o overlay evita um lightbox órfão sobre a página nova.
+  if (kbZoomIsOpen()) kbZoomClose();
   if (!article) {
     kbDetailTitleEl.textContent = "";
     kbDetailMetaEl.textContent = "";
@@ -228,6 +233,8 @@ function hydrateKnowledgeImages(container) {
             kbImageDataUrlCache.set(id, value);
           }
           img.classList.remove("kb-inline-image-pending");
+          img.classList.remove("kb-inline-image-error");
+          img.removeAttribute("title");
           img.src = value;
         })
         .catch(function (err) {
@@ -254,6 +261,574 @@ function markKbImageError(img) {
   img.classList.add("kb-inline-image-error");
   img.setAttribute("title", "Imagem indisponível");
   img.removeAttribute("src");
+}
+
+// ── Zoom (lightbox) das imagens da Base de Conhecimento ──────────────────
+//
+// O CSS já desenhava a lupa (cursor: zoom-in) em .kb-inline-image, mas NENHUM
+// listener tratava o clique: o "zoom" era só uma promessa visual. Este overlay
+// é dedicado à KB em vez de reaproveitar o screenshotOpenLightbox (do chat),
+// porque aquele tem só o botão de fechar (sem teclado, sem estado de imagem
+// indisponível) e um cabeçalho pensado para prints.
+
+var kbZoomRetryFn = null;
+// Há um retry em voo? (fora de kbZoomRetryFn para sobreviver a fechar/reabrir)
+var kbZoomRetryInFlight = false;
+var kbZoomView = { zoom: 1, x: 0, y: 0 };
+var kbZoomMin = 1;
+var kbZoomMax = 8;
+var kbZoomStep = 1.25;
+
+function kbZoomT(key) {
+  return typeof translate === "function" ? translate(key) : key;
+}
+
+// kbZoomImageFromEvent devolve a imagem da KB sob o clique (ou null). O escopo
+// é o container do artigo, não o documento: outras telas podem ter <img> e
+// não devem abrir este overlay.
+function kbZoomImageFromEvent(event) {
+  var target = event.target;
+  if (!target || !target.closest) return null;
+  var img = target.closest("img.kb-inline-image");
+  if (!img || !kbDetailContentEl || !kbDetailContentEl.contains(img)) {
+    return null;
+  }
+  return img;
+}
+
+// kbZoomImageSrc: prefere a data URL do cache ao próprio atributo — img.src
+// resolve para URL absoluta, o que mudaria o formato enviado ao overlay.
+function kbZoomImageSrc(img) {
+  var id = String(img.getAttribute("data-kb-image-id") || "").trim();
+  if (id) {
+    var cached = kbImageDataUrlCache.get(id);
+    if (cached) return cached;
+  }
+  return img.getAttribute("src") || img.src || "";
+}
+
+function kbEnsureZoomOverlay() {
+  var box = document.getElementById("kbImageZoom");
+  if (box) return box;
+
+  box = document.createElement("div");
+  box.id = "kbImageZoom";
+  box.className = "kb-image-zoom hidden";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", kbZoomT("knowledge.imageZoom"));
+  box.tabIndex = -1;
+  box.innerHTML = [
+    '<div class="kb-image-zoom-card">',
+    '  <div class="kb-image-zoom-head">',
+    '    <span id="kbImageZoomCaption" class="kb-image-zoom-caption"></span>',
+    '    <span class="kb-image-zoom-buttons">',
+    '      <span id="kbImageZoomLevel" class="kb-image-zoom-level">100%</span>',
+    '      <button id="kbImageZoomOut" class="btn subtle" type="button">&#8722;</button>',
+    '      <button id="kbImageZoomIn" class="btn subtle" type="button">+</button>',
+    '      <button id="kbImageZoomFit" class="btn subtle" type="button">&#10530;</button>',
+    '      <button id="kbImageZoomClose" class="btn danger" type="button"></button>',
+    "    </span>",
+    "  </div>",
+    '  <div class="kb-image-zoom-stage">',
+    '    <img id="kbImageZoomImg" class="kb-image-zoom-img hidden" alt="" />',
+    '    <div id="kbImageZoomEmpty" class="kb-image-zoom-empty hidden">',
+    '      <span id="kbImageZoomEmptyText"></span>',
+    '      <button id="kbImageZoomRetry" class="btn subtle" type="button"></button>',
+    "    </div>",
+    "  </div>",
+    '  <div class="kb-image-zoom-hint"></div>',
+    "</div>",
+  ].join("");
+  document.body.appendChild(box);
+
+  var closeBtn = document.getElementById("kbImageZoomClose");
+  if (closeBtn) {
+    closeBtn.textContent = kbZoomT("knowledge.imageClose");
+    closeBtn.title = kbZoomT("knowledge.imageClose");
+    closeBtn.addEventListener("click", kbZoomClose);
+  }
+  var hint = box.querySelector(".kb-image-zoom-hint");
+  if (hint) hint.textContent = kbZoomT("knowledge.imageZoomHint");
+  var inBtn = document.getElementById("kbImageZoomIn");
+  if (inBtn) {
+    inBtn.title = kbZoomT("screenshot.zoomIn");
+    inBtn.addEventListener("click", function () {
+      kbZoomApply(kbZoomView.zoom * kbZoomStep);
+    });
+  }
+  var outBtn = document.getElementById("kbImageZoomOut");
+  if (outBtn) {
+    outBtn.title = kbZoomT("screenshot.zoomOut");
+    outBtn.addEventListener("click", function () {
+      kbZoomApply(kbZoomView.zoom / kbZoomStep);
+    });
+  }
+  var fitBtn = document.getElementById("kbImageZoomFit");
+  if (fitBtn) {
+    fitBtn.title = kbZoomT("screenshot.zoomFit");
+    fitBtn.addEventListener("click", kbZoomReset);
+  }
+  var retryBtn = document.getElementById("kbImageZoomRetry");
+  if (retryBtn) {
+    retryBtn.title = kbZoomT("knowledge.retry");
+    retryBtn.addEventListener("click", kbZoomRetry);
+  }
+  var stage = box.querySelector(".kb-image-zoom-stage");
+  var viewImg = document.getElementById("kbImageZoomImg");
+  if (stage) {
+    // Roda e arraste no quadro inteiro (não só no <img>): com a imagem ampliada
+    // a área do quadro fora da imagem também responde.
+    stage.addEventListener("wheel", kbZoomWheel, { passive: false });
+    stage.addEventListener("mousedown", kbZoomDragStart);
+    stage.addEventListener("dblclick", kbZoomReset);
+  }
+  if (viewImg) {
+    // Soltar o src quando o overlay sai do DOM também libera a data URL cheia.
+    viewImg.addEventListener("error", kbZoomViewImageError);
+  }
+  // Clique no fundo (fora do card) fecha.
+  box.addEventListener("click", function (event) {
+    if (event.target === box) kbZoomClose();
+  });
+  return box;
+}
+
+// kbZoomViewImageError: a imagem falhou mesmo com a data URL (arquivo
+// corrompido) — mostra o estado indisponível em vez de um quadro vazio.
+function kbZoomViewImageError() {
+  var view = document.getElementById("kbImageZoomImg");
+  var empty = document.getElementById("kbImageZoomEmpty");
+  var text = document.getElementById("kbImageZoomEmptyText");
+  var retry = document.getElementById("kbImageZoomRetry");
+  if (!view || !empty || view.classList.contains("hidden")) return;
+  view.classList.add("hidden");
+  empty.classList.remove("hidden");
+  if (text) text.textContent = kbZoomT("knowledge.imageUnavailable");
+  if (retry) {
+    retry.textContent = kbZoomT("knowledge.retry");
+    retry.classList.remove("hidden");
+  }
+}
+
+function kbZoomShow(box) {
+  box.classList.remove("hidden");
+  // A prévia do chat (hover) também é fixed e ficaria por cima do overlay.
+  if (typeof screenshotHideHoverPreview === "function") {
+    screenshotHideHoverPreview();
+  }
+  try {
+    box.focus();
+  } catch (_) {
+    /* foco indisponível */
+  }
+}
+
+function kbZoomIsOpen() {
+  var box = document.getElementById("kbImageZoom");
+  return !!(box && !box.classList.contains("hidden"));
+}
+
+// kbZoomOpen é o handler do clique na imagem do artigo.
+function kbZoomOpen(img) {
+  if (!img) return;
+  var box = kbEnsureZoomOverlay();
+  var view = document.getElementById("kbImageZoomImg");
+  var empty = document.getElementById("kbImageZoomEmpty");
+  var caption = document.getElementById("kbImageZoomCaption");
+  if (!view || !empty) return;
+
+  var alt = img.getAttribute("alt") || "";
+  if (caption) caption.textContent = alt;
+
+  var src = kbZoomImageSrc(img);
+  if (!src) {
+    // Hidratação falhou (offline, binário antigo…): oferece recarregar em vez
+    // de abrir um overlay vazio.
+    view.classList.add("hidden");
+    view.removeAttribute("src");
+    empty.classList.remove("hidden");
+    var text = document.getElementById("kbImageZoomEmptyText");
+    if (text) text.textContent = kbZoomT("knowledge.imageUnavailable");
+    var retry = document.getElementById("kbImageZoomRetry");
+    if (retry) {
+      retry.textContent = kbZoomT("knowledge.retry");
+      retry.classList.remove("hidden");
+    }
+    kbZoomRetryFn = function () {
+      return kbZoomReloadFromSource(img);
+    };
+    kbZoomShow(box);
+    return;
+  }
+
+  empty.classList.add("hidden");
+  view.classList.remove("hidden");
+  view.setAttribute("alt", alt);
+  // Reabrir outra imagem não pode herdar a origem/transform de um zoom anterior
+  // (o <img> do overlay é o mesmo nó entre aberturas).
+  view.style.transformOrigin = "50% 50%";
+  view.style.transform = "";
+  view.src = src;
+  kbZoomReset();
+  kbZoomShow(box);
+}
+
+// kbZoomReloadFromSource refaz a hidratação de UMA imagem: descarta cache e
+// chamada em voo do id e volta ao placeholder; quando chega, abre o overlay.
+function kbZoomReloadFromSource(img) {
+  var id = String(img.getAttribute("data-kb-image-id") || "").trim();
+  var api = null;
+  try {
+    api = appApi();
+  } catch (_) {
+    api = null;
+  }
+  var fn =
+    api && typeof api.GetKnowledgeImageDataUrl === "function"
+      ? api.GetKnowledgeImageDataUrl.bind(api)
+      : null;
+  if (!fn || !id) return Promise.resolve("");
+  kbImageDataUrlCache.delete(id);
+  kbImageInflight.delete(id);
+  img.classList.remove("kb-inline-image-error");
+  img.classList.add("kb-inline-image-pending");
+  return fn(id)
+    .then(function (dataUrl) {
+      var value = String(dataUrl || "").trim();
+      if (!value) {
+        markKbImageError(img);
+        return "";
+      }
+      if (value.length <= kbImageJsCacheMaxChars) {
+        kbImageDataUrlCache.set(id, value);
+      }
+      img.classList.remove("kb-inline-image-pending");
+      img.classList.remove("kb-inline-image-error");
+      img.removeAttribute("title");
+      img.src = value;
+      return value;
+    })
+    .catch(function () {
+      markKbImageError(img);
+      return "";
+    });
+}
+
+function kbZoomRetry() {
+  if (typeof kbZoomRetryFn !== "function") return;
+  // Guard de clique repetido: sem isto N cliques disparariam N RPCs iguais
+  // (o cache só é preenchido no .then). O estado fica FORA de kbZoomRetryFn:
+  // fechar/reabrir recria a função e o guard precisa acompanhar apenas o RPC.
+  if (kbZoomRetryInFlight) return;
+  kbZoomRetryInFlight = true;
+  var retryBtn = document.getElementById("kbImageZoomRetry");
+  if (retryBtn) {
+    retryBtn.disabled = true;
+    retryBtn.textContent = kbZoomT("knowledge.loadingArticles");
+  }
+
+  var token = kbRenderToken;
+  var pending = kbZoomRetryFn();
+  if (!pending || typeof pending.then !== "function") {
+    kbZoomRetryDone();
+    return;
+  }
+  pending
+    .then(function (src) {
+      kbZoomRetryDone();
+      if (!src) return;
+      // O artigo/página pode ter sido trocado durante o retry: nesse caso o
+      // overlay já foi fechado por renderKnowledgeArticleDetail.
+      if (token !== kbRenderToken || !kbZoomIsOpen()) return;
+      var view = document.getElementById("kbImageZoomImg");
+      var empty = document.getElementById("kbImageZoomEmpty");
+      if (!view || !empty) return;
+      // Reset ANTES de atribuir o src: garante origem/transform limpos.
+      kbZoomReset();
+      empty.classList.add("hidden");
+      view.classList.remove("hidden");
+      view.src = src;
+    })
+    .catch(function () {
+      kbZoomRetryDone();
+    });
+}
+
+function kbZoomRetryDone() {
+  kbZoomRetryInFlight = false;
+  var retryBtn = document.getElementById("kbImageZoomRetry");
+  if (retryBtn) {
+    retryBtn.disabled = false;
+    retryBtn.textContent = kbZoomT("knowledge.retry");
+  }
+}
+
+function kbZoomClose() {
+  var box = document.getElementById("kbImageZoom");
+  if (!box) return;
+  box.classList.add("hidden");
+  var view = document.getElementById("kbImageZoomImg");
+  kbZoomRetryFn = null;
+  kbZoomReset();
+  if (view) {
+    // Soltar o src libera a memória da data URL em tamanho cheio (o
+    // kbZoomReset acima não toca no src).
+    view.removeAttribute("src");
+    view.classList.add("hidden");
+  }
+  var empty = document.getElementById("kbImageZoomEmpty");
+  if (empty) empty.classList.add("hidden");
+  // Devolve o foco ao "Voltar" do detalhe (elemento focável de verdade): o
+  // <img> só é focável com tabindex e focá-lo daria outline na imagem.
+  var back = document.getElementById("kbBackBtn");
+  if (back && typeof back.focus === "function") {
+    try {
+      back.focus({ preventScroll: true });
+    } catch (_) {
+      /* foco indisponível */
+    }
+  }
+}
+
+// kbZoomMaxZoom: nunca ampliar além de ~1 pixel original por pixel de tela
+// (acima disso só borra), respeitando o teto fixo para prints pequenos.
+function kbZoomMaxZoom() {
+  var img = document.getElementById("kbImageZoomImg");
+  if (!img || !img.clientWidth || !img.naturalWidth) return kbZoomMax;
+  var natural = img.naturalWidth / img.clientWidth;
+  return Math.max(kbZoomMin, Math.min(kbZoomMax, Math.round(natural * 10) / 10));
+}
+
+// kbZoomPaint aplica o transform atual em um único lugar.
+function kbZoomPaint() {
+  var view = kbZoomView;
+  var img = document.getElementById("kbImageZoomImg");
+  if (!img) return;
+  img.style.transform =
+    "translate(" + view.x + "px," + view.y + "px) scale(" + view.zoom + ")";
+  img.style.cursor = view.zoom > 1 ? "grab" : "zoom-in";
+  var level = document.getElementById("kbImageZoomLevel");
+  if (level) level.textContent = Math.round(view.zoom * 100) + "%";
+}
+
+// kbZoomApply(next): zoom pelos BOTÕES/teclado (sem âncora de cursor). Zerar
+// x/y evita que a posição de um arraste anterior "puxe" a imagem já ampliada.
+function kbZoomApply(next) {
+  var view = kbZoomView;
+  var max = kbZoomMaxZoom();
+  var nextZoom = Math.max(kbZoomMin, Math.min(max, next));
+  if (nextZoom <= 1.001) {
+    kbZoomReset();
+    return;
+  }
+  // Ampliar/reduzir pelos botões re-centra: a origem do transform volta ao
+  // centro (a roda do mouse é que troca a origem para o ponto sob o cursor).
+  var img = document.getElementById("kbImageZoomImg");
+  if (img) img.style.transformOrigin = "50% 50%";
+  view.zoom = nextZoom;
+  view.x = 0;
+  view.y = 0;
+  kbZoomPaint();
+}
+
+function kbZoomReset() {
+  var view = kbZoomView;
+  view.zoom = 1;
+  view.x = 0;
+  view.y = 0;
+  var img = document.getElementById("kbImageZoomImg");
+  if (img) {
+    img.style.transformOrigin = "50% 50%";
+    // Sem transform inline em 1x: evita carregar a matriz de um zoom anterior
+    // para uma imagem recém-carregada (e solta o compositor).
+    img.style.transform = "";
+  }
+  var level = document.getElementById("kbImageZoomLevel");
+  if (level) level.textContent = "100%";
+}
+
+// kbZoomLimit: enquanto ampliada, a imagem pode andar até ~90% da borda — não
+// dá para "perder" a imagem no arraste.
+function kbZoomLimit() {
+  var view = kbZoomView;
+  var img = document.getElementById("kbImageZoomImg");
+  if (!img) return;
+  var w = img.clientWidth;
+  var h = img.clientHeight;
+  var maxX = Math.max(0, ((w * view.zoom) - w) / 2) * 0.9;
+  var maxY = Math.max(0, ((h * view.zoom) - h) / 2) * 0.9;
+  view.x = Math.max(-maxX, Math.min(maxX, view.x));
+  view.y = Math.max(-maxY, Math.min(maxY, view.y));
+}
+
+// kbZoomWheel: roda do mouse dá zoom ancorado no cursor (a origem do transform
+// vai para o ponto sob o mouse) e não rola a página por trás do overlay.
+//
+// NÃO usar kbZoomApply aqui: ele re-centra (origem 50%/50% e pan zerado), o que
+// desfaria justamente a âncora de cursor calculada abaixo.
+function kbZoomWheel(event) {
+  if (!kbZoomIsOpen()) return;
+  var img = document.getElementById("kbImageZoomImg");
+  if (!img || !img.clientWidth || img.classList.contains("hidden")) return;
+  event.preventDefault();
+
+  var view = kbZoomView;
+  var max = kbZoomMaxZoom();
+  var factor = event.deltaY < 0 ? kbZoomStep : 1 / kbZoomStep;
+  var next = Math.max(kbZoomMin, Math.min(max, view.zoom * factor));
+  if (Math.abs(next - view.zoom) < 0.001) return;
+
+  if (next <= 1.001) {
+    kbZoomReset();
+    return;
+  }
+
+  // Origem = ponto sob o cursor (em % da imagem JÁ transformada, via rect).
+  var rect = img.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) {
+    var originX = ((event.clientX - rect.left) / rect.width) * 100;
+    var originY = ((event.clientY - rect.top) / rect.height) * 100;
+    img.style.transformOrigin =
+      Math.max(0, Math.min(100, originX)).toFixed(2) +
+      "% " +
+      Math.max(0, Math.min(100, originY)).toFixed(2) +
+      "%";
+  }
+  view.zoom = next;
+  kbZoomLimit();
+  kbZoomPaint();
+}
+
+// kbZoomDragStart: arrastar move a imagem ampliada (listeners no documento
+// para o arraste sobreviver a sair do quadro).
+function kbZoomDragStart(event) {
+  if (!kbZoomIsOpen()) return;
+  var view = kbZoomView;
+  var img = document.getElementById("kbImageZoomImg");
+  if (!img || event.button !== 0 || view.zoom <= 1) return;
+  event.preventDefault();
+  var startX = event.clientX;
+  var startY = event.clientY;
+  var x0 = view.x;
+  var y0 = view.y;
+  img.style.cursor = "grabbing";
+  function onMove(ev) {
+    view.x = x0 + (ev.clientX - startX);
+    view.y = y0 + (ev.clientY - startY);
+    kbZoomLimit();
+    kbZoomPaint();
+  }
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    if (img) img.style.cursor = view.zoom > 1 ? "grab" : "zoom-in";
+  }
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
+// kbZoomKey trata os atalhos com o overlay aberto: Esc fecha, +/− ampliam,
+// 0 ajusta, as setas movem e Tab fica preso no overlay. Devolve true quando
+// consumiu a tecla.
+function kbZoomKey(event) {
+  if (!kbZoomIsOpen()) return false;
+  var key = event.key;
+  if (key === "Escape") {
+    kbZoomClose();
+    event.preventDefault();
+    return true;
+  }
+  if (key === "Tab") {
+    // aria-modal promete foco contido: sem isto o Tab iria para os controles
+    // do artigo que estão escondidos atrás do backdrop. A lista é só de
+    // elementos realmente focáveis (button/link/input/[tabindex]), não de
+    // qualquer coisa com classe .btn.
+    var box = document.getElementById("kbImageZoom");
+    var candidates = box
+      ? box.querySelectorAll(
+          "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
+        )
+      : [];
+    var list = Array.prototype.filter.call(candidates, function (el) {
+      return (
+        !el.disabled &&
+        !el.classList.contains("hidden") &&
+        el.tabIndex !== -1
+      );
+    });
+    if (!list.length) return false;
+    var first = list[0];
+    var last = list[list.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      last.focus();
+      event.preventDefault();
+      return true;
+    }
+    if (!event.shiftKey && document.activeElement === last) {
+      first.focus();
+      event.preventDefault();
+      return true;
+    }
+    return false;
+  }
+  if (key === "+" || key === "=") {
+    kbZoomApply(kbZoomView.zoom * kbZoomStep);
+    event.preventDefault();
+    return true;
+  }
+  if (key === "-" || key === "_") {
+    kbZoomApply(kbZoomView.zoom / kbZoomStep);
+    event.preventDefault();
+    return true;
+  }
+  if (key === "0") {
+    kbZoomReset();
+    event.preventDefault();
+    return true;
+  }
+  var arrows = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1],
+  };
+  if (!arrows[key] || kbZoomView.zoom <= 1) return false;
+  var step = event.shiftKey ? 80 : 30;
+  kbZoomView.x += arrows[key][0] * step;
+  kbZoomView.y += arrows[key][1] * step;
+  kbZoomLimit();
+  kbZoomPaint();
+  event.preventDefault();
+  return true;
+}
+
+// initKnowledgeZoom liga o clique na imagem (o "zoom-in" do cursor só existia
+// no CSS), o teclado do overlay e o reenquadramento quando a janela muda de
+// tamanho (em 1x o card é centrado pelo CSS, então o reset basta).
+function initKnowledgeZoom() {
+  if (!kbDetailContentEl) return;
+  kbDetailContentEl.addEventListener("click", function (event) {
+    var img = kbZoomImageFromEvent(event);
+    if (!img) return;
+    // img.kb-inline-image-error não tem src: o overlay mostra "indisponível"
+    // com ação de recarregar (antes o clique não fazia nada).
+    event.preventDefault();
+    kbZoomOpen(img);
+  });
+  document.addEventListener("keydown", function (event) {
+    // Outro handler já tratou a tecla (Esc de outro modal, atalho global).
+    if (event.defaultPrevented) return;
+    if (!kbZoomIsOpen()) return;
+    kbZoomKey(event);
+  });
+  window.addEventListener("resize", function () {
+    if (!kbZoomIsOpen()) return;
+    // No estado "indisponível" não há imagem para reenquadrar.
+    var view = document.getElementById("kbImageZoomImg");
+    if (!view || view.classList.contains("hidden")) return;
+    kbZoomReset();
+  });
 }
 
 function renderKnowledgeArticles(items) {
@@ -554,6 +1129,7 @@ async function loadKnowledgeBase() {
 }
 
 function initKnowledge() {
+  initKnowledgeZoom();
   if (kbRefreshBtn) {
     kbRefreshBtn.addEventListener("click", async function () {
       kbRefreshBtn.disabled = true;

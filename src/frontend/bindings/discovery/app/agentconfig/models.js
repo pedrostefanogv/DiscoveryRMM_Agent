@@ -260,6 +260,16 @@ export class AgentConfiguration {
              */
             this["windowsUpdateScanIntervalMinutes"] = null;
         }
+        if (!("windowsUpdateStateIntervalMinutes" in $$source)) {
+            /**
+             * WindowsUpdateStateIntervalMinutes controla a sonda BARATA de estado
+             * (registro/log/serviço, sem WUA) que dispara o scan quando a assinatura
+             * muda. nil = default (5 min, mínimo 30s — abaixo de 1 min é arredondado).
+             * @member
+             * @type {number | null}
+             */
+            this["windowsUpdateStateIntervalMinutes"] = null;
+        }
 
         Object.assign(this, $$source);
     }

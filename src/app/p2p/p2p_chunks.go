@@ -264,6 +264,15 @@ func downloadChunkedLibp2p(
 		return "", 0, err
 	}
 
+	// C3: cada peer que serve a partir do modelo seguro exige o token emitido
+	// por /artifact/access/1.0.0. O token é obtido uma vez por peer/artifact
+	// (com cache) e reenviado em todos os chunks servidos por ele; quando o
+	// token expira no meio de um download longo, a renovação acontece no retry.
+	accessTokens := newArtifactAccessTokenCache()
+	tokenFor := func(lp libp2pPeer) string {
+		return accessTokens.token(abortCtx, h, lp.peerID, artifactName, requesterID, logf)
+	}
+
 	type chunkResult struct {
 		index int
 		err   error
@@ -316,7 +325,7 @@ func downloadChunkedLibp2p(
 				// e excluindo peers que já falharam para este chunk.
 				lp := sched.pickPeerExcluding(i, peers, failedPeers)
 
-				lastErr = libp2pDownloadChunk(abortCtx, h, lp.peerID, artifactName, requesterID, chunk, chunkFile, func(readSoFar, total int64) {
+				lastErr = libp2pDownloadChunk(abortCtx, h, lp.peerID, artifactName, requesterID, tokenFor(lp), chunk, chunkFile, func(readSoFar, total int64) {
 					if onChunkProgress != nil {
 						onChunkProgress(chunkIdx, readSoFar, chunkSize, totalChunks)
 					}
@@ -328,6 +337,11 @@ func downloadChunkedLibp2p(
 				}
 				sched.recordError(lp.peerID)
 				failedPeers[lp.peerID.String()] = true
+				// Falha de credencial: descarta o token do peer para que a
+				// próxima tentativa negocie um novo /artifact/access.
+				if isArtifactAccessAuthError(lastErr) {
+					accessTokens.invalidate(lp.peerID)
+				}
 				if logf != nil {
 					peerShort := lp.peerID.String()
 					if len(peerShort) > 12 {

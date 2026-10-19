@@ -47,8 +47,16 @@ type windowsUpdateInstallPayload struct {
 // O agente NUNCA instala por título: os alvos são revalidados contra o catálogo
 // atual do WUA por GUID/chave canônica.
 func (a *App) handleWindowsUpdateCommand(ctx context.Context, payload any) (bool, int, string, string) {
+	startedAt := time.Now()
+	// O handler era silencioso: um clique em "Verificar atualizacoes" no site
+	// nao deixava rastro no log do agente. Agora entrada e saida sao logadas.
+	if a != nil {
+		a.Logs.Append(fmt.Sprintf("[windows-update] comando recebido: payload=%v", payload))
+	}
+
 	payloadJSON, err := agentcommands.NormalizePayloadJSON(payload)
 	if err != nil {
+		a.logWindowsUpdateCommandResult("invalid", 2, err.Error(), startedAt)
 		return true, 2, "", "payload windowsupdate invalido: " + err.Error()
 	}
 
@@ -58,6 +66,7 @@ func (a *App) handleWindowsUpdateCommand(ctx context.Context, payload any) (bool
 	}
 
 	if a == nil || a.InventorySvc == nil {
+		a.logWindowsUpdateCommandResult(action, 1, "servico de inventario indisponivel", startedAt)
 		return true, 1, "", "servico de inventario indisponivel"
 	}
 
@@ -65,18 +74,44 @@ func (a *App) handleWindowsUpdateCommand(ctx context.Context, payload any) (bool
 
 	switch action {
 	case "scan":
-		result, err := a.InventorySvc.ScanAndSyncWindowsUpdates(ctx)
+		// O resultado (mesmo com erro) sobe o envelope com status/errorCode;
+		// o codigo de saida reflete a falha para o servidor/UI.
+		result, err := a.InventorySvc.ScanAndSyncWindowsUpdatesTriggered(ctx, "command")
+		code := inventoryScanErrorCode(err)
 		if err != nil {
-			code := inventoryScanErrorCode(err)
-			return true, 1, "", fmt.Sprintf("scan de windows update falhou (%s): %v", code, err)
+			output := ""
+			if result != nil {
+				output = marshalWindowsUpdateResult(map[string]any{
+					"success":        false,
+					"errorCode":      code,
+					"error":          err.Error(),
+					"pendingCount":   result.PendingCount,
+					"installedCount": result.InstalledCount,
+					"skippedCount":   result.SkippedCount,
+					"skippedReasons": result.SkippedReasons,
+					"pendingReboot":  result.PendingReboot,
+					"serviceState":   result.State.ServiceState,
+				})
+			}
+			a.logWindowsUpdateCommandResult(action, 1, fmt.Sprintf("scan falhou (%s): %v", code, err), startedAt)
+			return true, 1, output, fmt.Sprintf("scan de windows update falhou (%s): %v", code, err)
 		}
+		// O estado que acabou de ser enviado vira a referencia da sonda: evita
+		// um scan duplicado por "mudanca" logo depois do comando.
+		if result != nil {
+			a.InventorySvc.SetWindowsUpdateBaseline(a.windowsUpdateSignatureOfScan(ctx))
+		}
+		a.logWindowsUpdateCommandResult(action, 0, fmt.Sprintf("pending=%d installed=%d skipped=%d reboot=%t",
+			result.PendingCount, result.InstalledCount, result.SkippedCount, result.PendingReboot.Pending), startedAt)
 		return true, 0, marshalWindowsUpdateResult(map[string]any{
 			"success":        true,
 			"pendingCount":   result.PendingCount,
 			"installedCount": result.InstalledCount,
 			"skippedCount":   result.SkippedCount,
+			"skippedReasons": result.SkippedReasons,
 			"pendingReboot":  result.PendingReboot,
 			"durationMs":     result.DurationMs,
+			"state":          result.State,
 		}), ""
 
 	case "install":
@@ -89,8 +124,11 @@ func (a *App) handleWindowsUpdateCommand(ctx context.Context, payload any) (bool
 		}
 		result, installErr := a.InventorySvc.InstallWindowsUpdates(ctx, installPayload.Updates)
 		if installErr != nil {
+			a.logWindowsUpdateCommandResult(action, 1, "instalacao falhou: "+installErr.Error(), startedAt)
 			return true, 1, "", "instalacao de windows update falhou: " + installErr.Error()
 		}
+		a.logWindowsUpdateCommandResult(action, result.Code(), fmt.Sprintf("installed=%d failed=%d notFound=%d rebootRequired=%t",
+			len(result.Installed), len(result.Failed), len(result.NotFound), result.RebootRequired), startedAt)
 
 		// Atualiza o inventário local/servidor em segundo plano: o resultado do
 		// comando precisa sair antes (a UI faz polling curto do snapshot).
@@ -134,12 +172,15 @@ func (a *App) handleWindowsUpdateCommand(ctx context.Context, payload any) (bool
 	case "hide", "unhide":
 		keys := stringSliceField(payloadJSON, "updateKeys")
 		if len(keys) == 0 {
+			a.logWindowsUpdateCommandResult(action, 2, "campo 'updateKeys' ausente", startedAt)
 			return true, 2, "", "campo 'updateKeys' e obrigatorio"
 		}
 		hidden, err := a.InventorySvc.HideWindowsUpdates(ctx, keys, action == "hide")
 		if err != nil {
+			a.logWindowsUpdateCommandResult(action, 1, err.Error(), startedAt)
 			return true, 1, "", "falha ao " + action + " updates: " + err.Error()
 		}
+		a.logWindowsUpdateCommandResult(action, 0, fmt.Sprintf("changed=%d", hidden), startedAt)
 		return true, 0, marshalWindowsUpdateResult(map[string]any{
 			"success": true,
 			"changed": hidden,
@@ -178,8 +219,23 @@ func (a *App) handleWindowsUpdateCommand(ctx context.Context, payload any) (bool
 		return true, 0, marshalWindowsUpdateResult(map[string]any{"success": true, "settings": settings, "probe": a.InventorySvc.WindowsUpdateProbe(ctx)}), ""
 
 	default:
+		a.logWindowsUpdateCommandResult(action, 2, "acao nao suportada", startedAt)
 		return true, 2, "", "acao de windows update nao suportada: " + action
 	}
+}
+
+// logWindowsUpdateCommandResult registra a saida de um comando windowsupdate
+// (a UI depende de saber que o comando chegou e o que aconteceu).
+func (a *App) logWindowsUpdateCommandResult(action string, code int, detail string, startedAt time.Time) {
+	if a == nil {
+		return
+	}
+	elapsed := time.Since(startedAt).Milliseconds()
+	line := fmt.Sprintf("[windows-update] comando concluido: action=%s exitCode=%d (%dms)", action, code, elapsed)
+	if strings.TrimSpace(detail) != "" {
+		line += " — " + detail
+	}
+	a.Logs.Append(line)
 }
 
 // refreshWindowsUpdatesAfterInstall re-coleta e reenvia o inventário depois de
@@ -190,9 +246,11 @@ func (a *App) refreshWindowsUpdatesAfterInstall() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	if _, err := a.InventorySvc.ScanAndSyncWindowsUpdates(ctx); err != nil {
+	if _, err := a.InventorySvc.ScanAndSyncWindowsUpdatesTriggered(ctx, "install"); err != nil {
 		a.Logs.Append("[windows-update] refresh pos-instalacao falhou: " + err.Error())
+		return
 	}
+	a.InventorySvc.SetWindowsUpdateBaseline(a.windowsUpdateSignatureOfScan(ctx))
 }
 
 func parseWindowsUpdateInstallPayload(payloadJSON map[string]any) (windowsUpdateInstallPayload, error) {

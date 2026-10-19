@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"discovery/app/core/windowsupdate"
@@ -101,6 +102,20 @@ func (s *Service) WindowsUpdateProbe(ctx context.Context) windowsupdate.ProbeInf
 // reboot). Serializado por mutex: comandos e o loop periodico nao podem rodar
 // dois scans ao mesmo tempo.
 func (s *Service) ScanWindowsUpdates(ctx context.Context) (*windowsupdate.ScanResult, error) {
+	_ = ctx // o Scan do cliente aplica o proprio ScanTimeout; ctx e do ciclo de vida
+	result, err := s.scanWindowsUpdates(true)
+	if err != nil && result == nil {
+		return nil, err
+	}
+	return result, err
+}
+
+// scanWindowsUpdates devolve SEMPRE o resultado quando o cliente o forneceu,
+// inclusive junto de erro (servico desabilitado/WUA ausente): o chamador usa
+// esse resultado parcial para subir o envelope com status=error + errorCode +
+// sonda de estado, explicando a maquina na UI. Sem isso a aba ficava vazia e
+// sem motivo.
+func (s *Service) scanWindowsUpdates(verbose bool) (*windowsupdate.ScanResult, error) {
 	client, _, enabled := s.wuDeps()
 	if client == nil {
 		return nil, windowsupdate.ErrUnsupportedOS
@@ -112,25 +127,94 @@ func (s *Service) ScanWindowsUpdates(ctx context.Context) (*windowsupdate.ScanRe
 	s.scanMu.Lock()
 	defer s.scanMu.Unlock()
 
-	s.logf("[windows-update] scan iniciado")
-	result, err := client.Scan(ctx, windowsupdate.ScanOptions{IncludeInstalled: true})
-	if err != nil {
-		s.logf("[windows-update] scan falhou: " + err.Error())
+	if verbose {
+		s.logf("[windows-update] scan iniciado")
+	}
+	started := time.Now()
+	result, err := client.Scan(context.Background(), windowsupdate.ScanOptions{IncludeInstalled: true})
+	if result == nil {
+		if err != nil {
+			s.logf("[windows-update] scan falhou (" + ScanErrorCode(err) + "): " + err.Error())
+		}
 		return nil, err
 	}
-	s.logf(fmt.Sprintf("[windows-update] scan concluido: pending=%d installed=%d skipped=%d reboot=%t (%dms)",
-		result.PendingCount, result.InstalledCount, result.SkippedCount, result.PendingReboot.Pending, result.DurationMs))
-	return result, nil
+	if err != nil {
+		s.logf(fmt.Sprintf("[windows-update] scan parcial (%s): %v — enviando estado mesmo assim",
+			ScanErrorCode(err), err))
+	}
+	skipped := ""
+	if len(result.SkippedReasons) > 0 {
+		skipped = fmt.Sprintf(" reasons=%v", result.SkippedReasons)
+	}
+	s.logf(fmt.Sprintf("[windows-update] scan concluido: pending=%d installed=%d skipped=%d%s reboot=%t(%v) service=%s wuOnline=%t lastInstallSuccess=%s (%dms, total %dms)",
+		result.PendingCount, result.InstalledCount, result.SkippedCount, skipped,
+		result.PendingReboot.Pending, result.PendingReboot.Reasons,
+		result.State.ServiceState, result.State.WuOnline, formatStateTime(result.State.LastInstallSuccess),
+		result.DurationMs, time.Since(started).Milliseconds()))
+	return result, err
 }
 
-// SyncWindowsUpdates faz o upload do resultado do scan (somente se mudou) e
-// persiste o cache local. Nunca falha o ciclo de inventario: erro so loga.
+// ProbeWindowsUpdateState devolve a sonda barata do estado local (sem WUA) e a
+// sua assinatura estavel. Usada pelo loop do agente para decidir quando um
+// scan completo e necessario.
+func (s *Service) ProbeWindowsUpdateState(ctx context.Context) (windowsupdate.WindowsUpdateState, string) {
+	client, _, enabled := s.wuDeps()
+	if client == nil || !enabled {
+		state := windowsupdate.WindowsUpdateState{
+			Supported:       false,
+			PolicyErrorCode: windowsupdate.ScanErrorUnsupported,
+			CheckedAt:       time.Now().UTC(),
+		}
+		return state, windowsupdate.WindowsUpdateStateSignature(state)
+	}
+	state := client.ProbeState(ctx)
+	return state, windowsupdate.WindowsUpdateStateSignature(state)
+}
+
+// WindowsUpdateStateSignature devolve somente a assinatura (sem alocar estado
+// para log quando nao ha mudanca).
+func (s *Service) WindowsUpdateStateSignature(ctx context.Context) string {
+	_, signature := s.ProbeWindowsUpdateState(ctx)
+	return signature
+}
+
+func formatStateTime(value *time.Time) string {
+	if value == nil || value.IsZero() {
+		return "-"
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
+// SyncWindowsUpdates faz o upload do resultado do scan persiste o cache local.
+//
+// A supressao por hash NUNCA pode esconder uma mudanca de estado:
+//   - scan.status e scan.errorCode mudando sempre força o upload (antes, uma
+//     maquina com servico desabilitado/WUA quebrado e as mesmas KBs ficava
+//     horas sem reportar a falha);
+//   - reboot pendente mudando força o upload (download concluido + reboot
+//     pendente NAO mudam a lista de KBs — era exatamente o caso "Baixando 0% /
+//     Instalacao pendente" congelado por ate 6h);
+//   - o estado local (WindowsUpdateState) muda a assinatura quando o Windows
+//     instala/baixa algo.
+//
+// Nunca falha o ciclo de inventario: erro so loga.
 func (s *Service) SyncWindowsUpdates(ctx context.Context, result *windowsupdate.ScanResult) bool {
+	return s.syncWindowsUpdates(ctx, result, "")
+}
+
+// SyncWindowsUpdatesWithError permite ao chamador informar o erro do scan; o
+// envelope sobe com status=error + errorCode mesmo sem resultado completo.
+func (s *Service) SyncWindowsUpdatesWithError(ctx context.Context, result *windowsupdate.ScanResult, scanErr error) bool {
+	return s.syncWindowsUpdates(ctx, result, ScanErrorCode(scanErr))
+}
+
+func (s *Service) syncWindowsUpdates(ctx context.Context, result *windowsupdate.ScanResult, scanErrCode string) bool {
 	if s == nil || result == nil {
 		return false
 	}
 	_, cache, enabled := s.wuDeps()
 	if !enabled {
+		s.logf("[windows-update] upload ignorado: modulo desabilitado por configuracao")
 		return false
 	}
 
@@ -145,7 +229,7 @@ func (s *Service) SyncWindowsUpdates(ctx context.Context, result *windowsupdate.
 		return false
 	}
 
-	envelope := buildWindowsUpdateEnvelope(agentID, result)
+	envelope := buildWindowsUpdateEnvelope(agentID, result, scanErrCode)
 	body, err := json.Marshal(envelope)
 	if err != nil {
 		s.logf("[windows-update] falha ao serializar payload: " + err.Error())
@@ -155,21 +239,23 @@ func (s *Service) SyncWindowsUpdates(ctx context.Context, result *windowsupdate.
 
 	if cache != nil {
 		if cachedPayload, cachedHash, _, found, cacheErr := cache.GetWindowsUpdateCache(agentID); cacheErr == nil && found {
-			if cachedHash == hash {
-				s.logf("[windows-update] upload ignorado: payload sem mudancas")
-				// A sonda de reboot pode ter mudado sem alterar o resto do payload;
-				// o hash cobre tudo, entao nada a fazer.
+			if cachedHash == hash && !windowsUpdateUploadForced(envelope, cachedPayload) {
+				s.logf(fmt.Sprintf("[windows-update] upload ignorado: payload sem mudancas (status=%s reboot=%t updates=%d)",
+					envelope.Scan.Status, envelope.PendingReboot.Pending, len(envelope.Updates)))
 				return false
 			}
-			_ = cachedPayload
+			if cachedHash == hash {
+				s.logf("[windows-update] upload forçado: status do scan ou reinicio pendente mudou com payload igual")
+			}
 		}
 	}
 
 	endpoint := cfg.ApiScheme + "://" + cfg.ApiServer + windowsUpdateEndpointPath
 	if err := s.sendWindowsUpdateRequest(ctx, endpoint, cfg, http.MethodPost, body); err != nil {
-		s.logf("[windows-update] POST falhou: " + err.Error())
+		s.logf("[windows-update] POST " + endpoint + " falhou: " + err.Error())
 		if err := s.sendWindowsUpdateRequest(ctx, endpoint, cfg, http.MethodPut, body); err != nil {
-			s.logf("[windows-update] PUT falhou: " + err.Error())
+			s.logf("[windows-update] PUT " + endpoint + " falhou: " + err.Error())
+			// Nao grava o cache: a proxima tentativa precisa reenviar.
 			return false
 		}
 	}
@@ -179,9 +265,35 @@ func (s *Service) SyncWindowsUpdates(ctx context.Context, result *windowsupdate.
 			s.logf("[windows-update] aviso: falha ao gravar cache local: " + err.Error())
 		}
 	}
-	s.logf(fmt.Sprintf("[windows-update] inventario enviado: updates=%d pending=%d installed=%d",
-		len(result.Updates), result.PendingCount, result.InstalledCount))
+	s.logf(fmt.Sprintf("[windows-update] inventario enviado: status=%s errorCode=%q updates=%d pending=%d installed=%d skipped=%d reboot=%t(%v) service=%s",
+		envelope.Scan.Status, envelope.Scan.ErrorCode, len(result.Updates), result.PendingCount, result.InstalledCount,
+		result.SkippedCount, envelope.PendingReboot.Pending, envelope.PendingReboot.Reasons, envelope.State.ServiceState))
 	return true
+}
+
+// windowsUpdateUploadForced compara o envelope atual com o payload cacheado e
+// decide se uma mudanca IMPORTANTE aconteceu mesmo com hash igual (diferenca
+// de versao do agente no formato, por exemplo) — ou, no sentido inverso, se o
+// hash igual esconde status/reboot diferentes.
+func windowsUpdateUploadForced(current agentWindowsUpdateEnvelope, cachedPayload []byte) bool {
+	if len(cachedPayload) == 0 {
+		return false
+	}
+	var previous agentWindowsUpdateEnvelope
+	if err := json.Unmarshal(cachedPayload, &previous); err != nil {
+		return true
+	}
+	if previous.Scan.Status != current.Scan.Status || previous.Scan.ErrorCode != current.Scan.ErrorCode {
+		return true
+	}
+	if previous.PendingReboot.Pending != current.PendingReboot.Pending ||
+		!sameReasons(previous.PendingReboot.Reasons, current.PendingReboot.Reasons) {
+		return true
+	}
+	if previous.State.Signature != current.State.Signature {
+		return true
+	}
+	return false
 }
 
 // ReportPendingReboot envia a sonda de reinicio SOMENTE quando o estado muda
@@ -228,8 +340,10 @@ func (s *Service) ReportPendingReboot(ctx context.Context) (bool, error) {
 	}
 	endpoint := cfg.ApiScheme + "://" + cfg.ApiServer + pendingRebootEndpointPath
 	if err := s.sendWindowsUpdateRequest(ctx, endpoint, cfg, http.MethodPost, body); err != nil {
+		s.logf("[windows-update] POST " + endpoint + " (pending-reboot) falhou: " + err.Error())
 		return false, err
 	}
+	s.logf(fmt.Sprintf("[windows-update] sonda de reinicio enviada: pending=%t reasons=%v", info.Pending, info.Reasons))
 	if cache != nil {
 		if err := cache.SaveWindowsUpdateRebootState(agentID, info.Reasons, info.CheckedAt, true); err != nil {
 			s.logf("[windows-update] aviso: falha ao gravar estado de reboot: " + err.Error())
@@ -238,29 +352,57 @@ func (s *Service) ReportPendingReboot(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// ScanAndSyncWindowsUpdates e o fluxo completo usado pelo comando remoto:
-// scan + upload + sonda. Devolve o resultado e o erro do scan.
+// ScanAndSyncWindowsUpdates e o fluxo completo usado pelo comando remoto e
+// pelo loop periodico: scan + upload (+ sonda). Devolve o resultado e o erro do
+// scan.
+//
+// IMPORTANTE: o envelope e enviado MESMO quando o scan falha (servico
+// desabilitado, WUA ausente, timeout). Antes disso o agente ficava em silencio
+// e a aba de atualizacoes do agente vazia e sem explicacao.
 func (s *Service) ScanAndSyncWindowsUpdates(ctx context.Context) (*windowsupdate.ScanResult, error) {
-	result, err := s.ScanWindowsUpdates(ctx)
-	if err != nil {
-		// Mesmo com scan falho, reporta a sonda de reinicio (barata).
-		if _, reportErr := s.ReportPendingReboot(ctx); reportErr != nil {
-			s.logf("[windows-update] falha ao reportar reinicio pendente: " + reportErr.Error())
-		}
-		return nil, err
-	}
-	s.SyncWindowsUpdates(ctx, result)
-	if result.PendingReboot.Pending {
-		// O envelope ja levou a sonda; apenas persiste o estado local.
-		if _, cache, _ := s.wuDeps(); cache != nil {
-			if cfgAgentID := strings.TrimSpace(s.debugConfig().AgentID); cfgAgentID != "" {
-				_ = cache.SaveWindowsUpdateRebootState(cfgAgentID, result.PendingReboot.Reasons, result.PendingReboot.CheckedAt, true)
-			}
-		}
-	}
-	return result, nil
+	SetWindowsUpdateTrigger("command")
+	return s.scanAndSync(ctx, "")
 }
 
+// ScanAndSyncWindowsUpdatesTriggered e igual a ScanAndSyncWindowsUpdates, mas
+// registra o motivo do scan no envelope (periodic | change | command | install).
+func (s *Service) ScanAndSyncWindowsUpdatesTriggered(ctx context.Context, trigger string) (*windowsupdate.ScanResult, error) {
+	if strings.TrimSpace(trigger) == "" {
+		trigger = "command"
+	}
+	SetWindowsUpdateTrigger(trigger)
+	return s.scanAndSync(ctx, "")
+}
+
+func (s *Service) scanAndSync(ctx context.Context, _ string) (*windowsupdate.ScanResult, error) {
+	result, err := s.ScanWindowsUpdates(ctx)
+	if err != nil {
+		s.logf("[windows-update] scan falhou (" + ScanErrorCode(err) + "): " + err.Error())
+	}
+	if result != nil {
+		s.SyncWindowsUpdatesWithError(ctx, result, err)
+		if result.PendingReboot.Pending {
+			// O envelope ja levou a sonda; apenas persiste o estado local.
+			if _, cache, _ := s.wuDeps(); cache != nil {
+				if cfgAgentID := strings.TrimSpace(s.debugConfig().AgentID); cfgAgentID != "" {
+					_ = cache.SaveWindowsUpdateRebootState(cfgAgentID, result.PendingReboot.Reasons, result.PendingReboot.CheckedAt, true)
+				}
+			}
+		}
+		return result, err
+	}
+
+	// Nenhum resultado do cliente (modulo desabilitado ou cliente ausente):
+	// mesmo assim reporta a sonda barata de reinicio, que e o unico sinal que
+	// temos para nao deixar o servidor cego.
+	if _, reportErr := s.ReportPendingReboot(ctx); reportErr != nil {
+		s.logf("[windows-update] falha ao reportar reinicio pendente: " + reportErr.Error())
+	}
+	if err == nil {
+		err = windowsupdate.ErrUnsupportedOS
+	}
+	return nil, err
+}
 // InstallWindowsUpdates instala os alvos informados (ja revalidados no WUA pelo
 // cliente) e, em seguida, atualiza o inventario local/servidor.
 func (s *Service) InstallWindowsUpdates(ctx context.Context, targets []windowsupdate.InstallTarget) (*windowsupdate.InstallResult, error) {
@@ -308,10 +450,60 @@ func (s *Service) ReadWindowsUpdatePolicy() (windowsupdate.PolicySettings, error
 // ---- envelope/upload helpers ----------------------------------------------
 
 type agentWindowsUpdateScan struct {
-	Status     string `json:"status"`
-	DurationMs int64  `json:"durationMs"`
-	StartedAt  string `json:"startedAt"`
-	ErrorCode  string `json:"errorCode,omitempty"`
+	Status        string         `json:"status"`
+	DurationMs    int64          `json:"durationMs"`
+	StartedAt     string         `json:"startedAt"`
+	ErrorCode     string         `json:"errorCode,omitempty"`
+	SkippedCount  int            `json:"skippedCount,omitempty"`
+	SkippedReason map[string]int `json:"skippedReasons,omitempty"`
+	// Source: wua/qfe; Trigger: periodic | change | command | install.
+	Source  string `json:"source,omitempty"`
+	Trigger string `json:"trigger,omitempty"`
+}
+
+// agentWindowsUpdateState e o espelho JSON do WindowsUpdateState + assinatura.
+// Campos opcionais no servidor: a API antiga ignora o objeto inteiro.
+type agentWindowsUpdateState struct {
+	Supported          bool     `json:"supported"`
+	ServiceState       string   `json:"serviceState,omitempty"`
+	WuOnline           bool     `json:"wuOnline"`
+	PolicyManaged      bool     `json:"policyManaged"`
+	WSUSServer         string   `json:"wsusServer,omitempty"`
+	RebootPending      bool     `json:"rebootPending"`
+	RebootReasons      []string `json:"rebootReasons,omitempty"`
+	LastInstallSuccess string   `json:"lastInstallSuccess,omitempty"`
+	LastInstallTime    string   `json:"lastInstallTime,omitempty"`
+	DownloadInProgress bool     `json:"downloadInProgress"`
+	QFEInstalledCount  int      `json:"qfeInstalledCount"`
+	RecentQFEs         []string `json:"recentQfes,omitempty"`
+	AuOptions          int      `json:"auOptions,omitempty"`
+	NoAutoUpdate       bool     `json:"noAutoUpdate"`
+	DeferralDays       int      `json:"deferralDays,omitempty"`
+	CheckedAt          string   `json:"checkedAt"`
+	// Signature e o hash estavel do estado: o agente reenvia quando muda.
+	Signature string `json:"signature,omitempty"`
+}
+
+func newAgentWindowsUpdateState(state windowsupdate.WindowsUpdateState) agentWindowsUpdateState {
+	return agentWindowsUpdateState{
+		Supported:          state.Supported,
+		ServiceState:       state.ServiceState,
+		WuOnline:           state.WuOnline,
+		PolicyManaged:      state.PolicyManaged,
+		WSUSServer:         state.WSUSServer,
+		RebootPending:      state.RebootPending,
+		RebootReasons:      state.RebootReasons,
+		LastInstallSuccess: formatStateTime(state.LastInstallSuccess),
+		LastInstallTime:    formatStateTime(state.LastInstallTime),
+		DownloadInProgress: state.DownloadInProgress,
+		QFEInstalledCount:  state.QFEInstalledCount,
+		RecentQFEs:         state.RecentQFEs,
+		AuOptions:          state.AuOptions,
+		NoAutoUpdate:       state.NoAutoUpdate,
+		DeferralDays:       state.DeferralDays,
+		CheckedAt:          state.CheckedAt.UTC().Format(time.RFC3339),
+		Signature:          windowsupdate.WindowsUpdateStateSignature(state),
+	}
 }
 
 type agentWindowsUpdateReboot struct {
@@ -326,38 +518,104 @@ type agentWindowsUpdateEnvelope struct {
 	Scan          agentWindowsUpdateScan   `json:"scan"`
 	PendingReboot agentWindowsUpdateReboot `json:"pendingReboot"`
 	Updates       []windowsupdate.Update   `json:"updates"`
+	// State e a sonda barata do estado local (campo OPCIONAL: API antiga ignora).
+	State agentWindowsUpdateState `json:"state"`
 }
 
 // scanStatusFor mapeia o resultado para o status do envelope. "partial"
 // sinaliza que uma fonte falhou (ex.: QFE instaladas) e listas vazias NÃO devem
 // ser tratadas como remoção pelo servidor.
-func scanStatusFor(result *windowsupdate.ScanResult) string {
+func scanStatusFor(result *windowsupdate.ScanResult, scanErrCode string) string {
+	switch scanErrCode {
+	case windowsupdate.ScanErrorTimeout:
+		return windowsupdate.ScanStatusTimeout
+	case windowsupdate.ScanErrorUnsupported:
+		return windowsupdate.ScanStatusUnsupported
+	case windowsupdate.ScanErrorWuaUnavailable, windowsupdate.ScanErrorServiceDisabled, windowsupdate.ScanErrorFailed:
+		return windowsupdate.ScanStatusError
+	}
 	if result != nil && result.Partial {
 		return "partial"
 	}
 	return windowsupdate.ScanStatusOK
 }
 
-func buildWindowsUpdateEnvelope(agentID string, result *windowsupdate.ScanResult) agentWindowsUpdateEnvelope {
-	collectedAt := result.StartedAt
-	if collectedAt.IsZero() {
-		collectedAt = time.Now().UTC()
+// buildWindowsUpdateEnvelope monta o payload de upload. scanErrCode != ""
+// produz status=error/timeout/unsupported + errorCode SEMPRE — inclusive quando
+// o scan nem rodou (servico desabilitado) — para a UI explicar o vazio.
+func buildWindowsUpdateEnvelope(agentID string, result *windowsupdate.ScanResult, scanErrCode string) agentWindowsUpdateEnvelope {
+	startedAt := result.StartedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+	state := result.State
+	if state.CheckedAt.IsZero() {
+		state.CheckedAt = time.Now().UTC()
+	}
+	// A sonda de reboot mais fresca e a do scan; mantem coerencia entre
+	// pendingReboot e state.rebootPending (duas leituras em momentos diferentes
+	// confundiriam a UI).
+	state.RebootPending = result.PendingReboot.Pending
+	if len(result.PendingReboot.Reasons) > 0 || !result.PendingReboot.Pending {
+		state.RebootReasons = append([]string(nil), result.PendingReboot.Reasons...)
+	}
+	if scanErrCode == "" && strings.EqualFold(state.ServiceState, "disabled") {
+		scanErrCode = windowsupdate.ScanErrorServiceDisabled
+	}
+	if scanErrCode != "" && !result.Partial {
+		result.Partial = true
+	}
+
+	updates := result.Updates
+	if updates == nil {
+		updates = []windowsupdate.Update{}
+	}
+	rebootCheckedAt := result.PendingReboot.CheckedAt
+	if rebootCheckedAt.IsZero() {
+		rebootCheckedAt = state.CheckedAt
 	}
 	return agentWindowsUpdateEnvelope{
 		AgentID:     agentID,
-		CollectedAt: collectedAt.UTC().Format(time.RFC3339),
+		CollectedAt: startedAt.UTC().Format(time.RFC3339),
 		Scan: agentWindowsUpdateScan{
-			Status:     scanStatusFor(result),
-			DurationMs: result.DurationMs,
-			StartedAt:  result.StartedAt.UTC().Format(time.RFC3339),
+			Status:        scanStatusFor(result, scanErrCode),
+			DurationMs:    result.DurationMs,
+			StartedAt:     startedAt.UTC().Format(time.RFC3339),
+			ErrorCode:     scanErrCode,
+			SkippedCount:  result.SkippedCount,
+			SkippedReason: result.SkippedReasons,
+			Source:        result.Source,
+			Trigger:       currentWindowsUpdateTrigger(),
 		},
 		PendingReboot: agentWindowsUpdateReboot{
 			Pending:   result.PendingReboot.Pending,
 			Reasons:   result.PendingReboot.Reasons,
-			CheckedAt: result.PendingReboot.CheckedAt.UTC().Format(time.RFC3339),
+			CheckedAt: rebootCheckedAt.UTC().Format(time.RFC3339),
 		},
-		Updates: result.Updates,
+		Updates: updates,
+		State:   newAgentWindowsUpdateState(state),
 	}
+}
+
+// windowsUpdateTrigger guarda o motivo do ultimo scan (log/diagnostico). O
+// valor entra no envelope para a UI diferenciar "verificar agora" de
+// "periodico".
+var windowsUpdateTrigger atomic.Value
+
+// SetWindowsUpdateTrigger registra o motivo do proximo upload
+// (periodic | change | command | install).
+func SetWindowsUpdateTrigger(trigger string) {
+	switch strings.ToLower(strings.TrimSpace(trigger)) {
+	case "periodic", "change", "command", "install":
+		windowsUpdateTrigger.Store(strings.ToLower(strings.TrimSpace(trigger)))
+	}
+}
+
+func currentWindowsUpdateTrigger() string {
+	if value, ok := windowsUpdateTrigger.Load().(string); ok {
+		return value
+	}
+	return ""
 }
 
 var windowsUpdateHTTPClient = &http.Client{Timeout: windowsUpdateUploadTimeout}
@@ -378,16 +636,30 @@ func (s *Service) sendWindowsUpdateRequest(parent context.Context, endpoint stri
 		return err
 	}
 
+	started := time.Now()
 	resp, err := windowsUpdateHTTPClient.Do(req)
 	if err != nil {
+		s.logf(fmt.Sprintf("[windows-update] %s %s falhou apos %dms: %v", method, endpoint, time.Since(started).Milliseconds(), err))
 		return err
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
+	elapsed := time.Since(started).Milliseconds()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		s.logf(fmt.Sprintf("[windows-update] %s %s -> HTTP %s (%dms) body=%s", method, endpoint, resp.Status, elapsed, truncateForLog(string(respBody), 512)))
 		return fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
+	s.logf(fmt.Sprintf("[windows-update] %s %s -> %d OK (%dms, request=%dB response=%dB)", method, endpoint, resp.StatusCode, elapsed, len(body), len(respBody)))
 	return nil
+}
+
+// truncateForLog limita o texto de diagnostico (respostas de erro da API).
+func truncateForLog(value string, max int) string {
+	trimmed := strings.TrimSpace(value)
+	if max > 0 && len(trimmed) > max {
+		return trimmed[:max] + "..."
+	}
+	return trimmed
 }
 
 func hashPayload(body []byte) string {

@@ -37,6 +37,15 @@ func (a *App) supportChatService() *supportchat.Service {
 			}
 		},
 		Emit: func(name string, data ...any) {
+			// Estado "waiting" SEM cartão na tela não pode passar em silêncio:
+			// garante a superfície do convite ANTES de emitir (ver
+			// ensureSupportChatInviteSurface). Sem isto o convite ficava só em
+			// memória e o aceite nunca chegava ao usuário.
+			if name == supportChatStateEventName && len(data) > 0 {
+				if state, ok := data[0].(supportchat.State); ok {
+					a.ensureSupportChatInviteSurface(state)
+				}
+			}
 			a.EmitEvent(name, data...)
 			// Transições de estado do chat também governam o modo da janela:
 			// "sempre no topo" apenas enquanto o convite está pendente.

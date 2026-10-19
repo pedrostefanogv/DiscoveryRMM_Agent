@@ -31,3 +31,59 @@ export class Registry {
         return new Registry(/** @type {Partial<Registry>} */($$parsedSource));
     }
 }
+
+/**
+ * TicketImageUpload é uma imagem pronta para envio ao servidor, no formato que
+ * o bridge do App consome (DataBase64 sem o prefixo data:).
+ */
+export class TicketImageUpload {
+    /**
+     * Creates a new TicketImageUpload instance.
+     * @param {Partial<TicketImageUpload>} [$$source = {}] - The source object to create the TicketImageUpload.
+     */
+    constructor($$source = {}) {
+        if (!("FileName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["FileName"] = "";
+        }
+        if (!("ContentType" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["ContentType"] = "";
+        }
+        if (!("DataBase64" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["DataBase64"] = "";
+        }
+        if (!("SizeBytes" in $$source)) {
+            /**
+             * SizeBytes é o tamanho DECODIFICADO da imagem. Guardado no resolve para
+             * os metadados não precisarem decodificar base64 de novo (e porque
+             * base64.StdEncoding.DecodedLen erra para comprimentos sem padding).
+             * @member
+             * @type {number}
+             */
+            this["SizeBytes"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketImageUpload instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketImageUpload}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new TicketImageUpload(/** @type {Partial<TicketImageUpload>} */($$parsedSource));
+    }
+}

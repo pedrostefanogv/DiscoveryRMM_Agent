@@ -67,7 +67,7 @@ func TestSupportChatInviteNotificationAnsweredSuppressesReopen(t *testing.T) {
 		t.Fatal("sessão respondida deveria estar marcada")
 	}
 	// show() deve devolver true (tratado como já apresentado) sem criar cartão.
-	if !a.showSupportChatInviteNotification(supportchat.Invite{SessionID: "sessao-1"}) {
+	if !a.showSupportChatInviteNotification(supportchat.Invite{SessionID: "sessao-1"}, false) {
 		t.Fatal("convite já respondido deveria ser suprimido")
 	}
 	a.supportChatNotifyMu.Lock()

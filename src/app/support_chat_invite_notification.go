@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -20,8 +21,9 @@ import (
 // decide sozinho no fim do tempo. Quem responde é sempre o usuário; se o
 // convite expirar no servidor, o verify/reconciliação fecha o cartão.
 //
-// A decisão do usuário é aplicada aqui, no processo de UI: aceite reporta ao
-// servidor e abre a janela; recusa reporta e mantém a janela fechada.
+// A decisão do usuário é aplicada aqui, no processo de UI: a escolha vai ao
+// SERVIDOR pelo próprio cartão (reportSupportChatInviteDecision) e só depois o
+// cartão sai da tela — aceite abre a janela do chat; recusa mantém fechada.
 
 // supportChatInviteNotificationResult é a escolha do usuário no cartão.
 type supportChatInviteNotificationResult struct {
@@ -29,6 +31,11 @@ type supportChatInviteNotificationResult struct {
 	// clique e o processamento o convite pode ter sido substituído/encerrado.
 	SessionID string
 	Accepted  bool
+	// Error é o resultado do envio da decisão ao SERVIDOR (nil = entregue).
+	//
+	// O cartão reporta a escolha antes de sair da tela, então ele já sabe se o
+	// servidor aceitou a recusa; o consumidor da decisão usa isto para logar.
+	Error error
 }
 
 // supportChatInviteNotificationAnsweredTTL é por quanto tempo a sessão que o
@@ -40,6 +47,11 @@ type supportChatInviteNotificationResult struct {
 // responder. O TTL cobre com folga a latência da resposta e a reentrega.
 const supportChatInviteNotificationAnsweredTTL = 2 * time.Minute
 
+// supportChatInviteReportWait limita a espera do cartão pela resposta do
+// servidor. O cartão fica na tela com "avisando o suporte…" até este prazo; é
+// curto de propósito porque a janela do chat/da recusa só fecha depois dele.
+const supportChatInviteReportWait = 8 * time.Second
+
 // Labels/textos do cartão. Ficam aqui (fora do arquivo Windows) para os testes
 // de contrato rodarem em qualquer plataforma.
 func supportChatInviteNotificationTitle() string    { return "O suporte quer abrir o chat" }
@@ -48,6 +60,16 @@ func supportChatInviteNotificationAllow() string    { return "Abrir chat" }
 func supportChatInviteNotificationDeny() string     { return "Agora não" }
 func supportChatInviteNotificationHint() string {
 	return "Esc recusa · sem ação automática"
+}
+
+// supportChatInviteNotificationRespondingMessage é o texto mostrado entre o
+// clique e a resposta do servidor: o usuário precisa saber que a escolha foi
+// registrada (o cartão só fecha depois de o servidor responder).
+func supportChatInviteNotificationRespondingMessage(accepted bool) string {
+	if accepted {
+		return "Abrindo o chat de suporte…"
+	}
+	return "Avisando o suporte de que você não pode atender agora…"
 }
 
 // supportChatInviteNotificationMessage monta a mensagem do cartão a partir do
@@ -70,7 +92,11 @@ func supportChatInviteNotificationMessage(invite supportchat.Invite) string {
 // Devolve false quando a plataforma não tem cartão nativo (não-Windows) ou a
 // janela não pôde ser criada — nesse caso o chamador mantém o fluxo antigo
 // (janela do chat com o modal de convite), que continua sendo o fallback.
-func (a *App) showSupportChatInviteNotification(invite supportchat.Invite) bool {
+//
+// intentional indica REENTREGA INTENCIONAL do mesmo convite (novo comando do
+// servidor, tipicamente o botão "Reenviar convite" do console): o cartão da
+// tela é substituído por um novo em vez de ser dado como já apresentado.
+func (a *App) showSupportChatInviteNotification(invite supportchat.Invite, intentional bool) bool {
 	if a == nil {
 		return false
 	}
@@ -101,15 +127,28 @@ func (a *App) showSupportChatInviteNotification(invite supportchat.Invite) bool 
 	}
 	// Reentrega do mesmo convite (evento IPC + JS + redelivery): o cartão já
 	// está na tela; não abre outro.
-	if _, ok := a.supportChatNotify[sessionID]; ok {
+	//
+	// EXCEÇÃO (reentrega INTENCIONAL): quando o atendente usa "Reenviar convite"
+	// o comando chega com outro CommandId e espera nova pergunta na máquina. Se
+	// o cartão anterior não está mais na tela — usuário fechou no X, Esc, ou a
+	// resposta se perdeu — reapresenta em vez de confirmar ao servidor um pedido
+	// que o usuário não está vendo.
+	existingCancel, cardOnScreen := a.supportChatNotify[sessionID]
+	if cardOnScreen && !intentional {
 		a.supportChatNotifyMu.Unlock()
 		return true
 	}
 	// O usuário já respondeu este convite e a resposta ainda está indo ao
 	// servidor (estado local temporariamente "waiting"): não reabre o cartão.
-	if _, ok := a.supportChatNotifyAnswered[sessionID]; ok {
+	if _, answered := a.supportChatNotifyAnswered[sessionID]; answered && !intentional {
 		a.supportChatNotifyMu.Unlock()
 		return true
+	}
+	if cardOnScreen {
+		// Reenvio pedido pelo suporte: fecha o cartão atual e abre outro (abaixo)
+		// com os dados novos do convite.
+		delete(a.supportChatNotify, sessionID)
+		a.Logs.Append("[supportchat] reenvio do convite solicitado pelo suporte; reapresentando o cartao (sessao " + sessionID + ")")
 	}
 	// Só existe um convite pendente por máquina; um cartão de sessão anterior
 	// não pode ficar órfão na tela.
@@ -119,11 +158,14 @@ func (a *App) showSupportChatInviteNotification(invite supportchat.Invite) bool 
 	}
 	a.supportChatNotifyMu.Unlock()
 
+	if existingCancel != nil && cardOnScreen {
+		cancels = append(cancels, existingCancel)
+	}
 	for _, cancel := range cancels {
 		cancel()
 	}
 
-	resultCh, cancel, ok := startSupportChatInviteNotification(a.supportChatContext(), invite)
+	resultCh, cancel, ok := startSupportChatInviteNotification(a.supportChatContext(), invite, a.reportSupportChatInviteDecision)
 	if !ok {
 		return false
 	}
@@ -138,9 +180,17 @@ func (a *App) showSupportChatInviteNotification(invite supportchat.Invite) bool 
 	// recém-criado não pode ficar órfão na tela.
 	state := a.supportChatService().State()
 	if state.Status != supportchat.StatusWaiting || state.SessionID != sessionID ||
-		a.supportChatInviteNotificationWasAnswered(sessionID) {
+		(!intentional && a.supportChatInviteNotificationWasAnswered(sessionID)) {
 		a.closeSupportChatInviteNotification(sessionID)
 		return true
+	}
+
+	// Reenvio intencional do suporte: a nova pergunta precisa de fato aparecer
+	// (o cartão nasce topmost e passa na frente) e a resposta anterior deixa de
+	// valer — senão um clique nesta pergunta seria descartado como "já
+	// respondido".
+	if intentional {
+		a.clearSupportChatInviteNotificationAnswered(sessionID)
 	}
 
 	go a.runSupportChatInviteNotificationDecision(sessionID, resultCh)
@@ -165,6 +215,18 @@ func (a *App) supportChatInviteNotificationWasAnswered(sessionID string) bool {
 	}
 	_, ok := a.supportChatNotifyAnswered[sessionID]
 	return ok
+}
+
+// clearSupportChatInviteNotificationAnswered libera a marca de "já respondido"
+// da sessão (usada quando o suporte REENVIA o convite: a nova pergunta precisa
+// de uma nova resposta).
+func (a *App) clearSupportChatInviteNotificationAnswered(sessionID string) {
+	if a == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	a.supportChatNotifyMu.Lock()
+	delete(a.supportChatNotifyAnswered, strings.TrimSpace(sessionID))
+	a.supportChatNotifyMu.Unlock()
 }
 
 // markSupportChatInviteNotificationAnswered registra que o usuário respondeu o
@@ -260,15 +322,32 @@ func (a *App) runSupportChatInviteNotificationDecision(sessionID string, resultC
 
 	a.forgetSupportChatInviteNotification(sessionID)
 	if !ok {
-		// Cartão fechado sem decisão (cancelado por outro caminho): nada a
-		// reportar ao servidor.
+		// Cartão fechado sem decisão (cancelado por outro caminho — ex.: o
+		// convite foi substituído, expirou no servidor ou o chat foi encerrado):
+		// nada a reportar.
+		//
+		// O estado local NÃO é limpo aqui: esse caminho também roda quando o
+		// usuário ACABOU de recusar (o serviço marca o estado e o cartão é
+		// cancelado na sequência) — limpar apagaria o "ended" logo depois do
+		// POST e deixaria uma reentrega tardia do comando reabrir o cartão.
 		return
 	}
 
 	// Marca ANTES de falar com o servidor: a chamada de rede deixa o estado
 	// local em "waiting" e uma reentrega nesse intervalo não pode reabrir o
-	// cartão de um convite que o usuário já respondeu.
+	// cartão de um convite que o usuário já respondeu. Também impede que a
+	// reentrada da UI (ver replaySupportChatInviteAfterUIReconnect) rearme o
+	// pedido depois de o usuário ter recusado.
 	a.markSupportChatInviteNotificationAnswered(sessionID)
+
+	// O ENVIO ao servidor acontece DENTRO do cartão (reportSupportChatInviteDecision),
+	// antes de a janela nativa sair da tela — ver o cartão em
+	// support_chat_invite_notification_windows.go. Em modo companion o cartão é
+	// criado na UI e o serviço só publica por IPC: a decisão do cartão é a
+	// AUTORIDADE.
+	if result.Error != nil {
+		a.Logs.Append("[supportchat] falha ao reportar a resposta do cartao nativo: " + result.Error.Error())
+	}
 
 	// A resposta é aplicada à sessão CORRENTE pelo serviço. Se o convite do
 	// cartão não é mais o pendente (substituído/encerrado enquanto o cartão
@@ -285,9 +364,14 @@ func (a *App) runSupportChatInviteNotificationDecision(sessionID string, resultC
 
 	if result.Accepted {
 		a.Logs.Append("[supportchat] convite aceito no cartao nativo (sessao " + sessionID + ")")
-		if err := a.SupportChatRespondInvite(true, ""); err != nil {
-			a.Logs.Append("[supportchat] falha ao reportar o aceite do cartao nativo: " + err.Error())
-		}
+		// Estado local -> active e snapshot da conversa. Roda em goroutine: a
+		// janela do chat precisa abrir JÁ (a abertura é independente do REST) e
+		// o carregamento das mensagens não pode atrasar a janela.
+		go func() {
+			if err := a.SupportChatRespondInvite(true, ""); err != nil {
+				a.Logs.Append("[supportchat] falha ao concluir o aceite no cartao nativo: " + err.Error())
+			}
+		}()
 		// Abre mesmo se o reporte falhou: a janela mostra o estado/erro e o
 		// usuário não perde o contexto do convite que acabou de aceitar.
 		if a.app != nil {
@@ -297,32 +381,272 @@ func (a *App) runSupportChatInviteNotificationDecision(sessionID string, resultC
 	}
 
 	a.Logs.Append("[supportchat] convite recusado no cartao nativo (sessao " + sessionID + ")")
-	if err := a.SupportChatRespondInvite(false, "user_denied"); err != nil {
-		a.Logs.Append("[supportchat] falha ao reportar a recusa do cartao nativo: " + err.Error())
+	// Recusa: descarta o estado e garante que nenhuma janela do chat fique
+	// aberta (caminho fallback). O servidor já foi avisado pelo cartão.
+	a.supportChatService().ClearState()
+	a.closeSupportChatWindow()
+}
+
+// reportSupportChatInviteDecision leva a escolha do cartão ao SERVIDOR.
+//
+// Chamado pelo cartão nativo ANTES de ele sair da tela: a recusa/aceite precisa
+// chegar ao servidor mesmo se a UI estiver lenta, e o cartão mostra "avisando o
+// suporte…" enquanto isto roda. O motivo reportado é sempre o do USUÁRIO
+// (user_denied): a recusa automática por "sem interface" é outro caminho
+// (scheduleSupportChatInviteRedelivery) e não passa por aqui.
+func (a *App) reportSupportChatInviteDecision(result supportChatInviteNotificationResult) error {
+	if a == nil || strings.TrimSpace(result.SessionID) == "" {
+		return nil
 	}
+
+	// Mesma marca do caminho do resultado: durante o POST o estado local ainda é
+	// "waiting" e uma reentrega não pode reabrir o cartão.
+	a.markSupportChatInviteNotificationAnswered(result.SessionID)
+
+	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatInviteReportWait)
+	defer cancel()
+
+	reason := ""
+	if !result.Accepted {
+		reason = "user_denied"
+	}
+
+	var err error
+	if result.Accepted {
+		// Só o convite da sessão CORRENTE pode virar "active".
+		if state := a.supportChatService().State(); state.Status == supportchat.StatusWaiting && state.SessionID == result.SessionID {
+			err = a.supportChatService().RespondInvite(ctx, true, reason)
+		}
+	} else {
+		// A recusa não depende do estado corrente: ela é reportada para a sessão
+		// do cartão mesmo que outro convite tenha assumido no meio do caminho.
+		err = a.supportChatService().RespondInviteForSession(ctx, result.SessionID, false, reason)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	decision := "recusado"
+	if result.Accepted {
+		decision = "aceito"
+	}
+	a.Logs.Append("[supportchat] convite " + decision + " no cartao nativo e reportado ao servidor (sessao " + result.SessionID + ")")
+	return nil
+}
+
+// replaySupportChatInviteAfterUIReconnect reapresenta o convite pendente quando a
+// UI (companion) se conecta ao serviço.
+//
+// BUG RELATADO: o atendente abria o chat, o cartão aparecia na máquina e, ao
+// recusar, o console continuava mostrando "Aguardando confirmação" para sempre.
+//
+// O convite é entregue pelo canal unicast do NATS, que NÃO tem replay: se a
+// resposta (recusa/aceite) se perder no caminho — UI recém-subida, pipe de IPC
+// ainda conectando, processo trocando — o servidor reentrega o COMANDO alguns
+// minutos depois. Antes essa reentrega virava uma nova pergunta ao usuário numa
+// sessão ainda "Pending": ele recusava de novo, mas o resultado ficava ambíguo
+// e o console não saía de "aguardando".
+//
+// Aqui, a cada (re)conexão da UI, o serviço consulta o servidor: se a sessão
+// ainda está pendente, o cartão é reapresentado (ao usuário E ao atendente, já
+// que um "Reenviar convite" também chega por aqui); se não existe mais, o
+// estado local é limpo.
+func (a *App) replaySupportChatInviteAfterUIReconnect() {
+	if a == nil {
+		return
+	}
+
+	state := a.supportChatService().State()
+	if state.Status != supportchat.StatusWaiting || strings.TrimSpace(state.SessionID) == "" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
+	defer cancel()
+
+	activeID, hasSession, err := a.supportChatService().ActiveSessionID(ctx)
+	if err != nil {
+		a.Logs.Append("[supportchat] reentrega do convite: servidor indisponível — " + err.Error())
+		return
+	}
+
+	// A sessão deixou de ser a pendente (foi respondida/encerrada/substituída):
+	// nada a reexibir.
+	current := a.supportChatService().State()
+	if current.Status != supportchat.StatusWaiting || current.SessionID != state.SessionID {
+		return
+	}
+	if !hasSession || activeID != state.SessionID {
+		a.Logs.Append("[supportchat] convite " + state.SessionID + " nao esta mais pendente no servidor; limpando o estado local")
+		a.clearSupportChatIfCurrent(state.SessionID)
+		if hasSession {
+			// Há outra conversa VIVA na máquina que esta UI ainda não conhece
+			// (ex.: aceita enquanto a UI estava desconectada). Só limpar deixaria
+			// o chat invisível até a reconciliação dos próximos 30 s — avisa a
+			// UI para adotar a sessão (ver adoptSupportChatSession).
+			a.EmitEvent("supportchat:replay", map[string]any{
+				"sessionId": activeID,
+				"previous":  state.SessionID,
+			})
+		}
+		return
+	}
+
+	// Já respondido no cartão (resposta recente): não reabre.
+	if a.supportChatInviteNotificationWasAnswered(state.SessionID) {
+		return
+	}
+
+	a.Logs.Append("[supportchat] UI reconectada com convite pendente; reapresentando (sessao " + state.SessionID + ")")
+	a.presentSupportChatInvite(supportchat.Invite{
+		SessionID:   state.SessionID,
+		TicketID:    state.TicketID,
+		TicketTitle: state.TicketTitle,
+		SupportName: state.SupportName,
+	})
+}
+
+// adoptSupportChatSession adota a sessão que o SERVIÇO conhece mas esta UI
+// ainda não (estado pedido pelo evento supportchat:replay).
+//
+// Acontece quando o usuário aceita enquanto a UI companion estava
+// desconectada: a UI fica em "waiting"/"none" e, sem isto, o chat ficaria
+// invisível até a reconciliação periódica (30 s). Aqui a ação é imediata e
+// idempotente: um Refresh traz status da sessão + mensagens.
+func (a *App) adoptSupportChatSession(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if a == nil || a.app == nil || sessionID == "" {
+		return
+	}
+
+	a.closeAllSupportChatInviteNotifications()
+	// O convite anterior não vale mais: marca como respondido para uma reentrega
+	// tardia não reabrir o cartão por cima da conversa que está começando.
+	if previous := strings.TrimSpace(a.supportChatService().State().SessionID); previous != "" && previous != sessionID {
+		a.markSupportChatInviteNotificationAnswered(previous)
+	}
+
+	a.Logs.Append("[supportchat] adotando sessao viva do servico (sessao " + sessionID + ")")
+	go func() {
+		ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
+		defer cancel()
+
+		state, err := a.supportChatService().Refresh(ctx)
+		if err != nil {
+			a.Logs.Append("[supportchat] adocao da sessao falhou: " + err.Error())
+			return
+		}
+		if !state.HasSession || state.SessionID != sessionID {
+			// O servidor não confirma a sessão: deixa a reconciliação decidir.
+			return
+		}
+		if state.Status == supportchat.StatusWaiting {
+			// Ainda pendente: a superfície correta continua sendo o cartão.
+			a.ensureSupportChatInviteSurface(state)
+			return
+		}
+		a.openSupportChatWindow()
+	}()
+}
+
+// supportChatInviteAnswerWindow é por quanto tempo uma resposta recente do
+// usuário (aceite/recusa no cartão) ainda pode explicar um convite que o
+// servidor considera pendente. Depois disso, "o servidor reenviou o convite e a
+// nossa resposta não chegou": a pergunta precisa aparecer de novo.
+//
+// Curto de propósito: cobre o redelivery pós-reconexão (segundos a ~1 min) sem
+// deixar um convite pendente invisível por todo o TTL de 2 min da marca.
+const supportChatInviteAnswerWindow = 90 * time.Second
+
+// supportChatInviteRecentlyAnswered informa se o usuário respondeu este convite
+// há menos de supportChatInviteAnswerWindow.
+func (a *App) supportChatInviteRecentlyAnswered(sessionID string) bool {
+	if a == nil || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	sessionID = strings.TrimSpace(sessionID)
+
+	a.supportChatNotifyMu.Lock()
+	defer a.supportChatNotifyMu.Unlock()
+	until, ok := a.supportChatNotifyAnswered[sessionID]
+	if !ok {
+		return false
+	}
+	// Validade restante maior que (TTL - janela) ⇒ respondido há menos de
+	// supportChatInviteAnswerWindow.
+	return time.Until(until) > supportChatInviteNotificationAnsweredTTL-supportChatInviteAnswerWindow
+}
+
+// clearStaleSupportChatInviteAnswer apaga a marca de "já respondido" quando a
+// resposta do usuário já não explica o convite pendente.
+//
+// BUG DA REVISÃO: a marca vale 2 min; se o POST da resposta falhava (servidor
+// fora no momento do clique), o REDELIVERY do comando só chegava depois — e
+// era engolido por "já respondido". O convite ficava pendente no console e o
+// cartão não reaparecia para o usuário decidir de novo.
+func (a *App) clearStaleSupportChatInviteAnswer(sessionID string) bool {
+	if a == nil || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if a.supportChatInviteRecentlyAnswered(sessionID) {
+		return false
+	}
+
+	a.supportChatNotifyMu.Lock()
+	until, ok := a.supportChatNotifyAnswered[sessionID]
+	// Só limpa a marca AINDA válida (expirada já não suprime nada).
+	if ok && time.Now().Before(until) {
+		delete(a.supportChatNotifyAnswered, sessionID)
+	} else {
+		ok = false
+	}
+	a.supportChatNotifyMu.Unlock()
+
+	if ok {
+		a.Logs.Append("[supportchat] resposta anterior do usuario nao foi entregue ao servidor; convite pode ser reapresentado (" +
+			sessionID + ")")
+	}
+	return ok
 }
 
 // presentSupportChatInvite exibe o cartão nativo e cai para a janela do chat
 // quando o cartão não está disponível. Centraliza o caminho usado pelo evento
 // IPC, pelo handler standalone e pela retomada no startup.
 func (a *App) presentSupportChatInvite(invite supportchat.Invite) {
+	a.presentSupportChatInviteWithRetry(invite, false)
+}
+
+// presentSupportChatInviteWithRetry é o caminho com a opção de REENTREGA
+// INTENCIONAL: intentional=true (novo comando do servidor, ex.: "Reenviar
+// convite" do console) reapresenta o cartão mesmo que o usuário já tenha
+// respondido este convite antes, porque é uma pergunta NOVA.
+func (a *App) presentSupportChatInviteWithRetry(invite supportchat.Invite, intentional bool) {
 	if strings.TrimSpace(invite.SessionID) == "" {
 		return
 	}
 	// No processo de SERVIÇO (sem Wails) não existe janela nativa para o
 	// usuário: o cartão nasceria invisível no desktop da sessão 0. A superfície
 	// correta é a UI companion, que recebe o evento via IPC.
+	//
+	// O evento é emitido SEMPRE que há UI companion conectada — e não só no
+	// ServiceMode: no SDK/construtor de testes e quando o serviço participa do
+	// modo standalone sobra um processo sem Wails cuja única saída é o IPC.
 	if a.app == nil {
-		if a.RuntimeFlags.ServiceMode {
+		// Uma ÚNICA superfície de aceite. Quem cria o cartão nativo é a UI
+		// companion (que recebe o evento abaixo); abrir aqui a janela fallback
+		// duplicaria o pedido (cartão + modal na janela do chat).
+		if a.RuntimeFlags.ServiceMode || a.hasSupportChatUI() {
 			a.EmitEvent("supportchat:invite",
 				"sessionId", invite.SessionID,
 				"ticketId", invite.TicketID,
 				"ticketTitle", invite.TicketTitle,
 				"supportName", invite.SupportName)
+			return
 		}
-		return
 	}
-	if a.showSupportChatInviteNotification(invite) {
+	if a.showSupportChatInviteNotification(invite, intentional) {
 		a.startSupportChatInviteVerification(invite.SessionID)
 		return
 	}
@@ -331,7 +655,9 @@ func (a *App) presentSupportChatInvite(invite supportchat.Invite) {
 		return
 	}
 	// Fallback (não-Windows ou cartão indisponível): fluxo antigo, com toast,
-	// janela do chat e modal de convite.
+	// janela do chat e modal de convite. A janela chega a existir com o convite
+	// pendente de propósito (ela É a superfície de aceite neste fluxo) — é a
+	// exceção de supportChatWindowMayOpen.
 	a.notifySupportChatInvite(invite)
 	a.openSupportChatWindow()
 	a.startSupportChatInviteVerification(invite.SessionID)

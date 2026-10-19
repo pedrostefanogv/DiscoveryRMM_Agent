@@ -91,7 +91,14 @@
   height: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
+  /* O clique abre o zoom (kbImageZoom, em app-knowledge.js). */
   cursor: zoom-in;
+  transition: filter 0.12s ease, box-shadow 0.12s ease;
+}
+
+.md-content img.kb-inline-image:hover {
+  filter: brightness(0.97);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #2563eb) 45%, transparent);
 }
 
 /* Placeholder enquanto o Go busca os bytes: reserva altura e mostra um spinner
@@ -106,14 +113,19 @@
   animation: kb-inline-image-pulse 1.1s ease-in-out infinite;
 }
 
+/* Indisponível: o clique continua útil (abre o overlay com "recarregar"), por
+   isso o cursor NÃO é not-allowed — que prometia uma ação bloqueada. */
 .md-content img.kb-inline-image-error {
   display: inline-block;
   min-width: 96px;
   min-height: 48px;
+  padding: 4px 8px;
   border: 1px dashed var(--border);
   border-radius: 6px;
   background-color: color-mix(in srgb, var(--surface-2) 40%, transparent);
-  cursor: not-allowed;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: zoom-in;
 }
 
 @keyframes kb-inline-image-pulse {
@@ -123,6 +135,125 @@
   }
   50% {
     opacity: 1;
+  }
+}
+
+/* ---- Zoom (lightbox) das imagens da Base de Conhecimento ---- */
+.kb-image-zoom {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.kb-image-zoom.hidden {
+  display: none;
+}
+
+.kb-image-zoom:focus {
+  outline: none;
+}
+
+.kb-image-zoom-card {
+  max-width: 92vw;
+  max-height: 92vh;
+  /* O zoom é um transform: o card recorta o que passar do quadro. */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+}
+
+.kb-image-zoom-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+.kb-image-zoom-caption {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-image-zoom-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.kb-image-zoom-level {
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 44px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.kb-image-zoom-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  min-width: 120px;
+  min-height: 120px;
+  touch-action: none;
+}
+
+.kb-image-zoom-img {
+  max-width: 86vw;
+  max-height: 74vh;
+  display: block;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  cursor: zoom-in;
+  /* Sem isso o arraste inicia o "arrastar imagem" nativo do WebView. */
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.kb-image-zoom-img.hidden,
+.kb-image-zoom-empty.hidden {
+  display: none;
+}
+
+.kb-image-zoom-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 32px 24px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Em janelas baixas a dica cede espaço para a imagem. */
+.kb-image-zoom-hint {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  flex: 0 0 auto;
+}
+
+@media (max-height: 560px) {
+  .kb-image-zoom-hint {
+    display: none;
   }
 }
 

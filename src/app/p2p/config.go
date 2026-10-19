@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"math"
+	"os"
 	"strings"
 
 	"discovery/app/p2pmeta"
@@ -59,6 +60,7 @@ func DefaultConfig() Config {
 		HTTPListenPortRangeStart: DefaultP2PPortRangeStart,
 		HTTPListenPortRangeEnd:   DefaultP2PPortRangeEnd,
 		AuthTokenRotationMinutes: DefaultP2PTokenRotationMinutes,
+		ArtifactServeMode:        p2pmeta.ArtifactServeModeRequire,
 		// TCPOnly default true (ponteiro nil = true via TCPOnlyEnabled()).
 		// Não setar aqui: o default é aplicado pelo helper, e configs
 		// persistidos sem o campo também devem herdar true.
@@ -75,6 +77,10 @@ func NormalizeConfig(cfg Config) Config {
 	out.MinSeeds = defaultInt(out.MinSeeds, d.MinSeeds)
 	out.AuthTokenRotationMinutes = defaultInt(out.AuthTokenRotationMinutes, d.AuthTokenRotationMinutes)
 	out.SharedSecret = strings.TrimSpace(out.SharedSecret)
+	// Modelo seguro por padrão: streams libp2p de artifact exigem token. O
+	// servidor pode operar em "legacy" (agentes antigos sem token) por
+	// configuração ou pela variável de ambiente abaixo.
+	out.ArtifactServeMode = normalizeArtifactServeMode(out.ArtifactServeMode)
 
 	out.HTTPListenPortRangeStart = defaultInt(out.HTTPListenPortRangeStart, d.HTTPListenPortRangeStart)
 	out.HTTPListenPortRangeEnd = defaultInt(out.HTTPListenPortRangeEnd, d.HTTPListenPortRangeEnd)
@@ -90,6 +96,20 @@ func NormalizeConfig(cfg Config) Config {
 	}
 
 	return out
+}
+
+// normalizeArtifactServeMode resolve o modo de serviço de artifacts. A
+// precedência é: variável de ambiente DISCOVERY_P2P_ARTIFACT_SERVE_MODE >
+// valor configurado > default seguro ("require"). Valores desconhecidos caem
+// no default (fail-safe: nunca relaxamos o acesso por erro de digitação).
+func normalizeArtifactServeMode(mode string) string {
+	if env := strings.TrimSpace(os.Getenv("DISCOVERY_P2P_ARTIFACT_SERVE_MODE")); env != "" {
+		mode = env
+	}
+	if strings.EqualFold(strings.TrimSpace(mode), p2pmeta.ArtifactServeModeLegacy) {
+		return p2pmeta.ArtifactServeModeLegacy
+	}
+	return p2pmeta.ArtifactServeModeRequire
 }
 
 // SeedCount calcula o número de seeds com base em percentual e mínimo.

@@ -20,7 +20,22 @@ func (c *unsupportedClient) Probe(context.Context) ProbeInfo {
 }
 
 func (c *unsupportedClient) Scan(context.Context, ScanOptions) (*ScanResult, error) {
-	return nil, ErrUnsupportedOS
+	return &ScanResult{
+		Updates:   []Update{},
+		Partial:   true,
+		State:     WindowsUpdateState{Supported: false, PolicyErrorCode: ScanErrorUnsupported, CheckedAt: time.Now().UTC()},
+		StartedAt: time.Now().UTC(),
+		Source:    SourceWUA,
+	}, ErrUnsupportedOS
+}
+
+func (c *unsupportedClient) ProbeState(context.Context) WindowsUpdateState {
+	return WindowsUpdateState{
+		Supported:       false,
+		ServiceState:    "unknown",
+		PolicyErrorCode: ScanErrorUnsupported,
+		CheckedAt:       time.Now().UTC(),
+	}
 }
 
 func (c *unsupportedClient) Install(context.Context, []InstallTarget) (*InstallResult, error) {

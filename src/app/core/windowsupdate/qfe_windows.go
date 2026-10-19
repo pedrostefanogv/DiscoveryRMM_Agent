@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf16"
+	"unsafe"
 
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
@@ -22,7 +24,13 @@ func queryInstalledQFE() ([]Update, error) {
 	if err != nil {
 		return nil, err
 	}
+	return buildsInstalledUpdatesFromRows(rows), nil
+}
 
+// buildsInstalledUpdatesFromRows converte as linhas do WMI em Updates
+// instalados (KBs unicas, titulo normalizado). Separado do COM para permitir
+// teste com rows sinteticas.
+func buildsInstalledUpdatesFromRows(rows []map[string]any) []Update {
 	updates := make([]Update, 0, len(rows))
 	seen := make(map[string]struct{}, len(rows))
 	for _, row := range rows {
@@ -36,16 +44,13 @@ func queryInstalledQFE() ([]Update, error) {
 		}
 		seen[key] = struct{}{}
 
-		title := strings.TrimSpace(wmiString(row, "Caption"))
-		if title == "" {
-			title = "Atualizacao " + kb
-		}
+		title := NormalizeQFETitle(kb, wmiString(row, "Caption"), wmiString(row, "Description"))
 		update := Update{
 			UpdateKey:   key,
 			KBIDs:       []string{kb},
 			KBID:        kb,
-			Title:       truncate(title, 500),
-			Description: truncate(strings.TrimSpace(wmiString(row, "Description")), 2000),
+			Title:       title.Title,
+			Description: title.Description,
 			IsInstalled: true,
 			Source:      SourceQFE,
 		}
@@ -54,21 +59,33 @@ func queryInstalledQFE() ([]Update, error) {
 		}
 		updates = append(updates, update)
 	}
-	return updates, nil
+	return updates
 }
 
-// parseWMIInstalledOn aceita "20240115", "2024-01-15", "1/15/2024" e datetime
-// completo do CIM. Retorna nil quando nao parseavel.
+// parseWMIInstalledOn aceita "20240115", "2024-01-15", "1/15/2024",
+// "2026-10-16 21:09:57", datetime completo do CIM e RFC3339. O WMI em pt-BR
+// costuma devolver "16/10/2026". Retorna nil quando nao parseavel.
 func parseWMIInstalledOn(raw string) *time.Time {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return nil
 	}
+	// CIM datetime (20261016210957.000000-180) tem sufixo de fuso numerico;
+	// normaliza para UTC sem o sufixo.
+	if len(value) >= 14 && value[4] == '-' && value[7] == '-' {
+		value = strings.Replace(value, " ", "T", 1)
+	}
+	// CIM datetime normalizado para "AAAA-MM-DD HH:MM:SS". O layout do Go usa
+	// "2006-01-02 15:04:05" como exemplo canonico.
 	layouts := []string{
 		"20060102",
 		"2006-01-02",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
 		"01/02/2006",
-		"20060102150405.000000-420",
+		"02/01/2006",
+		"01/02/2006 15:04:05",
+		"02/01/2006 15:04:05",
 		"2006-01-02T15:04:05Z07:00",
 	}
 	for _, layout := range layouts {
@@ -77,7 +94,14 @@ func parseWMIInstalledOn(raw string) *time.Time {
 			return &utc
 		}
 	}
-	// Fallback: o SWbemProperty pode entregar time.Time direto.
+	// CIM "[...]" pode vir com microssegundos; tenta o prefixo de 14 digitos.
+	if len(value) >= 8 {
+		digits := value[:8]
+		if parsed, err := time.Parse("20060102", digits); err == nil {
+			utc := parsed.UTC()
+			return &utc
+		}
+	}
 	return nil
 }
 
@@ -126,7 +150,17 @@ func queryWMI(namespace, query string) ([]map[string]any, error) {
 }
 
 // readWMIRows enumera uma SWbemObjectSet e devolve as propriedades de cada
-// objeto. Usa oleutil.ForEach porque SWbemPropertySet nao suporta ItemIndex.
+// objeto.
+//
+// BUG CORRIGIDO (maquina 019faa6f): a leitura anterior usava
+// `nameRaw.ToString()`/`normalizeWMIValue` sobre VARIANTs EMPRESTADOS pelo
+// ForEach e o ToString do go-ole chama SysStringLen, que depende do cabecalho
+// do BSTR. Com o VARIANT aposentado/realocado a leitura devolvia 0 e TODA
+// string virava "" (titulos "Atualizacao KB5127839", descricao vazia), mesmo o
+// WMI tendo Caption preenchido. Agora:
+//   - o NOME da propriedade vem do BSTR ponteiro direto (VARIANT_BSTRString);
+//   - o VALOR e lido por uma copia em stack (Invoke), cuja VARIANT e de nossa
+//     propriedade e liberada com Clear() — o BSTR e convertido ANTES do Clear.
 func readWMIRows(queryObj *ole.IDispatch) ([]map[string]any, error) {
 	rows := make([]map[string]any, 0, 32)
 	err := oleutil.ForEach(queryObj, func(itemVar *ole.VARIANT) error {
@@ -145,6 +179,7 @@ func readWMIRows(queryObj *ole.IDispatch) ([]map[string]any, error) {
 			propsRaw.Clear()
 			return nil
 		}
+		// propsRaw.ToIDispatch() transfere a referencia: Release libera.
 		defer props.Release()
 
 		row := make(map[string]any, 12)
@@ -155,17 +190,12 @@ func readWMIRows(queryObj *ole.IDispatch) ([]map[string]any, error) {
 			}
 			defer prop.Release()
 
-			nameRaw, nameErr := oleutil.GetProperty(prop, "Name")
-			valueRaw, valueErr := oleutil.GetProperty(prop, "Value")
-			if nameErr == nil && valueErr == nil {
-				row[nameRaw.ToString()] = normalizeWMIValue(valueRaw)
+			name := wmiPropertyName(prop)
+			value, ok := readWMIPropertyValue(prop)
+			if name == "" || !ok {
+				return nil
 			}
-			if nameRaw != nil {
-				nameRaw.Clear()
-			}
-			if valueRaw != nil {
-				valueRaw.Clear()
-			}
+			row[name] = value
 			return nil
 		})
 		if len(row) == 0 {
@@ -180,13 +210,83 @@ func readWMIRows(queryObj *ole.IDispatch) ([]map[string]any, error) {
 	return rows, nil
 }
 
+// wmiPropertyName le SWbemProperty.Name usando copia do BSTR. Retorna "" em
+// caso de erro.
+func wmiPropertyName(prop *ole.IDispatch) string {
+	raw, err := oleutil.GetProperty(prop, "Name")
+	if err != nil || raw == nil {
+		return ""
+	}
+	name := variantBSTRString(raw)
+	_ = raw.Clear()
+	return strings.TrimSpace(name)
+}
+
+// readWMIPropertyValue le SWbemProperty.Value e normaliza. Ok=false quando o
+// WMI nao devolve valor (a propriedade e omitida da linha).
+func readWMIPropertyValue(prop *ole.IDispatch) (any, bool) {
+	raw, err := oleutil.GetProperty(prop, "Value")
+	if err != nil || raw == nil {
+		return nil, false
+	}
+	// Importante: converter ANTES do Clear (o Clear libera o BSTR).
+	value := normalizeWMIValue(raw)
+	_ = raw.Clear()
+	return value, true
+}
+
+// variantBSTRString converte uma VARIANT BSTR em string lendo os UTF-16 ate o
+// terminador NUL a partir do ponteiro. Nao usa SysStringLen (que depende do
+// cabecalho do BSTR prefixado e falha quando a VARIANT aponta para memoria
+// reaproveitada); o BSTR e sempre terminado em NUL por contrato do COM.
+func variantBSTRString(v *ole.VARIANT) string {
+	if v == nil {
+		return ""
+	}
+	if v.VT&ole.VT_BYREF != 0 {
+		// VT_BSTR|VT_BYREF: nao ocorre no fluxo WMI usado aqui; recusado de
+		// proposito (a conversao de endereco em uintptr nao e verificavel pelo
+		// vet de unsafe e nao ha necessidade de suporta-la).
+		return ""
+	}
+	if v.VT != ole.VT_BSTR {
+		return ""
+	}
+	ptr := *(**uint16)(unsafe.Pointer(&v.Val))
+	if ptr == nil {
+		return ""
+	}
+	return bstrPointerToString(ptr)
+}
+
+// bstrPointerToString le uma string UTF-16 terminada em NUL com limite de
+// seguranca (32K caracteres) para nao ler memoria arbitraria sem fim.
+func bstrPointerToString(ptr *uint16) string {
+	if ptr == nil {
+		return ""
+	}
+	const maxLength = 32768
+	buf := unsafe.Slice(ptr, maxLength)
+	units := make([]uint16, 0, 64)
+	for _, unit := range buf {
+		if unit == 0 {
+			break
+		}
+		units = append(units, unit)
+	}
+	if len(units) == 0 {
+		return ""
+	}
+	return string(utf16.Decode(units))
+}
+
 func normalizeWMIValue(v *ole.VARIANT) any {
 	if v == nil {
 		return ""
 	}
 	switch v.VT {
 	case ole.VT_BSTR:
-		return v.ToString()
+		return variantBSTRString(v)
 	case ole.VT_I4, ole.VT_I2, ole.VT_I1, ole.VT_UI4, ole.VT_UI2, ole.VT_UI1:
 		return int64(v.Val)
 	case ole.VT_R4, ole.VT_R8:
@@ -204,15 +304,38 @@ func normalizeWMIValue(v *ole.VARIANT) any {
 	case ole.VT_NULL, ole.VT_EMPTY:
 		return ""
 	default:
-		if value := v.Value(); value != nil {
-			return value
+		if v.VT&ole.VT_ARRAY != 0 {
+			return ""
 		}
-		return v.ToString()
+		if value := v.Value(); value != nil {
+			switch typed := value.(type) {
+			case string:
+				return typed
+			case *ole.IDispatch, *ole.IUnknown:
+				return ""
+			default:
+				return fmt.Sprint(typed)
+			}
+		}
+		return variantBSTRString(v)
 	}
 }
 
 func wmiString(row map[string]any, key string) string {
+	if row == nil {
+		return ""
+	}
+	// Nomes de propriedade do WMI sao case-insensitive na pratica; normalizamos
+	// a procura para nao depender do casing devolvido pelo provedor.
 	value, ok := row[key]
+	if !ok {
+		for name, candidate := range row {
+			if strings.EqualFold(name, key) {
+				value, ok = candidate, true
+				break
+			}
+		}
+	}
 	if !ok || value == nil {
 		return ""
 	}
