@@ -38,8 +38,9 @@ type Config struct {
 	// configurada na instalação). Zero = sem teto.
 	MaxDeadline time.Time
 	// CloseWithoutPeerSignal: quando true, encerra a sessão após InitialGrace se
-	// o peer NUNCA sinalizou (comportamento do remote debug). Quando false
-	// (acesso remoto), nunca fecha por ausência antes do primeiro sinal — o
+	// o peer NUNCA sinalizou (remote debug e sessões remotas COM consentimento —
+	// o viewer dessa versão fala ping/pong). Quando false (acesso remoto sem
+	// consentimento), nunca fecha por ausência antes do primeiro sinal — o
 	// chamador mantém o prazo original do start, o que preserva viewers antigos
 	// que ainda não enviam ping. Depois do primeiro sinal, os dois modos fecham
 	// após MissesAllowed*Interval.

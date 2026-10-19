@@ -765,7 +765,7 @@ func NewApp(opts AppStartupOptions) *App {
 			a.activeRemoteSessions.Add(-1)
 			a.syncRemoteSessionTray()
 			a.Logs.Append(fmt.Sprintf("[remote-session] sessao encerrada: %s (%s) — %d ativas", sessionID, reason, a.activeRemoteSessions.Load()))
-			reportBannerDisconnectIfNeeded(sessionID, reason)
+			reportAgentInitiatedCloseIfNeeded(sessionID, reason)
 		},
 	)
 	wireRemoteConsentManager(a.RemoteSessionMgr)

@@ -279,6 +279,18 @@ export function CheckPSADTModuleStatus() {
 }
 
 /**
+ * ChooseSupportChatAttachmentSavePath abre o diálogo NATIVO "Salvar como" para
+ * um anexo do chat. Reaproveita o mesmo diálogo dos anexos de chamado (a janela
+ * do chat roda no processo da UI, onde o diálogo nativo existe).
+ * @param {string} fileName
+ * @param {string} title
+ * @returns {$CancellablePromise<string>}
+ */
+export function ChooseSupportChatAttachmentSavePath(fileName, title) {
+    return $Call.ByID(2287112575, fileName, title);
+}
+
+/**
  * ChooseTicketAttachmentSavePath abre o diálogo NATIVO "Salvar como" no processo
  * da UI (usuário interativo) e devolve o caminho completo escolhido. Devolve
  * string vazia quando o usuário cancela. O download em si continua no serviço
@@ -2695,6 +2707,29 @@ export function SupportChatRequestScreenshot() {
  */
 export function SupportChatRespondInvite(accepted, reason) {
     return $Call.ByID(1226572069, accepted, reason);
+}
+
+/**
+ * SupportChatSaveAttachment baixa um anexo do chat ao vivo e salva na pasta
+ * padrão (Downloads do usuário). Devolve o caminho absoluto gravado.
+ * @param {string} attachmentID
+ * @param {string} fileName
+ * @returns {$CancellablePromise<string>}
+ */
+export function SupportChatSaveAttachment(attachmentID, fileName) {
+    return $Call.ByID(1043477519, attachmentID, fileName);
+}
+
+/**
+ * SupportChatSaveAttachmentAs salva um anexo do chat no caminho escolhido no
+ * diálogo nativo (Save As).
+ * @param {string} attachmentID
+ * @param {string} fileName
+ * @param {string} destPath
+ * @returns {$CancellablePromise<string>}
+ */
+export function SupportChatSaveAttachmentAs(attachmentID, fileName, destPath) {
+    return $Call.ByID(1528857915, attachmentID, fileName, destPath);
 }
 
 /**

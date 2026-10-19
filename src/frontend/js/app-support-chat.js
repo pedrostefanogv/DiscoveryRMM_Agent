@@ -43,7 +43,10 @@
     // criada aqui (revogada ao fechar) da URL reaproveitada do cache de
     // miniaturas (que continua viva para o chip).
     viewerUrl: null,
-    viewerOwnsUrl: false
+    viewerOwnsUrl: false,
+    // Callback para salvar a imagem ABERTA no visor (recebe askPath). null
+    // quando o visor foi aberto sem um anexo associado.
+    viewerSave: null
   };
 
   // ── Cache de miniaturas ───────────────────────────────────────────────────
@@ -60,6 +63,12 @@
   var thumbnailFailed = {};
   var thumbnailOrder = [];
   var thumbnailLimit = 24;
+
+  // Caminho do arquivo JA salvo, por anexo (chave chat:<id> / comment:<id>).
+  // Num segundo clique o anexo nao e baixado de novo: so informamos onde ele
+  // esta. pendingAttachmentSaves deduplica cliques enquanto a gravacao corre.
+  var savedAttachmentPaths = {};
+  var pendingAttachmentSaves = {};
 
   function byId(id) { return document.getElementById(id); }
 
@@ -95,6 +104,7 @@
     els.viewerImage = byId("scViewerImage");
     els.viewerCaption = byId("scViewerCaption");
     els.viewerClose = byId("scViewerClose");
+    els.viewerSave = byId("scViewerSave");
   }
 
   /**
@@ -394,7 +404,8 @@
   // BUG CORRIGIDO: o anexo enviado pelo suporte aparecia só como um chip com o
   // nome "anexo" (o envelope do NATS não trazia nome/tipo) e o clique apenas
   // BAIXAVA o arquivo — não havia como VER o print dentro da janela. Agora a
-  // imagem ganha miniatura e abre num visor; os demais tipos continuam baixando.
+  // imagem ganha miniatura e abre num visor; os demais tipos são salvos em disco
+  // pelo backend (sem painel de downloads do Edge).
   function buildAttachments(attachments) {
     var wrap = document.createElement("div");
     wrap.className = "sc-attachments";
@@ -405,14 +416,18 @@
       var chip = document.createElement("button");
       chip.type = "button";
       chip.className = "sc-attachment" + (isImage ? " sc-attachment--image" : "");
-      chip.title = isImage ? "Abrir imagem" : "Baixar anexo";
+      chip.title = isImage
+        ? "Abrir imagem (Shift+clique para salvar em outro local)"
+        : "Salvar anexo (Shift+clique para escolher onde salvar)";
 
       var label = document.createElement("span");
       label.className = "sc-attachment-name";
       label.textContent = attachment.fileName || "anexo";
       chip.appendChild(label);
 
-      chip.addEventListener("click", function () { openAttachment(attachment); });
+      chip.addEventListener("click", function (e) {
+        openAttachment(attachment, !!(e && e.shiftKey));
+      });
       wrap.appendChild(chip);
 
       if (isImage) loadAttachmentThumbnail(chip, attachment);
@@ -543,38 +558,69 @@
     }
   }
 
-  function downloadCommentAttachment(comment, attachment) {
+  /**
+   * Salva em disco um anexo de COMENTÁRIO pelo backend (grava e devolve o
+   * caminho). Não usa mais Blob + <a download>: o painel de downloads do Edge
+   * cobria a conversa e cada clique baixava uma cópia nova.
+   *
+   * O caminho fica em cache por anexo: repetir o clique só avisa onde o arquivo
+   * está. Shift+clique abre o "Salvar como" e grava uma nova cópia se o usuário
+   * quiser.
+   */
+  function saveCommentAttachment(comment, attachment, askPath) {
     var ticketId = state.ticketId;
-    if (!ticketId || !comment || !attachment) return;
+    if (!ticketId || !comment || !comment.id || !attachment || !attachment.id) {
+      showBanner("Anexo indisponível: o servidor não informou o identificador do arquivo.");
+      return Promise.resolve(null);
+    }
 
-    call("DownloadTicketCommentAttachment", ticketId, comment.id, attachment.id)
-      .then(function (payload) {
-        var base64 = payload && payload.base64 ? payload.base64 : "";
-        if (!base64) return;
+    var key = "comment:" + attachment.id;
+    var fileName = attachment.fileName || "anexo";
 
-        var contentType = (payload && payload.contentType) || "application/octet-stream";
-        var bytes = atob(base64);
-        var buffer = new Uint8Array(bytes.length);
-        for (var i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
+    if (!askPath && savedAttachmentPaths[key]) {
+      showBanner("Anexo já salvo em: " + savedAttachmentPaths[key]);
+      return Promise.resolve(savedAttachmentPaths[key]);
+    }
+    if (!askPath && pendingAttachmentSaves[key]) {
+      return pendingAttachmentSaves[key];
+    }
+    if (!askPath) showBanner("Salvando anexo…");
 
-        var blob = new Blob([buffer], { type: contentType });
-        var url = URL.createObjectURL(blob);
-        var link = document.createElement("a");
-        link.href = url;
-        link.download = attachment.fileName || "anexo";
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
-      })
-      .catch(function (err) {
-        showBanner("Não foi possível baixar o anexo do comentário: " + describe(err));
-      });
+    var start;
+    if (askPath) {
+      start = call("ChooseTicketAttachmentSavePath", fileName, "Salvar anexo")
+        .then(function (destPath) { return { destPath: destPath || "", asked: true }; });
+    } else {
+      start = Promise.resolve({ destPath: "", asked: false });
+    }
+
+    var request = start.then(function (choice) {
+      if (choice.asked && !choice.destPath) return null;
+      if (choice.destPath) {
+        return call("SaveTicketCommentAttachmentAs", ticketId, comment.id, attachment.id, fileName, choice.destPath);
+      }
+      return call("SaveTicketCommentAttachment", ticketId, comment.id, attachment.id, fileName);
+    }).then(function (path) {
+      if (!path) return null;
+      savedAttachmentPaths[key] = path;
+      showBanner("Anexo salvo em: " + path);
+      return path;
+    }).catch(function (err) {
+      showBanner("Não foi possível salvar o anexo do comentário: " + describe(err));
+      return null;
+    }).then(function (result) {
+      if (!askPath) delete pendingAttachmentSaves[key];
+      return result;
+    });
+
+    if (!askPath) pendingAttachmentSaves[key] = request;
+    return request;
   }
 
   /**
    * Anexos do COMENTÁRIO na conversa: mesma linguagem do anexo do chat ao
-   * vivo — imagem ganha MINIATURA (abre no visor) e os demais baixam.
+   * vivo — imagem ganha MINIATURA (abre no visor) e os demais são salvos em
+   * disco pelo backend.
    */
   function buildCommentAttachments(comment) {
     var attachments = Array.isArray(comment.attachments) ? comment.attachments : [];
@@ -589,19 +635,24 @@
       var chip = document.createElement("button");
       chip.type = "button";
       chip.className = "sc-attachment" + (isImage ? " sc-attachment--image" : "");
-      chip.title = isImage ? "Abrir imagem" : "Baixar anexo";
+      chip.title = isImage
+        ? "Abrir imagem (Shift+clique para salvar em outro local)"
+        : "Salvar anexo (Shift+clique para escolher onde salvar)";
 
       var label = document.createElement("span");
       label.className = "sc-attachment-name";
       label.textContent = attachment.fileName || "anexo";
       chip.appendChild(label);
 
-      chip.addEventListener("click", function () {
-        if (thumbnailUrls[attachment.id]) {
-          showAttachmentViewer(thumbnailUrls[attachment.id], attachment.fileName || "imagem", false);
+      chip.addEventListener("click", function (e) {
+        var askPath = !!(e && e.shiftKey);
+        if (!askPath && thumbnailUrls[attachment.id]) {
+          showAttachmentViewer(thumbnailUrls[attachment.id], attachment.fileName || "imagem", false,
+            function () { saveCommentAttachment(comment, attachment, false); },
+            function (askPath) { return saveCommentAttachment(comment, attachment, askPath); });
           return;
         }
-        downloadCommentAttachment(comment, attachment);
+        saveCommentAttachment(comment, attachment, askPath);
       });
 
       wrap.appendChild(chip);
@@ -1070,20 +1121,32 @@
 
   /**
    * Abre um anexo da conversa: imagem no visor da própria janela, qualquer
-   * outro tipo como download.
+   * outro tipo é salvo em disco pelo backend.
    *
    * BUG CORRIGIDO: um anexo sem identificador (mensagem antiga/replay) morria
    * em silêncio no clique — o usuário não tinha retorno nenhum.
    */
-  function openAttachment(attachment) {
+  function openAttachment(attachment, askPath) {
     if (!attachment || !attachment.id) {
       showBanner("Anexo indisponível: o servidor não informou o identificador do arquivo.");
       return;
     }
 
+    var isImage = isRenderableImage(attachment.contentType, attachment.fileName);
+
     // Miniatura já baixada e já é imagem: abre direto, sem segundo download.
-    if (thumbnailUrls[attachment.id]) {
-      showAttachmentViewer(thumbnailUrls[attachment.id], attachment.fileName || "imagem", false);
+    if (!askPath && isImage && thumbnailUrls[attachment.id]) {
+      showAttachmentViewer(thumbnailUrls[attachment.id], attachment.fileName || "imagem", false,
+        function () { saveSupportChatAttachment(attachment, false); },
+        function (askPath) { return saveSupportChatAttachment(attachment, askPath); });
+      return;
+    }
+
+    // PDF, log, zip, csv, executável, anexo sem tipo e formatos de imagem que o
+    // WebView2 não renderiza: grava DIRETO em disco pelo Go (sem o painel de
+    // downloads do Edge e sem baixar de novo a cada clique).
+    if (!isImage || askPath) {
+      saveSupportChatAttachment(attachment, askPath);
       return;
     }
 
@@ -1095,18 +1158,65 @@
           return;
         }
 
-        var contentType = String(blob.type || attachment.contentType || "").toLowerCase();
-
-        if (isRenderableImage(contentType, attachment.fileName)) {
-          showAttachmentViewer(URL.createObjectURL(blob), attachment.fileName || "imagem", true);
-          return;
-        }
-
-        // Todo o resto BAIXA com o nome original: PDF, log, zip, csv, executável,
-        // anexo sem tipo e também formatos de imagem que o WebView2 não renderiza.
-        triggerDownload(URL.createObjectURL(blob), attachment.fileName || "anexo");
+        showAttachmentViewer(URL.createObjectURL(blob), attachment.fileName || "imagem", true,
+          function () { saveSupportChatAttachment(attachment, false); },
+          function (askPath) { return saveSupportChatAttachment(attachment, askPath); });
       })
-      .catch(function (err) { showBanner("Falha ao baixar o anexo: " + describe(err)); });
+      .catch(function (err) { showBanner("Falha ao abrir o anexo: " + describe(err)); });
+  }
+
+  /**
+   * Salva em disco um anexo do CHAT AO VIVO pelo backend. O caminho fica em
+   * cache: repetir o clique não baixa outra cópia (só mostra onde está).
+   * Shift+clique abre o "Salvar como" para gravar em outro local.
+   */
+  function saveSupportChatAttachment(attachment, askPath) {
+    if (!attachment || !attachment.id) {
+      showBanner("Anexo indisponível: o servidor não informou o identificador do arquivo.");
+      return Promise.resolve(null);
+    }
+
+    var key = "chat:" + attachment.id;
+    var fileName = attachment.fileName || "anexo";
+
+    if (!askPath && savedAttachmentPaths[key]) {
+      showBanner("Anexo já salvo em: " + savedAttachmentPaths[key]);
+      return Promise.resolve(savedAttachmentPaths[key]);
+    }
+    if (!askPath && pendingAttachmentSaves[key]) {
+      return pendingAttachmentSaves[key];
+    }
+    if (!askPath) showBanner("Salvando anexo…");
+
+    var start;
+    if (askPath) {
+      start = call("ChooseSupportChatAttachmentSavePath", fileName, "Salvar anexo")
+        .then(function (destPath) { return { destPath: destPath || "", asked: true }; });
+    } else {
+      start = Promise.resolve({ destPath: "", asked: false });
+    }
+
+    var request = start.then(function (choice) {
+      if (choice.asked && !choice.destPath) return null;
+      if (choice.destPath) {
+        return call("SupportChatSaveAttachmentAs", attachment.id, fileName, choice.destPath);
+      }
+      return call("SupportChatSaveAttachment", attachment.id, fileName);
+    }).then(function (path) {
+      if (!path) return null;
+      savedAttachmentPaths[key] = path;
+      showBanner("Anexo salvo em: " + path);
+      return path;
+    }).catch(function (err) {
+      showBanner("Falha ao salvar o anexo: " + describe(err));
+      return null;
+    }).then(function (result) {
+      if (!askPath) delete pendingAttachmentSaves[key];
+      return result;
+    });
+
+    if (!askPath) pendingAttachmentSaves[key] = request;
+    return request;
   }
 
   /** Converte o payload base64 devolvido pelo Go em Blob tipado. */
@@ -1121,20 +1231,15 @@
     return new Blob([buffer], { type: contentType });
   }
 
-  function triggerDownload(url, fileName) {
-    var link = document.createElement("a");
-    link.href = url;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
-  }
-
-  function showAttachmentViewer(url, fileName, owned) {
+  function showAttachmentViewer(url, fileName, owned, onRenderError, onSave) {
     closeAttachmentViewer();
     state.viewerUrl = url;
     state.viewerOwnsUrl = !!owned;
+    state.viewerSave = typeof onSave === "function" ? onSave : null;
+    if (els.viewerSave) {
+      els.viewerSave.hidden = !state.viewerSave;
+      els.viewerSave.disabled = !state.viewerSave;
+    }
     if (els.viewerCaption) els.viewerCaption.textContent = fileName || "";
     if (els.viewerImage) {
       els.viewerImage.src = url;
@@ -1145,15 +1250,21 @@
       els.viewerImage.onerror = function () {
         var downloadUrl = state.viewerUrl;
         if (!downloadUrl) return;
-        // A URL passa a ser do download (revogada pelo teto de 30s), não do visor.
-        state.viewerOwnsUrl = false;
+        var ownsViewerUrl = state.viewerOwnsUrl;
         // Se a URL veio do cache de miniaturas, ela é lixo (não renderiza):
-        // some com a entrada para o chip não repetir o mesmo caminho.
+        // some com a entrada para o chip não repetir o mesmo caminho. A URL
+        // criada pelo próprio visor continua marcada como "owned" para o
+        // closeAttachmentViewer revogá-la (sem isso o Blob vazaria).
         Object.keys(thumbnailUrls).forEach(function (id) {
           if (thumbnailUrls[id] === downloadUrl) delete thumbnailUrls[id];
         });
         closeAttachmentViewer();
-        triggerDownload(downloadUrl, fileName || "anexo");
+        // URL do cache de miniaturas não é revogada pelo close (o chip poderia
+        // reusá-la); como a entrada foi descartada por não renderizar, libera.
+        if (!ownsViewerUrl) URL.revokeObjectURL(downloadUrl);
+        // Entrega o arquivo pelo backend (grava em disco e informa o caminho)
+        // em vez de disparar o painel de downloads do Edge.
+        if (typeof onRenderError === "function") onRenderError();
       };
     }
     if (els.viewer) els.viewer.hidden = false;
@@ -1167,6 +1278,11 @@
     }
     state.viewerUrl = null;
     state.viewerOwnsUrl = false;
+    state.viewerSave = null;
+    if (els.viewerSave) {
+      els.viewerSave.hidden = true;
+      els.viewerSave.disabled = true;
+    }
     if (els.viewerImage) {
       // Limpa o handler ANTES de tirar o src: remover o src dispara "error" em
       // alguns motores e o fallback de download entraria em loop.
@@ -1293,6 +1409,21 @@
     on(els.inviteReject, "click", function () { respondInvite(false); });
 
     on(els.end, "click", askClose);
+
+    // Visor de imagem: "Salvar imagem" grava o arquivo aberto pelo backend
+    // (Shift+clique abre o "Salvar como"). O clique não pode fechar o visor.
+    on(els.viewerSave, "click", function (event) {
+      event.stopPropagation();
+      if (typeof state.viewerSave !== "function") return;
+      var request = state.viewerSave(!!(event && event.shiftKey));
+      if (request && typeof request.then === "function") {
+        request.then(function (path) {
+          if (!path || !els.viewerCaption) return;
+          if (els.viewer && els.viewer.hidden) return;
+          els.viewerCaption.textContent = "Salvo em: " + path;
+        });
+      }
+    });
 
     // Visor de imagem: fecha no X, no clique fora da figura e no Esc.
     on(els.viewer, "click", function (event) {

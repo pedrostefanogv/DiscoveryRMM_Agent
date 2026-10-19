@@ -53,6 +53,10 @@ const (
 	// consentWMAppCancel é a mensagem usada para fechar o prompt de outra
 	// goroutine (cancelamento do servidor/worker).
 	consentWMAppCancel = 0x8000 + 42
+	// consentMessageMaxExtraPx é o quanto a caixa de mensagem pode crescer
+	// (96 DPI) para caber textos longos (o servidor aceita até 500 caracteres).
+	// O prompt cresce para cima, ancorado no canto inferior direito.
+	consentMessageMaxExtraPx = 160
 )
 
 // consentButton identifica os botões do prompt.
@@ -87,8 +91,54 @@ func (f *consentFonts) release() {
 	winui.DeleteGDIObject(f.hint)
 }
 
-// consentLayout devolve os retângulos do cartão (coordenadas fixas do desenho).
+// consentLayout devolve os retângulos do cartão no layout de projeto (96 DPI).
 func consentLayout() (logo, title, subtitle, divider, messageBox, messageText,
+	countLabel, countValue, defaultAction, progressTrack, allow, deny, hint winui.Rect) {
+	return consentLayoutFor(1, 0)
+}
+
+// consentLayoutFor escala o layout de projeto pelo DPI e cresce a caixa de
+// mensagem em extraHeight px físicos (empurrando contador/barra/botões para
+// baixo). Sem escala/extra devolve o layout base usado pelos testes.
+func consentLayoutFor(scale float64, extraHeight int) (logo, title, subtitle, divider, messageBox, messageText,
+	countLabel, countValue, defaultAction, progressTrack, allow, deny, hint winui.Rect) {
+	logo, title, subtitle, divider, messageBox, _, countLabel, countValue,
+		defaultAction, progressTrack, allow, deny, hint = consentLayoutBase()
+	if scale == 0 {
+		scale = 1
+	}
+	if scale != 1 {
+		scaleRect := func(r winui.Rect) winui.Rect {
+			return winui.Rect{
+				X: winui.ScalePx(r.X, scale),
+				Y: winui.ScalePx(r.Y, scale),
+				W: winui.ScalePx(r.W, scale),
+				H: winui.ScalePx(r.H, scale),
+			}
+		}
+		logo, title, subtitle, divider = scaleRect(logo), scaleRect(title), scaleRect(subtitle), scaleRect(divider)
+		messageBox = scaleRect(messageBox)
+		countLabel, countValue, defaultAction = scaleRect(countLabel), scaleRect(countValue), scaleRect(defaultAction)
+		progressTrack, allow, deny, hint = scaleRect(progressTrack), scaleRect(allow), scaleRect(deny), scaleRect(hint)
+	}
+	insetX := winui.ScalePx(14, scale)
+	insetY := winui.ScalePx(10, scale)
+	if extraHeight > 0 {
+		messageBox.H += extraHeight
+		countLabel.Y += extraHeight
+		countValue.Y += extraHeight
+		defaultAction.Y += extraHeight
+		progressTrack.Y += extraHeight
+		allow.Y += extraHeight
+		deny.Y += extraHeight
+		hint.Y += extraHeight
+	}
+	messageText = messageBox.Inset(insetX, insetY)
+	return
+}
+
+// consentLayoutBase é o layout de projeto em 96 DPI (sem escala nem extra).
+func consentLayoutBase() (logo, title, subtitle, divider, messageBox, messageText,
 	countLabel, countValue, defaultAction, progressTrack, allow, deny, hint winui.Rect) {
 	logo = winui.Rect{X: consentPad, Y: 20, W: 40, H: 40}
 	headerLeft := logo.Right() + 14
@@ -130,6 +180,56 @@ type consentNativeState struct {
 	// Quando true, o cartão é pintado reto e o compositor recorta os cantos —
 	// evita o serrilhado da região binária do SetWindowRgn.
 	systemCorners bool
+
+	// Geometria efetiva em pixels físicos (escalada pelo DPI do monitor) e
+	// altura extra da caixa de mensagem para textos longos. dwmCornerRadius é
+	// o raio do canto do DWM já escalado (hit-testing).
+	scale           float64
+	width           int
+	height          int
+	radius          int
+	extraHeight     int
+	dwmCornerRadius int
+}
+
+// metrics devolve a geometria efetiva da janela (fallback: projeto 96 DPI).
+func (s *consentNativeState) metrics() (width, height, radius int, scale float64) {
+	scale = s.scale
+	if scale <= 0 {
+		scale = 1
+	}
+	width, height, radius = s.width, s.height, s.radius
+	if width <= 0 {
+		width = consentWidth
+	}
+	if height <= 0 {
+		height = consentHeight + s.extraHeight
+	}
+	if radius <= 0 {
+		radius = consentRadius
+	}
+	return width, height, radius, scale
+}
+
+// layout devolve os retângulos do cartão na escala/altura efetivas.
+func (s *consentNativeState) layout() (logo, title, subtitle, divider, messageBox, messageText,
+	countLabel, countValue, defaultAction, progressTrack, allow, deny, hint winui.Rect) {
+	scale := s.scale
+	if scale <= 0 {
+		scale = 1
+	}
+	return consentLayoutFor(scale, s.extraHeight)
+}
+
+// insideRoundedCard informa se o ponto (coordenadas de cliente) está dentro do
+// cartão visível quando o DWM arredonda a janela (o raio acompanha o DPI).
+func (s *consentNativeState) insideRoundedCard(x, y int) bool {
+	width, height, _, _ := s.metrics()
+	corner := s.dwmCornerRadius
+	if corner <= 0 {
+		corner = consentSystemCornerRadius
+	}
+	return consentInsideRoundedCardAt(x, y, width, height, corner)
 }
 
 // consentTimeoutDecision aplica a ação de timeout da política do servidor.
@@ -258,7 +358,7 @@ func (s *consentNativeState) activate(hwnd uintptr, button consentButton) {
 
 // buttonAt devolve o botão sob o ponto informado.
 func (s *consentNativeState) buttonAt(x, y int) consentButton {
-	_, _, _, _, _, _, _, _, _, _, allow, deny, _ := consentLayout()
+	_, _, _, _, _, _, _, _, _, _, allow, deny, _ := s.layout()
 	if allow.Contains(x, y) {
 		return consentButtonAllow
 	}
@@ -341,7 +441,7 @@ func consentWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		// do SetWindowRgn fazia esse recorte de input).
 		if state.systemCorners {
 			x, y := winui.ScreenToClient(hwnd, consentLParamX(lparam), consentLParamY(lparam))
-			if !consentInsideRoundedCard(x, y) {
+			if !state.insideRoundedCard(x, y) {
 				return winui.HtTransparent
 			}
 		}
@@ -397,15 +497,25 @@ func consentLParamX(lparam uintptr) int { return int(int16(lparam & 0xFFFF)) }
 func consentLParamY(lparam uintptr) int { return int(int16((lparam >> 16) & 0xFFFF)) }
 
 // consentInsideRoundedCard informa se o ponto (coordenadas de cliente) está
-// dentro do cartão visível. Os cantos são os do arredondamento do DWM no
-// Windows 11: um ponto na região cortada do canto não deve capturar o clique.
+// dentro do cartão visível no layout de projeto (96 DPI). Os cantos são os do
+// arredondamento do DWM no Windows 11: um ponto fora da curva não deve capturar
+// o clique (a janela sem região continua retangular para o mouse).
 func consentInsideRoundedCard(x, y int) bool {
-	if x < 0 || y < 0 || x >= consentWidth || y >= consentHeight {
+	return consentInsideRoundedCardAt(x, y, consentWidth, consentHeight, consentSystemCornerRadius)
+}
+
+// consentInsideRoundedCardAt é a versão parametrizada (largura/altura/raio
+// efetivos, já escalados pelo DPI).
+func consentInsideRoundedCardAt(x, y, width, height, cornerRadius int) bool {
+	if x < 0 || y < 0 || x >= width || y >= height {
 		return false
 	}
-	r := consentSystemCornerRadius
+	r := cornerRadius
+	if r <= 0 {
+		return true
+	}
 	left, top := x < r, y < r
-	right, bottom := x >= consentWidth-r, y >= consentHeight-r
+	right, bottom := x >= width-r, y >= height-r
 	if !left && !right && !top && !bottom {
 		return true
 	}
@@ -414,12 +524,12 @@ func consentInsideRoundedCard(x, y int) bool {
 	if left {
 		cx = r
 	} else if right {
-		cx = consentWidth - r
+		cx = width - r
 	}
 	if top {
 		cy = r
 	} else if bottom {
-		cy = consentHeight - r
+		cy = height - r
 	}
 	dx, dy := x-cx, y-cy
 	return dx*dx+dy*dy <= r*r
@@ -427,30 +537,39 @@ func consentInsideRoundedCard(x, y int) bool {
 
 // drawConsentBadge desenha o selo do cabeçalho: um "monitor" no cartão, com
 // fundo levemente tingido pelo accent do Windows (funciona em claro e escuro).
-func drawConsentBadge(hdc uintptr, rect winui.Rect, theme winui.Theme) {
-	winui.FillRoundRectBorderAA(hdc, rect, 12,
+func drawConsentBadge(hdc uintptr, rect winui.Rect, theme winui.Theme, scale float64) {
+	sw := func(v int) int { return winui.ScalePx(v, scale) }
+	winui.FillRoundRectBorderAA(hdc, rect, sw(12),
 		theme.Card.Blend(theme.Accent, 16),
 		theme.Card.Blend(theme.Accent, 40))
-	screen := winui.Rect{X: rect.X + 10, Y: rect.Y + 10, W: rect.W - 20, H: 15}
-	winui.StrokeRoundRectAA(hdc, screen, 4, 2, theme.Accent)
-	winui.FillRect(hdc, winui.Rect{X: rect.X + rect.W/2 - 4, Y: screen.Bottom() + 3, W: 8, H: 2}, theme.Accent)
-	winui.FillRoundRectAA(hdc, winui.Rect{X: rect.X + rect.W/2 - 8, Y: screen.Bottom() + 7, W: 16, H: 3}, 1, theme.Accent)
+	padX, padY := sw(10), sw(10)
+	screen := winui.Rect{X: rect.X + padX, Y: rect.Y + padY, W: rect.W - 2*padX, H: sw(15)}
+	winui.StrokeRoundRectAA(hdc, screen, sw(4), sw(2), theme.Accent)
+	winui.FillRect(hdc, winui.Rect{
+		X: rect.X + rect.W/2 - sw(4), Y: screen.Bottom() + sw(3), W: sw(8), H: sw(2),
+	}, theme.Accent)
+	winui.FillRoundRectAA(hdc, winui.Rect{
+		X: rect.X + rect.W/2 - sw(8), Y: screen.Bottom() + sw(7), W: sw(16), H: sw(3),
+	}, sw(1), theme.Accent)
 }
 
 // paint desenha o cartão inteiro.
 func (s *consentNativeState) paint(screenDC uintptr) {
-	memDC, bitmap, oldBitmap := winui.BufferedPaint(screenDC, consentWidth, consentHeight)
+	width, height, radius, scale := s.metrics()
+	sw := func(v int) int { return winui.ScalePx(v, scale) }
+
+	memDC, bitmap, oldBitmap := winui.BufferedPaint(screenDC, width, height)
 	hdc := memDC
 	if hdc == 0 {
 		hdc = screenDC
 	} else {
-		defer winui.FlushBufferedPaint(screenDC, memDC, bitmap, oldBitmap, consentWidth, consentHeight)
+		defer winui.FlushBufferedPaint(screenDC, memDC, bitmap, oldBitmap, width, height)
 	}
 
 	theme := s.theme
 	logo, title, subtitle, divider, messageBox, messageText, countLabel, countValue,
-		defaultAction, progressTrack, allow, deny, hint := consentLayout()
-	card := winui.Rect{W: consentWidth, H: consentHeight}
+		defaultAction, progressTrack, allow, deny, hint := s.layout()
+	card := winui.Rect{W: width, H: height}
 
 	// Ação padrão (fim do tempo) define a cor de destaque do bloco de contagem.
 	actionColor := theme.Danger
@@ -462,28 +581,29 @@ func (s *consentNativeState) paint(screenDC uintptr) {
 	// DWM o desenho é reto: o próprio compositor recorta/antialiasa o canto
 	// (um canto desenhado com raio fixo deixaria uma cunha sem pintura entre o
 	// desenho e o recorte do sistema).
-	cardRadius := consentRadius
+	cardRadius := radius
 	if s.systemCorners {
 		cardRadius = 0
 	}
 	winui.FillRoundRectAA(hdc, card, cardRadius, theme.Card)
 	// Faixa accent como pílula com margem: recortada nos cantos ela deixava
 	// degraus serrilhados (mesmo ajuste feito no banner da sessão).
+	accentMargin := sw(10)
 	winui.FillRoundRectAA(hdc,
-		winui.Rect{X: 3, Y: 10, W: 4, H: consentHeight - 20},
-		2, theme.Accent)
-	winui.StrokeRoundRectAA(hdc, card, cardRadius, 1, theme.Border)
+		winui.Rect{X: sw(3), Y: accentMargin, W: sw(4), H: height - 2*accentMargin},
+		sw(2), theme.Accent)
+	winui.StrokeRoundRectAA(hdc, card, cardRadius, sw(1), theme.Border)
 
 	// Selo do acesso remoto (desenhado no tema; independe de asset externo).
-	drawConsentBadge(hdc, logo, theme)
+	drawConsentBadge(hdc, logo, theme, scale)
 
 	winui.DrawTextSingle(hdc, s.titleText(), title, s.fonts.title, theme.Text, winui.AlignLeft)
 	winui.DrawTextSingle(hdc, "Acesso remoto", subtitle, s.fonts.subtitle, theme.TextMuted, winui.AlignLeft)
 	winui.FillRect(hdc, divider, theme.Border)
 
 	// Caixa da mensagem (mesma hierarquia do diálogo Fluent do PSADT).
-	winui.FillRoundRectBorderAA(hdc, messageBox, 8, theme.Surface, theme.Border)
-	winui.DrawTextWrapped(hdc, s.messageText(), messageText, s.fonts.body, theme.Text, winui.AlignLeft)
+	winui.FillRoundRectBorderAA(hdc, messageBox, sw(8), theme.Surface, theme.Border)
+	winui.DrawTextWrappedEllipsis(hdc, s.messageText(), messageText, s.fonts.body, theme.Text, winui.AlignLeft)
 
 	// Contagem regressiva + ação padrão.
 	winui.DrawTextSingle(hdc, "Tempo para responder", countLabel, s.fonts.countLabel, theme.TextMuted, winui.AlignLeft)
@@ -492,29 +612,32 @@ func (s *consentNativeState) paint(screenDC uintptr) {
 		s.fonts.defaultAction, actionColor, winui.AlignLeft)
 
 	// Barra de progresso do tempo restante.
-	winui.FillRoundRectAA(hdc, progressTrack, 4, theme.Border)
+	winui.FillRoundRectAA(hdc, progressTrack, sw(4), theme.Border)
 	progress := progressTrack
 	progress.W = int(float64(progressTrack.W) * s.progressRatio())
-	if progress.W < 8 {
-		progress.W = 8
+	if minWidth := sw(8); progress.W < minWidth {
+		progress.W = minWidth
 	}
 	if progress.W > progressTrack.W {
 		progress.W = progressTrack.W
 	}
-	winui.FillRoundRectAA(hdc, progress, 4, actionColor)
+	winui.FillRoundRectAA(hdc, progress, sw(4), actionColor)
 
 	// Dica de teclado (a ação padrão também é o Enter).
 	winui.DrawTextSingle(hdc, "Enter confirma a ação padrão · Esc recusa", hint, s.fonts.hint, theme.TextMuted, winui.AlignLeft)
 
-	// Botões.
+	// Botões (raio e anel de foco acompanham o DPI).
+	buttonRadius := sw(9)
 	allowStyle := winui.PillButton(
 		theme.Success,
 		theme.Success.Lighten(12),
 		theme.Success.Darken(12),
 		theme.SuccessText,
-		9,
+		buttonRadius,
 	)
-	denyStyle := winui.OutlineButton(theme, 9)
+	denyStyle := winui.OutlineButton(theme, buttonRadius)
+	allowStyle.FocusGap, allowStyle.FocusWidth = sw(4), sw(2)
+	denyStyle.FocusGap, denyStyle.FocusWidth = sw(4), sw(2)
 	winui.PaintButton(hdc, allow, "Permitir", s.fonts.button, allowStyle,
 		s.hover == consentButtonAllow, s.pressed == consentButtonAllow,
 		s.focus == consentButtonAllow, theme.Accent)
@@ -603,7 +726,8 @@ func runNativeConsentWindow(ctx context.Context, req remotesession.ConsentReques
 	}
 	// Canto inferior direito da área útil (acima da barra de tarefas), como os
 	// toasts do Windows — e não no centro da tela, que cobre o trabalho do
-	// usuário no momento do pedido de acesso remoto.
+	// usuário no momento do pedido de acesso remoto. A posição inicial usa o
+	// tamanho de projeto; depois do DPI real o cartão é redimensionado.
 	x, y := winui.BottomRightOnActiveWorkArea(consentWidth, consentHeight, consentScreenMargin)
 	hwnd, err := winui.CreateWindow(
 		consentClassName,
@@ -615,25 +739,61 @@ func runNativeConsentWindow(ctx context.Context, req remotesession.ConsentReques
 	if err != nil {
 		return remotesession.ConsentDecision{}, false
 	}
-	consentStates.Store(hwnd, state)
+
+	// DPI efetivo do monitor: com PerMonitorV2 o Windows não escala a janela
+	// sozinho. O prompt acompanha a escala, como o banner da sessão.
+	scale := winui.ScaleForDPI(winui.DpiForWindow(hwnd))
+	width := winui.ScalePx(consentWidth, scale)
+	baseHeight := winui.ScalePx(consentHeight, scale)
+	radius := winui.ScalePx(consentRadius, scale)
+
+	// Altura dinâmica da caixa de mensagem: o servidor permite mensagens longas
+	// (até 500 caracteres) e a caixa fixa cortava o texto silenciosamente.
+	bodyFont := winui.CreateFont(winui.ScalePx(15, scale), 400)
+	_, _, _, _, _, messageTextRect, _, _, _, _, _, _, _ := consentLayoutFor(scale, 0)
+	extraHeight := 0
+	if needed := winui.MeasureWrappedText(bodyFont, state.messageText(), messageTextRect.W); needed > messageTextRect.H {
+		extraHeight = needed - messageTextRect.H
+		if maxExtra := winui.ScalePx(consentMessageMaxExtraPx, scale); extraHeight > maxExtra {
+			extraHeight = maxExtra
+		}
+	}
+	height := baseHeight + extraHeight
+
+	state.scale = scale
+	state.width = width
+	state.height = height
+	state.radius = radius
+	state.extraHeight = extraHeight
+	state.dwmCornerRadius = winui.ScalePx(consentSystemCornerRadius, scale)
+
+	// Ancora no canto inferior direito com o tamanho final (texto longo cresce
+	// para cima, sem sair da área útil).
+	x, y = winui.BottomRightOnActiveWorkArea(width, height, winui.ScalePx(consentScreenMargin, scale))
+	winui.MoveResizeWindow(hwnd, x, y, width, height)
 
 	// Cantos: no Windows 11 o DWM arredonda com antialiasing (contorno suave);
 	// sem suporte, cai na região binária (serrilhada) como antes.
 	state.systemCorners = winui.SetSystemRoundedCorners(hwnd)
 	if !state.systemCorners {
-		winui.SetRoundedRegion(hwnd, consentWidth, consentHeight, consentRadius)
+		winui.SetRoundedRegion(hwnd, width, height, radius)
 	}
 	state.theme = consentThemeLoader()
 	state.fonts = consentFonts{
-		title:         winui.CreateFont(22, 600),
-		subtitle:      winui.CreateFont(14, 400),
-		body:          winui.CreateFont(15, 400),
-		countLabel:    winui.CreateFont(12, 400),
-		countValue:    winui.CreateFont(30, 600),
-		defaultAction: winui.CreateFont(13, 600),
-		button:        winui.CreateFont(14, 600),
-		hint:          winui.CreateFont(11, 400),
+		title:         winui.CreateFont(winui.ScalePx(22, scale), 600),
+		subtitle:      winui.CreateFont(winui.ScalePx(14, scale), 400),
+		body:          bodyFont,
+		countLabel:    winui.CreateFont(winui.ScalePx(12, scale), 400),
+		countValue:    winui.CreateFont(winui.ScalePx(30, scale), 600),
+		defaultAction: winui.CreateFont(winui.ScalePx(13, scale), 600),
+		button:        winui.CreateFont(winui.ScalePx(14, scale), 600),
+		hint:          winui.CreateFont(winui.ScalePx(11, scale), 400),
 	}
+
+	// Só publica o estado depois da geometria/fontes prontas: a janela ainda
+	// está oculta e o wndproc não pinta nada antes do ShowWindow. Isso também
+	// elimina a corrida de testes/consumidores que localizam o HWND pelo mapa.
+	consentStates.Store(hwnd, state)
 
 	winui.ShowWindow(hwnd, winui.SwShowNormal)
 	winui.EnsureTopMost(hwnd)

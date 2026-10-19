@@ -34,6 +34,22 @@
   consulta falhar, segue o fluxo normal (prompt), validado pelo servidor.
 - O servidor também envia `RemoteSessionStop` ao agente quando a decisão é
   negada (best-effort), encerrando qualquer worker/prompt pendente.
+- **Janela de decisão tardia (server ↔ console)**: o deadline é do servidor, mas
+  o POST `/consent` chega alguns segundos depois do fim do contador no endpoint
+  (timer do prompt, latência e possível skew de relógio). A API aceita a decisão
+  até `RemoteAccess:Consent:LateDecisionGraceSeconds` (default **15s**) após o
+  deadline e publica esse valor no start/status; o console usa a MESMA janela e,
+  ao fim dela, faz uma última consulta autoritativa antes de mostrar erro. Se o
+  agent confirmar dentro da janela, a sessão é adotada em vez de exibir
+  "O tempo para autorização expirou". O sweeper só nega depois de
+  `DecisionGraceSeconds` (default 30s, sempre ≥ janela tardia + 5s).
+- **Sessão sem viewer (órfã)**: se o console desiste/fecha depois do grant, o
+  agent inicia a sessão mas nenhum viewer pede credenciais. Para não deixar o
+  banner "suporte conectado" preso até o TTL, (a) sessões com consentimento
+  fecham no agent após `liveness.initialGraceSeconds` sem o primeiro ping/pong
+  do viewer e reportam stop ao servidor; (b) o sweeper da API fecha sessões
+  ACTIVE que nunca tiveram credenciais/`renew` após
+  `RemoteAccess:OrphanedSessionGraceSeconds` (default **120s**).
 
 ## Tema (claro/escuro + accent)
 - O worker da sessão remota roda como **SYSTEM** na sessão interativa: `HKCU` é o

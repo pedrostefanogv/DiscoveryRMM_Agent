@@ -387,10 +387,15 @@ func wireRemoteConsentManager(mgr *remotesession.Manager) {
 	})
 }
 
-// reportBannerDisconnectIfNeeded reporta ao servidor o encerramento iniciado
-// pelo banner (best-effort; o viewer também chama stop).
-func reportBannerDisconnectIfNeeded(sessionID, reason string) {
-	if reason != "banner-disconnect" {
+// reportAgentInitiatedCloseIfNeeded sincroniza com o servidor os encerramentos
+// decididos pelo AGENT (banner, viewer-timeout, sessão sem viewer no grace).
+// Sem isso o agent fecha o banner local mas a API mantém a sessão ACTIVE até o
+// TTL, bloqueando novas sessões e exibindo "suporte conectado" no endpoint.
+// Best-effort e idempotente no servidor (stop de sessão já fechada é no-op).
+func reportAgentInitiatedCloseIfNeeded(sessionID, reason string) {
+	switch reason {
+	case "banner-disconnect", "viewer-timeout", "peer-timeout", "expired", "max-duration":
+	default:
 		return
 	}
 	go func() {

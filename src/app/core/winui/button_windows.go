@@ -12,6 +12,10 @@ type ButtonStyle struct {
 	Border      Color
 	Label       Color
 	Radius      int
+	// FocusGap/FocusWidth permitem escalar o anel de foco (DPI). Zero usa os
+	// padrões de projeto (4px de folga, 2px de espessura).
+	FocusGap   int
+	FocusWidth int
 }
 
 // fillFor devolve a cor de fundo considerando hover/pressionado.
@@ -42,9 +46,18 @@ func PaintButton(hdc uintptr, r Rect, label string, font uintptr, style ButtonSt
 		FillRoundRectAA(hdc, r, radius, fill)
 	}
 	if focused {
-		// Anel de 2px com 2px de folga em relação ao botão (mesma geometria do
-		// desenho GDI anterior), agora com cantos antialiased.
-		StrokeRoundRectAA(hdc, r.InsetUniform(-4), radius+4, 2, focusColor)
+		// Anel com 2px de folga em relação ao botão (mesma geometria do desenho
+		// GDI anterior), agora com cantos antialiased. Gap/espessura podem vir
+		// escalados pelo DPI via ButtonStyle.
+		gap := style.FocusGap
+		if gap <= 0 {
+			gap = 4
+		}
+		ringWidth := style.FocusWidth
+		if ringWidth <= 0 {
+			ringWidth = 2
+		}
+		StrokeRoundRectAA(hdc, r.InsetUniform(-gap), radius+gap, ringWidth, focusColor)
 	}
 	DrawTextSingle(hdc, label, r, font, style.Label, AlignCenter)
 }

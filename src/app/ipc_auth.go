@@ -381,6 +381,18 @@ var ipcKnownMutatingMethods = map[string]struct{}{
 	"support:comment_attachment_save":     {},
 	"support:ticket_attachment_settings":  {},
 	"support:comment_attachment_settings": {},
+
+	// Loja de apps: instalação/remoção/atualização executadas pelo SERVIÇO
+	// (SYSTEM), não pela UI. O canal admin é obrigatório porque estes métodos
+	// instalam software na máquina — a UI (Medium IL) só pode PEDIR a operação.
+	// Os sufixos genéricos de isIPCMutatingMethod não cobrem "install"/
+	// "uninstall"/"upgrade", por isso a tabela explícita é obrigatória (sem ela
+	// um método "store:install" seria tratado como LEITURA e recusado no canal
+	// admin com ipc_wrong_channel).
+	"store:install":     {},
+	"store:uninstall":   {},
+	"store:upgrade":     {},
+	"store:upgrade_all": {},
 }
 
 // isIPCMutatingMethod classifica um método RPC como mutante (exige canal

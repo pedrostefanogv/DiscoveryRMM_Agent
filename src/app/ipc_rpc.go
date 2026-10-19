@@ -7,6 +7,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"discovery/app/core/runtimediag"
 )
@@ -69,6 +70,18 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCAutomationState()
 	case "updates:scan":
 		return a.ipcRPCUpdatesScan()
+	// Loja de apps (companion → serviço): a instalação roda no SERVIÇO, que é
+	// SYSTEM. Antes a UI (Medium IL, sem admin) executava o instalador e o
+	// msiexec machine-scope caía no prompt UAC de credenciais — inutilizável
+	// para usuário não-administrador. Ver packageActionViaService.
+	case "store:install":
+		return a.ipcRPCStorePackageAction(payload, "install")
+	case "store:uninstall":
+		return a.ipcRPCStorePackageAction(payload, "uninstall")
+	case "store:upgrade":
+		return a.ipcRPCStorePackageAction(payload, "upgrade")
+	case "store:upgrade_all":
+		return a.ipcRPCStorePackageAction(payload, "upgrade_all")
 	// Suporte / base de conhecimento (D3: a UI companion não abre o SQLite —
 	// estes RPCs usam o SupportSvc do serviço, que tem o cache offline).
 	case "support:agent_info":
@@ -283,6 +296,51 @@ func (a *App) ipcRPCUpdatesScan() map[string]any {
 	// da UI ter expirado enquanto o scan continuava no serviço.
 	a.EmitEvent("updates:list", "updates", json.RawMessage(raw))
 	return map[string]any{"ok": true, "data": map[string]any{"updates": json.RawMessage(raw)}}
+}
+
+// ipcRPCStorePackageAction executa uma ação da loja NO SERVIÇO (lado SYSTEM).
+//
+// Por que no serviço: a UI companion roda na sessão do usuário com a mesma
+// identidade dele (Medium IL, sem admin). Um MSI machine-scope (ex.: VLC,
+// wix) exige elevação; executado da UI o Windows abre o prompt UAC de
+// credenciais — que um usuário padrão não consegue responder. O serviço já
+// roda como SYSTEM e já executa instalações (automação/updates), então a UI
+// apenas PEDE a operação; o policy da loja (resolveAllowed) continua sendo
+// aplicado aqui, no serviço, antes de qualquer execução.
+//
+// Escopo do RPC: só o id do pacote (sem comando livre) — não é um "exec as
+// SYSTEM" genérico. A autenticação é do canal admin (só a UI instalada).
+func (a *App) ipcRPCStorePackageAction(payload map[string]any, action string) map[string]any {
+	if err := a.requireInventorySvc(); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	id, _ := payload["id"].(string)
+	id = strings.TrimSpace(id)
+	if id == "" && action != "upgrade_all" {
+		return map[string]any{"ok": false, "error": "id do pacote é obrigatório"}
+	}
+	var out string
+	var err error
+	switch action {
+	case "install":
+		out, err = a.InventorySvc.Install(id)
+	case "uninstall":
+		out, err = a.InventorySvc.Uninstall(id)
+	case "upgrade":
+		out, err = a.InventorySvc.Upgrade(id)
+	case "upgrade_all":
+		out, err = a.InventorySvc.UpgradeAll()
+	default:
+		return map[string]any{"ok": false, "error": "ação de loja desconhecida: " + action}
+	}
+	data := map[string]any{"output": out}
+	if err != nil {
+		// Erro de DOMÍNIO (política, download, instalador) — devolvido à UI
+		// como desfecho definitivo; a UI NÃO repete localmente (repetir
+		// duplicaria a instalação e cairia de novo no UAC).
+		return map[string]any{"ok": false, "error": err.Error(), "data": data}
+	}
+	return map[string]any{"ok": true, "data": data}
 }
 
 // ── P2P / Zero Touch (companion → serviço) ──

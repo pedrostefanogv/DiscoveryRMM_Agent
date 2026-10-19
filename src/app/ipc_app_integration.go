@@ -166,6 +166,19 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 			return
 		}
 		ctx = authCtx
+		// Request em execução (ex.: instalação da loja, que pode levar
+		// minutos): marca a conexão como ativa para o sweep de ociosidade não
+		// derrubá-la no meio da operação. O touch no fim renova a janela.
+		var inflightClient *ipcClientConn
+		if a.ipcServer != nil {
+			if inflightClient = a.ipcServer.connClient(conn); inflightClient != nil {
+				inflightClient.inFlight.Add(1)
+				defer func() {
+					inflightClient.inFlight.Add(-1)
+					inflightClient.touch()
+				}()
+			}
+		}
 		// O token nunca é repassado aos handlers/RPCs.
 		delete(msg.Payload, "token")
 		resp := a.handleIPCRequest(ctx, msg.Payload)

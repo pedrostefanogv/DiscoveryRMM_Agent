@@ -35,7 +35,18 @@ func (a *App) RefreshCatalog() (models.Catalog, error) {
 	return a.InventorySvc.RefreshCatalog()
 }
 
+// Install/Uninstall/Upgrade/UpgradeAll são as ações da loja.
+//
+// COMPANION: a operação é PEDIDA ao serviço (SYSTEM) via IPC admin, porque a UI
+// roda na sessão do usuário (Medium IL, sem admin) e instaladores machine-scope
+// exigem elevação — executados na UI, caem no prompt UAC de credenciais. O
+// serviço já executa instalações (automação/updates) e aplica o policy da loja.
+// Se não houver serviço (ou ele for antigo e não conhecer o RPC), cai no
+// caminho local de sempre (standalone/retrocompatibilidade).
 func (a *App) Install(id string) (string, error) {
+	if out, handled, err := a.packageActionViaService("store:install", id); handled {
+		return out, err
+	}
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err
 	}
@@ -43,6 +54,9 @@ func (a *App) Install(id string) (string, error) {
 }
 
 func (a *App) Uninstall(id string) (string, error) {
+	if out, handled, err := a.packageActionViaService("store:uninstall", id); handled {
+		return out, err
+	}
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err
 	}
@@ -50,6 +64,9 @@ func (a *App) Uninstall(id string) (string, error) {
 }
 
 func (a *App) Upgrade(id string) (string, error) {
+	if out, handled, err := a.packageActionViaService("store:upgrade", id); handled {
+		return out, err
+	}
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err
 	}
@@ -57,6 +74,9 @@ func (a *App) Upgrade(id string) (string, error) {
 }
 
 func (a *App) UpgradeAll() (string, error) {
+	if out, handled, err := a.packageActionViaService("store:upgrade_all", ""); handled {
+		return out, err
+	}
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err
 	}

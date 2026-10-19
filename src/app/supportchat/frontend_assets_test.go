@@ -189,8 +189,11 @@ func TestChatWindow_ImagemRenderizavelNaoEhImageQualquer(t *testing.T) {
 	if !strings.Contains(jsText, "RENDERABLE_IMAGE_TYPES") || !strings.Contains(jsText, "IMAGE_EXTENSIONS") {
 		t.Fatal("a lista de tipos renderizáveis e o fallback por extensão (sem MIME) precisam existir")
 	}
-	if !strings.Contains(jsText, `triggerDownload(`) {
-		t.Fatal("os tipos não renderizáveis precisam BAIXAR (triggerDownload)")
+	if strings.Contains(jsText, "triggerDownload(") || strings.Contains(jsText, "link.download") {
+		t.Fatal("o anexo não pode ser baixado pelo webview (painel de downloads do Edge); use a gravação nativa")
+	}
+	if !strings.Contains(jsText, "SupportChatSaveAttachment") {
+		t.Fatal("os tipos não renderizáveis precisam ser gravados em disco pelo backend (SupportChatSaveAttachment)")
 	}
 }
 
@@ -204,7 +207,7 @@ func TestChatWindow_AnexoDeImagemTemVisorEMergeCanonico(t *testing.T) {
 	if err != nil {
 		t.Fatalf("não foi possível ler %s: %v", htmlPath, err)
 	}
-	for _, needle := range []string{`id="scAttachmentViewer"`, `id="scViewerImage"`, `id="scViewerClose"`} {
+	for _, needle := range []string{`id="scAttachmentViewer"`, `id="scViewerImage"`, `id="scViewerClose"`, `id="scViewerSave"`} {
 		if !strings.Contains(string(html), needle) {
 			t.Fatalf("chat-window.html deve conter %s (visor do anexo de imagem)", needle)
 		}
@@ -240,6 +243,47 @@ func TestChatWindow_AnexoDeImagemTemVisorEMergeCanonico(t *testing.T) {
 	}
 }
 
+// REQUISITO (definido pelo usuário): a imagem aberta no visor precisa ter uma
+// opção explícita de baixar/salvar — antes o visor só mostrava o print.
+// O salvamento usa o backend (sem painel de downloads do Edge) e o Shift+clique
+// abre o "Salvar como" para escolher outro local.
+func TestChatWindow_VisorDeImagemTemOpcaoDeSalvar(t *testing.T) {
+	htmlPath := filepath.Join("..", "..", "frontend", "chat-window.html")
+	html, err := os.ReadFile(htmlPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", htmlPath, err)
+	}
+	if !strings.Contains(string(html), `id="scViewerSave"`) {
+		t.Fatal("chat-window.html deve conter o botão de salvar imagem (scViewerSave)")
+	}
+
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+	for _, needle := range []string{
+		"els.viewerSave = byId(\"scViewerSave\");",
+		"state.viewerSave = typeof onSave === \"function\" ? onSave : null;",
+		"state.viewerSave(!!(event && event.shiftKey))",
+		"Salvo em: ",
+	} {
+		if !strings.Contains(jsText, needle) {
+			t.Fatalf("app-support-chat.js deve conter %q (salvar imagem pelo visor)", needle)
+		}
+	}
+
+	cssPath := filepath.Join("..", "..", "frontend", "support-chat.css")
+	css, err := os.ReadFile(cssPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", cssPath, err)
+	}
+	if !strings.Contains(string(css), ".sc-viewer-save") {
+		t.Fatal("support-chat.css precisa estilizar o botão de salvar do visor (.sc-viewer-save)")
+	}
+}
+
 // BUG CORRIGIDO: o anexo de imagem de um COMENTÁRIO na conversa aparecia só
 // como um chip com o nome do arquivo, enquanto o anexo do chat ao vivo já
 // tinha miniatura e visor. Agora os dois usam a mesma linguagem visual.
@@ -258,6 +302,74 @@ func TestChatWindow_ComentarioComAnexoDeImagemTemMiniatura(t *testing.T) {
 	} {
 		if !strings.Contains(jsText, needle) {
 			t.Fatalf("app-support-chat.js deve conter %q (miniatura do anexo de comentário)", needle)
+		}
+	}
+}
+
+// REQUISITO (definido pelo usuário em produção): o download de um anexo NÃO
+// pode abrir o painel de downloads do Edge nem baixar uma cópia nova a cada
+// clique. A janela salva o arquivo pelo backend (Go) numa pasta do usuário,
+// guarda o caminho por anexo e, num segundo clique, apenas informa onde está.
+// Shift+clique oferece o "Salvar como".
+func TestChatWindow_AnexosSalvamEmDiscoSemPainelDeDownload(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+
+	// Nada de Blob + <a download> (era o que abria o painel do Edge e baixava
+	// de novo a cada clique).
+	for _, forbidden := range []string{"triggerDownload(", "link.download", `createElement("a")`} {
+		if strings.Contains(jsText, forbidden) {
+			t.Fatalf("o download não pode passar pelo webview (encontrado %q); use a gravação nativa", forbidden)
+		}
+	}
+
+	// Gravação nativa dos DOIS níveis (chat ao vivo e comentário) e diálogo
+	// "Salvar como" para o Shift+clique.
+	for _, needle := range []string{
+		"function saveSupportChatAttachment(",
+		"function saveCommentAttachment(",
+		"SupportChatSaveAttachment",
+		"SupportChatSaveAttachmentAs",
+		"ChooseSupportChatAttachmentSavePath",
+		"SaveTicketCommentAttachment",
+		"SaveTicketCommentAttachmentAs",
+		"ChooseTicketAttachmentSavePath",
+	} {
+		if !strings.Contains(jsText, needle) {
+			t.Fatalf("app-support-chat.js deve conter %q (gravação nativa do anexo)", needle)
+		}
+	}
+
+	// Guarda contra download repetido: caminho salvo + promessa em andamento.
+	for _, needle := range []string{
+		"var savedAttachmentPaths = {};",
+		"var pendingAttachmentSaves = {};",
+		"Anexo já salvo em: ",
+	} {
+		if !strings.Contains(jsText, needle) {
+			t.Fatalf("app-support-chat.js deve conter %q (deduplicação de downloads)", needle)
+		}
+	}
+
+	// As bindings geradas pelo Wails precisam conter os métodos Go: build antigo
+	// sem regenerar faria o clique cair em "Binding indisponível".
+	bindingsPath := filepath.Join("..", "..", "frontend", "bindings", "discovery", "app", "app.js")
+	bindings, err := os.ReadFile(bindingsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", bindingsPath, err)
+	}
+	bindingsText := string(bindings)
+	for _, needle := range []string{
+		"export function SupportChatSaveAttachment(",
+		"export function SupportChatSaveAttachmentAs(",
+		"export function ChooseSupportChatAttachmentSavePath(",
+	} {
+		if !strings.Contains(bindingsText, needle) {
+			t.Fatalf("bindings do Wails desatualizadas: falta %q; rode wails3 generate bindings", needle)
 		}
 	}
 }

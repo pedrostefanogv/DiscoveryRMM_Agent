@@ -4,7 +4,6 @@ package screen
 
 import (
 	"fmt"
-	"math"
 	"runtime"
 	"strings"
 	"sync"
@@ -180,25 +179,12 @@ func bannerWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 // (96 DPI = 100%). Clampa em [1, 3]: não encolhe o cartão abaixo do projeto e
 // evita tamanhos absurdos em configurações de acessibilidade extremas.
 func bannerScaleForDPI(dpi int) float64 {
-	if dpi <= 0 {
-		return 1
-	}
-	scale := float64(dpi) / 96.0
-	if scale < 1 {
-		return 1
-	}
-	if scale > 3 {
-		return 3
-	}
-	return scale
+	return winui.ScaleForDPI(dpi)
 }
 
 // scalePx aplica o fator de escala a uma medida de projeto (96 DPI).
 func scalePx(value int, scale float64) int {
-	if scale <= 0 || scale == 1 {
-		return value
-	}
-	return int(math.Round(float64(value) * scale))
+	return winui.ScalePx(value, scale)
 }
 
 // paintMetrics devolve a geometria efetiva usada pelo desenho. Quando o

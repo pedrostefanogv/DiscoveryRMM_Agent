@@ -119,7 +119,7 @@ func RunRemoteSessionWorker() {
 	configureRemoteConsentRuntime(workerAPIBase(cfg), authToken, agentID)
 	wireRemoteConsentManager(mgr)
 	mgr.SetCallbacks(nil, func(sessionID, reason string) {
-		reportBannerDisconnectIfNeeded(sessionID, reason)
+		reportAgentInitiatedCloseIfNeeded(sessionID, reason)
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

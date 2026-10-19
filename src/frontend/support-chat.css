@@ -405,6 +405,25 @@
   cursor: pointer;
 }
 
+/* Opção de salvar a imagem aberta no visor. Fica no lado oposto ao X para não
+   competir com o gesto de fechar. */
+.sc-viewer-save {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sc-viewer-save:hover { background: rgba(0, 0, 0, 0.65); }
+
+.sc-viewer-save[hidden] { display: none; }
+
 #scInvite .sc-modal { border-color: var(--accent); }
 
 .sc-modal h3 { margin: 0 0 8px; font-size: 16px; }

@@ -51,6 +51,36 @@ func TestIPCServer_SweepIdleConns(t *testing.T) {
 	}
 }
 
+// Request em execução (ex.: instalação da loja) não pode ser derrubado pelo
+// sweep enquanto o serviço trabalha: a conexão está viva, só não manda nada.
+func TestIPCServer_SweepIdleConns_KeepsInFlightRequest(t *testing.T) {
+	server := &IPCServer{conns: make(map[net.Conn]*ipcClientConn)}
+
+	conn, peer := net.Pipe()
+	defer conn.Close()
+	defer peer.Close()
+
+	client := &ipcClientConn{reader: bufio.NewReader(conn)}
+	client.touch()
+	// Ociosa há muito tempo (seria derrubada), mas com request em voo.
+	client.lastActivity.Store(time.Now().Add(-(ipcServerIdleTimeout + 5*time.Second)).UnixMilli())
+	client.inFlight.Store(1)
+	server.conns[conn] = client
+
+	if dropped := server.sweepIdleConns(time.Now()); dropped != 0 {
+		t.Fatalf("conexão com request em voo não pode ser derrubada; derrubou %d", dropped)
+	}
+	if _, ok := server.conns[conn]; !ok {
+		t.Fatal("conexão com request em voo saiu do mapa de conexões")
+	}
+
+	// Terminado o request, a ociosidade volta a valer.
+	client.inFlight.Store(0)
+	if dropped := server.sweepIdleConns(time.Now()); dropped != 1 {
+		t.Fatalf("após o request, a conexão ociosa deve ser derrubada; derrubou %d", dropped)
+	}
+}
+
 // Conexão recém-criada (sem nenhuma mensagem ainda) não é derrubada: a UI pode
 // estar no handshake.
 func TestIPCServer_SweepIdleConns_KeepsFreshConnWithoutActivity(t *testing.T) {

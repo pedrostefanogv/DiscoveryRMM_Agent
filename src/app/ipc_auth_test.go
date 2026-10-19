@@ -19,6 +19,11 @@ func TestIPCMethodClassification(t *testing.T) {
 		"support:agent_ticket_close", "support:agent_comment_add",
 		"support:ticket_attachment_upload", "support:comment_attachment_upload",
 		"support:ticket_attachment_save", "support:comment_attachment_save",
+		// Ações da loja executadas pelo SERVIÇO (SYSTEM): mutantes por
+		// definição (instalam software). Sem a tabela explícita o sufixo
+		// "install"/"upgrade" não é reconhecido e o método vazaria para o
+		// canal de leitura sem token.
+		"store:install", "store:uninstall", "store:upgrade", "store:upgrade_all",
 		// sufixos genéricos (métodos novos não precisam editar a tabela)
 		"qualquer:set", "foo:write", "foo:delete", "foo:create", "foo:add",
 		"foo:upload", "foo.save", "x:refresh", "y:scan",

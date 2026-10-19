@@ -23,6 +23,8 @@ var (
 	procDrawTextW             = user32.NewProc("DrawTextW")
 	procSystemParametersInfoW = user32.NewProc("SystemParametersInfoW")
 	procGetSystemMetrics      = user32.NewProc("GetSystemMetrics")
+	procGetDC                 = user32.NewProc("GetDC")
+	procReleaseDC             = user32.NewProc("ReleaseDC")
 
 	procCreateSolidBrush       = gdi32.NewProc("CreateSolidBrush")
 	procCreatePen              = gdi32.NewProc("CreatePen")
@@ -59,6 +61,11 @@ const (
 	// smCXScreen/smCYScreen do GetSystemMetrics.
 	smCXScreen = 0
 	smCYScreen = 1
+	// dtCalcRect/dtWordBreak/dtNoPrefix simulam/medem o texto sem desenhar.
+	dtCalcRect     = 0x00000400
+	dtWordBreak    = 0x00000010
+	dtNoPrefix     = 0x00000800
+	dtWordEllipsis = 0x00040000
 )
 
 // Rect é um retângulo em pixels da janela (origem no canto superior esquerdo).
@@ -270,7 +277,14 @@ func DrawTextSingle(hdc uintptr, text string, r Rect, font uintptr, color Color,
 
 // DrawTextWrapped desenha texto com quebra de linha automática.
 func DrawTextWrapped(hdc uintptr, text string, r Rect, font uintptr, color Color, align int) {
-	drawText(hdc, text, r, font, color, drawFlags(align, false, false)|0x00000010) // DT_WORDBREAK
+	drawText(hdc, text, r, font, color, drawFlags(align, false, false)|dtWordBreak)
+}
+
+// DrawTextWrappedEllipsis é igual a DrawTextWrapped, mas sinaliza truncamento
+// com "…" na última linha visível (usado na mensagem do consentimento quando
+// um texto extremo excede a altura máxima do cartão).
+func DrawTextWrappedEllipsis(hdc uintptr, text string, r Rect, font uintptr, color Color, align int) {
+	drawText(hdc, text, r, font, color, drawFlags(align, false, false)|dtWordBreak|dtWordEllipsis)
 }
 
 // drawText chama o DrawTextW com a fonte/cor informadas.
@@ -299,6 +313,37 @@ func drawText(hdc uintptr, text string, r Rect, font uintptr, color Color, flags
 	if oldFont != 0 {
 		procSelectObject.Call(hdc, oldFont)
 	}
+}
+
+// MeasureWrappedText devolve a altura (px) que o texto ocupa ao ser quebrado
+// em largura width com a fonte informada — sem desenhar nada (DT_CALCRECT).
+// Usado para dimensionar dinamicamente a caixa da mensagem do consentimento.
+func MeasureWrappedText(font uintptr, text string, width int) int {
+	if font == 0 || text == "" || width <= 0 {
+		return 0
+	}
+	dc, _, _ := procGetDC.Call(0)
+	if dc == 0 {
+		return 0
+	}
+	defer procReleaseDC.Call(0, dc)
+
+	ptr, err := windows.UTF16PtrFromString(text)
+	if err != nil {
+		return 0
+	}
+	oldFont, _, _ := procSelectObject.Call(dc, font)
+	defer procSelectObject.Call(dc, oldFont)
+
+	nr := nativeRect{Left: 0, Top: 0, Right: int32(width)}
+	procDrawTextW.Call(
+		dc,
+		uintptr(unsafe.Pointer(ptr)),
+		^uintptr(0),
+		uintptr(unsafe.Pointer(&nr)),
+		uintptr(dtCalcRect|dtWordBreak|dtNoPrefix),
+	)
+	return int(nr.Bottom - nr.Top)
 }
 
 // WorkArea devolve a área útil do monitor primário (sem a barra de tarefas).

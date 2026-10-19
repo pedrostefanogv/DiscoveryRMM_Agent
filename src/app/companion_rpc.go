@@ -109,6 +109,76 @@ func (a *App) ipcRPCStoreCatalog(payload map[string]any) map[string]any {
 	return map[string]any{"ok": true, "data": map[string]any{"catalog": json.RawMessage(raw)}}
 }
 
+// ── Ações da loja (companion → serviço, execução como SYSTEM) ──────────────
+
+// storePackageActionRPCTimeout é o teto de espera da UI por uma ação da loja
+// executada no serviço. Instalações reais (download + MSI de centenas de MB)
+// levam minutos — muito acima do timeout padrão de 10s dos RPCs de leitura.
+const storePackageActionRPCTimeout = 30 * time.Minute
+
+// packageActionViaService roteia install/uninstall/upgrade/upgrade_all da loja
+// para o SERVIÇO (SYSTEM) via canal admin do IPC.
+//
+// Contrato de retorno:
+//   - handled=false: não há serviço (UI sem IPC) ou o serviço é ANTIGO e não
+//     conhece o método (método desconhecido) — o caller segue no caminho
+//     local, preservando o comportamento anterior.
+//   - handled=true:  o serviço respondeu (sucesso ou erro de domínio). NUNCA
+//     repetir localmente nesse caso: a operação já foi executada/pedida lá.
+//
+// Falha de transporte (timeout, pipe caído, canal admin indisponível) também
+// NÃO cai no fallback local: repetir às cegas poderia instalar duas vezes, e
+// o caminho local é justamente o que exige UAC para usuário não-admin.
+func (a *App) packageActionViaService(method, id string) (string, bool, error) {
+	if a == nil || a.ipcClient == nil {
+		return "", false, nil
+	}
+	// Sem serviço conectado (UI antiga standalone ou boot antes do primeiro
+	// handshake): mantém o caminho local de sempre. Com serviço conectado a
+	// ação NUNCA cai no local — lá o policy é aplicado e a execução é SYSTEM.
+	if _, _, ok := a.ipcClient.ServiceHandshake(); !ok {
+		return "", false, nil
+	}
+	payload := map[string]any{}
+	if id = strings.TrimSpace(id); id != "" {
+		payload["id"] = id
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, storePackageActionRPCTimeout)
+	defer cancel()
+
+	resp, err := a.ipcClient.Request(ctx, method, payload)
+	out := ipcRPCDataOutput(resp)
+	if err != nil {
+		// Serviço ANTIGO (UI nova após update parcial): o método ainda não
+		// existe. Fallback local é seguro porque nada foi executado lá.
+		if strings.Contains(err.Error(), "método desconhecido") {
+			return "", false, nil
+		}
+		// Qualquer outro erro (domínio OU transporte) é definitivo: o serviço
+		// pode ter executado a operação e perdido a resposta; repetir local
+		// duplicaria a instalação — e o caminho local é o que pede UAC.
+		return out, true, err
+	}
+	return out, true, nil
+}
+
+// ipcRPCDataOutput extrai data.output de uma resposta RPC ("" quando ausente).
+func ipcRPCDataOutput(resp map[string]any) string {
+	if resp == nil {
+		return ""
+	}
+	data, _ := resp["data"].(map[string]any)
+	if data == nil {
+		return ""
+	}
+	out, _ := data["output"].(string)
+	return out
+}
+
 // ── Config de debug (companion ↔ serviço) ──────────────────────────────────
 // O SetDebugConfig da UI roda na memória do processo da UI; o serviço (que
 // roda o core) precisa receber a mesma config, senão fica divergente até

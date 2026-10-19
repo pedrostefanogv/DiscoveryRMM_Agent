@@ -4,6 +4,8 @@ package app
 // cobertura dos caminhos IPC RPC e do ciclo headless de notificações.
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,6 +65,75 @@ func TestHandleIPCRequestDeletesMethodKey(t *testing.T) {
 	_ = a.handleIPCRequest(nil, payload)
 	if _, still := payload["method"]; still {
 		t.Fatal("handleIPCRequest deve remover 'method' do payload")
+	}
+}
+
+// ── Loja: ações executadas no SERVIÇO (SYSTEM) ─────────────────────────────
+
+func TestHandleIPCRequestStoreActionsAsMutating(t *testing.T) {
+	// Sem context autenticado (canal admin), o dispatch recusa QUALQUER ação da
+	// loja — a UI não pode instalar software sem passar pelo canal autenticado.
+	a := &App{}
+	for _, method := range []string{"store:install", "store:uninstall", "store:upgrade", "store:upgrade_all"} {
+		resp := a.handleIPCRequest(nil, map[string]any{"method": method, "id": "videolan.vlc"})
+		if resp["ok"] != false {
+			t.Fatalf("%s sem auth deveria ser recusado", method)
+		}
+		if code, _ := resp["code"].(string); code != "ipc_unauthorized" {
+			t.Fatalf("%s: code=%q, esperado ipc_unauthorized", method, code)
+		}
+	}
+}
+
+func TestHandleIPCRequestStoreActionRequiresInventorySvc(t *testing.T) {
+	// Com auth válida, mas sem InventorySvc (ex.: App recém-criada): erro claro,
+	// sem panic e sem "método desconhecido" (que faria a UI cair no fallback
+	// local e voltar a pedir UAC).
+	a := &App{}
+	ctx := withIPCAuth(context.Background(), ipcRequestAuth{Admin: true, SID: "S-1-5-21-1", PID: 1, SessionID: 2})
+	for _, method := range []string{"store:install", "store:uninstall", "store:upgrade", "store:upgrade_all"} {
+		resp := a.handleIPCRequest(ctx, map[string]any{"method": method, "id": "videolan.vlc"})
+		if resp["ok"] != false {
+			t.Fatalf("%s sem InventorySvc deveria retornar ok=false", method)
+		}
+		msg, _ := resp["error"].(string)
+		if msg == "" {
+			t.Fatalf("%s deve incluir mensagem de erro", method)
+		}
+		if strings.Contains(msg, "método desconhecido") {
+			t.Fatalf("%s não pode responder 'método desconhecido' (viraria fallback local): %q", method, msg)
+		}
+	}
+}
+
+func TestHandleIPCRequestStoreInstallRequiresPackageID(t *testing.T) {
+	// id vazio não pode chegar ao InventorySvc. InventorySvc nil já retorna
+	// antes; este teste cobre o guard de payload com serviço presente seria
+	// redundante — validamos só o contrato de erro do guard de id via
+	// ipcRPCStorePackageAction direto.
+	a := &App{}
+	resp := a.ipcRPCStorePackageAction(map[string]any{}, "install")
+	if resp["ok"] != false {
+		t.Fatal("id vazio deveria retornar ok=false")
+	}
+}
+
+func TestPackageActionViaServiceStandalone(t *testing.T) {
+	// UI sem cliente IPC (standalone): handled=false para o caller executar o
+	// caminho local, sem erro.
+	a := &App{}
+	out, handled, err := a.packageActionViaService("store:install", "videolan.vlc")
+	if handled || err != nil || out != "" {
+		t.Fatalf("standalone: handled=%v err=%v out=%q, esperado false/nil/\"\"", handled, err, out)
+	}
+}
+
+func TestIPCRPCDataOutput(t *testing.T) {
+	if got := ipcRPCDataOutput(nil); got != "" {
+		t.Fatalf("nil: %q", got)
+	}
+	if got := ipcRPCDataOutput(map[string]any{"data": map[string]any{"output": "ok"}}); got != "ok" {
+		t.Fatalf("output: %q", got)
 	}
 }
 

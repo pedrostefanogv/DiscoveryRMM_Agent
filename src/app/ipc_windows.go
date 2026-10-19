@@ -173,6 +173,12 @@ type ipcClientConn struct {
 	helloLimiter *ipcRequestLimiter
 	dedup        *ipcDedupCache
 
+	// inFlight conta requests sendo executados NESTA conexão. Uma instalação
+	// da loja pode durar muitos minutos sem mandar nada; sem este contador o
+	// sweep de ociosidade (5 min no canal admin) fecharia a conexão no meio da
+	// operação e a resposta se perderia.
+	inFlight atomic.Int32
+
 	authMu      sync.Mutex
 	token       string
 	tokenExpiry time.Time
@@ -299,6 +305,11 @@ func (s *IPCServer) sweepIdleConns(now time.Time) int {
 	var idle []net.Conn
 	var idleAdmin []bool
 	for conn, client := range s.conns {
+		// Request em execução (ex.: instalação da loja, minutos sem tráfego):
+		// a conexão está viva, só não manda mensagens. Não derrubar.
+		if client.inFlight.Load() > 0 {
+			continue
+		}
 		timeout := ipcServerIdleTimeout
 		if client.admin {
 			// O canal admin não recebe o snapshot de 5s: o teto é a ociosidade
@@ -326,6 +337,17 @@ func (s *IPCServer) sweepIdleConns(now time.Time) int {
 		conn.Close()
 	}
 	return len(idle)
+}
+
+// connClient devolve o estado da conexão (nil quando ela já saiu do mapa).
+// Usado pelo dispatch para marcar request em voo (sweep de ociosidade).
+func (s *IPCServer) connClient(conn net.Conn) *ipcClientConn {
+	if s == nil || conn == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conns[conn]
 }
 
 // adminIdle devolve o teto de ociosidade do canal admin (injetável em teste).

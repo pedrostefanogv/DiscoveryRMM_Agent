@@ -4,6 +4,7 @@ package winui
 
 import (
 	"fmt"
+	"math"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -241,6 +242,32 @@ func KillTimer(hwnd, id uintptr) {
 func SetLayeredAlpha(hwnd uintptr, alpha byte) {
 	const lwaAlpha = 0x00000002
 	procSetLayeredAttrs.Call(hwnd, 0, uintptr(alpha), lwaAlpha)
+}
+
+// ScaleForDPI converte DPI em fator de escala de layout (96 = 1.0).
+// Clampa em [1, 3]: não encolhe controles abaixo do projeto e evita tamanhos
+// absurdos em configurações de acessibilidade extremas. Mesma política usada
+// pelo banner e pelo prompt de consentimento.
+func ScaleForDPI(dpi int) float64 {
+	if dpi <= 0 {
+		return 1
+	}
+	scale := float64(dpi) / 96.0
+	if scale < 1 {
+		return 1
+	}
+	if scale > 3 {
+		return 3
+	}
+	return scale
+}
+
+// ScalePx aplica o fator de escala a uma medida de projeto (96 DPI).
+func ScalePx(value int, scale float64) int {
+	if scale <= 0 || scale == 1 {
+		return value
+	}
+	return int(math.Round(float64(value) * scale))
 }
 
 // DpiForWindow devolve o DPI efetivo do monitor da janela (96 = 100%).

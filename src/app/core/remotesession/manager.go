@@ -211,7 +211,8 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 
 	// Consentimento: SOMENTE desktop (screen/all). Terminal, arquivos, proxy e
 	// processos seguem sem prompt, como antes.
-	if consentCfg := ParseConsentConfig(payload); consentCfg != nil && (kind == "screen" || kind == "all") {
+	consentCfg := ParseConsentConfig(payload)
+	if consentCfg != nil && (kind == "screen" || kind == "all") {
 		skipConsent := false
 		// REPLAY do worker (watchdog de crash/logoff): a sessão pode JÁ ter sido
 		// autorizada (ou já ter sido negada/encerrada) no servidor. Consulta o
@@ -277,7 +278,10 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		MaxDeadline:   maxExpiresAt,
 		// Acesso remoto: viewers antigos nao enviam ping. Sem o primeiro sinal
 		// NAO fechar por ausencia — a sessao cai no prazo original do start.
-		CloseWithoutPeerSignal: false,
+		// EXCEÇÃO: sessão com consentimento só existe em agent >= MinimumAgentVersion
+		// e o viewer dessa mesma versão já fala ping/pong. Se ninguém conectar
+		// dentro de InitialGrace, fecha (evita banner "suporte conectado" preso).
+		CloseWithoutPeerSignal: consentCfg != nil && consentCfg.Required,
 	}, now)
 
 	session := &Session{

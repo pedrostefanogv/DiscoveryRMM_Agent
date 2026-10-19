@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -322,4 +323,65 @@ func (a *App) SaveTicketCommentAttachmentAs(ticketID, commentID, attachmentID, f
 		return "", err
 	}
 	return res.Path, nil
+}
+
+// ── Anexos do CHAT AO VIVO (janela dedicada) ──────────────────────────────
+//
+// Antes a janela do chat montava um Blob em JS e clicava em <a download>: o
+// WebView2 abria o painel de downloads do Edge (um "modal" que cobre a
+// conversa) e cada clique baixava o arquivo DE NOVO, inclusive quando o
+// usuário só queria reabrir o que já tinha salvado.
+//
+// Agora o Go grava direto na pasta padrão (Downloads do usuário resolvida no
+// processo da UI) e devolve o caminho. A UI guarda esse caminho por anexo e,
+// num segundo clique, apenas informa onde o arquivo está — sem novo download e
+// sem o painel do navegador.
+
+// supportChatAttachmentData baixa os bytes de um anexo do chat ao vivo.
+// Centraliza validação/contexto usados pelo download (visor/miniatura) e pela
+// gravação em disco.
+func (a *App) supportChatAttachmentData(attachmentID string) ([]byte, error) {
+	attachmentID = strings.TrimSpace(attachmentID)
+	if attachmentID == "" {
+		return nil, errSupportChatInvalidAttachment
+	}
+
+	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
+	defer cancel()
+
+	data, _, err := a.supportChatService().DownloadAttachment(ctx, attachmentID)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("anexo vazio")
+	}
+	return data, nil
+}
+
+// ChooseSupportChatAttachmentSavePath abre o diálogo NATIVO "Salvar como" para
+// um anexo do chat. Reaproveita o mesmo diálogo dos anexos de chamado (a janela
+// do chat roda no processo da UI, onde o diálogo nativo existe).
+func (a *App) ChooseSupportChatAttachmentSavePath(fileName, title string) (string, error) {
+	return a.ChooseTicketAttachmentSavePath(fileName, title)
+}
+
+// SupportChatSaveAttachment baixa um anexo do chat ao vivo e salva na pasta
+// padrão (Downloads do usuário). Devolve o caminho absoluto gravado.
+func (a *App) SupportChatSaveAttachment(attachmentID, fileName string) (string, error) {
+	data, err := a.supportChatAttachmentData(attachmentID)
+	if err != nil {
+		return "", err
+	}
+	return saveDownloadedAttachment(fileName, data)
+}
+
+// SupportChatSaveAttachmentAs salva um anexo do chat no caminho escolhido no
+// diálogo nativo (Save As).
+func (a *App) SupportChatSaveAttachmentAs(attachmentID, fileName, destPath string) (string, error) {
+	data, err := a.supportChatAttachmentData(attachmentID)
+	if err != nil {
+		return "", err
+	}
+	return saveAttachmentBytesAt(destPath, fileName, data)
 }
