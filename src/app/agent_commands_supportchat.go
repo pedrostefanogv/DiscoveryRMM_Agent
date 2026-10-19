@@ -56,6 +56,19 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 		return true, 1, "", "convite de chat expirado"
 	}
 
+	// Reentrega do convite DEPOIS de o usuário já ter respondido no cartão: a
+	// resposta ao servidor é uma chamada de rede e, nesse intervalo, o estado
+	// local ainda é "waiting". Repreparar aqui reemitiria o convite (e poderia
+	// limpar o transcript) para uma sessão que o usuário já respondeu.
+	if a.supportChatInviteNotificationWasAnswered(invite.SessionID) {
+		a.Logs.Append("[supportchat] convite reentregue apos resposta no cartao; ignorado (sessionId=" + invite.SessionID + ")")
+		body, _ := json.Marshal(map[string]any{
+			"alreadyAnswered": true,
+			"sessionId":       invite.SessionID,
+		})
+		return true, 0, string(body), ""
+	}
+
 	svc := a.supportChatService()
 
 	// Decisão ATÔMICA no serviço (ver PrepareInviteIfIdle): o antigo
@@ -69,6 +82,11 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 	// substituído: recusa no servidor para ele não ficar "aguardando" até expirar.
 	if decision.SupersededSessionID != "" {
 		a.Logs.Append("[supportchat] convite substituido por outro mais recente: " + decision.SupersededSessionID)
+		// O cartão nativo do convite anterior não pode ficar órfão na tela. A
+		// marca também impede que uma reentrega tardia desse convite substitua o
+		// convite novo que o usuário está vendo.
+		a.closeSupportChatInviteNotification(decision.SupersededSessionID)
+		a.markSupportChatInviteNotificationAnswered(decision.SupersededSessionID)
 		go a.respondSupportChatInvite(decision.SupersededSessionID, false, "replaced")
 	}
 
@@ -116,7 +134,8 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 	// aceite, chamava openSupportChatWindow() DENTRO DO SERVIÇO — onde a.app é
 	// nil. A janela do chat só acabava abrindo pela retomada no startup da UI,
 	// que é exatamente o sintoma "só abre quando fecho e reabro o agent".
-	a.notifySupportChatInvite(invite)
+	// O alerta visual agora é o cartão nativo (ou o toast, no fallback de
+	// presentSupportChatInvite): não dispara um segundo toast em paralelo.
 	a.EmitEvent("supportchat:invite",
 		"sessionId", invite.SessionID,
 		"ticketId", invite.TicketID,
@@ -146,17 +165,16 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 		return true, 0, string(body), ""
 	}
 
-	// Processo ÚNICO (UI standalone, sem serviço): a janela pode ser aberta
-	// AQUI, sem depender do frontend. O evento para a janela principal é
-	// best-effort e, no cenário que mais dói — agent recém-iniciado no tray, com a
-	// janela principal nunca criada (criação preguiçosa) —, não existe webview
+	// Processo ÚNICO (UI standalone, sem serviço): a superfície do convite pode
+	// ser aberta AQUI, sem depender do frontend. O evento para a janela principal
+	// é best-effort e, no cenário que mais dói — agent recém-iniciado no tray, com
+	// a janela principal nunca criada (criação preguiçosa) —, não existe webview
 	// carregado para receber o evento: o convite ficava engolido até a
-	// reconciliação de 60s. Abrir no Go elimina essa dependência.
+	// reconciliação de 60s. Apresentar no Go elimina essa dependência.
 	if a.app != nil {
-		go a.openSupportChatWindow()
-		// O caminho standalone não passa pelo IPC/JS: a validação em background
-		// (e o fechamento de convite-eco) precisa ser iniciada aqui também.
-		a.startSupportChatInviteVerification(invite.SessionID)
+		// Cartão nativo (sem ação padrão) ou, se indisponível, a janela antiga.
+		// presentSupportChatInvite também inicia a validação em background.
+		go a.presentSupportChatInvite(invite)
 	}
 
 	body, _ := json.Marshal(map[string]any{
@@ -245,7 +263,8 @@ func (a *App) scheduleSupportChatInviteRedelivery(invite supportchat.Invite) {
 // comando; aqui só falta a SUPERFÍCIE onde o usuário dá o aceite.
 func (a *App) redeliverSupportChatInvite(invite supportchat.Invite) {
 	a.Logs.Append("[supportchat] UI disponivel; reemitindo o convite para a tela (sessionId=" + invite.SessionID + ")")
-	a.notifySupportChatInvite(invite)
+	// O alerta visual agora é o cartão nativo (ou o toast, no fallback de
+	// presentSupportChatInvite): não dispara um segundo toast em paralelo.
 	a.EmitEvent("supportchat:invite",
 		"sessionId", invite.SessionID,
 		"ticketId", invite.TicketID,

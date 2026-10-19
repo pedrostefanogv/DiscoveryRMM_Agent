@@ -161,6 +161,17 @@ type App struct {
 	// pedir a mesma validação várias vezes; cada verify faz até 20 GETs.
 	supportChatVerifyMu  sync.Mutex
 	supportChatVerifying map[string]bool
+	// Cartões nativos do convite de chat (um por sessão; no máximo um visível).
+	// O cancelador fecha o cartão sem decisão quando o convite é respondido por
+	// outro caminho, substituído ou expira no servidor.
+	supportChatNotifyMu sync.Mutex
+	supportChatNotify   map[string]func()
+	// supportChatNotifyShowMu serializa a abertura do cartão (evento IPC + JS +
+	// reentrega podem concorrer).
+	supportChatNotifyShowMu sync.Mutex
+	// supportChatNotifyAnswered evita reabrir o cartão enquanto a resposta do
+	// usuário ainda está indo ao servidor (estado local ainda "waiting").
+	supportChatNotifyAnswered map[string]time.Time
 	// Cache da política de anexos do chat (allowlist/tamanho vindos do servidor).
 	supportChatPolicyMu      sync.Mutex
 	supportChatPolicy        supportchat.AttachmentPolicy
