@@ -29,13 +29,22 @@ func setAgentAuthHeaders(req *http.Request, cfg DebugConfig) error {
 
 // normalizeStatus converte o status canônico do servidor (PascalCase) para o
 // vocabulário da janela do agent.
+//
+// BUG CORRIGIDO (revisão): só o vocabulário do SERVIDOR era reconhecido. O
+// estado local e o que trafega por IPC já usam o vocabulário da JANELA
+// (waiting/active/ended). Passar "waiting" por aqui devolvia StatusNone — foi o
+// que fazia a adoção de estado via IPC zerar o convite em vez de adotá-lo (o
+// convite seguia sem cartão e a janela não abria).
 func normalizeStatus(raw string) string {
+	// As constantes StatusWaiting/StatusActive/StatusEnded JÁ são as formas
+	// minúsculas ("waiting"/"active"/"ended"), então cobrem os dois vocabulários
+	// no mesmo switch.
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "pending":
+	case "pending", StatusWaiting:
 		return StatusWaiting
-	case "active":
+	case StatusActive:
 		return StatusActive
-	case "ended", "declined", "expired":
+	case "declined", "expired", StatusEnded:
 		return StatusEnded
 	default:
 		return StatusNone

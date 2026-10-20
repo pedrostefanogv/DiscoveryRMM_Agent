@@ -501,7 +501,6 @@ func (s *supportChatNotifyState) paint(screenDC uintptr) {
 	width, height, radius, scale := s.metrics()
 	sw := func(v int) int { return winui.ScalePx(v, scale) }
 
-
 	memDC, bitmap, oldBitmap := winui.BufferedPaint(screenDC, width, height)
 	hdc := memDC
 	if hdc == 0 {

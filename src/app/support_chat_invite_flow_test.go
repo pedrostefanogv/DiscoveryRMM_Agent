@@ -173,7 +173,7 @@ func newSupportChatTestApp(t *testing.T, apiServer string) *App {
 	a := &App{}
 	a.ctx = context.Background()
 	a.supportChatSvc = supportchat.New(supportchat.Deps{
-		Ctx: func() context.Context { return a.ctx },
+		Ctx:  func() context.Context { return a.ctx },
 		Logf: func(string) {},
 		GetDebugConfig: func() supportchat.DebugConfig {
 			return supportchat.DebugConfig{

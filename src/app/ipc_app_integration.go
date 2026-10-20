@@ -72,6 +72,29 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 				"onboardingConfigured": onb["configured"],
 				"onboardingMessage":    onb["message"],
 			}))
+			// Estado do CHAT DE SUPORTE junto do snapshot de status.
+			//
+			// BUG CORRIGIDO (revisão): a UI só aprendia o estado do chat por eventos,
+			// e eventos só viajam quando algo TRANSICIONA. Uma UI que (re)conecta no
+			// meio de uma conversa — o log mostra reconexões de IPC a cada poucos
+			// minutos — ficava com o estado de antes: convencida de que não havia
+			// sessão, ou de que havia OUTRA, e então recusava convites como "máquina
+			// ocupada" ou deixava de mostrar o cartão.
+			//
+			// O snapshot de status já vai só para a UI que pediu (RespondTo), então
+			// não há risco de eco: a UI apenas ADOTA este estado.
+			if a.supportChatSvc != nil {
+				chatState := a.supportChatService().State()
+				a.ipcServer.RespondTo(conn, NewIPCMessage(IPCMsgEvent, map[string]any{
+					"name":        supportChatStateEventName,
+					"sessionId":   chatState.SessionID,
+					"ticketId":    chatState.TicketID,
+					"ticketTitle": chatState.TicketTitle,
+					"supportName": chatState.SupportName,
+					"expiresAt":   chatState.ExpiresAt,
+					"status":      chatState.Status,
+				}))
+			}
 		}
 	case IPCMsgRemoteSession:
 		// S2: remote_session só é aceito de conexão ADMIN autenticada com token
@@ -524,7 +547,19 @@ func (a *App) startIPCClient() {
 				// UI, que é quem tem a janela. O serviço não sabe do Wails, então
 				// sem isto a janela do convite ficaria flutuando até o usuário
 				// responder — ou perderia o topo no meio do atendimento.
+				// BUG CORRIGIDO: o estado vindo do SERVIÇO era usado só para decidir o
+				// modo da janela — o serviço local da UI (companion) continuava com o
+				// SEU próprio estado. Quando a conversa era encerrada pelo servidor
+				// (session-ended) só o SERVIÇO recebia o evento: a UI ficava em
+				// "active" para sempre e o convite seguinte era recusado com
+				// "já existe um chat de suporte ativo nesta máquina" — o cartão nem
+				// aparecia (relato: "mando abrir o chat e a notificação não vem").
+				//
+				// O serviço é a AUTORIDADE do estado do chat (carimbo/expiração/
+				// aceite passam por ele). A UI adota o status e a sessão ANTES de
+				// decidir o modo da janela; o transcript local é preservado.
 				if name == supportChatStateEventName {
+					a.adoptSupportChatStateFromIPC(msg.Payload)
 					a.syncSupportChatWindowFromIPCPayload(msg.Payload)
 				}
 				a.EmitEvent(name, eventData...)

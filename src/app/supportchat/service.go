@@ -832,6 +832,110 @@ func (s *Service) ActiveSessionID(ctx context.Context) (string, bool, error) {
 	return strings.TrimSpace(response.Session.ID), true, nil
 }
 
+// AdoptSnapshot aplica no serviço LOCAL o estado que o SERVIÇO autoritativo
+// (companion) emitiu, SEM chamada de rede.
+//
+// Usado pelo processo de UI: o serviço companion é quem recebe os envelopes
+// (SessionOpened/SessionDeclined/SessionEnded) e o resultado do convite; a UI
+// só recebe o evento supportchat:state. Sem esta adoção a UI ficava com um
+// estado velho — por exemplo "active" para uma conversa que o servidor já
+// encerrou — e passava a recusar convites novos por "máquina ocupada".
+//
+// O transcript (mensagens) é PRESERVADO: a adoção muda o esqueleto da sessão,
+// não apaga o que o usuário está lendo. Uma sessão DIFERENTE, sim, zera o
+// transcript (as sequências recomeçam em cada sessão).
+func (s *Service) AdoptSnapshot(snapshot State) {
+	// Guarda pelo texto BRUTO: normalizeStatus("") devolve StatusNone (o caso
+	// "sem sessão"), então um payload IPC incompleto zeraria o estado atual.
+	if strings.TrimSpace(snapshot.Status) == "" {
+		return
+	}
+	status := normalizeStatus(snapshot.Status)
+
+	s.mu.Lock()
+	previousStatus := s.state.Status
+	previousSession := s.state.SessionID
+
+	// BUG CORRIGIDO (revisão): não havia guarda contra evento ATRASADO. O canal
+	// IPC é confiável por conexão, mas a UI reconecta com frequência e o serviço
+	// reemite o estado; um "active" que saiu antes do "ended" e chegou depois
+	// regredia a UI para "active" e o falso "máquina ocupada" voltava — o mesmo
+	// defeito que a adoção existe para corrigir.
+	//
+	// Regra: para a MESMA sessão, o estado final (ended) é TERMINAL. Um convite
+	// (waiting) ou uma conversa (active) só pode vir de uma sessão DIFERENTE.
+	if previousSession != "" && snapshot.SessionID == previousSession &&
+		previousStatus == StatusEnded && status != StatusEnded {
+		s.mu.Unlock()
+		s.deps.Logf("[supportchat] estado " + status + " atrasado ignorado: a sessao " + snapshot.SessionID +
+			" ja terminou")
+		return
+	}
+
+	// Sessão diferente: o transcript anterior é de outra conversa.
+	if snapshot.SessionID != "" && snapshot.SessionID != previousSession {
+		s.resetTranscriptForSessionLocked(snapshot.SessionID)
+	}
+
+	s.state.Status = status
+	s.state.SessionID = snapshot.SessionID
+	s.state.HasSession = status == StatusActive || status == StatusWaiting || status == StatusEnded
+	if snapshot.TicketID != "" {
+		s.state.TicketID = snapshot.TicketID
+	}
+	if snapshot.TicketTitle != "" {
+		s.state.TicketTitle = snapshot.TicketTitle
+	}
+	if snapshot.SupportName != "" {
+		s.state.SupportName = snapshot.SupportName
+	}
+	if snapshot.ExpiresAt != "" {
+		s.state.ExpiresAt = snapshot.ExpiresAt
+	}
+	if s.state.Messages == nil {
+		s.state.Messages = []Message{}
+	}
+	switch status {
+	case StatusActive:
+		if s.activeSince.IsZero() {
+			s.activeSince = time.Now()
+		}
+	case StatusWaiting:
+		if s.waitingSince.IsZero() {
+			s.waitingSince = time.Now()
+		}
+	}
+	s.mu.Unlock()
+
+	if previousStatus == status && previousSession == snapshot.SessionID {
+		return
+	}
+	s.deps.Logf("[supportchat] estado do servico adotado pela UI: " + status + "/" + snapshot.SessionID +
+		" (anterior " + previousStatus + "/" + previousSession + ")")
+	// NÃO emite "supportchat:state" aqui de propósito: a adoção é a CONSEQUÊNCIA
+	// de um estado que o serviço já publicou. Reemitir faria o evento voltar pelo
+	// IPC e virar eco entre os dois processos. Quem precisa reagir já recebeu o
+	// evento original (é ele que trouxe a adoção até aqui).
+}
+
+// RepublishState reemite o estado atual para os interessados.
+//
+// Por que existe: no modo companion o estado do chat mora no SERVIÇO e os
+// eventos só viajam quando algo TRANSICIONA. Uma UI que (re)conecta no meio de
+// uma conversa — o log mostra reconexões de IPC a cada poucos minutos — não
+// recebia nada até a próxima transição e ficava com o estado que tinha antes:
+// convencida de que não havia sessão (ou de que havia outra). A partir daí
+// recusava convites ("máquina ocupada") ou deixava de mostrar o cartão.
+//
+// O chamador é o processo do SERVIÇO (na conexão de uma UI). Não há eco porque a
+// UI nunca chama isto: ela só ADOTA (ver AdoptSnapshot).
+func (s *Service) RepublishState() {
+	if s == nil {
+		return
+	}
+	s.emitState("republish-to-ui")
+}
+
 // Refresh faz o snapshot REST do estado (usado na reconciliação).
 func (s *Service) Refresh(ctx context.Context) (State, error) {
 	return s.refresh(ctx, false)

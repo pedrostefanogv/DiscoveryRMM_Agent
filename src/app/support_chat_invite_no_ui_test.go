@@ -38,8 +38,8 @@ func TestHandleTicketChatInvite_SemUINaoEmiteEvento(t *testing.T) {
 	}
 
 	ok, code, body, errText := a.handleTicketChatInviteCommand(nil, map[string]any{
-		"sessionId":   "sessao-sem-ui",
-		"ticketTitle": "Notebook lento",
+		"sessionId":       "sessao-sem-ui",
+		"ticketTitle":     "Notebook lento",
 		"supportUserName": "Ana",
 		"expiresAtUtc":    time.Now().Add(2 * time.Minute).UTC().Format(time.RFC3339),
 	})

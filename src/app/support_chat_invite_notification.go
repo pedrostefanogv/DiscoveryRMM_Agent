@@ -568,6 +568,7 @@ func (a *App) retryDeniedSupportChatInvite(sessionID string, firstErr error) {
 // desaparecer sozinho. O motivo continua aceito pelo servidor e pelo console
 // (capabilities ja publicadas) para builds anteriores nao gerarem dado orfao.
 const supportChatInviteGuardDeniedReason = "user_dismissed"
+
 // supportChatInvitePresentationCount informa quantas vezes o cartão desta
 // sessão já foi apresentado (ver showSupportChatInviteNotification).
 func (a *App) supportChatInvitePresentationCount(sessionID string) int {
@@ -954,6 +955,13 @@ func (a *App) adoptSupportChatSession(sessionID string) {
 			a.ensureSupportChatInviteSurface(state)
 			return
 		}
+		// Só a conversa ATIVA abre a janela: uma sessão que o servidor já
+		// encerrou ou expirou não tem nada a atender — e o "ENCERRADO" na tela é
+		// justamente o que o usuário acabou de fechar.
+		if state.Status != supportchat.StatusActive {
+			a.Logs.Append("[supportchat] sessao adotada " + state.Status + "; nao abrindo a janela (sessao " + sessionID + ")")
+			return
+		}
 		a.openSupportChatWindow()
 	}()
 }
@@ -983,8 +991,6 @@ const supportChatInviteCardCloseGuard = 4 * time.Second
 // legítima esperando o usuário, e fechá-lo enviava "recusa" ao servidor sem
 // ninguém ter clicado.
 const supportChatInviteCardGuardPoll = time.Second
-
-
 
 // supportChatNotifyCardPending informa se o cartão da sessão ainda está
 // registrado como aberto (o cancelamento o remove do mapa).

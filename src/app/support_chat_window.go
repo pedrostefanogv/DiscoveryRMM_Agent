@@ -360,6 +360,42 @@ func (a *App) syncSupportChatWindowFromEvent(name string, data ...any) {
 	go a.applySupportChatWindowMode(state.Status)
 }
 
+// adoptSupportChatStateFromIPC aplica no serviço LOCAL da UI o estado que o
+// SERVIÇO (companion) acabou de emitir.
+//
+// Por que existe: no modo companion cada processo tem a sua instância do
+// serviço de chat. O evento suportechat:state sempre foi tratado apenas como
+// "como a janela deve se comportar", nunca como o estado de verdade. O efeito
+// prático era a UI continuar em "active" depois de o servidor encerrar a
+// conversa (o session-ended só chegava ao SERVIÇO), e o convite seguinte ser
+// recusado por "computador ocupado" — o cartão não aparecia e o atendente via
+// um convite que nunca chegava à máquina.
+//
+// Só o "esqueleto" (status/sessão/chamado/atendente) é adotado: o transcript
+// local NÃO é apagado, para a janela não esvaziar no meio da leitura.
+func (a *App) adoptSupportChatStateFromIPC(payload map[string]any) {
+	if a == nil || payload == nil {
+		return
+	}
+	source := payload
+	if raw, ok := payload[ipcEventRawKey].(map[string]any); ok {
+		source = raw
+	}
+
+	status := strings.TrimSpace(supportChatField(source, "status"))
+	if status == "" {
+		return
+	}
+	a.supportChatService().AdoptSnapshot(supportchat.State{
+		Status:      status,
+		SessionID:   supportChatField(source, "sessionId"),
+		TicketID:    supportChatField(source, "ticketId"),
+		TicketTitle: supportChatField(source, "ticketTitle"),
+		SupportName: supportChatField(source, "supportName"),
+		ExpiresAt:   supportChatField(source, "expiresAt"),
+	})
+}
+
 // syncSupportChatWindowFromIPCPayload lê o status do payload IPC de
 // supportchat:state (mapa JSON) e aplica o modo da janela.
 //
@@ -830,7 +866,22 @@ func (a *App) resumeSupportChatIfActive(delay time.Duration) {
 		return
 	}
 
-	a.Logs.Append("[supportchat] sessão ativa/pendente encontrada sem janela aberta; abrindo o chat")
+	// BUG CORRIGIDO: aqui o código era "sessão ativa/pendente ... abrindo o
+	// chat" para QUALQUER status que não fosse waiting — inclusive "ended".
+	// Desde que o servidor passou a devolver a sessão FINAL em /active
+	// (Declined/Expired/Ended), este ramo passou a reabrir a janela de uma
+	// conversa JÁ ENCERRADA a cada tick de reconciliação (30 s): o usuário
+	// fechava a janela e ela voltava sozinha, mostrando "ENCERRADO".
+	//
+	// Só a conversa ATIVA justifica abrir a janela: encerrada/expirada não tem
+	// nada a atender e o "encerrado" na tela é justamente o que o usuário
+	// acabou de fechar.
+	if state.Status != supportchat.StatusActive {
+		a.Logs.Append("[supportchat] sessao " + state.Status + " sem janela aberta; nao reabrindo o chat (sessao " + state.SessionID + ")")
+		return
+	}
+
+	a.Logs.Append("[supportchat] conversa ativa encontrada sem janela aberta; abrindo o chat")
 	a.openSupportChatWindow()
 }
 
