@@ -1468,6 +1468,11 @@ func (a *App) ensureSupportChatInviteSurface(state supportchat.State) {
 		a.Logs.Append("[supportchat] convite " + invite.SessionID + " vencido; nao reapresentando o cartao")
 		return
 	}
+	// Dedupe: adoção de estado e evento IPC podem disparar este fallback no
+	// mesmo milissegundo; só a primeira chamada na janela de TTL reapresenta.
+	if !a.allowSupportChatReinvite(invite.SessionID) {
+		return
+	}
 	a.Logs.Append("[supportchat] estado waiting sem cartao na tela; reapresentando o convite (sessao " + invite.SessionID + ")")
 	go a.presentSupportChatInvite(invite)
 }

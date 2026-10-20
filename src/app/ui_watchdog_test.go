@@ -274,7 +274,11 @@ func TestUIWatchdog_ZombieStreakBacksOff(t *testing.T) {
 		t.Fatalf("1ª travada deveria encerrar e relançar; kills=%d spawns=%v", f.kills, f.spawns)
 	}
 
-	// A UI relançada volta a travar sem nunca conectar (2 verificações).
+	// A UI relançada volta a travar sem nunca conectar. Primeiro ela cumpre a
+	// graça pós-spawn (a UI nova também tem direito aos ~90s para nascer e
+	// conectar — matar no parto era o ciclo dos logs de 2026-10-20), depois 2
+	// verificações caracterizam a reincidência.
+	f.advance(uiWatchdogSpawnGrace + time.Second)
 	f.procs = 1
 	w.Tick()
 	w.Tick()

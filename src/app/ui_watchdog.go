@@ -43,6 +43,13 @@ const (
 	// uiWatchdogRequestCooldown é o intervalo mínimo entre relançamentos
 	// PEDIDOS (chegada de convite de chat sem UI).
 	uiWatchdogRequestCooldown = 30 * time.Second
+	// uiWatchdogSpawnGrace é o período após um relançamento em que o watchdog
+	// NÃO conta verificações de "processo vivo sem IPC": a UI pode levar ~1 min
+	// para nascer e conectar (autostart no tray com WebView2 adiado — nos logs
+	// de 2026-10-20 a UI nasceu em ~54s). Sem essa tolerância o watchdog matava
+	// a UI no parto e entrava no ciclo matar/relançar (18:21:44 spawn →
+	// 18:22:35+ "processos vivos sem IPC" → kill → relançar → repetir).
+	uiWatchdogSpawnGrace = 90 * time.Second
 )
 
 // StartupSourceWatchdog é a origem registrada na linha de comando da UI
@@ -229,7 +236,13 @@ func (w *uiWatchdog) checkLocked() {
 
 	if alive := w.deps.ProcessCount(); alive > 0 {
 		// Processo vivo, mas nenhuma UI conectada no IPC: ou está subindo, ou
-		// travou. O limiar separa os dois casos.
+		// travou. O limiar separa os dois casos — e um relançamento recente nem
+		// começa a contar (a UI ainda pode estar nascendo).
+		if w.spawnRecentlyLocked() {
+			w.misses = 0
+			w.logOnceLocked("spawn-recente", "UI relançada recentemente; aguardando a primeira conexão IPC antes de tratar como travada")
+			return
+		}
 		w.misses = 0
 		w.zombieChecks++
 		if w.zombieChecks < uiWatchdogZombieThreshold {
@@ -270,6 +283,21 @@ func (w *uiWatchdog) checkLocked() {
 // sessão (multiusuário). Sem elas, vale o comportamento legado.
 func (w *uiWatchdog) sessionMode() bool {
 	return w.deps.ActiveSessions != nil && w.deps.SpawnUISession != nil
+}
+
+// spawnRecentlyLocked informa se algum relançamento (global ou por sessão)
+// aconteceu há menos de uiWatchdogSpawnGrace. Chamado com w.mu preso.
+func (w *uiWatchdog) spawnRecentlyLocked() bool {
+	now := w.deps.Now()
+	if !w.lastSpawn.IsZero() && now.Sub(w.lastSpawn) < uiWatchdogSpawnGrace {
+		return true
+	}
+	for _, last := range w.sessionLastSpawn {
+		if !last.IsZero() && now.Sub(last) < uiWatchdogSpawnGrace {
+			return true
+		}
+	}
+	return false
 }
 
 // activeSessionsLocked devolve as sessões interativas ativas, já normalizadas
@@ -344,6 +372,13 @@ func (w *uiWatchdog) checkSessionsLocked() {
 
 	if uiProcessTotal(counts) > 0 {
 		// Processo vivo sem NENHUMA UI conectada: ou está subindo, ou travou.
+		// Relançamento recente nem começa a contar (a UI ainda pode estar
+		// nascendo — ver uiWatchdogSpawnGrace).
+		if w.spawnRecentlyLocked() {
+			w.misses = 0
+			w.logOnceLocked("spawn-recente", "UI relançada recentemente; aguardando a primeira conexão IPC antes de tratar como travada")
+			return
+		}
 		w.misses = 0
 		w.zombieChecks++
 		if w.zombieChecks < uiWatchdogZombieThreshold {

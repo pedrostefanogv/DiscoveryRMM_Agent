@@ -1523,6 +1523,14 @@ func (c *IPCClient) RunConnectLoop() {
 const (
 	rxWatchdogInterval = 10 * time.Second
 	rxWatchdogTimeout  = 30 * time.Second
+	// ipcClientReadIdleTimeout é o prazo do read deadline do cliente: maior que
+	// rxWatchdogTimeout para o diagnóstico do watchdog aparecer primeiro. Uma UI
+	// saudável recebe resposta ao poll de status a cada 5s, então 45s sem
+	// NENHUM byte indica conexão morta (o serviço fechou o lado dele após
+	// "broadcast falhou" e o ReadFile em named pipe NÃO é desbloqueado pelo
+	// Close() de outra goroutine no Windows — sem deadline o readLoop ficava
+	// preso para sempre: UI viva, IPC morto, "agent travando").
+	ipcClientReadIdleTimeout = 45 * time.Second
 )
 
 // runRxWatchdog fecha a conexão quando não há recebimento há rxWatchdogTimeout.
@@ -1575,16 +1583,29 @@ func (c *IPCClient) readLoop(conn net.Conn, rx *bufio.Reader) {
 		}
 	}()
 
+	deadlineWarned := false
 	for {
+		// Read deadline a cada iteração: renova o prazo para ipcClientReadIdleTimeout
+		// a partir de agora. Se o pipe não entregar nada nesse prazo, a leitura
+		// RETORNA por si (o Close() externo não desbloqueia ReadFile em named
+		// pipe do Windows) e o readLoop sai → downCh → reconexão limpa.
+		if err := conn.SetReadDeadline(time.Now().Add(ipcClientReadIdleTimeout)); err != nil && !deadlineWarned {
+			deadlineWarned = true
+			log.Printf("[ipc] read deadline indisponivel neste pipe: %v", err)
+		}
 		msg, err := DecodeIPCMessage(rx)
 		c.mu.Lock()
 		c.lastRx.Store(time.Now().UnixMilli())
 		c.mu.Unlock()
 		if err != nil {
-			// Diagnóstico: registra POR QUE a leitura terminou (EOF limpo no
-			// shutdown do serviço, pipe quebrado, timeout etc.). Sem este log
-			// não dá para distinguir queda do serviço de pipe travado.
-			log.Printf("[ipc] leitura do pipe encerrada: %v", err)
+			if strings.Contains(err.Error(), "i/o timeout") || errors.Is(err, os.ErrDeadlineExceeded) {
+				log.Printf("[ipc] leitura ociosa há %s — descartando a conexão para reconectar", ipcClientReadIdleTimeout)
+			} else {
+				// Diagnóstico: registra POR QUE a leitura terminou (EOF limpo no
+				// shutdown do serviço, pipe quebrado, timeout etc.). Sem este log
+				// não dá para distinguir queda do serviço de pipe travado.
+				log.Printf("[ipc] leitura do pipe encerrada: %v", err)
+			}
 			return
 		}
 		// Request/response (Fase C): respostas com correlation-id são roteadas

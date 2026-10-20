@@ -602,6 +602,38 @@ func (a *App) markSupportChatInvitePresentation(sessionID string) {
 	a.supportChatNotifyMu.Unlock()
 }
 
+// supportChatReinviteDedupTTL é a janela em que uma reapresentação do convite
+// recém-feita suprime novas reapresentações da MESMA sessão.
+const supportChatReinviteDedupTTL = 3 * time.Second
+
+// allowSupportChatReinvite verifica-e-marca atomicamente: true quando esta
+// chamada ganhou o direito de reapresentar o convite da sessão agora. Dois
+// gatilhos concorrentes (adoção de estado + evento IPC) chegavam no mesmo
+// milissegundo e duplicavam o log e o cartão.
+func (a *App) allowSupportChatReinvite(sessionID string) bool {
+	if a == nil || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	now := time.Now()
+	a.supportChatNotifyMu.Lock()
+	defer a.supportChatNotifyMu.Unlock()
+	if last, ok := a.supportChatNotifyReinvited[sessionID]; ok && now.Sub(last) < supportChatReinviteDedupTTL {
+		return false
+	}
+	if a.supportChatNotifyReinvited == nil {
+		a.supportChatNotifyReinvited = make(map[string]time.Time)
+	}
+	// Poda entradas velhas para o mapa não crescer indefinidamente.
+	for id, at := range a.supportChatNotifyReinvited {
+		if now.Sub(at) > time.Minute {
+			delete(a.supportChatNotifyReinvited, id)
+		}
+	}
+	a.supportChatNotifyReinvited[sessionID] = now
+	return true
+}
+
 // supportChatInviteGuardClosed informa se a rede de segurança fechou o cartão
 // desta sessão sem decisão do usuário (o estado "waiting" que sobrou não é um
 // pedido que o usuário esteja vendo).

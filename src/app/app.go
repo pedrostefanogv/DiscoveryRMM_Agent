@@ -204,6 +204,11 @@ type App struct {
 	// cartão sem decisão do usuário: nesse estado o "waiting" que sobrou NÃO é
 	// um pedido que o usuário esteja vendo e não pode ser reapresentado de novo.
 	supportChatNotifyGuardClosed map[string]time.Time
+	// supportChatNotifyReinvited registra quando o fallback "estado waiting sem
+	// cartão" reapresentou o convite por sessão: gatilhos concorrentes (adoção
+	// de estado + evento IPC) logavam e reapresentavam no mesmo milissegundo
+	// (logs de 2026-10-20 18:33:44.366, duas linhas idênticas).
+	supportChatNotifyReinvited map[string]time.Time
 	// Cache da política de anexos do chat (allowlist/tamanho vindos do servidor).
 	supportChatPolicyMu      sync.Mutex
 	supportChatPolicy        supportchat.AttachmentPolicy
