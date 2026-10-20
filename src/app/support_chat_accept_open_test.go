@@ -88,8 +88,6 @@ func TestServiceMarkActive_IdempotenteESoDaSessaoCorrente(t *testing.T) {
 		t.Fatalf("MarkActive da sessão corrente precisa virar active; obtido %q", state.Status)
 	}
 
-	awaitSess := svc.AwaitSessionAfterAccept(nil, "s1", 0)
-	_ = awaitSess
 	if after := svc.State(); after.Status != supportchat.StatusActive {
 		t.Fatal("MarkActive precisa ser idempotente")
 	}
