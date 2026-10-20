@@ -60,7 +60,7 @@ func TestSupportChatNotifyState_PublicaDecisaoUmaVez(t *testing.T) {
 }
 
 // O fechamento do cartão NUNCA espera o callback/UI: mesmo com um callback
-// travado, o prazo de segurança destrava o cartão (não fica "agarrado").
+// travado, resolve() retorna na hora (o cartão não fica "agarrado").
 func TestSupportChatNotifyState_NaoFicaPresoComCallbackTravado(t *testing.T) {
 	resultCh := make(chan supportChatInviteNotificationResult, 1)
 	state := &supportChatNotifyState{
@@ -78,14 +78,10 @@ func TestSupportChatNotifyState_NaoFicaPresoComCallbackTravado(t *testing.T) {
 	start := time.Now()
 	state.resolve(0, false)
 
-	// Em vez de esperar decisionGrace (11 s), validamos o mecanismo: o callback
-	// continua pendente, mas o prazo é o ÚNICO caminho de fechamento e ele é
-	// independente do callback (ver resolve).
+	// O callback continua pendente, mas o fechamento não depende dele em nada
+	// (ver resolve: fecha primeiro, reporta em goroutine).
 	if supportChatInviteReportWait <= 0 {
-		t.Fatal("o prazo de segurança precisa ser positivo")
-	}
-	if decisionGrace <= supportChatInviteReportWait {
-		t.Fatal("decisionGrace precisa cobrir o timeout do POST")
+		t.Fatal("o timeout do envio precisa ser positivo")
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("resolve() não pode bloquear a thread da janela (demorou %s)", elapsed)

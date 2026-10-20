@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"discovery/app/supportchat"
@@ -60,16 +61,6 @@ func supportChatInviteNotificationAllow() string    { return "Abrir chat" }
 func supportChatInviteNotificationDeny() string     { return "Agora não" }
 func supportChatInviteNotificationHint() string {
 	return "Esc recusa · sem ação automática"
-}
-
-// supportChatInviteNotificationRespondingMessage é o texto mostrado entre o
-// clique em "Abrir chat" e a confirmação do servidor (só o ACEITE espera: a
-// recusa fecha o cartão na hora — ver resolve em _windows.go).
-func supportChatInviteNotificationRespondingMessage(accepted bool) string {
-	if accepted {
-		return "Abrindo o chat de suporte…"
-	}
-	return "Avisando o suporte…"
 }
 
 // supportChatInviteNotificationMessage monta a mensagem do cartão a partir do
@@ -193,7 +184,7 @@ func (a *App) showSupportChatInviteNotification(invite supportchat.Invite, inten
 		a.clearSupportChatInviteNotificationAnswered(sessionID)
 	}
 
-	go a.runSupportChatInviteNotificationDecision(sessionID, resultCh)
+	go a.runSupportChatInviteNotificationDecision(invite, cancel, resultCh)
 	return true
 }
 
@@ -306,23 +297,45 @@ func (a *App) closeAllSupportChatInviteNotifications() {
 
 // runSupportChatInviteNotificationDecision aguarda a escolha do usuário no
 // cartão e aplica a resposta (aceite abre a janela do chat; recusa só reporta).
-func (a *App) runSupportChatInviteNotificationDecision(sessionID string, resultCh <-chan supportChatInviteNotificationResult) {
+func (a *App) runSupportChatInviteNotificationDecision(invite supportchat.Invite, cancel func(), resultCh <-chan supportChatInviteNotificationResult) {
+	sessionID := strings.TrimSpace(invite.SessionID)
 	var (
 		result supportChatInviteNotificationResult
 		ok     bool
 	)
 
-	// Rede de segurança do cartão: se o processo nativo falhar em fechar a
-	// janela (thread ocupada, hwnd inválido), o cartão não pode ficar na tela
-	// depois de respondido. Depois do prazo, o cancelador fecha o cartão — ele
-	// não interfere numa decisão já publicada (abort é no-op com done=true).
-	cardGuard := time.AfterFunc(supportChatInviteCardCloseGuard, func() {
-		if a.supportChatNotifyCardPending(sessionID) {
-			a.Logs.Append("[supportchat] cartao do convite ainda na tela apos a resposta; fechando pela rede de seguranca (sessao " + sessionID + ")")
-			a.closeSupportChatInviteNotification(sessionID)
+	// Rede de segurança do cartão: se a janela nativa falhar em fechar (thread
+	// ocupada, hwnd inválido), o cartão não pode ficar na tela depois de
+	// respondido. O canceller fecha a janela nativa por dentro (WM_CLOSE); o
+	// cartão já respondido não perde a decisão (abort é no-op com done=true).
+	var (
+		guardOnce sync.Once
+		guardDone = make(chan struct{})
+	)
+	go func() {
+		timer := time.NewTimer(supportChatInviteCardCloseGuard)
+		defer timer.Stop()
+		select {
+		case <-guardDone:
+			return
+		case <-a.supportChatContext().Done():
+			return
+		case <-timer.C:
 		}
-	})
-	defer cardGuard.Stop()
+		select {
+		case <-guardDone:
+			return
+		default:
+		}
+		guardOnce.Do(func() {
+			a.Logs.Append("[supportchat] cartao do convite ainda na tela apos o prazo; fechando pela rede de seguranca (sessao " + sessionID + ")")
+			if cancel != nil {
+				cancel()
+			}
+			a.closeSupportChatInviteNotification(sessionID)
+		})
+	}()
+	defer guardOnce.Do(func() { close(guardDone) })
 
 	select {
 	case <-a.supportChatContext().Done():
@@ -334,9 +347,8 @@ func (a *App) runSupportChatInviteNotificationDecision(sessionID string, resultC
 
 	a.forgetSupportChatInviteNotification(sessionID)
 	if !ok {
-		// Cartão fechado sem decisão (cancelado por outro caminho — ex.: o
-		// convite foi substituído, expirou no servidor ou o chat foi encerrado):
-		// nada a reportar.
+		// Cartão fechado SEM decisão (cancelado por outro caminho — convite
+		// substituído, expirado no servidor, chat encerrado): nada a reportar.
 		//
 		// O estado local NÃO é limpo aqui: esse caminho também roda quando o
 		// usuário ACABOU de recusar (o serviço marca o estado e o cartão é
@@ -419,11 +431,10 @@ func (a *App) runSupportChatInviteNotificationDecision(sessionID string, resultC
 
 // reportSupportChatInviteDecision leva a escolha do cartão ao SERVIDOR.
 //
-// Chamado pelo cartão nativo ANTES de ele sair da tela: a recusa/aceite precisa
-// chegar ao servidor mesmo se a UI estiver lenta, e o cartão mostra "avisando o
-// suporte…" enquanto isto roda. O motivo reportado é sempre o do USUÁRIO
-// (user_denied): a recusa automática por "sem interface" é outro caminho
-// (scheduleSupportChatInviteRedelivery) e não passa por aqui.
+// Chamado pelo cartão nativo EM PARALELO ao fechamento (a tela não espera
+// rede): o cartão some ao clique e o POST segue em goroutine. O motivo
+// reportado é sempre o do USUÁRIO (user_denied): a recusa automática por "sem
+// interface" é outro caminho (scheduleSupportChatInviteRedelivery).
 func (a *App) reportSupportChatInviteDecision(result supportChatInviteNotificationResult) error {
 	if a == nil || strings.TrimSpace(result.SessionID) == "" {
 		return nil

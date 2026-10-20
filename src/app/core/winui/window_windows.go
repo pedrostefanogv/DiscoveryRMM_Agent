@@ -43,6 +43,7 @@ var (
 	procScreenToClient   = user32.NewProc("ScreenToClient")
 
 	procCreateRoundRectRgn = gdi32.NewProc("CreateRoundRectRgn")
+	procGetCurrentThreadID = kernel32.NewProc("GetCurrentThreadId")
 )
 
 // Mensagens e estilos do Win32 usados pelas janelas do agente.
@@ -215,9 +216,18 @@ func UpdateWindow(hwnd uintptr) {
 	procUpdateWindow.Call(hwnd)
 }
 
-// DestroyWindow destrói a janela.
-func DestroyWindow(hwnd uintptr) {
-	procDestroyWindow.Call(hwnd)
+// DestroyWindow destrói a janela e devolve diferente de zero em caso de sucesso
+// (o chamador usa o resultado para decidir se precisa encerrar o loop).
+func DestroyWindow(hwnd uintptr) int {
+	ret, _, _ := procDestroyWindow.Call(hwnd)
+	return int(ret)
+}
+
+// CurrentThreadID devolve o identificador da thread atual (compara com a thread
+// dona de uma janela criada aqui).
+func CurrentThreadID() uint32 {
+	id, _, _ := procGetCurrentThreadID.Call()
+	return uint32(id)
 }
 
 // Invalidate marca a janela inteira para repintura.

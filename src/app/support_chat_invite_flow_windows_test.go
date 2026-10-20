@@ -32,9 +32,13 @@ func TestSupportChatNotifyState_ReportaAntesDeFechar(t *testing.T) {
 
 	called := make(chan struct{})
 	state.onDecided = func(result supportChatInviteNotificationResult) error {
-		// Neste ponto o cartão ainda está "respondendo" (na tela, esperando).
-		if !state.isResponding() {
-			t.Error("o cartão já saiu do estado de espera antes do servidor responder")
+		// Neste ponto o cartão já registrou a decisão (done) e está saindo da
+		// tela: o envio roda em paralelo ao fechamento.
+		state.mu.Lock()
+		decided := state.done
+		state.mu.Unlock()
+		if !decided {
+			t.Error("a decisão deveria estar registrada antes do envio")
 		}
 		if result.Accepted {
 			t.Error("o cartão deveria ter recusado")
@@ -48,8 +52,8 @@ func TestSupportChatNotifyState_ReportaAntesDeFechar(t *testing.T) {
 
 	<-called
 
-	// O canal é publicado por uma goroutine (o fechamento espera o servidor com
-	// prazo — ver decisionGrace): aguarda sem assumir que é síncrono.
+	// O canal é publicado em goroutine (o envio acontece em paralelo ao
+	// fechamento): aguarda sem assumir que é síncrono.
 	select {
 	case result := <-resultCh:
 		if result.Accepted {

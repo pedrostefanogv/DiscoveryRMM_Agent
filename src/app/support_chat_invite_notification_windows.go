@@ -6,7 +6,6 @@ import (
 	"context"
 	"runtime"
 	"sync"
-	"time"
 
 	"golang.org/x/sys/windows"
 
@@ -75,19 +74,20 @@ type supportChatNotifyState struct {
 	invite supportchat.Invite
 	// done marca a decisão já tomada (clicou, Esc, X ou cancelamento).
 	done bool
-	// responding é true enquanto a decisão está sendo levada ao servidor.
-	responding bool
-	// decided guarda a escolha até o servidor responder: o cartão NÃO é
-	// destruído antes disso (ver resolve).
+	// decided guarda a escolha do usuário para publicá-la ao processo de UI
+	// (ver resolve/publishDecision).
 	decided *supportChatInviteNotificationResult
 	// published garante que a decisão chega ao processo de UI uma única vez
 	// (fechamento normal x prazo de segurança — ver publishDecision).
 	published bool
-	// resultCh entrega a decisão ao processo de UI depois que o cartão saiu da
-	// tela (com o erro do envio ao servidor em Result.Error).
+	// resultCh entrega a decisão ao processo de UI (com o erro do envio ao
+	// servidor em Result.Error).
 	resultCh chan supportChatInviteNotificationResult
-	// onDecided leva a escolha ao SERVIDOR. Roda em goroutine enquanto o cartão
-	// ainda está na tela, mostrando "avisando o suporte…".
+	// windowThread é a thread que criou a janela e roda o loop de mensagens.
+	// Decide quem pode encerrar o loop (PostQuitMessage só é válido nela).
+	windowThread uint32
+	// onDecided leva a escolha ao SERVIDOR. Roda em goroutine, em paralelo ao
+	// fechamento do cartão (a tela não espera rede).
 	//
 	// Por que reportar DENTRO do cartão: antes a janela era destruída e a
 	// decisão ia para um canal lido em goroutine — entre o clique e o POST
@@ -213,13 +213,16 @@ func (s *supportChatNotifyState) buttonAt(x, y int) supportChatNotifyButton {
 	return supportChatNotifyNone
 }
 
-// resolve registra a escolha e mantém o cartão na tela (com o botão escolhido
-// em "carregando") até o servidor responder.
+// resolve registra a escolha e tira o cartão da tela NA HORA — para as duas
+// respostas (aceitar e recusar).
 //
-// ORDEM DELIBERADA: reportar ANTES de fechar. A recusa precisa chegar ao
-// servidor mesmo que o desktop/runtime esteja lento, e o usuário precisa ver
-// que o clique foi registrado. Quando o resultado volta (ou o prazo estoura),
-// finish é quem destrói a janela e aplica a decisão no processo de UI.
+// DECISÃO DE UX (relato do usuário, duas vezes): "clicou em Abrir chat, o chat
+// abre e esse modal/notificação deve fechar igual quando clica Agora não". O
+// cartão é uma PERGUNTA: respondida, sai de cena. Não existe mais o estado
+// "Abrindo o chat de suporte…" no cartão — quem abre a janela do chat é o
+// processo de UI, e o cartão já não tem o que dizer.
+//
+// O reporte ao servidor segue em paralelo (goroutine): a tela nunca espera rede.
 func (s *supportChatNotifyState) resolve(hwnd uintptr, accepted bool) {
 	s.mu.Lock()
 	if s.done {
@@ -227,73 +230,68 @@ func (s *supportChatNotifyState) resolve(hwnd uintptr, accepted bool) {
 		return
 	}
 	s.done = true
-	s.responding = true
 	s.decided = &supportChatInviteNotificationResult{SessionID: s.invite.SessionID, Accepted: accepted}
 	result := *s.decided
 	onDecided := s.onDecided
 	s.mu.Unlock()
 
-	winui.Invalidate(hwnd)
-
-	// A RECUSA NÃO mostra estado de espera e fecha o cartão NA HORA.
-	//
-	// Relato: "quando clico em fechar ele fica avisando o suporte… e não fecha".
-	// Recusar é uma ação de SAÍDA: o usuário fechou, o cartão some; o envio ao
-	// servidor segue em paralelo (best-effort) e o resultado vai para o log.
-	if !accepted {
-		go func() {
-			var err error
-			if onDecided != nil {
-				err = onDecided(result)
-			}
-			s.publishDecision(err)
-		}()
-		s.destroyCard(hwnd)
-		return
-	}
-
-	// ACEITE: fecha assim que o servidor confirmar (a janela do chat abre logo
-	// em seguida, pelas decisão publicada) — com prazo, nunca "para sempre".
-	done := make(chan error, 1)
+	// 1) Envio ao servidor, sem bloquear a UI nem o fechamento.
 	go func() {
 		var err error
 		if onDecided != nil {
 			err = onDecided(result)
 		}
-		done <- err
+		s.publishDecision(err)
 	}()
 
-	go func() {
-		grace := time.NewTimer(decisionGrace)
-		defer grace.Stop()
-
-		select {
-		case err := <-done:
-			go s.publishDecision(err)
-			s.destroyCard(hwnd)
-		case <-grace.C:
-			// O envio não respondeu no prazo. O cartão não pode ficar preso.
-			go s.publishDecision(errSupportChatInviteReportTimeout)
-			s.destroyCard(hwnd)
-		}
-	}()
+	// 2) Fecha o cartão imediatamente (mesmo comportamento de "Agora não").
+	//    Este resolve roda dentro do WndProc, ou seja, na thread da janela.
+	s.destroyCard(hwnd)
 }
 
 // destroyCard tira o cartão da tela de forma DETERMINÍSTICA.
 //
-// Não depende de mensagens: destruí-lo aqui mesmo (DestroyWindow, ou
-// PostQuitMessage quando o hwnd já sumiu) fecha a janela e encerra o loop de
-// mensagens. Antes o fechamento era um PostMessage(WM_CLOSE): se a thread dona
-// da janela estivesse atrasada (ou o hwnd já tivesse sido destruído por um
-// cancelamento concorrente), o cartão ficava na tela e só saía pelo prazo.
+// Em Windows, DestroyWindow pode ser chamado de qualquer thread e, quando
+// destruiu a janela, já envia WM_QUIT à thread dona (o loop de mensagens
+// termina). PostQuitMessage só é chamado pela THREAD DA JANELA: chamá-lo de
+// outra goroutine parava o loop com a janela ainda viva — a janela ficava órfã
+// na tela (o cartão travava depois da resposta).
 func (s *supportChatNotifyState) destroyCard(hwnd uintptr) {
 	if hwnd == 0 {
 		return
 	}
-	winui.DestroyWindow(hwnd)
-	// Rede de segurança: se a destruição não acontecer (janela de outra thread,
-	// hwnd já inválido), encerra o loop para que o cartão não fique pendurado.
-	winui.PostQuitMessage(0)
+	if winui.DestroyWindow(hwnd) != 0 {
+		return
+	}
+	// DestroyWindow recusou (a janela já não existe): encerra o loop aqui apenas
+	// se ESTA goroutine é a thread dona da janela.
+	if s.ownsWindowThread() {
+		winui.PostQuitMessage(0)
+	}
+}
+
+// destroyCardOnWindowThread pede à thread da janela que feche o cartão (único
+// caminho seguro quando a chamada vem de outra goroutine).
+func (s *supportChatNotifyState) destroyCardOnWindowThread(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	if s.ownsWindowThread() {
+		s.destroyCard(hwnd)
+		return
+	}
+	winui.PostMessage(hwnd, winui.MsgClose, 0, 0)
+}
+
+// ownsWindowThread informa se a goroutine atual é a thread dona da janela.
+func (s *supportChatNotifyState) ownsWindowThread() bool {
+	s.mu.Lock()
+	owner := s.windowThread
+	s.mu.Unlock()
+	if owner == 0 {
+		return false
+	}
+	return winui.CurrentThreadID() == owner
 }
 
 // publishDecision entrega a decisão ao processo de UI (uma única vez).
@@ -318,40 +316,21 @@ func (s *supportChatNotifyState) publishDecision(err error) {
 	close(s.resultCh)
 }
 
-// isResponding informa se a decisão está em voo para o servidor (o cartão não
-// aceita mais cliques/teclas e mostra o estado de espera).
-func (s *supportChatNotifyState) isResponding() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.responding
-}
-
-// decisionGrace é o prazo em que o cartão espera o servidor antes de sair da
-// tela sozinho. Não pode ser maior que o timeout do POST
-// (supportChatInviteReportWait): um callback travado nunca pode deixar o cartão
-// preso na tela para sempre.
-const decisionGrace = supportChatInviteReportWait + 5*time.Second
-
 // publishDecided publica a decisão já tomada (chamado no WM_DESTROY, na thread
 // da janela, quando o cartão sai da tela depois de o usuário responder).
 func (s *supportChatNotifyState) publishDecided(err error) {
 	go s.publishDecision(err)
 }
 
-// abort fecha o cartão sem decisão (cancelado por outro caminho).
+// abort fecha o cartão sem decisão (cancelado por outro caminho: convite
+// substituto, expirado no servidor, chat encerrado).
 //
-// Se o usuário JÁ respondeu (responding), o fechamento NÃO cancela a decisão:
-// ela continua indo ao servidor e, quando termina, finish fecha o cartão. Antes
-// o cancelamento genérico podia destruir o cartão e fechar o canal no meio do
-// envio, e a recusa se perdia.
+// Com decisão já tomada o fechamento é no-op — a escolha do usuário já foi
+// publicada (e o envio ao servidor segue em goroutine).
 func (s *supportChatNotifyState) abort(hwnd uintptr) {
 	s.mu.Lock()
 	if s.done {
-		responding := s.responding
 		s.mu.Unlock()
-		if !responding && hwnd != 0 {
-			winui.DestroyWindow(hwnd)
-		}
 		return
 	}
 	s.done = true
@@ -359,7 +338,9 @@ func (s *supportChatNotifyState) abort(hwnd uintptr) {
 
 	close(s.resultCh)
 	if hwnd != 0 {
-		winui.DestroyWindow(hwnd)
+		// Thread da janela (WM_*) ou mensagem para ela (cancelamento de outra
+		// goroutine): em ambos os casos o cartão sai da tela.
+		s.destroyCardOnWindowThread(hwnd)
 	}
 }
 
@@ -436,9 +417,6 @@ func supportChatNotifyWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		}
 		return 0
 	case winui.MsgLButtonDown:
-		if state.isResponding() {
-			return 0
-		}
 		button := state.buttonAt(consentLParamX(lparam), consentLParamY(lparam))
 		if button != supportChatNotifyNone {
 			state.pressed = button
@@ -473,9 +451,6 @@ func supportChatNotifyWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		}
 		return winui.DefWindowProc(hwnd, msg, wparam, lparam)
 	case winui.MsgKeyDown:
-		if state.isResponding() {
-			return 0
-		}
 		return state.handleKey(hwnd, wparam)
 	case supportChatNotifyWMAppCancel:
 		state.abort(hwnd)
@@ -526,13 +501,6 @@ func (s *supportChatNotifyState) paint(screenDC uintptr) {
 	width, height, radius, scale := s.metrics()
 	sw := func(v int) int { return winui.ScalePx(v, scale) }
 
-	// Decisão já tomada e indo para o servidor: os botões não respondem mais e o
-	// texto explica a espera (ver resolve). Sem este retorno de imagem o cartão
-	// parecia "morto" nos segundos do POST.
-	s.mu.Lock()
-	responding := s.responding
-	decided := s.decided
-	s.mu.Unlock()
 
 	memDC, bitmap, oldBitmap := winui.BufferedPaint(screenDC, width, height)
 	hdc := memDC
@@ -564,13 +532,7 @@ func (s *supportChatNotifyState) paint(screenDC uintptr) {
 	winui.FillRect(hdc, divider, theme.Border)
 
 	winui.FillRoundRectBorderAA(hdc, messageBox, sw(8), theme.Surface, theme.Border)
-	message := supportChatInviteNotificationMessage(s.invite)
-	if responding && decided != nil && decided.Accepted {
-		// Só o ACEITE mostra espera: a recusa fecha o cartão imediatamente e
-		// nunca deve aparecer "Avisando o suporte…" (ver resolve).
-		message = supportChatInviteNotificationRespondingMessage(true)
-	}
-	winui.DrawTextWrappedEllipsis(hdc, message, messageText, s.fonts.body, theme.Text, winui.AlignLeft)
+	winui.DrawTextWrappedEllipsis(hdc, supportChatInviteNotificationMessage(s.invite), messageText, s.fonts.body, theme.Text, winui.AlignLeft)
 
 	winui.DrawTextSingle(hdc, supportChatInviteNotificationHint(), hint, s.fonts.hint, theme.TextMuted, winui.AlignLeft)
 
@@ -585,17 +547,12 @@ func (s *supportChatNotifyState) paint(screenDC uintptr) {
 	dismissStyle := winui.OutlineButton(theme, buttonRadius)
 	openStyle.FocusGap, openStyle.FocusWidth = sw(4), sw(2)
 	dismissStyle.FocusGap, dismissStyle.FocusWidth = sw(4), sw(2)
-	hover, pressed, focus := s.hover, s.pressed, s.focus
-	if responding {
-		// Cartão em espera: nenhum botão em destaque (o clique já foi aceito).
-		hover, pressed, focus = supportChatNotifyNone, supportChatNotifyNone, supportChatNotifyNone
-	}
 	winui.PaintButton(hdc, open, supportChatInviteNotificationAllow(), s.fonts.button, openStyle,
-		hover == supportChatNotifyOpen, pressed == supportChatNotifyOpen,
-		focus == supportChatNotifyOpen, theme.Accent)
+		s.hover == supportChatNotifyOpen, s.pressed == supportChatNotifyOpen,
+		s.focus == supportChatNotifyOpen, theme.Accent)
 	winui.PaintButton(hdc, dismiss, supportChatInviteNotificationDeny(), s.fonts.button, dismissStyle,
-		hover == supportChatNotifyDismiss, pressed == supportChatNotifyDismiss,
-		focus == supportChatNotifyDismiss, theme.Accent)
+		s.hover == supportChatNotifyDismiss, s.pressed == supportChatNotifyDismiss,
+		s.focus == supportChatNotifyDismiss, theme.Accent)
 }
 
 // supportChatNotifyThemeLoader lê o tema do usuário (var para testes).
@@ -672,6 +629,10 @@ func runSupportChatInviteNotificationWindow(ctx context.Context, invite supportc
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+
+	state.mu.Lock()
+	state.windowThread = winui.CurrentThreadID()
+	state.mu.Unlock()
 
 	x, y := winui.BottomRightOnActiveWorkArea(supportChatNotifyWidth, supportChatNotifyHeight, supportChatNotifyScreenMargin)
 	hwnd, err := winui.CreateWindow(
@@ -794,9 +755,10 @@ func runSupportChatInviteNotificationWindow(ctx context.Context, invite supportc
 	decided := state.done
 	state.mu.Unlock()
 	if !decided {
-		// Inclui o hwnd: se o loop terminou sem WM_DESTROY (WM_QUIT inesperado),
-		// a janela não pode ficar órfã na tela. Com decisão em voo, abort só
-		// mantém a janela viva até finish (ver abort).
+		// O loop terminou sem WM_DESTROY (WM_QUIT inesperado): a janela não pode
+		// ficar órfã na tela. Aqui já estamos na thread da janela.
 		state.abort(hwnd)
 	}
+	// Se havia decisão tomada, publishDecision já foi chamado (resolve ou o
+	// WM_DESTROY): o canal foi fechado e o processo de UI foi avisado.
 }

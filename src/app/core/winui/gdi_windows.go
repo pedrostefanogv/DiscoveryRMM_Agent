@@ -16,8 +16,9 @@ import (
 // Aqui ficam os primitivos compartilhados pelo banner e pelo prompt.
 
 var (
-	user32 = windows.NewLazySystemDLL("user32.dll")
-	gdi32  = windows.NewLazySystemDLL("gdi32.dll")
+	user32   = windows.NewLazySystemDLL("user32.dll")
+	gdi32    = windows.NewLazySystemDLL("gdi32.dll")
+	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
 
 	procFillRect              = user32.NewProc("FillRect")
 	procDrawTextW             = user32.NewProc("DrawTextW")

@@ -53,10 +53,30 @@ func TestSupportChatNotifyState_RecusaFechaNaHora(t *testing.T) {
 	}
 }
 
-// O cartão de recusa NÃO deve desenhar o texto de espera (só o aceite espera).
-func TestSupportChatNotifyState_TextoDeEsperaSoNoAceite(t *testing.T) {
-	// Guarda de contrato dos textos usados pelo cartão.
-	if got := supportChatInviteNotificationRespondingMessage(true); got != "Abrindo o chat de suporte…" {
-		t.Fatalf("texto de espera do aceite inesperado: %q", got)
+// O ACEITE também fecha o cartão na hora (mesmo comportamento de "Agora não"):
+// o usuário não deve ver "Abrindo o chat de suporte…" no cartão — quem abre a
+// janela é o processo de UI.
+func TestSupportChatNotifyState_AceiteFechaNaHora(t *testing.T) {
+	resultCh := make(chan supportChatInviteNotificationResult, 1)
+	state := &supportChatNotifyState{
+		invite:   inviteForStateTest(),
+		resultCh: resultCh,
+		focus:    supportChatNotifyNone,
 	}
+
+	release := make(chan struct{})
+	state.onDecided = func(supportChatInviteNotificationResult) error {
+		<-release // POST lento: não pode segurar o cartão
+		return nil
+	}
+
+	start := time.Now()
+	state.resolve(0, true)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("resolve() do aceite não pode bloquear (demorou %s)", elapsed)
+	}
+	if !state.done {
+		t.Fatal("o cartão deveria estar respondido imediatamente")
+	}
+	close(release)
 }

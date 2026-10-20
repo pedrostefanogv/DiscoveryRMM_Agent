@@ -96,16 +96,18 @@ func TestSupportChatInviteIsCurrentPending_SemSessao(t *testing.T) {
 	}
 }
 
-// A mensagem de espera precisa existir para os dois caminhos: aceitar ("Abrindo
-// o chat…") e recusar ("Avisando o suporte…").
-func TestSupportChatInviteNotificationRespondingMessage(t *testing.T) {
-	accept := supportChatInviteNotificationRespondingMessage(true)
-	if !strings.Contains(accept, "Abrindo o chat") {
-		t.Fatalf("mensagem de aceite inesperada: %q", accept)
-	}
-	deny := supportChatInviteNotificationRespondingMessage(false)
-	if !strings.Contains(deny, "suporte") {
-		t.Fatalf("mensagem de recusa inesperada: %q", deny)
+// O cartão não tem mais estado de espera: responder (aceitar OU recusar) tira o
+// cartão da tela na hora (ver resolve em _windows.go). Este teste garante que
+// nenhuma mensagem de espera voltou para a UI do cartão.
+func TestSupportChatInviteNotification_SemMensagemDeEspera(t *testing.T) {
+	for _, text := range []string{
+		supportChatInviteNotificationMessage(supportchat.Invite{SessionID: "s", SupportName: "Ana"}),
+		supportChatInviteNotificationHint(),
+	} {
+		lower := strings.ToLower(text)
+		if strings.Contains(lower, "abrindo o chat") || strings.Contains(lower, "avisando o suporte") {
+			t.Fatalf("texto de espera não deve mais existir no cartão: %q", text)
+		}
 	}
 }
 
