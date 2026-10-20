@@ -454,13 +454,30 @@ func (a *App) reportSupportChatInviteDecision(result supportChatInviteNotificati
 
 	var err error
 	if result.Accepted {
-		// Só o convite da sessão CORRENTE pode virar "active".
-		wasPending := false
+		// O convite LOCAL que este cartão representava ainda está pendente? Se já
+		// não estiver (outra sessão assumiu, ou o processo trocou de papel), o
+		// aceite vai pelas funções PURAS do serviço — antes o POST simplesmente
+		// não acontecia e o servidor reentrega o comando, reaparecendo o cartão.
+		wasCurrentPending := false
 		if state := a.supportChatService().State(); state.Status == supportchat.StatusWaiting && state.SessionID == result.SessionID {
-			wasPending = true
-			err = a.supportChatService().RespondInvite(ctx, true, reason)
+			wasCurrentPending = true
 		}
-		if err == nil && wasPending {
+
+		// BUG RELATADO (agent no tray, UI relançada pelo watchdog): o cartão era
+		// criado no processo de UI, mas o estado "waiting" vivo estava no
+		// SERVIÇO (outro processo). A UI via "waiting" e o POST saía; ou via
+		// "none"/outra sessão e o aceite era engolido — o console ficava
+		// "Aguardando confirmação" e o usuário clicava de novo.
+		//
+		// O aceite NUNCA é condicional: é reportado para a sessão do CARTÃO.
+		err = a.supportChatService().RespondInviteAcceptedForSession(ctx, result.SessionID)
+		if err == nil && wasCurrentPending {
+			// Estado local -> active + snapshot da conversa.
+			if _, rerr := a.supportChatService().Refresh(ctx); rerr != nil {
+				a.Logs.Append("[supportchat] snapshot apos o aceite indisponivel: " + rerr.Error())
+			}
+		}
+		if err == nil {
 			// ACEITE: a janela do chat abre JÁ, sem passar pela rechecagem de
 			// estado do processo de UI (ver runSupportChatInviteNotificationDecision).
 			// Foi essa rechecagem que, numa corrida com o evento do servidor,
@@ -556,13 +573,29 @@ func (a *App) replaySupportChatInviteAfterUIReconnect() {
 		return
 	}
 
-	a.Logs.Append("[supportchat] UI reconectada com convite pendente; reapresentando (sessao " + state.SessionID + ")")
-	a.presentSupportChatInvite(supportchat.Invite{
+	// Convite VELHO não volta para a tela.
+	//
+	// RELATO: "se fecho o agent no tray e abro de novo, a notificação aparece
+	// mas já é velha/atrasada". O estado local é em MEMÓRIA e só se perde no
+	// restart do processo; quando a UI volta (tray) ele pode ter sobrevivido ao
+	// tempo do convite. O cartão só é reapresentado se o convite ainda está
+	// dentro da validade que o servidor mandou (expiresAtUtc).
+	invite := supportchat.Invite{
 		SessionID:   state.SessionID,
 		TicketID:    state.TicketID,
 		TicketTitle: state.TicketTitle,
 		SupportName: state.SupportName,
-	})
+		ExpiresAt:   state.ExpiresAt,
+	}
+	if invite.ExpiredAt(time.Now()) {
+		a.Logs.Append("[supportchat] convite " + invite.SessionID + " expirado no relogio local; nao reapresentando (limpeza)")
+		a.clearSupportChatIfCurrent(invite.SessionID)
+		a.closeSupportChatInviteNotification(invite.SessionID)
+		return
+	}
+
+	a.Logs.Append("[supportchat] UI reconectada com convite pendente; reapresentando (sessao " + state.SessionID + ")")
+	a.presentSupportChatInvite(invite)
 }
 
 // adoptSupportChatSession adota a sessão que o SERVIÇO conhece mas esta UI
@@ -716,11 +749,14 @@ func (a *App) presentSupportChatInviteWithRetry(invite supportchat.Invite, inten
 		// companion (que recebe o evento abaixo); abrir aqui a janela fallback
 		// duplicaria o pedido (cartão + modal na janela do chat).
 		if a.RuntimeFlags.ServiceMode || a.hasSupportChatUI() {
+			// expiresAt viaja no evento: a UI precisa saber até quando o convite
+			// vale para não apresentar um cartão já vencido.
 			a.EmitEvent("supportchat:invite",
 				"sessionId", invite.SessionID,
 				"ticketId", invite.TicketID,
 				"ticketTitle", invite.TicketTitle,
-				"supportName", invite.SupportName)
+				"supportName", invite.SupportName,
+				"expiresAt", invite.ExpiresAt)
 			return
 		}
 	}

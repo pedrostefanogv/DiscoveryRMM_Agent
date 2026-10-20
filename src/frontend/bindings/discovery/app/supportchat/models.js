@@ -203,6 +203,16 @@ export class State {
              */
             this["status"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * ExpiresAt é o vencimento do CONVITE (RFC3339, vindo do servidor). Existe
+             * para a UI não reapresentar um cartão já velho depois de um restart ou de
+             * reentrada no tray ("a notificação aparece mas já é atrasada").
+             * @member
+             * @type {string | undefined}
+             */
+            this["expiresAt"] = undefined;
+        }
         if (!("connected" in $$source)) {
             /**
              * @member
@@ -234,10 +244,10 @@ export class State {
      * @returns {State}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType3;
+        const $$createField9_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("messages" in $$parsedSource) {
-            $$parsedSource["messages"] = $$createField8_0($$parsedSource["messages"]);
+            $$parsedSource["messages"] = $$createField9_0($$parsedSource["messages"]);
         }
         return new State(/** @type {Partial<State>} */($$parsedSource));
     }

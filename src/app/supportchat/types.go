@@ -65,7 +65,11 @@ type State struct {
 	TicketTitle string    `json:"ticketTitle,omitempty"`
 	SupportName string    `json:"supportName,omitempty"`
 	Status      string    `json:"status"`
-	Connected   bool      `json:"connected"`
+	// ExpiresAt é o vencimento do CONVITE (RFC3339, vindo do servidor). Existe
+	// para a UI não reapresentar um cartão já velho depois de um restart ou de
+	// reentrada no tray ("a notificação aparece mas já é atrasada").
+	ExpiresAt string    `json:"expiresAt,omitempty"`
+	Connected bool      `json:"connected"`
 	LastError   string    `json:"lastError,omitempty"`
 	Messages    []Message `json:"messages"`
 }

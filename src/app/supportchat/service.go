@@ -655,6 +655,14 @@ func (s *Service) PrepareInviteIfIdle(invite Invite) InviteDecision {
 	}
 
 	if previous.Status == StatusWaiting && previous.SessionID != "" && previous.SessionID != invite.SessionID {
+		// CONVITE NOVO enquanto OUTRO aguarda resposta: o novo SUBSTITUI o
+		// anterior (não é "busy").
+		//
+		// RELATO: "mando convite e a notificação não abre". O convite anterior
+		// ainda estava "waiting" aqui e o serviço respondia "busy" — o usuário
+		// nunca recebia o pedido novo (mesmo quando o anterior já tinha saído da
+		// tela). A sessão antiga é RECUSADA como "replaced" pelo chamador, então
+		// o console não fica "aguardando" para sempre.
 		decision.SupersededSessionID = previous.SessionID
 	}
 
@@ -664,6 +672,7 @@ func (s *Service) PrepareInviteIfIdle(invite Invite) InviteDecision {
 	s.state.TicketID = strings.TrimSpace(invite.TicketID)
 	s.state.TicketTitle = invite.TicketTitle
 	s.state.SupportName = invite.SupportName
+	s.state.ExpiresAt = strings.TrimSpace(invite.ExpiresAt)
 	s.state.Status = StatusWaiting
 	s.state.LastError = ""
 	if s.state.Messages == nil {
@@ -1056,6 +1065,49 @@ func (s *Service) RespondInviteForSession(ctx context.Context, sessionID string,
 
 	path := fmt.Sprintf("/sessions/%s/invite-response", url.PathEscape(sessionID))
 	return s.doJSON(ctx, http.MethodPost, path, payload, nil)
+}
+
+// RespondInviteAcceptedForSession reporta o ACEITE de uma sessão específica e
+// move o estado local para Active QUANDO a sessão é a corrente.
+//
+// Por que existe: no modo companion o cartão do convite é criado na UI e o
+// estado "waiting" vive no SERVIÇO. Se a UI reportasse o aceite apenas quando
+// o estado local fosse "waiting" (que ela pode não ter, ou que pode ter sido
+// trocado por outra sessão), o POST simplesmente não saía: o servidor
+// reentregava o pedido e o cartão reaparecia ("às vezes não abre").
+//
+// O POST agora é SEMPRE feito para a sessão do cartão; o estado local só é
+// alterado se a sessão ainda for a corrente (outra conversa ativa nunca é
+// reescrita).
+func (s *Service) RespondInviteAcceptedForSession(ctx context.Context, sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("sessão de convite ausente")
+	}
+
+	if err := s.RespondInviteForSession(ctx, sessionID, true, ""); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	waiting := s.waitingSince
+	if s.state.SessionID != "" && s.state.SessionID == sessionID {
+		s.state.Status = StatusActive
+		if s.activeSince.IsZero() {
+			s.activeSince = time.Now()
+		}
+	}
+	s.mu.Unlock()
+
+	waited := time.Duration(0)
+	if !waiting.IsZero() {
+		waited = time.Since(waiting)
+	}
+	s.deps.Logf(fmt.Sprintf("[supportchat] conversa iniciada: sessao=%s (aceite apos %s)",
+		sessionID, waited.Round(time.Second)))
+
+	s.emitState("invite-response")
+	return nil
 }
 
 // RespondInvite responde ao convite da sessão corrente (caminho do aceite, que

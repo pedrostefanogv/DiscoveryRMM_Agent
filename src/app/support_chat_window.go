@@ -393,6 +393,7 @@ func (a *App) syncSupportChatWindowFromIPCPayload(payload map[string]any) {
 		TicketID:    supportChatField(source, "ticketId"),
 		TicketTitle: supportChatField(source, "ticketTitle"),
 		SupportName: supportChatField(source, "supportName"),
+		ExpiresAt:   supportChatField(source, "expiresAt"),
 	})
 
 	if status != supportchat.StatusWaiting {
@@ -415,8 +416,18 @@ func (a *App) syncSupportChatWindowFromIPCPayload(payload map[string]any) {
 // o valor cru sob ipcEventRawKey. Devolve ok=false quando não há sessionId — é a
 // única chave obrigatória do convite (conversa avulsa não tem ticketId).
 func supportChatInviteFromIPCPayload(payload map[string]any) (sessionID, ticketID, ticketTitle, supportName string, ok bool) {
-	if payload == nil {
+	invite, ok := supportChatInviteFromIPCPayloadFull(payload)
+	if !ok {
 		return "", "", "", "", false
+	}
+	return invite.SessionID, invite.TicketID, invite.TicketTitle, invite.SupportName, true
+}
+
+// supportChatInviteFromIPCPayloadFull é a versão completa (inclui expiresAt):
+// a UI usa o vencimento para NÃO reapresentar um convite já vencido.
+func supportChatInviteFromIPCPayloadFull(payload map[string]any) (supportchat.Invite, bool) {
+	if payload == nil {
+		return supportchat.Invite{}, false
 	}
 
 	source := payload
@@ -424,14 +435,17 @@ func supportChatInviteFromIPCPayload(payload map[string]any) (sessionID, ticketI
 		source = raw
 	}
 
-	sessionID, _ = source["sessionId"].(string)
-	if strings.TrimSpace(sessionID) == "" {
-		return "", "", "", "", false
+	invite := supportchat.Invite{
+		SessionID:   supportChatField(source, "sessionId"),
+		TicketID:    supportChatField(source, "ticketId"),
+		TicketTitle: supportChatField(source, "ticketTitle"),
+		SupportName: supportChatField(source, "supportName"),
+		ExpiresAt:   supportChatField(source, "expiresAt"),
 	}
-	ticketID, _ = source["ticketId"].(string)
-	ticketTitle, _ = source["ticketTitle"].(string)
-	supportName, _ = source["supportName"].(string)
-	return sessionID, ticketID, ticketTitle, supportName, true
+	if invite.SessionID == "" {
+		return supportchat.Invite{}, false
+	}
+	return invite, true
 }
 
 // openSupportChatInviteFromIPC apresenta o convite (cartão nativo) a partir do evento IPC
@@ -445,14 +459,23 @@ func (a *App) openSupportChatInviteFromIPC(payload map[string]any) {
 		return
 	}
 
-	sessionID, ticketID, ticketTitle, supportName, ok := supportChatInviteFromIPCPayload(payload)
+	invite, ok := supportChatInviteFromIPCPayloadFull(payload)
 	if !ok {
 		a.Logs.Append("[supportchat] convite via IPC sem sessionId; ignorado")
 		return
 	}
+	sessionID := invite.SessionID
+
+	// Convite que chega VENCIDO (UI relançada depois do prazo, replay de uma
+	// sessão morta) não vira cartão: seria o "a notificação aparece mas já é
+	// atrasada".
+	if invite.ExpiredAt(time.Now()) {
+		a.Logs.Append("[supportchat] convite via IPC vencido (" + invite.ExpiresAt + "); ignorado (sessao " + sessionID + ")")
+		return
+	}
 
 	go func() {
-		if err := a.SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, supportName); err != nil {
+		if err := a.SupportChatOpenInviteWindow(invite.SessionID, invite.TicketID, invite.TicketTitle, invite.SupportName); err != nil {
 			// O handler de JS da janela principal ainda pode abrir (é o caminho
 			// antigo, mantido); se nem ele existir, a reconciliação de 60s cobre.
 			a.Logs.Append("[supportchat] convite via IPC nao abriu a janela: " + err.Error())
@@ -644,13 +667,23 @@ func (a *App) resumeSupportChatIfActive(delay time.Duration) {
 			return
 		}
 		if activeID == previous.SessionID {
-			a.Logs.Append("[supportchat] convite pendente sem cartão/janela; reapresentando ao usuario")
-			a.presentSupportChatInvite(supportchat.Invite{
+			invite := supportchat.Invite{
 				SessionID:   previous.SessionID,
 				TicketID:    previous.TicketID,
 				TicketTitle: previous.TicketTitle,
 				SupportName: previous.SupportName,
-			})
+				ExpiresAt:   previous.ExpiresAt,
+			}
+			// Convite vencido não volta à tela: "a notificação aparece mas já é
+			// atrasada" (o estado em memória sobreviveu à hora do convite).
+			if invite.ExpiredAt(time.Now()) {
+				a.Logs.Append("[supportchat] convite " + invite.SessionID + " vencido no relogio local; limpando")
+				a.clearSupportChatIfCurrent(invite.SessionID)
+				a.closeSupportChatInviteNotification(invite.SessionID)
+				return
+			}
+			a.Logs.Append("[supportchat] convite pendente sem cartão/janela; reapresentando ao usuario")
+			a.presentSupportChatInvite(invite)
 			return
 		}
 		// O servidor tem OUTRA sessão: o convite antigo não vale mais. Refresh
@@ -1023,6 +1056,13 @@ func (a *App) ensureSupportChatInviteSurface(state supportchat.State) {
 		TicketID:    state.TicketID,
 		TicketTitle: state.TicketTitle,
 		SupportName: state.SupportName,
+		ExpiresAt:   state.ExpiresAt,
+	}
+	// Convite vencido não vira cartão: reapresentar um pedido que o servidor já
+	// considera expirado é o "a notificação aparece mas já é atrasada".
+	if invite.ExpiredAt(time.Now()) {
+		a.Logs.Append("[supportchat] convite " + invite.SessionID + " vencido; nao reapresentando o cartao")
+		return
 	}
 	a.Logs.Append("[supportchat] estado waiting sem cartao na tela; reapresentando o convite (sessao " + invite.SessionID + ")")
 	go a.presentSupportChatInvite(invite)
