@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -149,13 +150,17 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 	// que é exatamente o sintoma "só abre quando fecho e reabro o agent".
 	// O alerta visual agora é o cartão nativo (ou o toast, no fallback de
 	// presentSupportChatInvite): não dispara um segundo toast em paralelo.
-	a.EmitEvent("supportchat:invite",
-		"sessionId", invite.SessionID,
-		"ticketId", invite.TicketID,
-		"ticketTitle", invite.TicketTitle,
-		"supportName", invite.SupportName)
 
+	// SEM UI: nada é emitido.
+	//
+	// BUG RELATADO (agent fechado no tray): o evento supportchat:invite era
+	// emitido ANTES desta checagem, evaporava (não há pipe/webview para
+	// recebê-lo) e o watchdog não registrava NADA por 70 s — o convite
+	// simplesmente não existia para ninguém. A ordem agora é: primeiro decidir
+	// onde mostrar, depois emitir.
 	if !a.hasSupportChatUI() {
+		a.Logs.Append("[supportchat] convite recebido SEM UI para apresentar; pedindo relancamento da interface e aguardando " +
+			supportChatInviteUIWait.String() + " (sessao " + invite.SessionID + ")")
 		// Sem interface NÃO existe onde mostrar o convite — mas a UI pode estar
 		// subindo agora (o watchdog acabou de ser acionado). Antes o convite era
 		// recusado na hora, então uma UI que aparecesse 2 s depois encontrava o
@@ -177,6 +182,12 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 		})
 		return true, 0, string(body), ""
 	}
+
+	a.EmitEvent("supportchat:invite",
+		"sessionId", invite.SessionID,
+		"ticketId", invite.TicketID,
+		"ticketTitle", invite.TicketTitle,
+		"supportName", invite.SupportName)
 
 	// Processo ÚNICO (UI standalone, sem serviço): a superfície do convite pode
 	// ser aberta AQUI, sem depender do frontend. O evento para a janela principal
@@ -211,7 +222,14 @@ const (
 
 // scheduleSupportChatInviteRedelivery espera a UI aparecer e reemite o convite
 // para ela; se a UI não aparecer dentro de supportChatInviteUIWait, recusa o
-// convite (motivo "no_ui") e limpa o estado local.
+// convite (motivo "no_ui") e limpa o estado local — SÓ depois de a recusa ser
+// confirmada pelo servidor (ver respondSupportChatInviteWithOutcome).
+//
+// Quando a recusa já estava entregue ou o convite já não é o pendente, devolve
+// imediatamente. Caso a UI tenha subido DEPOIS do prazo (com o convite ainda
+// válido no estado local), é o redelivery que ela dispara ao conectar
+// (replaySupportChatInviteAfterUIReconnect) / a reconciliação que apresentam o
+// cartão — o estado não é limpo, então o convite não se perde.
 //
 // Roda em goroutine: o handler do comando precisa responder ao servidor na hora
 // (o resultado sai como "pendingConfirmation").
@@ -250,10 +268,7 @@ func (a *App) scheduleSupportChatInviteRedelivery(invite supportchat.Invite) {
 					return
 				}
 
-				a.Logs.Append("[supportchat] convite sem UI em " + supportChatInviteUIWait.String() +
-					"; recusando para o suporte nao ficar esperando (sessionId=" + invite.SessionID + ")")
-				a.respondSupportChatInvite(invite.SessionID, false, "no_ui")
-				a.clearSupportChatIfCurrent(invite.SessionID)
+				a.respondSupportChatInviteWithOutcome(invite.SessionID, false, supportChatInviteNoUIReason, true)
 				return
 
 			case <-ticker.C:
@@ -266,6 +281,175 @@ func (a *App) scheduleSupportChatInviteRedelivery(invite supportchat.Invite) {
 			}
 		}
 	}()
+}
+
+// Constantes e helpers do desfecho "sem UI".
+const (
+	// supportChatInviteNoUIReason é o motivo reportado ao servidor quando a UI
+	// não existiu dentro da tolerância: o convite nunca chegou a ser visto.
+	supportChatInviteNoUIReason = "no_ui"
+	// supportChatInviteNoUIRetryDelay é o intervalo da nova tentativa quando a
+	// própria recusa não pôde ser entregue ao servidor. Curto o suficiente para
+	// o convite ainda estar pendente (o servidor expira em ~120 s) e longo o
+	// suficiente para não virar tempestade de POSTs.
+	supportChatInviteNoUIRetryDelay = 15 * time.Second
+)
+
+// supportChatInviteNoUITries é quantas vezes a recusa por "sem UI" é tentada
+// antes de desistir (rede instável no exato momento do prazo). Variável: os
+// testes não devem depender do relógio.
+var supportChatInviteNoUITries = 3
+
+// supportChatInviteNoUIBackoff é a espera entre as tentativas da recusa por "sem
+// UI".
+var supportChatInviteNoUIBackoff = 2 * time.Second
+
+// respondSupportChatInviteWithOutcome reporta a recusa por "sem UI" e deixa o
+// DESFECHO registrado no log — inclusive quando o estado local não pode ser
+// limpo.
+//
+// BUG RELATADO (agent fechado no tray, 70 s de silêncio total): o prazo vencia,
+// a recusa era disparada em goroutine best-effort (respondSupportChatInvite só
+// logava falha) e o estado local era limpo na sequência — mesmo que o POST NÃO
+// tivesse chegado. Resultado: o convite morria em silêncio aqui e continuava
+// "Aguardando confirmação" no console.
+//
+// Regra nova:
+//   - desfecho SEMPRE logado (entregue / já resolvido / falhou);
+//   - o estado local só é limpo quando o servidor confirmou a recusa (ou quando
+//     ele já a tinha resolvido por conta própria: 409 session_declined/ended/expired);
+//   - se a entrega falha, o convite CONTINUA pendente e o próprio prazo agenda
+//     uma nova tentativa (supportChatInviteNoUIRetryDelay).
+func (a *App) respondSupportChatInviteWithOutcome(sessionID string, accepted bool, reason string, retryOnFailure bool) {
+	if a == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+
+	var err error
+	for attempt := 1; attempt <= supportChatInviteNoUITries; attempt++ {
+		ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatInviteReportWait)
+		err = a.supportChatService().RespondInviteForSession(ctx, sessionID, accepted, reason)
+		cancel()
+		if err == nil {
+			break
+		}
+		if attempt < supportChatInviteNoUITries {
+			a.Logs.Append("[supportchat] recusa sem UI nao entregue (tentativa " + strconv.Itoa(attempt) +
+				"/" + strconv.Itoa(supportChatInviteNoUITries) + ", motivo=" + reason + ", sessao " + sessionID + "): " + err.Error())
+			select {
+			case <-a.supportChatContext().Done():
+				return
+			case <-time.After(supportChatInviteNoUIBackoff):
+			}
+		}
+	}
+
+	if err == nil {
+		a.Logs.Append("[supportchat] desfecho no_ui reportado ao servidor (motivo=" + reason + ", sessao " + sessionID + ")")
+		a.clearSupportChatIfCurrent(sessionID)
+		return
+	}
+
+	if isSupportChatInviteAlreadyResolved(err) {
+		// 409 session_declined/ended/expired: o servidor já resolveu a sessão
+		// (outro caminho/expiração). Retentar não muda nada e o estado local
+		// pode ser limpo com segurança.
+		a.Logs.Append("[supportchat] desfecho no_ui: servidor ja resolveu o convite (" + err.Error() + ", sessao " + sessionID + ")")
+		a.clearSupportChatIfCurrent(sessionID)
+		return
+	}
+
+	a.Logs.Append("[supportchat] FALHA ao reportar o desfecho no_ui ao servidor (sessao " + sessionID + "): " + err.Error() +
+		"; convite mantido pendente")
+	if a.supportChatInviteIsCurrentPending(sessionID) && a.supportChatInviteNotificationWasAnswered(sessionID) {
+		// A marca de "já respondido" foi criada quando o usuário tocou no cartão
+		// (ou por este próprio caminho). Com o servidor ainda sem a resposta, uma
+		// UI que subir agora precisa poder apresentar o convite de novo.
+		a.clearSupportChatInviteNotificationAnswered(sessionID)
+	}
+	if retryOnFailure {
+		a.scheduleSupportChatInviteRedelivery(supportchat.Invite{SessionID: sessionID})
+	}
+}
+
+// isSupportChatInviteAlreadyResolved informa se o erro do POST de resposta do
+// convite significa "o servidor já não considera este convite pendente".
+//
+// O 409 do servidor vem como ProblemDetails cujo code/ título carrega
+// session_declined / session_ended / session_expired (ver
+// TicketChatCommandHandlers no backend). Retentar esses casos só geraria log
+// repetido: a sessão NÃO está pendente e a decisão não é mais necessária.
+func isSupportChatInviteAlreadyResolved(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := err.Error()
+	// Caminho PRINCIPAL: o erro traz o código estável da API prefixado no
+	// formato "[session_declined] <mensagem>" (ver supportChatErrorCodePrefix).
+	// Decidir pelo código é o que torna isto imune a mudança de idioma/texto —
+	// antes o agent dependia da frase traduzida ("a conversa não está mais
+	// ativa.") e qualquer ajuste de mensagem no servidor virava retentativa.
+	if open := strings.Index(text, "["); open >= 0 {
+		if close := strings.Index(text[open:], "]"); close > 1 {
+			code := strings.ToLower(strings.TrimSpace(text[open+1 : open+close]))
+			switch code {
+			case "session_declined", "session_ended", "session_expired",
+				"session_active", "session_not_pending", "session_not_active":
+				return true
+			}
+		}
+	}
+	// Fallback: builds ANTIGAS do servidor não prefixavam o código; a marcação
+	// por texto (minúsculas + sem acentos) continua valendo para elas.
+	lower := asciiFoldLower(text)
+	for _, marker := range []string{
+		"session_declined",
+		"session_ended",
+		"session_expired",
+		"session_active",
+		"session_not_pending",
+		"session_not_active",
+		"nao esta mais ativa",
+		"nao esta mais pendente",
+		"nao esta pendente",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// asciiFoldLower deixa o texto em minúsculas e sem acentos (o erro que chega
+// pode ser a mensagem localizada da API, ex.: "a conversa não está mais
+// pendente.").
+func asciiFoldLower(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case 'á', 'à', 'â', 'ã', 'ä', 'Á', 'À', 'Â', 'Ã', 'Ä':
+			b.WriteRune('a')
+		case 'é', 'ê', 'ë', 'É', 'Ê', 'Ë':
+			b.WriteRune('e')
+		case 'í', 'î', 'ï', 'Í', 'Î', 'Ï':
+			b.WriteRune('i')
+		case 'ó', 'ô', 'õ', 'ö', 'Ó', 'Ô', 'Õ', 'Ö':
+			b.WriteRune('o')
+		case 'ú', 'û', 'ü', 'Ú', 'Û', 'Ü':
+			b.WriteRune('u')
+		case 'ç', 'Ç':
+			b.WriteRune('c')
+		default:
+			if r >= 'A' && r <= 'Z' {
+				b.WriteRune(r + ('a' - 'A'))
+				continue
+			}
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // redeliverSupportChatInvite reemite o convite para a UI que passou a existir:

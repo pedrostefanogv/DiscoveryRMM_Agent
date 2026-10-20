@@ -203,4 +203,13 @@ const (
 	EventMessage        = "Message"
 	EventSessionEnded   = "SessionEnded"
 	EventInviteResponse = "InviteResponse"
+	// EventSessionDeclined é a recusa do convite (pelo usuário, por outra
+	// máquina ou por expiração) publicada pelo servidor no MESMO canal durável
+	// (JetStream, DeliverAll) dos demais eventos.
+	//
+	// Antes de existir, a recusa/expiração não saía por canal nenhum: o agent
+	// ficava preso em "waiting" com o cartão na tela até um polling REST —
+	// exatamente o "precisei clicar em Agora não e o console continuou
+	// aguardando".
+	EventSessionDeclined = "SessionDeclined"
 )

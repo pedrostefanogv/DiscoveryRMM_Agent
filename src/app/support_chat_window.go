@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1145,6 +1146,27 @@ func (a *App) ensureSupportChatInviteSurface(state supportchat.State) {
 	}
 	// Fluxo fallback: a janela do chat já É a superfície do convite.
 	if a.supportChatWindowOpen() && a.supportChatLegacyInviteWindowMode() {
+		return
+	}
+
+	// LIMITE DE UMA REAPRESENTAÇÃO + folga após a rede de segurança (fase 3.4).
+	//
+	// RELATO (teste real): o cartão foi fechado e reapresentado 4 vezes — a rede
+	// de segurança fechava, o próximo evento de estado via "waiting sem cartão"
+	// e reapresentava, e cada fechamento era uma decisão do usuário perdida.
+	// Aqui o teto é o mesmo do show() (supportChatInviteMaxPresentations) e, se o
+	// cartão foi fechado pela rede de segurança há instantes, NÃO há reapresentação:
+	// a recusa automática está sendo reportada, e reabrir o cartão agora só
+	// produziria um pingue-pongue.
+	if a.supportChatInviteGuardClosed(state.SessionID) {
+		a.Logs.Append("[supportchat] estado waiting apos a rede de seguranca fechar o cartao; nao reapresentando (sessao " +
+			state.SessionID + ")")
+		return
+	}
+	if a.supportChatInvitePresentationCount(state.SessionID) >= supportChatInviteMaxPresentations {
+		a.Logs.Append("[supportchat] estado waiting sem cartao, mas o convite ja foi apresentado " +
+			strconv.Itoa(a.supportChatInvitePresentationCount(state.SessionID)) + "x; nao reapresentando (sessao " +
+			state.SessionID + ")")
 		return
 	}
 

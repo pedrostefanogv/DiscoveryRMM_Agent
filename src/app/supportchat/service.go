@@ -193,6 +193,10 @@ func (s *Service) HandleEnvelope(data []byte) error {
 		s.applySessionEnded(envelope)
 		return nil
 
+	case EventSessionDeclined:
+		s.applySessionDeclined(envelope)
+		return nil
+
 	default:
 		// Eventos desconhecidos são confirmados (Ack) para não travar o consumer.
 		s.deps.Logf("[supportchat] envelope ignorado eventType=" + envelope.EventType)
@@ -228,6 +232,14 @@ func (s *Service) applySessionOpened(envelope Envelope) {
 }
 
 func (s *Service) applySessionEnded(envelope Envelope) {
+	// Motivo do fim quando o servidor manda um (ex.: "expired" — a expiração do
+	// convite chega por este evento, não por um livestream próprio). Só entra no
+	// LOG: o estado final é o mesmo para qualquer motivo.
+	reason := "servidor"
+	if endReason := strings.TrimSpace(envelope.EndReason); endReason != "" {
+		reason = "servidor/" + endReason
+	}
+
 	s.mu.Lock()
 
 	// Mesma guarda de sessão dos outros eventos: um SessionEnded REENTREGUE
@@ -238,6 +250,9 @@ func (s *Service) applySessionEnded(envelope Envelope) {
 		return
 	}
 
+	// Terminal em QUALQUER estado: um convite em "waiting" que o servidor
+	// encerra/expira não pode continuar "aguardando confirmação" (era o convite
+	// eterno na tela e no console).
 	s.state.Status = StatusEnded
 	s.state.HasSession = false
 	s.state.SessionID = envelope.SessionID
@@ -246,8 +261,70 @@ func (s *Service) applySessionEnded(envelope Envelope) {
 	// Resumo único da sessão (duração + volume): o log do agent já mostrava cada
 	// transição, mas reconstruir "quanto durou / quantas mensagens" exigia ler o
 	// histórico inteiro do logstore durante um atendimento.
-	s.logSessionClosed(envelope.SessionID, "servidor")
+	s.logSessionClosed(envelope.SessionID, reason)
 	s.emitState("session-ended")
+}
+
+// applySessionDeclined aplica o evento durável de RECUSA/EXPIRAÇÃO do convite.
+//
+// Por que existe: a recusa só era conhecida pelo próprio processo que fez o
+// POST. Se o usuário recusava no cartão e o POST falhava (rede), ou se quem
+// recusava era outra máquina/expiração do servidor, o agent ficava em
+// "waiting" — cartão na tela e console "Aguardando confirmação" — até o
+// polling REST. O servidor agora publica SessionDeclined no MESMO canal
+// JetStream durável (DeliverAll) dos demais eventos.
+//
+// A guarda de sessão é a mesma de applySessionEnded: replay de outra sessão
+// (ou de uma conversa já anterior) NÃO pode derrubar a sessão corrente.
+func (s *Service) applySessionDeclined(envelope Envelope) {
+	reason := "servidor"
+	if declineReason := strings.TrimSpace(envelope.Reason); declineReason != "" {
+		reason = "servidor/" + declineReason
+	} else if endReason := strings.TrimSpace(envelope.EndReason); endReason != "" {
+		reason = "servidor/" + endReason
+	}
+
+	s.mu.Lock()
+
+	if envelope.SessionID != "" && s.state.SessionID != "" && envelope.SessionID != s.state.SessionID {
+		s.mu.Unlock()
+		s.deps.Logf("[supportchat] SessionDeclined de outra sessão ignorado: " + envelope.SessionID)
+		return
+	}
+
+	// Já terminal e sem sessão: replay do mesmo evento (at-least-once). Nada a
+	// fazer — reemitir aqui só geraria um log/estado duplicado.
+	if s.state.Status == StatusEnded && s.state.SessionID == envelope.SessionID && !s.state.HasSession {
+		s.mu.Unlock()
+		return
+	}
+
+	// A conversa ATIVA de outro id cai na guarda acima; a do MESMO id não pode
+	// ser rebaixada por um decline atrasado (ex.: declínio de um convite anterior
+	// da mesma máquina chegando depois do aceite).
+	if s.state.Status == StatusActive && envelope.SessionID != "" && s.state.SessionID == envelope.SessionID {
+		s.mu.Unlock()
+		s.deps.Logf("[supportchat] SessionDeclined ignorado: a sessão já está ativa (" + envelope.SessionID + ")")
+		return
+	}
+
+	// Defensivo: sem SessionID não há como saber QUAL convite foi recusado.
+	// Sobrescrever a sessão corrente com vazio apagaria a referência de uma
+	// conversa legítima — melhor manter o estado e só registrar.
+	if strings.TrimSpace(envelope.SessionID) == "" {
+		s.mu.Unlock()
+		s.deps.Logf("[supportchat] SessionDeclined sem sessionId ignorado (estado preservado)")
+		return
+	}
+
+	// Terminal para o convite: nunca deixar "waiting".
+	s.state.Status = StatusEnded
+	s.state.HasSession = false
+	s.state.SessionID = envelope.SessionID
+	s.mu.Unlock()
+
+	s.logSessionClosed(envelope.SessionID, reason)
+	s.emitState("session-declined")
 }
 
 func (s *Service) applyMessage(envelope Envelope) error {
@@ -553,8 +630,13 @@ func apiErrorMessage(status int, raw string) string {
 	// procurando a string no corpo; a API devolve code=session_not_active com a
 	// mensagem em português, então a tradução nunca casava e a janela mostrava
 	// "operação inválida para o estado atual da conversa".
+	// BUG CORRIGIDO (revisão): o `code` estavavel era DESCARTADO ao traduzir. O
+	// chamador só recebia o texto, e o agent decidia "já resolvido" procurando
+	// a frase no texto — frágil e dependente do idioma. O código agora viaja
+	// junto (prefixado entre colchetes) para quem precisa decidir sem depender
+	// da mensagem localizada.
 	if strings.Contains(strings.ToLower(code), "session_not_active") {
-		return "a conversa não está mais ativa."
+		return supportChatErrorCodePrefix(code) + "a conversa não está mais ativa."
 	}
 
 	lower := strings.ToLower(message)
@@ -565,9 +647,28 @@ func apiErrorMessage(status int, raw string) string {
 			"enquanto isso, anexos e prints não podem ser enviados."
 	}
 	if status == http.StatusConflict && strings.Contains(strings.ToLower(code+message), "session_not_active") {
-		return "a conversa não está mais ativa."
+		return supportChatErrorCodePrefix(code) + "a conversa não está mais ativa."
 	}
-	return message
+	// Qualquer código estável de sessão (session_declined/session_ended/
+	// session_expired/session_active) acompanha a mensagem: é o que permite ao
+	// agent tratar "já resolvido" sem depender do texto.
+	return supportChatErrorCodePrefix(code) + message
+}
+
+// supportChatErrorCodePrefix devolve o código estável da API no formato
+// "[code] " para prefixar a mensagem devolvida ao chamador. Vazio quando o
+// servidor não mandou um code.
+//
+// Motivo: apiErrorMessage traduz a mensagem para o usuário final, e essa
+// tradução perde o code. Quem precisa DECIDIR (ex.: tratar 409
+// "session_declined" como convite já resolvido, sem retentar) precisa do
+// código, não do texto.
+func supportChatErrorCodePrefix(code string) string {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return ""
+	}
+	return "[" + code + "] "
 }
 
 // resetTranscriptForSessionLocked descarta a conversa em memória quando a

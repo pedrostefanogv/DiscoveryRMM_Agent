@@ -180,6 +180,15 @@ type App struct {
 	// supportChatNotifyAnswered evita reabrir o cartão enquanto a resposta do
 	// usuário ainda está indo ao servidor (estado local ainda "waiting").
 	supportChatNotifyAnswered map[string]time.Time
+	// supportChatNotifyShown conta quantas vezes o cartão de cada sessão já foi
+	// apresentado. Limita a UMA reapresentação por sessão: o ciclo "fecha pela
+	// rede de segurança → estado waiting sem cartão → reapresenta" repetia o
+	// cartão 4 vezes num teste real, e cada volta perdia a decisão do usuário.
+	supportChatNotifyShown map[string]int
+	// supportChatNotifyGuardClosed guarda quando a rede de segurança fechou o
+	// cartão sem decisão do usuário: nesse estado o "waiting" que sobrou NÃO é
+	// um pedido que o usuário esteja vendo e não pode ser reapresentado de novo.
+	supportChatNotifyGuardClosed map[string]time.Time
 	// Cache da política de anexos do chat (allowlist/tamanho vindos do servidor).
 	supportChatPolicyMu      sync.Mutex
 	supportChatPolicy        supportchat.AttachmentPolicy

@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -177,18 +179,31 @@ func (w *uiWatchdog) RequestSpawn(reason string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	// Toda saída deste método registra o DESFECHO.
+	//
+	// BUG RELATADO (08:20, convite com o agent fechado no tray): o watchdog não
+	// logou absolutamente nada por 70 s — nem pedido, nem relançada, nem erro.
+	// Sem o desfecho, um relançamento barrado (sem sessão, cooldown) era
+	// indistinguível de um watchdog morto.
 	if w.deps.HasUI() {
 		w.misses = 0
 		w.zombieChecks = 0
+		w.logOnceLocked("pedido-com-ui", "pedido de relançamento da UI ("+reason+") ignorado: interface JA conectada no IPC")
 		return
 	}
 	// Log único por estado: um convite sem UI é evento raro, mas repetir a mesma
 	// linha a cada tentativa bloqueada pelo cooldown seria ruído no logstore.
 	w.logOnceLocked("pedido-sem-ui", "pedido de relançamento da UI ("+reason+") sem UI conectada")
 	if w.sessionMode() {
+		sessions := w.activeSessionsLocked()
+		if len(sessions) == 0 {
+			w.logOnceLocked("pedido-sem-sessao", "pedido de relançamento da UI ("+reason+
+				") nao relancou: sem sessao de usuario ativa")
+			return
+		}
 		// Um pedido sem UI vale para TODAS as sessões sem interface: o convite
 		// pode ser para o usuário de qualquer uma delas.
-		w.spawnSessionsLocked(w.activeSessionsLocked(), "pedido:"+reason, uiWatchdogRequestCooldown, true)
+		w.spawnSessionsLocked(sessions, "pedido:"+reason, uiWatchdogRequestCooldown, true)
 		return
 	}
 	w.spawnLocked("pedido:"+reason, uiWatchdogRequestCooldown)
@@ -357,6 +372,11 @@ func (w *uiWatchdog) checkSessionsLocked() {
 // de matar a UI travada e em pedidos imediatos).
 func (w *uiWatchdog) spawnSessionsLocked(sessions []uint32, reason string, cooldown time.Duration, force bool) {
 	if len(sessions) == 0 {
+		// Pedido imediato (force) sem sessão nenhuma: o silêncio aqui era o
+		// "watchdog não logou nada".
+		if force {
+			w.logOnceLocked("sessoes-vazio:"+reason, "relancamento da UI nao executado ("+reason+"): nenhuma sessao para atender")
+		}
 		return
 	}
 	if w.sessionMisses == nil {
@@ -374,6 +394,14 @@ func (w *uiWatchdog) spawnSessionsLocked(sessions []uint32, reason string, coold
 			}
 		}
 		if last, ok := w.sessionLastSpawn[sid]; ok && now.Sub(last) < cooldown {
+			// Cooldown ativo: registra com a espera restante quando o pedido é
+			// IMEDIATO (convite) — no caminho periódico seria ruído a cada tick.
+			if force {
+				remaining := cooldown - now.Sub(last)
+				w.logOnceLocked("cooldown:"+reason+":"+strconv.FormatUint(uint64(sid), 10),
+					fmt.Sprintf("relancamento da UI nao executado (%s, sessão %d): cooldown ativo (restam %s)",
+						reason, sid, remaining.Round(time.Second)))
+			}
 			continue
 		}
 		// Marca ANTES de tentar: um spawn que falha não pode virar retry apertado.
@@ -435,7 +463,15 @@ func uiProcessTotal(counts map[uint32]int) int {
 func (w *uiWatchdog) spawnLocked(reason string, cooldown time.Duration) {
 	now := w.deps.Now()
 	if !w.lastSpawn.IsZero() && now.Sub(w.lastSpawn) < cooldown {
-		// Já houve tentativa recente: silêncio de propósito (o tick é de 60s).
+		// Já houve tentativa recente. O tick é de 60s e o silêncio ali é de
+		// propósito, mas um pedido IMEDIATO (convite) barrado pelo cooldown não
+		// pode sumir do log — era um dos buracos do "watchdog sem nenhuma
+		// mensagem por 70 s".
+		if strings.HasPrefix(reason, "pedido:") {
+			w.logOnceLocked("cooldown:"+reason,
+				"relancamento da UI nao executado ("+reason+"): cooldown ativo (restam "+
+					(cooldown-now.Sub(w.lastSpawn)).Round(time.Second).String()+")")
+		}
 		return
 	}
 	if !w.deps.UserSessionAvailable() {
@@ -452,6 +488,9 @@ func (w *uiWatchdog) spawnLocked(reason string, cooldown time.Duration) {
 		w.deps.Log("falha ao relançar a UI (" + reason + "): " + err.Error())
 		return
 	}
+	// Um relançamento bem-sucedido invalida os avisos de estado anteriores
+	// (cooldown/sem-sessão) — senão um pedido barrado uma vez nunca mais seria
+	// reportado.
 	w.misses = 0
 	w.lastNoticeKey = ""
 	w.deps.Log("UI relançada minimizada no tray (" + reason + ")")
