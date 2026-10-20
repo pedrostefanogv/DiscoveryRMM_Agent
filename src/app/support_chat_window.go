@@ -837,9 +837,10 @@ var supportChatLazyOpenPoll = 500 * time.Millisecond
 // scheduleSupportChatOpenAfterLazyLoad agenda UMA reabertura da janela do
 // chat depois de a janela principal terminar o lazy load. Single-flight via
 // supportChatLazyOpenRequested: N convites/cliques concorrentes nao criam N
-// agendadores. Quando o carregamento termina (janela existe ou a carencia
-// expira), a abertura e tentada normalmente; se o prazo estourar, desiste
-// registrando o motivo no log.
+// agendadores. Quando o carregamento termina DE FATO (janela existe e a
+// carencia pos-criacao passou), a abertura e tentada; se a carência expira
+// sem janela (WebView2 travado) ou o prazo geral estoura, desiste registrando
+// o motivo no log — sem criar janela em cima de main thread congelada.
 func (a *App) scheduleSupportChatOpenAfterLazyLoad() {
 	if !a.supportChatLazyOpenRequested.CompareAndSwap(false, true) {
 		return
@@ -854,9 +855,21 @@ func (a *App) scheduleSupportChatOpenAfterLazyLoad() {
 				return
 			case <-time.After(supportChatLazyOpenPoll):
 			}
-			if !a.mainWindowInitPending() {
+			// Ordem IMPORTA: conferir "pronta" antes de "desistir",
+			// porque !pending com janela inexistente significa WebView2 travado
+			// (carência expirou sem a janela nascer).
+			if !a.mainWindowInitPending() && a.mainWindowReady() {
 				a.Logs.Append("[supportchat] janela principal carregada; abrindo o chat")
 				a.openSupportChatWindow()
+				return
+			}
+			if !a.mainWindowInitPending() && !a.mainWindowReady() {
+				// A criação travou de vez: NÃO criar a janela do chat em cima de
+				// uma main thread congelada (a goroutine ficaria presa para
+				// sempre). A retomada/reconciliação cobre quando a UI voltar — o
+				// ui-watchdog relança a UI travada.
+				a.Logs.Append("[supportchat] janela principal nao terminou de carregar (travada); a reconciliacao cobrira a abertura do chat")
+				go a.resumeSupportChatIfActive(time.Second)
 				return
 			}
 			if time.Now().After(deadline) {

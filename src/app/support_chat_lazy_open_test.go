@@ -9,29 +9,38 @@ import (
 )
 
 // Contrato da decisao pura do lazy load: enquanto a criacao preguicosa da
-// janela principal esta em curso (e por uma carencia curta depois), a janela
-// do chat NAO deve ser criada em paralelo — dois WebView2 nascendo juntos na
-// mesma main thread congelam a interface inteira (relato 20/10).
+// janela principal esta em curso — E enquanto o webview dela carrega depois
+// da criacao (mainWindowInitGraceAfter) — a janela do chat NAO deve ser
+// criada em paralelo. O travamento de 20/10 (16:38) comecou ~3 s DEPOIS de
+// "janela principal criada sob demanda"; o dump mostra ServeWebViewRequest
+// em voo — criar outro webview nesse intervalo congela a interface.
 func TestMainWindowInitPendingState(t *testing.T) {
 	now := time.Now()
-	recente := now.Add(-2 * time.Second)
+	inicio := now.Add(-2 * time.Second)
 	velho := now.Add(-mainWindowInitGrace - time.Second)
+	criadoAgora := now.Add(-1 * time.Second)
+	criadoVelho := now.Add(-mainWindowInitGraceAfter - time.Second)
 
 	casos := []struct {
 		nome     string
-		pendente bool
-		params   [4]any
+		esperado bool
+		exists   bool
+		factory  bool
+		started  time.Time
+		created  time.Time
 	}{
-		{"janela existe: nunca pendente", false, [4]any{true, true, recente, now}},
-		{"sem fabrica: nada para esperar", false, [4]any{false, false, recente, now}},
-		{"fabrica registrada, criacao nunca comecou: nao pendente", false, [4]any{false, true, time.Time{}, now}},
-		{"criacao em curso: pendente", true, [4]any{false, true, recente, now}},
-		{"carencia expirada: abre mesmo assim", false, [4]any{false, true, velho, now}},
+		{"janela criada agora: webview ainda carregando", true, true, true, inicio, criadoAgora},
+		{"janela criada ha tempo: livre", false, true, true, inicio, criadoVelho},
+		{"janela existe sem marca de criacao (defensivo): livre", false, true, true, inicio, time.Time{}},
+		{"criacao em curso: pendente", true, false, true, inicio, time.Time{}},
+		{"carencia expirou sem janela: WebView2 travado (deixa o agendador desistir)", false, false, true, velho, time.Time{}},
+		{"fabrica registrada, criacao nunca comecou: nao pendente", false, false, true, time.Time{}, time.Time{}},
+		{"sem fabrica: nada para esperar", false, false, false, inicio, time.Time{}},
 	}
 	for _, c := range casos {
-		p := mainWindowInitPendingState(c.params[0].(bool), c.params[1].(bool), c.params[2].(time.Time), c.params[3].(time.Time))
-		if p != c.pendente {
-			t.Fatalf("%s: esperado pendente=%v, obtido %v", c.nome, c.pendente, p)
+		p := mainWindowInitPendingState(c.exists, c.factory, c.started, c.created, now)
+		if p != c.esperado {
+			t.Fatalf("%s: esperado pendente=%v, obtido %v", c.nome, c.esperado, p)
 		}
 	}
 }
@@ -70,12 +79,11 @@ func TestScheduleSupportChatOpenAfterLazyLoad_DesisteNoPrazo(t *testing.T) {
 	}
 }
 
-// Quando o lazy load TERMINA (janela criada), o agendador abre o chat em
-// seguida em vez de abandonar a abertura ("abrir a janela do chat depois").
-func TestScheduleSupportChatOpenAfterLazyLoad_AbreDepoisDoLoad(t *testing.T) {
+// BUG (revisao): carencia expirada SEM janela = WebView2 travado de vez. O
+// agendador NAO deve logar "carregada" (log mentiroso) nem tentar abrir em
+// cima de uma main thread congelada — desiste pelo caminho "travada".
+func TestScheduleSupportChatOpenAfterLazyLoad_CarenciaExpiradaSemJanela_DesisteComoTravada(t *testing.T) {
 	a := NewApp(AppStartupOptions{ServiceMode: true})
-	// Lazy load concluido: carencia expirada e janela inexistente (a.app nil
-	// faz openSupportChatWindow registrar a indisponibilidade e voltar).
 	a.windowFactory = func() application.Window { return nil }
 	a.windowInitStarted = time.Now().Add(-mainWindowInitGrace - time.Second)
 
@@ -88,13 +96,19 @@ func TestScheduleSupportChatOpenAfterLazyLoad_AbreDepoisDoLoad(t *testing.T) {
 	if a.supportChatLazyOpenRequested.Load() {
 		t.Fatal("o agendador deveria ter concluido e liberado a deduplicacao")
 	}
-	abriu := false
+	var travada, mentira bool
 	for _, l := range a.Logs.GetAll() {
+		if strings.Contains(l, "nao terminou de carregar (travada)") {
+			travada = true
+		}
 		if strings.Contains(l, "janela principal carregada; abrindo o chat") {
-			abriu = true
+			mentira = true
 		}
 	}
-	if !abriu {
-		t.Fatal("esperado log de abertura do chat apos o lazy load")
+	if !travada {
+		t.Fatal("esperado log de desistencia no caminho \"travada\"")
+	}
+	if mentira {
+		t.Fatal("nao deve logar \"janela principal carregada\" sem a janela existir")
 	}
 }

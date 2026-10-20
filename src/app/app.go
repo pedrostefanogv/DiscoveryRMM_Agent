@@ -360,6 +360,10 @@ type App struct {
 	// depois), a abertura da janela do chat é adiada — criar outra janela com
 	// WebView2 em cima de uma main thread ocupada é o travamento relatado.
 	windowInitStarted time.Time
+	// windowInitCompletedAt marca quando a janela principal FOI criada. O
+	// WebView2 continua carregando DEPOIS disso (o travamento observado começa
+	// ~3 s após a criação), então a carência pos-criação usa esta marca.
+	windowInitCompletedAt time.Time
 
 	// ── Notificação nativa da resposta do chat (Wails v3 notifications) ──
 	// nativeNotifications é o serviço nativo do Wails v3 (registrado em

@@ -63,6 +63,7 @@ func (a *App) ensureMainWindow() (application.Window, error) {
 		return nil, errors.New("fabrica da janela principal devolveu nil")
 	}
 	a.mainWindow = window
+	a.windowInitCompletedAt = time.Now()
 	log.Println("[window] janela principal criada sob demanda (WebView2 inicializado)")
 	return window, nil
 }
@@ -85,12 +86,28 @@ func (a *App) HasMainWindow() bool {
 // responder ao IPC logo apos "janela principal criada sob demanda").
 const mainWindowInitGrace = 15 * time.Second
 
+// mainWindowInitGraceAfter e quanto tempo DEPOIS da janela principal ser
+// criada o webview dela ainda e considerado "carregando". O log do travamento
+// de 20/10 (16:38) mostra a UI parando de responder ao IPC 3 s DEPOIS de
+// "janela principal criada sob demanda" — a criacao do objeto Window volta
+// antes de o WebView2 terminar de subir, e criar a janela do chat nesse
+// intervalo reproduz o congelamento (dump: ServeWebViewRequest em voo).
+const mainWindowInitGraceAfter = 8 * time.Second
+
 // mainWindowInitPendingState e a decisao pura (testavel) de mainWindowInitPending:
-// o lazy load da janela principal esta em curso (ou acabou de terminar dentro
-// da carencia)?
-func mainWindowInitPendingState(windowExists, factorySet bool, started, now time.Time) bool {
-	if windowExists || !factorySet {
+// o lazy load da janela principal esta em curso — ANTES da criacao (carencia
+// de mainWindowInitGrace) ou DEPOIS dela, enquanto o webview carrega
+// (mainWindowInitGraceAfter).
+func mainWindowInitPendingState(windowExists, factorySet bool, started, completed, now time.Time) bool {
+	if !factorySet {
 		return false
+	}
+	if windowExists {
+		if completed.IsZero() {
+			// Defensivo: criada sem marca (builds antigos em memoria).
+			return false
+		}
+		return now.Sub(completed) < mainWindowInitGraceAfter
 	}
 	if started.IsZero() {
 		return false
@@ -99,11 +116,22 @@ func mainWindowInitPendingState(windowExists, factorySet bool, started, now time
 }
 
 // mainWindowInitPending informa se a criacao preguicosa da janela principal
-// esta em curso (ou dentro da carencia logo apos). Enquanto estiver, a
-// janela do chat NAO deve ser criada: espera o carregamento terminar e abre
-// depois (ver scheduleSupportChatOpenAfterLazyLoad).
+// esta em curso — ou se o webview dela ainda esta carregando dentro da
+// carencia pos-criacao. Enquanto estiver, a janela do chat NAO deve ser
+// criada: espera o carregamento terminar e abre depois
+// (ver scheduleSupportChatOpenAfterLazyLoad).
 func (a *App) mainWindowInitPending() bool {
 	a.windowMu.Lock()
 	defer a.windowMu.Unlock()
-	return mainWindowInitPendingState(a.mainWindow != nil, a.windowFactory != nil, a.windowInitStarted, time.Now())
+	return mainWindowInitPendingState(a.mainWindow != nil, a.windowFactory != nil, a.windowInitStarted, a.windowInitCompletedAt, time.Now())
+}
+
+// mainWindowReady informa se a janela principal ja existe. Usado pelo
+// agendador do chat para distinguir "carregou" (abre o chat) de "carência
+// expirou sem janela" (WebView2 travado de vez: desiste em vez de criar
+// janela em cima de uma main thread congelada).
+func (a *App) mainWindowReady() bool {
+	a.windowMu.Lock()
+	defer a.windowMu.Unlock()
+	return a.mainWindow != nil
 }
