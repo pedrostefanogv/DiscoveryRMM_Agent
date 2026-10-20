@@ -55,6 +55,12 @@ const supportChatInviteNotificationAnsweredTTL = 2 * time.Minute
 // curto de propósito porque a janela do chat/da recusa só fecha depois dele.
 const supportChatInviteReportWait = 8 * time.Second
 
+// supportChatAcceptStateWait limita a espera pelo estado "aberta" depois do
+// aceite confirmado. O evento do servidor costuma chegar em milissegundos; em
+// rede lenta ou com REST fora, o prazo devolve o estado atual (a janela abre e
+// se corrige pelo primeiro snapshot/evento) — nunca bloqueia a abertura.
+const supportChatAcceptStateWait = 3 * time.Second
+
 // Labels/textos do cartão. Ficam aqui (fora do arquivo Windows) para os testes
 // de contrato rodarem em qualquer plataforma.
 func supportChatInviteNotificationTitle() string    { return "O suporte quer abrir o chat" }
@@ -651,6 +657,10 @@ func (a *App) reportSupportChatInviteDecision(result supportChatInviteNotificati
 	// "waiting" e uma reentrega não pode reabrir o cartão.
 	a.markSupportChatInviteNotificationAnswered(result.SessionID)
 
+	// Medida do caminho de abertura (aceite -> janela visível).
+	trace := a.supportChatTraceFor(result.SessionID)
+	trace.mark("post")
+
 	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatInviteReportWait)
 	defer cancel()
 
@@ -678,10 +688,18 @@ func (a *App) reportSupportChatInviteDecision(result supportChatInviteNotificati
 		//
 		// O aceite NUNCA é condicional: é reportado para a sessão do CARTÃO.
 		err = a.supportChatService().RespondInviteAcceptedForSession(ctx, result.SessionID)
-		if err == nil && wasCurrentPending {
-			// Estado local -> active + snapshot da conversa.
-			if _, rerr := a.supportChatService().Refresh(ctx); rerr != nil {
-				a.Logs.Append("[supportchat] snapshot apos o aceite indisponivel: " + rerr.Error())
+		if err == nil {
+			// O servidor confirmou o aceite: espera (curto e limitado) o estado
+			// da sessão chegar AQUI antes do snapshot. Sem isto o snapshot podia
+			// voltar ainda "waiting" (RefreshKeepingInvite o preserva) e a janela
+			// pintava o aviso de reconexão numa conversa que já estava aberta.
+			a.supportChatService().AwaitSessionAfterAccept(ctx, result.SessionID, supportChatAcceptStateWait)
+			trace.mark("estado")
+			if wasCurrentPending {
+				// Estado local -> active + snapshot da conversa.
+				if _, rerr := a.supportChatService().Refresh(ctx); rerr != nil {
+					a.Logs.Append("[supportchat] snapshot apos o aceite indisponivel: " + rerr.Error())
+				}
 			}
 		}
 		if err == nil {

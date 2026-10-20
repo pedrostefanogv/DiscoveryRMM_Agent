@@ -15,6 +15,103 @@ import (
 // de encerramento ficavam AMBOS visíveis — o de encerramento cobria o do convite
 // e `el.hidden = true` não escondia nada ("Continuar conversando" não fazia
 // nada). Este teste falha se a invariante for quebrada.
+// ── Abertura da janela: nada de "sem conexão" numa conversa recém-aberta ────
+//
+// RELATO: "mando abrir o chat, às vezes demora e aparece a mensagem de sem
+// conexão". O banner depende de state.link, com quatro valores:
+//
+//   opening  janela recém-aberta sem conversa carregada (NUNCA mostra o aviso);
+//   live     conversa carregada / canal saudável;
+//   offline  SÓ com o último snapshot falhando e sem conversa viva;
+//   over     conversa encerrada.
+//
+// A ordem dos ramos do render() e a fonte do link (o BACKEND, não o processo de
+// UI) são o contrato deste teste.
+func TestChatWindow_AberturaNaoAnunciaSemConexao(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+
+	if !strings.Contains(jsText, `els.subtitle.textContent = "Abrindo a conversa…";`) {
+		t.Fatal("a janela recém-aberta deve anunciar 'Abrindo a conversa…' em vez de 'Reconectando ao servidor…'")
+	}
+
+	// O ramo de abertura precede o de offline: o aviso só aparece depois do prazo.
+	openingIdx := strings.Index(jsText, `state.link === "opening"`)
+	offlineIdx := strings.Index(jsText, `state.link === "offline"`)
+	if openingIdx < 0 || offlineIdx < 0 || openingIdx > offlineIdx {
+		t.Fatal("render() deve tratar 'opening' ANTES de 'offline'")
+	}
+
+	// O link é calculado por recomputeLink(), e só cai para offline quando o
+	// ÚLTIMO SNAPSHOT falhou — o processo de UI não tem NATS próprio.
+	if !strings.Contains(jsText, "function recomputeLink()") {
+		t.Fatal("o link precisa ser derivado por recomputeLink()")
+	}
+	// "offline" é atribuído SOMENTE quando o último snapshot falhou; um snapshot
+	// bem-sucedido sem conversa cai em "idle" (diz o que é, sem prometer
+	// reconexão) — nunca fica preso em "Abrindo a conversa…".
+	if !strings.Contains(jsText, `state.link = "offline";`) {
+		t.Fatal("'offline' só pode ser derivado de uma falha real de snapshot")
+	}
+	if !strings.Contains(jsText, `state.link = "idle";`) {
+		t.Fatal("sem conversa e sem erro o link precisa cair em 'idle' (não pode ficar em 'opening' para sempre)")
+	}
+	if strings.Contains(jsText, "state.connected = !!next.connected") {
+		t.Fatal("o link não pode mais depender do connected do próprio processo de UI")
+	}
+}
+
+// REQUISITO: eventos e snapshots podem se cruzar (IPC x binding). Um evento
+// 'waiting' emitido ANTES do aceite não pode derrubar a conversa já 'active',
+// e 'ended' é terminal para a sessão.
+func TestChatWindow_EstadoMonotonicoPorSessao(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+
+	for _, needle := range []string{
+		"state.sessionState[nextSession]",
+		`previousStatus === "ended" && nextStatus !== "ended"`,
+		`previousStatus === "active" && nextStatus === "waiting"`,
+		"previousLiveSession === nextSession",
+	} {
+		if !strings.Contains(jsText, needle) {
+			t.Fatalf("applyState precisa do guarda monotônico %q", needle)
+		}
+	}
+}
+
+// REQUISITO: a janela REUSADA no aceite precisa buscar a conversa nova (o Go
+// emite supportchat:refresh) e precisa reconhecer a sessão trocada para não
+// mostrar o transcript antigo.
+func TestChatWindow_ReusoDaJanelaRecarregaConversa(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+
+	for _, needle := range []string{
+		"supportchat:refresh",
+		"function beginOpening()",
+		"function openingParams()",
+		"SupportChatWindowPainted",
+		"state.chatSessionId",
+	} {
+		if !strings.Contains(jsText, needle) {
+			t.Fatalf("janela do chat precisa de %q para o reuso no aceite", needle)
+		}
+	}
+}
+
 func TestChatWindow_ModaisRespeitamAtributoHidden(t *testing.T) {
 	cssPath := filepath.Join("..", "..", "frontend", "support-chat.css")
 	css, err := os.ReadFile(cssPath)
@@ -153,11 +250,19 @@ func TestChatWindow_ConversaEncerradaNaoAnunciaReconexao(t *testing.T) {
 		t.Fatal("app-support-chat.js deve derivar o estado 'conversa encerrada' (isConversationOver)")
 	}
 
-	// A ordem importa: o ramo do fim precisa vencer o aviso de conexão.
+	// A ordem importa: o ramo do fim precisa vencer os outros. O aviso de
+	// conexão agora é um VALOR de link ("offline"), decidido por
+	// recomputeLink() — que também coloca "over" em primeiro lugar.
 	overIdx := strings.Index(jsText, "if (over) {")
-	offlineIdx := strings.Index(jsText, "} else if (!state.connected) {")
+	offlineIdx := strings.Index(jsText, "} else if (state.link === \"idle\") {")
 	if overIdx < 0 || offlineIdx < 0 || overIdx > offlineIdx {
 		t.Fatal("render() deve avaliar a conversa encerrada ANTES do aviso de conexão em tempo real")
+	}
+	linkOverIdx := strings.Index(jsText, "function recomputeLink() {")
+	linkOfflineIdx := strings.Index(jsText, `state.link = "idle";`)
+	overInsideLinkIdx := strings.Index(jsText, `state.link = "over";`)
+	if linkOverIdx < 0 || linkOfflineIdx < 0 || overInsideLinkIdx < 0 || overInsideLinkIdx > linkOfflineIdx {
+		t.Fatal("recomputeLink() deve derivar o fim da conversa antes de calcular offline")
 	}
 
 	if !strings.Contains(jsText, `over ? "Fechar" : "Encerrar"`) {

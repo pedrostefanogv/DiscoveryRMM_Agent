@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -32,6 +33,16 @@ const (
 	// Tamanho FIXO do painel do chat (ver supportChatWindowOptions).
 	supportChatWindowWidth  = 520
 	supportChatWindowHeight = 680
+)
+
+const (
+	// supportChatReusePaintWait é quanto a abertura espera a janela do convite
+	// (fluxo fallback) confirmar que JÁ PINTOU antes de decidir reusá-la. Uma
+	// janela recém-criada que ainda não pintou não serve: reusar seria abrir o
+	// chat numa janela branca. Passado o prazo, ela é recriada.
+	supportChatReusePaintWait = 800 * time.Millisecond
+	// supportChatReusePoll é o intervalo de checagem da pintura.
+	supportChatReusePoll = 50 * time.Millisecond
 )
 
 // supportChatShouldFloat informa se a janela do chat deve ficar SEMPRE NO TOPO
@@ -217,6 +228,88 @@ func supportChatWindowOptionsOn(width, height int, screen *application.Screen, f
 	return opts
 }
 
+// supportChatPlacementForNewWindow devolve a tela e a posição (opcional) da
+// NOVA janela do chat.
+//
+// Prioridade:
+//  1. mesma tela e mesma posição da última janela do chat (ela ainda está
+//     conectada) — o usuário já tem o painel naquele ponto da tela e uma
+//     janela nova em outro lugar parece "não abriu";
+//  2. tela do cursor (ver supportChatPlacementScreen), centralizada.
+func (a *App) supportChatPlacementForNewWindow(wailsApp *application.App) (*application.Screen, *application.Point) {
+	a.supportChatMu.Lock()
+	last := a.supportChatLastPlacement
+	a.supportChatMu.Unlock()
+
+	var screens []*application.Screen
+	if wailsApp != nil && wailsApp.Screen != nil {
+		screens = wailsApp.Screen.GetAll()
+	}
+
+	if last != nil {
+		for _, screen := range screens {
+			if screen == nil || !sameSupportChatScreen(screen, last.screen) {
+				continue
+			}
+			// Só vale se a posição continua dentro da área de trabalho (a barra
+			// de tarefas pode ter mudado de lugar entre as duas janelas).
+			work := screen.WorkArea
+			if work.Width > 0 && work.Height > 0 && last.x < work.Width && last.y < work.Height {
+				point := &application.Point{X: last.x, Y: last.y}
+				return screen, point
+			}
+		}
+	}
+
+	return a.supportChatPlacementScreen(wailsApp), nil
+}
+
+// sameSupportChatScreen compara duas telas pelos limites físicos (o Wails pode
+// devolver instâncias diferentes para a mesma tela).
+func sameSupportChatScreen(left, right *application.Screen) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	a, b := left.Bounds, right.Bounds
+	return a.X == b.X && a.Y == b.Y && a.Width == b.Width && a.Height == b.Height
+}
+
+// supportChatWindowURL acrescenta à URL informada os parâmetros de contexto da
+// sessão corrente (a janela desenha o cabeçalho antes do primeiro snapshot).
+func (a *App) supportChatWindowURL(base string) string {
+	if a == nil {
+		return base
+	}
+	return supportChatWindowOptionsWithContext(
+		application.WebviewWindowOptions{URL: base},
+		a.supportChatService().State(),
+	).URL
+}
+
+// supportChatWindowOptionsWithContext põe na URL da janela os campos que o
+// frontend já consegue desenhar no cabeçalho ANTES do primeiro snapshot
+// (atendente/chamado/sessão). O chat abre "com a conversa" mesmo com a rede
+// lenta, em vez de abrir vazio esperando o REST.
+func supportChatWindowOptionsWithContext(opts application.WebviewWindowOptions, state supportchat.State) application.WebviewWindowOptions {
+	query := url.Values{}
+	if value := strings.TrimSpace(state.SessionID); value != "" {
+		query.Set("sessionId", value)
+	}
+	if value := strings.TrimSpace(state.TicketID); value != "" {
+		query.Set("ticketId", value)
+	}
+	if value := strings.TrimSpace(state.SupportName); value != "" {
+		query.Set("supportName", value)
+	}
+	if value := strings.TrimSpace(state.TicketTitle); value != "" {
+		query.Set("ticketTitle", value)
+	}
+	if encoded := query.Encode(); encoded != "" {
+		opts.URL = opts.URL + "?" + encoded
+	}
+	return opts
+}
+
 // supportChatPlacementScreen resolve a tela do painel do chat (cursor → janela
 // principal → primária) a partir dos dados do Wails.
 func (a *App) supportChatPlacementScreen(wailsApp *application.App) *application.Screen {
@@ -239,6 +332,54 @@ func (a *App) supportChatPlacementScreen(wailsApp *application.App) *application
 	}
 
 	return supportChatPlacementScreen(screens, cursor, preferred)
+}
+
+// supportChatWindowReusableForChat informa se a janela CURRENTE pode ser
+// transformada em janela da conversa em vez de destruída e recriada.
+//
+// BUG DE LATÊNCIA ("às vezes demora para abrir o chat"): no fluxo fallback (a
+// janela É a superfície do convite) o aceite fechava a janela que apresentava
+// o convite e criava OUTRA logo em seguida — destruir e recriar o WebView2
+// custa o carregamento inteiro (ambiente, navegação, scripts). E quando o
+// usuário tinha uma janela de conversa ENCERRADA aberta (log real: aceite às
+// 14:08 com a janela anterior na tela), ela era fechada e recriada sem
+// necessidade nenhuma.
+//
+// Reusa quando: existe janela; o frontend dela já CONFIRMOU pintura; e ela
+// não é a janela do convite ainda carregando. O conteúdo é trocado por
+// syncSupportChatWindowFromIPCPayload/supportchat:refresh (o frontend busca a
+// sessão nova).
+func (a *App) supportChatWindowReusableForChat() bool {
+	if a == nil {
+		return false
+	}
+	a.supportChatMu.Lock()
+	win := a.supportChatWin
+	a.supportChatMu.Unlock()
+	if win == nil || !a.supportChatWindowAlive(win) {
+		return false
+	}
+	return a.supportChatWinPaints.Load()
+}
+
+// waitSupportChatWindowPaints espera a janela (recém-criada) confirmar a
+// primeira pintura, até supportChatReusePaintWait. Devolve true quando ela
+// pode ser reusada.
+func (a *App) waitSupportChatWindowPaints() bool {
+	deadline := time.Now().Add(supportChatReusePaintWait)
+	for {
+		if a.supportChatWinPaints.Load() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-a.supportChatContext().Done():
+			return false
+		case <-time.After(supportChatReusePoll):
+		}
+	}
 }
 
 // supportChatWindowMayOpen informa se o estado do chat já permite criar o
@@ -548,7 +689,8 @@ func (a *App) openSupportChatWindow() {
 		return
 	}
 
-	if status := a.supportChatService().State().Status; !supportChatWindowMayOpen(status) && !a.supportChatLegacyInviteWindowMode() {
+	state := a.supportChatService().State()
+	if status := state.Status; !supportChatWindowMayOpen(status) && !a.supportChatLegacyInviteWindowMode() {
 		a.Logs.Append("[supportchat] janela do chat nao aberta: conversa ainda nao foi aceita (status=" + status + ")")
 		// A chamada pode ser a última da ação do usuário (binding do cartão):
 		// não deixa a superfície do convite perdida só porque o estado local
@@ -565,22 +707,46 @@ func (a *App) openSupportChatWindow() {
 		return
 	}
 
+	trace := a.supportChatTraceFor(state.SessionID)
+	trace.mark("open")
 	float := a.supportChatWindowFloat()
 
 	a.supportChatMu.Lock()
 	if a.supportChatWin != nil {
 		win := a.supportChatWin
 		a.supportChatMu.Unlock()
+		// Janela JÁ EXISTENTE (conversa encerrada aberta, reuso do convite ou
+		// reabertura): em vez de fechar e recriar — o que custa o carregamento
+		// inteiro do WebView2 — o conteúdo é reapontado para a sessão atual.
+		trace.mark("reuse")
+		trace.setReuse(true)
+		trace.setWebview("reaproveitado")
+		trace.mark("janela")
 		a.raiseSupportChatWindow(win, float)
+		// A janela pode estar mostrando OUTRA conversa (ou o encerramento
+		// anterior): pede ao frontend um snapshot da sessão corrente.
+		if a.supportChatWindowContentReady.Load() {
+			a.Logs.Append("[supportchat] janela do chat reusada (sempre no topo=" + boolLabel(float) + "); recarregando a conversa")
+			a.EmitEvent("supportchat:refresh")
+		}
 		return
 	}
 
-	// Tela onde a janela vai nascer: a do cursor (onde o usuário está
-	// trabalhando), depois a da janela principal e, por fim, a primária.
-	screen := a.supportChatPlacementScreen(app)
+	// Tela onde a janela vai nascer: a posição da ÚLTIMA janela do chat (o
+	// usuário já tem esse ponto na tela — nascer em outro monitor parece "não
+	// abriu"), depois o cursor, a janela principal e a primária.
+	screen, position := a.supportChatPlacementForNewWindow(app)
 	width, height := supportChatWindowSize(screen)
 
-	win := app.Window.NewWithOptions(supportChatWindowOptionsOn(width, height, screen, float))
+	opts := supportChatWindowOptionsOn(width, height, screen, float)
+	if position != nil {
+		opts.InitialPosition = application.WindowXY
+		opts.X = position.X
+		opts.Y = position.Y
+	}
+	opts = supportChatWindowOptionsWithContext(opts, state)
+
+	win := app.Window.NewWithOptions(opts)
 	// Portão por janela: o hook consulta ESTA janela e não um estado global que
 	// sobrevive ao fechamento anterior.
 	allowClose := &atomic.Bool{}
@@ -588,6 +754,8 @@ func (a *App) openSupportChatWindow() {
 	a.supportChatAllowClose = allowClose
 	a.supportChatMu.Unlock()
 	a.markSupportChatWindowContentPending()
+	trace.setWebview("novo")
+	trace.mark("janela")
 
 	win.RegisterHook(events.Common.WindowClosing, func(ev *application.WindowEvent) {
 		if allowClose.Load() {
@@ -668,8 +836,11 @@ func (a *App) ensureSupportChatWindowContent(win application.Window) {
 	if !a.supportChatWindowAlive(win) || a.supportChatWindowContentReady.Load() {
 		return
 	}
-	a.Logs.Append("[supportchat] webview ainda sem conteudo apos reload; renavegando para /chat-window.html")
-	win.SetURL("/chat-window.html")
+	// Renavega para a página com os MESMOS parâmetros de contexto (sessão,
+	// atendente, chamado): sem eles a janela recém-recarregada perderia o
+	// cabeçalho que o frontend desenha antes do primeiro snapshot.
+	a.Logs.Append("[supportchat] webview ainda sem conteudo apos reload; renavegando para o chat")
+	win.SetURL(a.supportChatWindowURL("/chat-window.html"))
 }
 
 // SupportChatWindowReady é chamado pelo frontend da janela do chat assim que o
@@ -680,13 +851,40 @@ func (a *App) SupportChatWindowReady() {
 		return
 	}
 	a.supportChatWindowContentReady.Store(true)
+	a.supportChatWinPaints.Store(true)
 	a.Logs.Append("[supportchat] janela do chat com conteudo (frontend pronto)")
+	a.markSupportChatOpenStep(a.currentSupportChatSessionID(), "conteudo")
+}
+
+// SupportChatWindowPainted é chamado pelo frontend quando a primeira pintura
+// de fato aconteceu (requestAnimationFrame no boot). É o sinal que permite ao
+// Go REUSAR a janela no aceite em vez de destruí-la e recriar o WebView2, e
+// fecha a medida "aceite -> janela visível" no log.
+func (a *App) SupportChatWindowPainted() {
+	if a == nil {
+		return
+	}
+	a.supportChatWinPaints.Store(true)
+	sessionID := a.currentSupportChatSessionID()
+	a.markSupportChatOpenStep(sessionID, "pintura")
+	if trace := a.currentSupportChatOpenTrace(); trace != nil && trace.sessionID == sessionID {
+		a.Logs.Append("[supportchat] janela do chat pintada (sessao " + sessionID + ")")
+		// A abertura terminou (do ponto de vista do usuário): fecha a medida.
+		a.finishSupportChatOpenTrace()
+	}
 }
 
 // markSupportChatWindowContentPending marca a janela recém-criada como "sem
 // conteúdo confirmado" (chamado na criação).
+//
+// BUG CORRIGIDO: a flag de PINTURA também precisa ser zerada aqui. Ela é por
+// janela, mas é um atomic global: sem este reset a janela NOVA herdava
+// "pintou" da anterior e o reuso (supportChatWindowReusableForChat /
+// hideSupportChatInviteSurface) tratava um webview ainda vazio como pronto —
+// o usuário ficava com o chat numa janela branca.
 func (a *App) markSupportChatWindowContentPending() {
 	a.supportChatWindowContentReady.Store(false)
+	a.supportChatWinPaints.Store(false)
 }
 
 // boolLabel formata um booleano para o log do agent.
@@ -706,11 +904,16 @@ func (a *App) closeSupportChatWindow() {
 	a.supportChatAllowClose = nil
 	a.supportChatMu.Unlock()
 
+	// Guarda onde a janela estava: a PRÓXIMA nasce no mesmo ponto da tela
+	// (ver supportChatPlacementForNewWindow).
+	a.rememberSupportChatWindowPlacement(win)
+
 	if win == nil {
 		return
 	}
 
 	a.supportChatWindowContentReady.Store(false)
+	a.supportChatWinPaints.Store(false)
 	if allowClose != nil {
 		allowClose.Store(true)
 	}
@@ -1370,6 +1573,11 @@ func (a *App) SupportChatRespondInvite(accepted bool, reason string) error {
 	// fallback: em qualquer caminho o cartão pendente desta sessão sai de cena.
 	state := svc.State()
 	sessionID := state.SessionID
+	// t0 da medida de abertura (aceite -> janela visível): o caso do fluxo
+	// fallback responde AQUI, sem passar pelo cartão nativo.
+	if accepted {
+		a.supportChatTraceFor(sessionID).mark("post")
+	}
 	a.closeSupportChatInviteNotification(sessionID)
 	a.logSupportChatInviteResponse(supportchat.Invite{
 		SessionID:   sessionID,
@@ -1395,6 +1603,8 @@ func (a *App) SupportChatRespondInvite(accepted bool, reason string) error {
 	a.applySupportChatWindowMode(supportchat.StatusNone)
 
 	if accepted {
+		svc.AwaitSessionAfterAccept(ctx, sessionID, supportChatAcceptStateWait)
+		a.markSupportChatOpenStep(sessionID, "estado")
 		_, err := svc.Refresh(ctx)
 		return err
 	}
@@ -1436,8 +1646,43 @@ func (a *App) hideSupportChatInviteSurface() {
 	if win == nil {
 		return
 	}
+
+	// REUSO: se a janela do convite (fluxo fallback) já PINTOU, ela é a própria
+	// janela do chat em seguida — fechar e recriar aqui custava o carregamento
+	// inteiro do WebView2 ("demora para abrir o chat"). A janela é mantida e o
+	// conteúdo passa a ser o da conversa (supportchat:refresh em
+	// openSupportChatWindow). Uma janela que ainda NÃO pintou é fechada: reusar
+	// algo que o usuário não vê deixaria o chat numa janela branca.
+	//
+	// A decisão é tomada ANTES de mexer no registro: desregistrar e registrar de
+	// novo abria uma janela de tempo em que supportChatWindowOpen() respondia
+	// false com a janela viva na tela — nesse intervalo a reconciliação de 30 s
+	// ou um resume podiam criar uma SEGUNDA janela do chat.
+	if a.supportChatWinPaints.Load() {
+		a.Logs.Append("[supportchat] janela do convite REUSADA para a conversa (sem recriar o webview)")
+		// O frontend recebe o refresh pelo evento supportchat:refresh emitido
+		// em openSupportChatWindow. A entrada no registro continua intacta.
+		return
+	}
+
+	a.supportChatMu.Lock()
+	allowClose := a.supportChatAllowClose
+	// Só desregistra se ainda for ESTA janela (outro caminho pode ter trocado).
+	if a.supportChatWin == win {
+		a.supportChatWin = nil
+		a.supportChatAllowClose = nil
+	}
+	a.supportChatMu.Unlock()
+
+	a.supportChatWindowContentReady.Store(false)
+	a.supportChatWinPaints.Store(false)
+	if allowClose != nil {
+		allowClose.Store(true)
+	}
+	a.rememberSupportChatWindowPlacement(win)
+	stopWindowFlash(win)
+	win.Close()
 	a.Logs.Append("[supportchat] convite respondido; fechando a janela que apresentava o convite")
-	a.closeSupportChatWindow()
 }
 
 // SupportChatEnd encerra a sessão pelo usuário.

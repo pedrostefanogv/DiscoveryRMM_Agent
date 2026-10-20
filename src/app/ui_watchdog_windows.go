@@ -52,6 +52,7 @@ func (a *App) startUIWatchdog(ctx context.Context) {
 		SpawnUI:              a.spawnAgentUIInUserSession,
 		KillZombieUI:         killAgentUIProcesses,
 		Log:                  a.logUIWatchdog,
+		MarkUISpawn:          a.markSupportChatUISpawn,
 		// Multiusuário: uma UI por sessão ativa, sem duplicar a que já existe.
 		ActiveSessions:  activeUserSessions,
 		UISessionCounts: uiProcessesBySession,

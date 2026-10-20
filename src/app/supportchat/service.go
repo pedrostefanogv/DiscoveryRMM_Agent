@@ -114,6 +114,18 @@ func (s *Service) emitState(reason string) {
 	s.deps.Emit("supportchat:state", state)
 }
 
+// LinkActive informa se o canal do chat está de fato conectado ao servidor.
+//
+// É a única fonte de verdade para o aviso "Sem conexão em tempo real" da
+// janela: no modo companion quem fala com o NATS é o SERVIÇO, e a UI (que
+// recebe o estado por IPC) ficava dizendo "sem conexão" só porque o campo
+// Connected do PRÓPRIO processo dela era false.
+func (s *Service) LinkActive() bool {
+	s.natsMu.Lock()
+	defer s.natsMu.Unlock()
+	return s.natsReady
+}
+
 func (s *Service) emitError(message string) {
 	s.mu.Lock()
 	s.state.LastError = message
@@ -1314,6 +1326,42 @@ func (s *Service) RespondInviteAcceptedForSession(ctx context.Context, sessionID
 	s.emitState("invite-response")
 	return nil
 }
+
+// AwaitSessionAfterAccept espera, por tempo LIMITADO, o estado da sessão
+// aceita chegar ao serviço (evento session-opened do NATS ou o snapshot que
+// o próprio serviço fez depois do POST).
+//
+// Por que existe: o POST de aceite e o GET /active da janela corriam em
+// paralelo. Quando a janela abria antes de o servidor refletir o aceite, o
+// snapshot devolvia o convite ainda "waiting" (RefreshKeepingInvite o
+// preserva) e a janela pintava o aviso de reconexão numa conversa que estava
+// aberta. Esperar aqui é barato (o evento costuma chegar em milissegundos) e
+// o timeout devolve o estado atual: nunca bloqueia a abertura.
+func (s *Service) AwaitSessionAfterAccept(ctx context.Context, sessionID string, timeout time.Duration) State {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || timeout <= 0 {
+		return s.State()
+	}
+
+	start := time.Now()
+	for {
+		state := s.State()
+		if state.SessionID == sessionID && state.Status != StatusWaiting && state.Status != StatusNone {
+			return state
+		}
+		if time.Since(start) >= timeout {
+			return state
+		}
+		select {
+		case <-ctx.Done():
+			return s.State()
+		case <-time.After(awaitSessionPoll):
+		}
+	}
+}
+
+// awaitSessionPoll é o intervalo de espera do evento de abertura da sessão.
+const awaitSessionPoll = 100 * time.Millisecond
 
 // RespondInvite responde ao convite da sessão corrente (caminho do aceite, que
 // move o estado local para Active).

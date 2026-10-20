@@ -44,6 +44,20 @@ func (a *App) supportChatService() *supportchat.Service {
 			if name == supportChatStateEventName && len(data) > 0 {
 				if state, ok := data[0].(supportchat.State); ok {
 					a.ensureSupportChatInviteSurface(state)
+					// Este processo é quem fala com o SERVIDOR: publica o link
+					// real do canal junto do estado. Antes a janela derivava
+					// "conectado" do Estado local, que no proceso de UI é
+					// sempre false — daí o aviso "Sem conexão em tempo real"
+					// aparecer numa conversa aberta.
+					// Fonte da verdade: o NATS DESTE processo quando ele é o
+					// dono do canal (serviço/standalone) e, no modo companion
+					// (UI, sem NATS próprio), o último valor publicado pelo
+					// serviço — o campo state.Connected da UI é sempre false.
+					active := a.supportChatService().LinkActive() || a.supportChatLinkCurrent()
+					a.setSupportChatLink(active)
+					a.EmitEvent(name, a.supportChatStateEventPayload(state)...)
+					a.syncSupportChatWindowFromEvent(name, data...)
+					return
 				}
 			}
 			a.EmitEvent(name, data...)

@@ -18,6 +18,30 @@
   var state = {
     status: "none",
     connected: false,
+    // link: estado REAL do canal com o servidor, em quatro valores:
+    //   "opening" — janela recém-aberta, ainda sem o primeiro snapshot com
+    //               sessão: a conversa está vindo, NÃO é "sem conexão";
+    //   "live"    — conversa carregada e canal saudável;
+    //   "offline" — o BACKEND confirmou que está fora E o último snapshot
+    //               falhou (só então o aviso de reconexão é verdadeiro);
+    //   "over"    — conversa encerrada (nada a reenviar).
+    // BUG RELATADO ("abro o chat e aparece Sem conexão em tempo real"): o
+    // banner dependia de um único boolean `connected` recalculado a cada
+    // evento — e o processo de UI nunca tem NATS próprio, então qualquer
+    // snapshot que chegasse sem sessão (corrida do aceite × /active, evento
+    // atrasado) pintava o aviso numa conversa que estava aberta.
+    link: "opening",
+    // openDeadlineMs: até quando a janela aceita o estado "opening" sem
+    // avisar. Depois disso, sem conversa carregada, ela avisa de verdade.
+    openDeadlineMs: 0,
+    lastSnapshotError: false,
+    // liveSession: sessão em que a conversa já foi vista viva. Monotônico —
+    // um snapshot posterior sem sessão da MESMA sessão não derruba o link.
+    liveSession: "",
+    // sessionState: último status visto por sessão (ver applyState).
+    sessionState: {},
+    // chatSessionId: sessão cujo transcript está na tela (reuso da janela).
+    chatSessionId: "",
     hasSession: false,
     ticketTitle: "",
     supportName: "",
@@ -212,6 +236,13 @@
     // Conversa terminada vem ANTES do aviso de conexão: o fim é o que está
     // acontecendo, e reconectar não muda mais nada.
     var over = isConversationOver();
+    // Rede de segurança do link: se o ramo que colocou a janela em
+    // "opening" já venceu (OPENING_WINDOW_MS) e nenhum snapshot trouxe a
+    // conversa, o aviso aparece mesmo sem uma chamada de render() nova.
+    // Enquanto o link está "live" isto é no-op.
+    if (!over && state.link !== "live") {
+      recomputeLink();
+    }
 
     if (over) {
       // Quem encerrou fica registrado na mensagem de sistema; a janela NÃO é
@@ -222,7 +253,17 @@
       });
       els.subtitle.textContent = reason || "Conversa encerrada";
       els.banner.hidden = true;
-    } else if (!state.connected) {
+    } else if (state.link === "opening") {
+      // Janela acabou de abrir (aceite): a conversa está vindo. Anunciar
+      // "sem conexão" aqui era EXATAMENTE o defeito relatado — o usuário
+      // abria o chat e o painel dizia que não havia conexão.
+      els.subtitle.textContent = "Abrindo a conversa…";
+      els.banner.hidden = true;
+    } else if (state.link === "idle") {
+      // Abriu e não há conversa carregada: diz o que é, sem prometer reconexão.
+      els.subtitle.textContent = "Sem conversa";
+      els.banner.hidden = true;
+    } else if (state.link === "offline") {
       els.subtitle.textContent = "Reconectando ao servidor…";
       els.banner.hidden = false;
       els.banner.textContent = "Sem conexão em tempo real. As mensagens serão reenviadas quando a conexão voltar.";
@@ -889,18 +930,108 @@
     return merged;
   }
 
+  /**
+   * No processo de UI o serviço é quem fala com o NATS: `connected` do serviço
+   * LOCAL é sempre false (a UI nunca assina o canal — ela recebe o estado por
+   * IPC). Por isso o link não pode ser derivado dele. A regra atual:
+   *
+   *   - "over"     conversa encerrada (nada a reenviar, banner NÃO aparece);
+   *   - "opening"  janela recém-aberta e ainda sem conversa carregada;
+   *   - "live"     conversa carregada (hasSession) OU evento de estado do bind;
+   *   - "offline"  só quando o snapshot REST FALHOU e não há conversa viva —
+   *                é o único momento em que o aviso de reconexão é verdadeiro.
+   */
+  function recomputeLink() {
+    if (isConversationOver()) {
+      state.link = "over";
+      return;
+    }
+    if (state.hasSession || state.status === "active" || state.status === "waiting") {
+      state.link = "live";
+      state.openDeadlineMs = 0;
+      return;
+    }
+    // Sem conversa carregada: a janela aberta ainda está esperando o primeiro
+    // snapshot. Passado o prazo, e se o último snapshot falhou, aí sim avisa.
+    if (state.openDeadlineMs && Date.now() < state.openDeadlineMs) {
+      state.link = "opening";
+      return;
+    }
+    if (state.lastSnapshotError) {
+      state.link = "offline";
+      return;
+    }
+    // BUG CORRIGIDO: aqui caía em "opening" para sempre quando o snapshot era
+    // BEM-SUCEDIDO e simplesmente não havia conversa (janela aberta numa sessão
+    // que já terminou, leitura vazia). O painel ficava eternamente em "Abrindo
+    // a conversa…" — antes ele pelo menos dizia algo. "idle" = abriu, nada a
+    // mostrar, canal OK.
+    state.link = "idle";
+  }
+
+  /**
+   * applyState aplica um snapshot/evento de estado de forma MONOTÔNICA por
+   * sessão. O evento `supportchat:state` e o resultado de `SupportChatRefresh`
+   * chegam por caminhos diferentes (IPC, binding) e podem se cruzar: um
+   * `waiting` emitido ANTES do aceite podia ser aplicado DEPOIS do `active` e
+   * derrubar a conversa para "aguardando"/"sem conexão".
+   *
+   * Regras: `ended` é terminal para a sessão; `active` não regride para
+   * `waiting`; e uma sessão que já foi vista viva mantém hasSession.
+   */
   function applyState(next) {
     if (!next) return;
-    state.status = next.status || "none";
-    // No processo de UI o serviço é quem fala com o NATS: `connected` do serviço
-    // local é sempre false e o banner "sem conexão em tempo real" aparecia mesmo
-    // com tudo funcionando. A conversa só é "ao vivo" quando existe sessão
-    // carregada — o serviço entrega os eventos por IPC.
-    // "ended" também é um estado legível (a janela fica aberta em leitura):
-    // sem isso o banner "sem conexão em tempo real" cobria a nota de
-    // encerramento, porque HasSession já é false no fim da conversa.
-    state.connected = !!next.connected || !!next.hasSession || next.status === "ended";
-    state.hasSession = !!next.hasSession;
+
+    // liveSession anterior: decide se um snapshot sem sessão da MESMA
+    // conversa pode derrubar o link (ver o bloco hasSession "grudado").
+    var previousLiveSession = state.liveSession;
+    var nextStatus = next.status || "none";
+    var nextSession = String(next.sessionId || "");
+
+    // GUARDAS PRIMEIRO: um evento atrasado é DESCARTADO por inteiro. Antes eles
+    // ficavam depois da troca de sessão abaixo — e um `waiting` atrasado da
+    // sessão ANTIGA já tinha zerado o transcript da conversa atual antes de
+    // retornar (a janela reusada aparecia vazia).
+    if (nextSession) {
+      var previousStatus = state.sessionState[nextSession];
+      if (previousStatus === "ended" && nextStatus !== "ended") {
+        // Evento atrasado de uma conversa já encerrada: não reabre.
+        return;
+      }
+      if (previousStatus === "active" && nextStatus === "waiting") {
+        // `waiting` depois de `active` só pode ser atraso de entrega.
+        return;
+      }
+      state.sessionState[nextSession] = nextStatus;
+    }
+
+    // Conversa ATIVA de uma sessão DIFERENTE da anterior (janela reusada no
+    // aceite): o transcript antigo sai da tela. Só limpa quando a nova sessão
+    // está ativa e com snapshot; nada é apagado numa leitura transitória.
+    if (nextSession && state.chatSessionId && state.chatSessionId !== nextSession && nextStatus === "active") {
+      state.chatSessionId = nextSession;
+      state.messages = [];
+      state.pending = [];
+      state.comments = [];
+      state.commentsLoadedFor = "";
+    } else if (nextSession) {
+      state.chatSessionId = nextSession;
+    }
+
+    state.status = nextStatus;
+    var nextHasSession = !!next.hasSession;
+    // hasSession "grudado": depois de a conversa ser vista viva nesta sessão,
+    // um snapshot sem sessão da MESMA sessão (leitura transitória, evento
+    // atrasado) não derruba o link. Outra sessão reseta.
+    if (!nextHasSession && nextSession && previousLiveSession === nextSession && nextStatus !== "ended") {
+      nextHasSession = true;
+    }
+    if (nextStatus === "ended" && nextSession && previousLiveSession === nextSession) {
+      state.liveSession = "";
+    } else if (nextSession && nextHasSession && nextStatus !== "ended") {
+      state.liveSession = nextSession;
+    }
+    state.hasSession = nextHasSession;
     state.ticketTitle = next.ticketTitle || state.ticketTitle;
     state.supportName = next.supportName || state.supportName;
 
@@ -915,6 +1046,18 @@
       state.ticketId = nextTicketId;
     }
     state.messages = mergeMessages(Array.isArray(next.messages) ? next.messages : []);
+
+    // Snapshot/evento com conteúdo = o canal está entregando: o link volta a
+    // "live" sozinho (o aviso de reconexão some sem ação do usuário).
+    state.lastSnapshotError = false;
+    if (next.realtime && next.realtime.active === false) {
+      // O BACKEND informa que está fora. Isso NÃO pinta o banner por si só:
+      // o link deixa de ser "live" só quando não há conversa carregada.
+      state.connected = false;
+    } else if (next.realtime && next.realtime.active === true) {
+      state.connected = true;
+    }
+    recomputeLink();
 
     // Convite pendente ganha título próprio: o tooltip do botão na barra de
     // tarefas mostra o título da janela e é o que sobra quando o usuário está
@@ -1011,12 +1154,22 @@
     return state.status === "none" && !state.messages.length && !state.ticketTitle;
   }
 
+  // Janela recém-aberta: enquanto o primeiro snapshot COM sessão não chega, o
+  // painel fica em "Abrindo a conversa…" e tenta de novo — nunca anuncia
+  // "sem conexão" nesse intervalo (era o defeito relatado: abrir o chat e
+  // ver o aviso de reconexão). Teto de tempo para não mascarar um servidor
+  // realmente fora.
+  var OPENING_WINDOW_MS = 8000;
+  var OPENING_RETRY_MS = 1000;
+  var OPENING_RETRIES = 8;
+
   function refresh(attempt) {
     attempt = attempt || 0;
     var wasSettled = !isUnsettled();
 
     return call("SupportChatRefresh")
       .then(function (next) {
+        state.lastSnapshotError = false;
         var blank = isBlankSnapshot(next);
         // Re-tenta quando o snapshot voltou vazio E a janela ainda não tinha
         // nada carregado (corrida do aceite × /active). Janela já preenchida
@@ -1027,11 +1180,72 @@
           }).then(function () { return refresh(attempt + 1); });
         }
         applyState(next);
+        // Ainda sem conversa carregada: agenda a próxima tentativa curta
+        // (a janela acabou de abrir e o snapshot pode estar atrás do POST do
+        // aceite). Para quando a conversa aparece ou o prazo vence.
+        if (isUnsettled() && state.link === "opening" && !state.closing) {
+          scheduleOpeningRetry();
+        }
       })
       .catch(function (err) {
-        // Snapshot falhou (rede): mantém o estado em memória do NATS.
-        showBanner("Não foi possível atualizar a conversa: " + describe(err));
+        // Snapshot falhou (rede). Mantém o estado em memória do NATS e marca
+        // a falha: é só com ela (e sem conversa viva) que o aviso de
+        // reconexão passa a ser exibido.
+        state.lastSnapshotError = true;
+        recomputeLink();
+        render();
+        // O aviso de reconexão ("Sem conexão em tempo real") já é o texto do
+        // banner nesse caso; repetir o erro do snapshot por cima só trocava
+        // a mensagem útil por um texto técnico.
+        if (state.link !== "offline") {
+          showBanner("Não foi possível atualizar a conversa: " + describe(err));
+        }
       });
+  }
+
+  var openingRetryTimer = null;
+  var snapshotDebounceTimer = null;
+
+  /**
+   * requestSnapshotSoon pede um snapshot em breve (debounce 150 ms): vários
+   * eventos de estado juntos (o serviço emite um por transição) viram UMA
+   * consulta em vez de N — o mesmo cuidado do refresh(attempt) com a corrida
+   * do aceite. force=true também dispara quando a janela já tem conversa
+   * (caso do reuso).
+   */
+  function requestSnapshotSoon(force) {
+    if (state.closing) return;
+    if (snapshotDebounceTimer) {
+      // Com force, um pedido pendente já vira o que precisamos: cancela e
+      // reagenda (janela reusada precisa buscar a conversa NOVA já).
+      if (!force) return;
+      clearTimeout(snapshotDebounceTimer);
+      snapshotDebounceTimer = null;
+    }
+    snapshotDebounceTimer = setTimeout(function () {
+      snapshotDebounceTimer = null;
+      if (state.closing) return;
+      if (openingRetryTimer) { clearTimeout(openingRetryTimer); openingRetryTimer = null; }
+      // force: a janela pode ter conversa carregada de OUTRA sessão (reuso) e
+      // refresh() não se recusa a rodar por isso.
+      refresh().catch(function () { /* tratado em refresh */ });
+    }, 150);
+  }
+  // openingAttempts: quantas re-tentativas de abertura já foram agendadas.
+  // Contador próprio (o `attempt` de refresh() zera a cada chamada externa).
+  var openingAttempts = 0;
+  var openingDeadlineTimer = null;
+
+  function scheduleOpeningRetry() {
+    if (openingRetryTimer || state.closing) return;
+    if (openingAttempts >= OPENING_RETRIES) return;
+    openingAttempts += 1;
+    openingRetryTimer = setTimeout(function () {
+      openingRetryTimer = null;
+      if (state.closing) return;
+      if (isConversationOver() || state.hasSession) return;
+      refresh().catch(function () { /* tratado em refresh */ });
+    }, OPENING_RETRY_MS);
   }
 
   // ── Anexos ───────────────────────────────────────────────────────────────
@@ -1521,7 +1735,19 @@
   function wireRealtime() {
     if (!window.wails || typeof window.wails.on !== "function") return;
 
-    window.wails.on("supportchat:state", function (payload) { applyState(payload); });
+    window.wails.on("supportchat:state", function (payload) {
+      applyState(payload);
+      // Evento de estado é sinal de vida do canal: com a conversa ainda não
+      // carregada, força um snapshot em vez de esperar o próximo timer.
+      requestSnapshotSoon();
+    });
+    // O Go pede um recarregamento explícito (janela REUSADA no aceite: a
+    // mesma janela passa de "convite" para "conversa" e precisa buscar a
+    // sessão nova). Sem este listener ela reabria e ficava sem conversa.
+    window.wails.on("supportchat:refresh", function () {
+      beginOpening();
+      requestSnapshotSoon(true);
+    });
     window.wails.on("supportchat:error", function (message) { showBanner(String(message || "Erro no chat.")); });
     window.wails.on("supportchat:confirm_close", function () { askClose(); });
 
@@ -1540,6 +1766,69 @@
       clearCapturePending();
       showBanner("Não foi possível capturar a tela." + (reason ? " " + reason : ""));
     });
+  }
+
+  // ── Abertura da janela ───────────────────────────────────────────────────
+
+  /**
+   * beginOpening marca a janela como "aberta agora" e desenha o cabeçalho que
+   * o Go já conhece (sessão/chamado/atendente vêm na URL).
+   *
+   * Assim o painel abre COM a conversa (cabeçalho) mesmo antes do primeiro
+   * snapshot — e a rolagem do render() não fica com a tela vazia enquanto a
+   * rede responde.
+   */
+  function beginOpening() {
+    state.link = "opening";
+    state.openDeadlineMs = Date.now() + OPENING_WINDOW_MS;
+    openingAttempts = 0;
+    // Não há render() periódico: quando o prazo vence sem conversa, o painel
+    // precisa sair de "Abrindo a conversa…" por conta própria.
+    if (openingDeadlineTimer) clearTimeout(openingDeadlineTimer);
+    openingDeadlineTimer = setTimeout(function () {
+      openingDeadlineTimer = null;
+      if (state.closing || state.hasSession || isConversationOver()) return;
+      recomputeLink();
+      render();
+      scheduleOpeningRetry();
+    }, OPENING_WINDOW_MS + 50);
+
+    var params = openingParams();
+    if (params.sessionId) {
+      state.hasSession = true;
+      state.sessionState[params.sessionId] = "active";
+    }
+    if (params.ticketTitle) state.ticketTitle = params.ticketTitle;
+    if (params.supportName) state.supportName = params.supportName;
+
+    // Sinaliza ao Go a PRIMEIRA PINTURA: é o que fecha a medida de tempo
+    // "aceite → janela visível" no log do agent (SupportChatWindowPainted).
+    if (window.requestAnimationFrame) {
+      window.requestAnimationFrame(function () {
+        call("SupportChatWindowPainted").catch(function () { /* build antigo */ });
+      });
+    }
+  }
+
+  /**
+   * openingParams lê os campos que o Go envia na URL da janela
+   * (sessionId/ticketId/supportName/ticketTitle). Valores ausentes devolvem
+   * string vazia — a janela funciona igual sem eles (build antigo).
+   */
+  function openingParams() {
+    var result = { sessionId: "", ticketId: "", supportName: "", ticketTitle: "" };
+    try {
+      var search = String((window.location && window.location.search) || "");
+      if (!search) return result;
+      var query = new URLSearchParams(search);
+      ["sessionId", "ticketId", "supportName", "ticketTitle"].forEach(function (key) {
+        var value = query.get(key);
+        if (value) result[key] = value;
+      });
+    } catch (err) {
+      // URLSearchParams indisponível: sem cabeçalho antecipado.
+    }
+    return result;
   }
 
   function bootstrap() {
@@ -1569,6 +1858,8 @@
         render();
       })
       .catch(function () { /* mantém o default */ });
+
+    beginOpening();
 
     applyState({ status: "none", connected: false, messages: [] });
 

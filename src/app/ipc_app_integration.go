@@ -93,6 +93,11 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 					"supportName": chatState.SupportName,
 					"expiresAt":   chatState.ExpiresAt,
 					"status":      chatState.Status,
+					// Link REAL do canal (o NATS é deste processo): a UI
+					// adota este valor em vez de inferir "conectado" do
+					// próprio estado — era daí que vinha o aviso falso de
+					// "Sem conexão em tempo real" na janela do chat.
+					"supportChatLinkActive": a.supportChatService().LinkActive(),
 				}))
 			}
 		}
@@ -561,6 +566,13 @@ func (a *App) startIPCClient() {
 				if name == supportChatStateEventName {
 					a.adoptSupportChatStateFromIPC(msg.Payload)
 					a.syncSupportChatWindowFromIPCPayload(msg.Payload)
+				}
+				// Link REAL do canal publicado pelo SERVIÇO (o NATS não é
+				// desta processo). A UI guarda o valor e o repassa à janela
+				// do chat no evento supportchat:state — antes ela dizia "sem
+				// conexão" só porque o próprio Connected era false.
+				if active, known := supportChatLinkFromIPC(msg.Payload); known {
+					a.setSupportChatLink(active)
 				}
 				a.EmitEvent(name, eventData...)
 			default:

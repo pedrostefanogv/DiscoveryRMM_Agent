@@ -63,6 +63,9 @@ type uiWatchdogDeps struct {
 	UserSessionAvailable func() bool
 	// SpawnUI relança a UI minimizada na sessão do usuário.
 	SpawnUI func(reason string) error
+	// MarkUISpawn (opcional) registra PROGRESSO de UI para a tolerância do
+	// convite de chat sem interface (ver supportChatUISpawnInProgress).
+	MarkUISpawn func(reason string)
 	// KillZombieUI encerra as UIs sem IPC (esperando elas saírem) e devolve
 	// quantas foram encerradas.
 	KillZombieUI func() int
@@ -487,6 +490,12 @@ func (w *uiWatchdog) spawnLocked(reason string, cooldown time.Duration) {
 	if err := w.deps.SpawnUI(reason); err != nil {
 		w.deps.Log("falha ao relançar a UI (" + reason + "): " + err.Error())
 		return
+	}
+	// Progresso de UI para a tolerância do convite de chat sem interface: com
+	// a UI nascendo, o prazo de 25 s é prorrogado em vez de recusar o convite
+	// (ver supportChatUISpawnInProgress).
+	if w.deps.MarkUISpawn != nil {
+		w.deps.MarkUISpawn(reason)
 	}
 	// Um relançamento bem-sucedido invalida os avisos de estado anteriores
 	// (cooldown/sem-sessão) — senão um pedido barrado uma vez nunca mais seria

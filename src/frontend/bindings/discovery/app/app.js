@@ -2864,6 +2864,17 @@ export function SupportChatUploadAttachment(fileName, contentType, base64Data) {
 }
 
 /**
+ * SupportChatWindowPainted é chamado pelo frontend quando a primeira pintura
+ * de fato aconteceu (requestAnimationFrame no boot). É o sinal que permite ao
+ * Go REUSAR a janela no aceite em vez de destruí-la e recriar o WebView2, e
+ * fecha a medida "aceite -> janela visível" no log.
+ * @returns {$CancellablePromise<void>}
+ */
+export function SupportChatWindowPainted() {
+    return $Call.ByID(1779935964);
+}
+
+/**
  * SupportChatWindowReady é chamado pelo frontend da janela do chat assim que o
  * DOM da conversa está montado. É o sinal que ensureSupportChatWindowContent usa
  * para distinguir "janela carregando" de "janela em branco".

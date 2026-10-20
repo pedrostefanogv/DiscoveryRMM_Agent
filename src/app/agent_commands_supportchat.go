@@ -216,6 +216,12 @@ const (
 	// recusar o convite. Cobre a subida do processo de UI + WebView2 depois do
 	// requestUIWatchdogSpawn (tipicamente 2–8 s em máquina fria).
 	supportChatInviteUIWait = 25 * time.Second
+	// supportChatInviteUIExtend é a PRORROGAÇÃO (uma única vez) do prazo
+	// quando há progresso visível de UI: no log desta máquina a interface
+	// levou ~54 s para subir e o convite foi recusado por "sem UI" no meio do
+	// processo. A prorrogação vale só com progresso — sem ele a recusa no_ui
+	// continua imediata, para o suporte não ficar esperando à toa.
+	supportChatInviteUIExtend = 30 * time.Second
 	// supportChatInviteUIPoll é o intervalo de verificação da UI.
 	supportChatInviteUIPoll = 500 * time.Millisecond
 )
@@ -239,6 +245,8 @@ func (a *App) scheduleSupportChatInviteRedelivery(invite supportchat.Invite) {
 	}
 
 	go func() {
+		started := time.Now()
+		extended := false
 		deadline := time.NewTimer(supportChatInviteUIWait)
 		defer deadline.Stop()
 
@@ -258,6 +266,22 @@ func (a *App) scheduleSupportChatInviteRedelivery(invite supportchat.Invite) {
 				if a.hasSupportChatUI() {
 					a.redeliverSupportChatInvite(invite)
 					return
+				}
+
+				// PROGRESSO de UI (processo de UI vivo, ainda conectando): o
+				// prazo é estendido UMA vez. Medido nesta máquina, o nascimento
+				// da interface levou ~54 s (gerência do serviço, self-update,
+				// IPC e WebView2): recusar em 25 s avisava o suporte de que o
+				// usuário tinha recusado um convite que ia aparecer segundos
+				// depois.
+				if !extended && a.supportChatUISpawnInProgress() {
+					extended = true
+					deadline.Reset(supportChatInviteUIExtend)
+					a.Logs.Append("[supportchat] convite aguardando a UI ha " +
+						(time.Since(started)).Round(time.Second).String() +
+						" com progresso; extendendo o prazo em " + supportChatInviteUIExtend.String() +
+						" (sessao " + invite.SessionID + ")")
+					continue
 				}
 
 				// Só recusa se o convite AINDA é o pendente: se outra sessão o

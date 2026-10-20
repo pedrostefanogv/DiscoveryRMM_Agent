@@ -165,6 +165,21 @@ type App struct {
 	// DOM. Usado pela blindagem de navegação (ensureSupportChatWindowContent):
 	// sem esse sinal no prazo, a janela é recarregada/renavegada.
 	supportChatWindowContentReady atomic.Bool
+	// supportChatWinPaints: a janela corrente já PINTOU (sinal do frontend em
+	// SupportChatWindowPainted). Portão do REUSO no aceite: só vale reaproveitar
+	// uma janela que o usuário já está vendo — reusar uma janela branca daria
+	// "abriu o chat e não tem nada".
+	supportChatWinPaints atomic.Bool
+	// supportChatLastPlacement: posição da última janela do chat (a próxima
+	// nasce nela). Protegida por supportChatMu.
+	supportChatLastPlacement *supportChatPlacementRecord
+	// supportChatLink: estado REAL do canal (NATS do SERVIÇO, não o da UI).
+	// A janela deixou de inferir "conectado" a partir do próprio processo.
+	supportChatLink supportChatLinkState
+	// supportChatTraceMu/supportChatOpenTrace: medida do caminho
+	// "aceite -> janela visível" (uma linha de log por abertura).
+	supportChatTraceMu    sync.Mutex
+	supportChatOpenTrace *supportChatOpenTrace
 	// Dedupe do verify em background por sessionId: event/JS/IPC/reentrega podem
 	// pedir a mesma validação várias vezes; cada verify faz até 20 GETs.
 	supportChatVerifyMu  sync.Mutex
