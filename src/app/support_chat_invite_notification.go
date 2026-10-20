@@ -365,10 +365,10 @@ func (a *App) runSupportChatInviteNotificationDecision(invite supportchat.Invite
 	a.markSupportChatInviteNotificationAnswered(sessionID)
 
 	// O ENVIO ao servidor acontece DENTRO do cartão (reportSupportChatInviteDecision),
-	// antes de a janela nativa sair da tela — ver o cartão em
+	// em paralelo ao fechamento da janela nativa — ver
 	// support_chat_invite_notification_windows.go. Em modo companion o cartão é
 	// criado na UI e o serviço só publica por IPC: a decisão do cartão é a
-	// AUTORIDADE.
+	// AUTORIDADE; aqui só se aplica o que falta no processo de UI.
 	if result.Error != nil {
 		a.Logs.Append("[supportchat] falha ao reportar a resposta do cartao nativo: " + result.Error.Error())
 	}
@@ -401,21 +401,19 @@ func (a *App) runSupportChatInviteNotificationDecision(invite supportchat.Invite
 
 	if result.Accepted {
 		a.Logs.Append("[supportchat] convite aceito no cartao nativo (sessao " + sessionID + ")")
-		// Fluxo FALLBACK (janela do chat com o modal de aceite): a janela que
-		// apresentava o convite sai de cena ANTES de abrir a nova. Sem isto o
-		// usuário ficava com DUAS janelas iguais na tela (a antiga, já respondida,
-		// e a conversa), e a reconciliação podia reabrir a antiga.
+		// ACEITE: o POST ao servidor JÁ foi feito pelo cartão
+		// (reportSupportChatInviteDecision → RespondInviteAcceptedForSession, que
+		// também move o estado local e pede o snapshot). NÃO repetir aqui:
+		// SupportChatRespondInvite faria um SEGUNDO POST de aceite na mesma
+		// sessão (o servidor responderia "session_not_pending" e o log viraria
+		// ruído), e ainda chamaria Refresh de novo.
+		//
+		// Se o cartão reportou erro (servidor fora), ainda vale abrir a janela:
+		// ela mostra o estado/erro e o usuário não perde o contexto.
 		a.hideSupportChatInviteSurface()
-		// Estado local -> active e snapshot da conversa. Roda em goroutine: a
-		// janela do chat precisa abrir JÁ (a abertura é independente do REST) e
-		// o carregamento das mensagens não pode atrasar a janela.
-		go func() {
-			if err := a.SupportChatRespondInvite(true, ""); err != nil {
-				a.Logs.Append("[supportchat] falha ao concluir o aceite no cartao nativo: " + err.Error())
-			}
-		}()
-		// Abre mesmo se o reporte falhou: a janela mostra o estado/erro e o
-		// usuário não perde o contexto do convite que acabou de aceitar.
+		if result.Error != nil {
+			a.Logs.Append("[supportchat] aceite nao confirmado pelo servidor; abrindo a janela mesmo assim (sessao " + sessionID + ")")
+		}
 		if a.app != nil {
 			a.openSupportChatWindow()
 		}
@@ -495,6 +493,11 @@ func (a *App) reportSupportChatInviteDecision(result supportChatInviteNotificati
 	}
 
 	if err != nil {
+		// Falha do POST: loga aqui (o cartão já saiu da tela; este é o único
+		// ponto que garante o registro, independentemente do caminho que
+		// consumir a decisão).
+		a.Logs.Append("[supportchat] falha ao reportar a resposta do convite ao servidor (sessao " +
+			result.SessionID + "): " + err.Error())
 		return err
 	}
 
@@ -589,6 +592,8 @@ func (a *App) replaySupportChatInviteAfterUIReconnect() {
 	}
 	if invite.ExpiredAt(time.Now()) {
 		a.Logs.Append("[supportchat] convite " + invite.SessionID + " expirado no relogio local; nao reapresentando (limpeza)")
+		// clearSupportChatIfCurrent: só limpa se o estado AINDA é deste convite
+		// (outro convite pode ter assumido entre a leitura e aqui).
 		a.clearSupportChatIfCurrent(invite.SessionID)
 		a.closeSupportChatInviteNotification(invite.SessionID)
 		return

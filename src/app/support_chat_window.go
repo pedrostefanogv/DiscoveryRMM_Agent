@@ -1003,12 +1003,22 @@ func (a *App) SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, supp
 	// acesso remoto (sem ação padrão). A janela do chat só é criada depois do
 	// aceite; em plataformas sem cartão, presentSupportChatInvite mantém o
 	// fluxo antigo (janela + modal).
-	a.presentSupportChatInvite(supportchat.Invite{
+	//
+	// O vencimento vem do estado do serviço (o binding só recebe os campos de
+	// exibição): sem ele, um convite reapresentado por este caminho poderia
+	// nascer já vencido.
+	invite := supportchat.Invite{
 		SessionID:   sessionID,
 		TicketID:    ticketID,
 		TicketTitle: ticketTitle,
 		SupportName: supportName,
-	})
+		ExpiresAt:   svc.State().ExpiresAt,
+	}
+	if invite.ExpiredAt(time.Now()) {
+		a.Logs.Append("[supportchat] convite " + sessionID + " vencido; cartao nao apresentado")
+		return errSupportChatInviteStale
+	}
+	a.presentSupportChatInvite(invite)
 	a.Logs.Append("[supportchat] convite apresentado ao usuario (sessao " + sessionID + ")")
 	return nil
 }
