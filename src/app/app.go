@@ -161,6 +161,10 @@ type App struct {
 	// openSupportChatWindow: várias tentativas de abertura no mesmo instante
 	// pediam vários resumos (e vários GET /active) para o mesmo evento.
 	supportChatResumeRequested atomic.Bool
+	// supportChatWindowContentReady: o frontend da JANELA DO CHAT já montou o
+	// DOM. Usado pela blindagem de navegação (ensureSupportChatWindowContent):
+	// sem esse sinal no prazo, a janela é recarregada/renavegada.
+	supportChatWindowContentReady atomic.Bool
 	// Dedupe do verify em background por sessionId: event/JS/IPC/reentrega podem
 	// pedir a mesma validação várias vezes; cada verify faz até 20 GETs.
 	supportChatVerifyMu  sync.Mutex

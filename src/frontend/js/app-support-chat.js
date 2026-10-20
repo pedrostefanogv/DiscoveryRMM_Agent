@@ -1571,6 +1571,16 @@
       .catch(function () { /* mantém o default */ });
 
     applyState({ status: "none", connected: false, messages: [] });
+
+    // Sinal de "janela com conteúdo" para o Go (SupportChatWindowReady).
+    //
+    // BUG RELATADO (agent relançado no tray): a janela do chat aparecia, mas em
+    // branco — o WebView2 criava o ambiente e a navegação não completava. O Go
+    // usa este sinal como prova de que a página carregou; sem ele dentro do
+    // prazo, a janela é recarregada/renavegada automaticamente
+    // (ensureSupportChatWindowContent).
+    call("SupportChatWindowReady").catch(function () { /* binding ausente em build antigo */ });
+
     refresh().catch(function (err) {
       showBanner("Não foi possível carregar a conversa: " + describe(err));
     });

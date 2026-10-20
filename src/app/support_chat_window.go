@@ -550,6 +550,7 @@ func (a *App) openSupportChatWindow() {
 	a.supportChatWin = win
 	a.supportChatAllowClose = allowClose
 	a.supportChatMu.Unlock()
+	a.markSupportChatWindowContentPending()
 
 	win.RegisterHook(events.Common.WindowClosing, func(ev *application.WindowEvent) {
 		if allowClose.Load() {
@@ -564,6 +565,91 @@ func (a *App) openSupportChatWindow() {
 
 	a.raiseSupportChatWindow(win, float)
 	a.Logs.Append("[supportchat] janela do chat aberta (sempre no topo=" + boolLabel(float) + ")")
+
+	// Blindagem de NAVEGAÇÃO do WebView2 desta janela.
+	//
+	// RELATO (agent relançado no tray): a janela aparecia, o poste de "aberta"
+	// era logado, mas NADA era desenhado — o WebView2 criava o ambiente e nunca
+	// navegava (noon "NavigationCompleted" do Wails, que faria o
+	// chromium.Show() e revelaria o conteúdo).
+	//
+	// Aqui a janela é VERIFICADA depois de nascer: se o webview não carregou a
+	// página do chat dentro do prazo, força reload/recria o conteúdo uma vez e
+	// registra o motivo no log do agent.
+	go a.ensureSupportChatWindowContent(win)
+}
+
+// supportChatContentDeadline é quanto tempo a janela do chat ganha para ter o
+// webview navegado antes de ser considerada "sem conteúdo".
+const supportChatContentDeadline = 4 * time.Second
+
+// ensureSupportChatWindowContent confere se o webview da janela do chat carregou
+// e, se não carregou, força uma nova navegação.
+//
+// O Wails só chama Show() do webview depois do primeiro NavigationCompleted; se
+// essa navegação não acontece (window criada durante o relaunch, ambiente do
+// WebView2 criando, asset server ainda subindo), a janela improvisa o título e
+// fica vazia. Um Reload()/SetURL explícito resolve na maioria dos casos.
+func (a *App) ensureSupportChatWindowContent(win application.Window) {
+	if win == nil {
+		return
+	}
+
+	deadline := time.Now().Add(supportChatContentDeadline)
+	for time.Now().Before(deadline) {
+		select {
+		case <-a.supportChatContext().Done():
+			return
+		case <-time.After(400 * time.Millisecond):
+		}
+		if !a.supportChatWindowAlive(win) {
+			return
+		}
+		// O Wails não expõe "navegou?" de forma portátil; a janela é considerada
+		// carregada quando o webview já existe e o usuário já vê a página.
+		// Usamos o próprio binding do frontend (setInterval abaixo) como sinal:
+		// se em deadline não houve sinal, recarrega uma vez.
+		if a.supportChatWindowContentReady.Load() {
+			return
+		}
+	}
+
+	if !a.supportChatWindowAlive(win) || a.supportChatWindowContentReady.Load() {
+		return
+	}
+
+	a.Logs.Append("[supportchat] webview da janela do chat nao confirmou o carregamento; recarregando")
+	win.Reload()
+
+	// Última tentativa: re-navega para a página do chat (relógio do Wails pode
+	// ter ficado com a URL anterior).
+	select {
+	case <-a.supportChatContext().Done():
+		return
+	case <-time.After(4 * time.Second):
+	}
+	if !a.supportChatWindowAlive(win) || a.supportChatWindowContentReady.Load() {
+		return
+	}
+	a.Logs.Append("[supportchat] webview ainda sem conteudo apos reload; renavegando para /chat-window.html")
+	win.SetURL("/chat-window.html")
+}
+
+// SupportChatWindowReady é chamado pelo frontend da janela do chat assim que o
+// DOM da conversa está montado. É o sinal que ensureSupportChatWindowContent usa
+// para distinguir "janela carregando" de "janela em branco".
+func (a *App) SupportChatWindowReady() {
+	if a == nil {
+		return
+	}
+	a.supportChatWindowContentReady.Store(true)
+	a.Logs.Append("[supportchat] janela do chat com conteudo (frontend pronto)")
+}
+
+// markSupportChatWindowContentPending marca a janela recém-criada como "sem
+// conteúdo confirmado" (chamado na criação).
+func (a *App) markSupportChatWindowContentPending() {
+	a.supportChatWindowContentReady.Store(false)
 }
 
 // boolLabel formata um booleano para o log do agent.
@@ -587,6 +673,7 @@ func (a *App) closeSupportChatWindow() {
 		return
 	}
 
+	a.supportChatWindowContentReady.Store(false)
 	if allowClose != nil {
 		allowClose.Store(true)
 	}

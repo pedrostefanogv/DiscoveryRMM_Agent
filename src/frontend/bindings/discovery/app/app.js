@@ -2864,6 +2864,16 @@ export function SupportChatUploadAttachment(fileName, contentType, base64Data) {
 }
 
 /**
+ * SupportChatWindowReady é chamado pelo frontend da janela do chat assim que o
+ * DOM da conversa está montado. É o sinal que ensureSupportChatWindowContent usa
+ * para distinguir "janela carregando" de "janela em branco".
+ * @returns {$CancellablePromise<void>}
+ */
+export function SupportChatWindowReady() {
+    return $Call.ByID(1301338662);
+}
+
+/**
  * @returns {$CancellablePromise<void>}
  */
 export function SyncNetworkConnections() {
