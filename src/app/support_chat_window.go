@@ -784,6 +784,37 @@ func (a *App) openSupportChatWindow() {
 	go a.ensureSupportChatWindowContent(win)
 }
 
+// openSupportChatWindowForAcceptedSession abre a janela de uma sessão cujo
+// aceite o SERVIDOR acabou de confirmar.
+//
+// BUG RELATADO ("cliquei em Abrir chat e a janela não abriu"): o aceite era
+// reportado ao servidor com sucesso, mas a abertura consultava o status LOCAL e
+// desistia quando ele ainda era "waiting" (`janela do chat nao aberta: conversa
+// ainda nao foi aceita (status=waiting)`). No log o estado virava "active" 76 ms
+// DEPOIS — e ninguém tentava de novo: a janela nunca era criada. A confirmação
+// do SERVIDOR é a autoridade: com ela, o estado local é detalhe e a janela abre.
+//
+// O estado do serviço é alinhado aqui (quando a sessão é a corrente) para o
+// resto do fluxo — refresh, "sempre no topo", snapshot — enxergar "active".
+func (a *App) openSupportChatWindowForAcceptedSession(sessionID string) {
+	if a == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID != "" {
+		if state := a.supportChatService().State(); state.SessionID == sessionID &&
+			state.Status != supportchat.StatusActive && state.Status != supportchat.StatusEnded {
+			a.supportChatService().MarkActive(sessionID)
+		}
+	}
+	// Com o estado já "active", a superfície do convite (fluxo fallback) sai de
+	// cena antes de a janela da conversa aparecer.
+	if a.supportChatLegacyInviteWindowMode() {
+		a.hideSupportChatInviteSurface()
+	}
+	a.openSupportChatWindow()
+}
+
 // supportChatContentDeadline é quanto tempo a janela do chat ganha para ter o
 // webview navegado antes de ser considerada "sem conteúdo".
 const supportChatContentDeadline = 4 * time.Second

@@ -1327,6 +1327,30 @@ func (s *Service) RespondInviteAcceptedForSession(ctx context.Context, sessionID
 	return nil
 }
 
+// MarkActive move para Active a sessão informada, quando ela é a corrente.
+//
+// Usado pelo processo de UI depois de o SERVIDOR confirmar o aceite: o estado
+// local pode ainda ser "waiting" (cópia do serviço, evento em voo) e a abertura
+// da janela não pode depender disso. Idempotente e sem efeito para outra sessão.
+func (s *Service) MarkActive(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if s == nil || sessionID == "" {
+		return
+	}
+	s.mu.Lock()
+	changed := s.state.SessionID == sessionID && s.state.Status != StatusActive && s.state.Status != StatusEnded
+	if changed {
+		s.state.Status = StatusActive
+		if s.activeSince.IsZero() {
+			s.activeSince = time.Now()
+		}
+	}
+	s.mu.Unlock()
+	if changed {
+		s.emitState("mark-active")
+	}
+}
+
 // AwaitSessionAfterAccept espera, por tempo LIMITADO, o estado da sessão
 // aceita chegar ao serviço (evento session-opened do NATS ou o snapshot que
 // o próprio serviço fez depois do POST).

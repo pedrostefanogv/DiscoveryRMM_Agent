@@ -481,8 +481,7 @@ func (a *App) runSupportChatInviteNotificationDecision(invite supportchat.Invite
 		// sem descartar a decisão. Antes este caminho tratava o convite já ativo
 		// como "decisão descartada" e o cartão ficava na tela sem a janela abrir.
 		a.Logs.Append("[supportchat] aceite confirmado apos o cartao; garantindo a janela do chat (sessao " + sessionID + ")")
-		a.hideSupportChatInviteSurface()
-		go a.openSupportChatWindow()
+		go a.openSupportChatWindowForAcceptedSession(sessionID)
 		return
 	}
 	if state.Status != supportchat.StatusWaiting || state.SessionID != sessionID {
@@ -491,8 +490,10 @@ func (a *App) runSupportChatInviteNotificationDecision(invite supportchat.Invite
 		// garantida — era isso que deixava o cartão sumir sem o chat abrir.
 		a.Logs.Append("[supportchat] decisao do cartao sem convite pendente; aplicando o minimo (sessao " + sessionID + ")")
 		if a.app != nil {
-			a.hideSupportChatInviteSurface()
-			go a.openSupportChatWindow()
+			// ACEITE confirmado: abre independentemente do estado local (ver
+			// openSupportChatWindowForAcceptedSession — o status aqui pode ainda
+			// ser "waiting" e openSupportChatWindow recusaria a abertura).
+			go a.openSupportChatWindowForAcceptedSession(sessionID)
 		}
 		return
 	}
@@ -687,30 +688,31 @@ func (a *App) reportSupportChatInviteDecision(result supportChatInviteNotificati
 		// "Aguardando confirmação" e o usuário clicava de novo.
 		//
 		// O aceite NUNCA é condicional: é reportado para a sessão do CARTÃO.
+		// O estado desta UI pode ser uma CÓPIA (modo companion: o estado vivo
+		// está no serviço e chega por IPC). Ele não decide se a janela abre:
+		// quem decide é o servidor, abaixo.
 		err = a.supportChatService().RespondInviteAcceptedForSession(ctx, result.SessionID)
 		if err == nil {
-			// O servidor confirmou o aceite: espera (curto e limitado) o estado
-			// da sessão chegar AQUI antes do snapshot. Sem isto o snapshot podia
-			// voltar ainda "waiting" (RefreshKeepingInvite o preserva) e a janela
-			// pintava o aviso de reconexão numa conversa que já estava aberta.
-			a.supportChatService().AwaitSessionAfterAccept(ctx, result.SessionID, supportChatAcceptStateWait)
+			// O servidor confirmou o aceite. A sessão local já virou "active"
+			// dentro do RespondInviteAcceptedForSession quando era a corrente;
+			// quando NÃO era, o snapshot abaixo é quem completa o estado.
 			trace.mark("estado")
-			if wasCurrentPending {
-				// Estado local -> active + snapshot da conversa.
-				if _, rerr := a.supportChatService().Refresh(ctx); rerr != nil {
-					a.Logs.Append("[supportchat] snapshot apos o aceite indisponivel: " + rerr.Error())
-				}
+			if _, rerr := a.supportChatService().Refresh(ctx); rerr != nil {
+				a.Logs.Append("[supportchat] snapshot apos o aceite indisponivel: " + rerr.Error())
 			}
+			_ = wasCurrentPending
 		}
 		if err == nil {
-			// ACEITE: a janela do chat abre JÁ, sem passar pela rechecagem de
-			// estado do processo de UI (ver runSupportChatInviteNotificationDecision).
-			// Foi essa rechecagem que, numa corrida com o evento do servidor,
-			// descartou o aceite e deixou o cartão na tela sem insistir na
-			// abertura da janela.
+			// ACEITE CONFIRMADO: a janela abre JÁ e NÃO depende do estado local
+			// (ver openSupportChatWindowForAcceptedSession).
+			//
+			// ORDEM: o estado local é alinhado para "active" ANTES de esconder a
+			// superfície do convite. hideSupportChatInviteSurface NÃO age com o
+			// convite ainda "waiting" (a janela é a única superfície de aceite),
+			// então chamá-la primeiro deixaria a janela do convite na tela por
+			// cima da conversa.
 			if a.app != nil {
-				a.hideSupportChatInviteSurface()
-				go a.openSupportChatWindow()
+				go a.openSupportChatWindowForAcceptedSession(result.SessionID)
 			}
 		}
 	} else {
