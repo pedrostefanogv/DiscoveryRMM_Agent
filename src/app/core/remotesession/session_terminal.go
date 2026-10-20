@@ -26,7 +26,11 @@ const (
 	termOutputCoalesceMs = 16        // debounce de coalescimento (~60Hz)
 	termMaxMsgPerSec     = 60        // rate limit maximo de mensagens/segundo
 	termRateWindowMs     = 100       // janela deslizante para rate limit
-	termMaxInputSize     = 32 * 1024 // limite de input por mensagem (32KB — suporta paste de textos longos)
+	// termMaxInputSize: limite de input por mensagem medido em bytes
+	// DECODIFICADOS (base64 decodificado — o payload real que chega ao shell).
+	// A comparação é sempre sobre o tamanho decodificado, nunca sobre o texto
+	// base64 (as duas semânticas divergem ~33%).
+	termMaxInputSize = 32 * 1024 // 32KB decodificados — suporta paste de textos longos
 
 	// R2: limites de taxa POR SESSÃO aplicados no agente (o debounce do front
 	// não é defesa). Excedente é descartado com contador em .stats.
@@ -878,6 +882,17 @@ type SessionTerminal struct {
 	// o viewer renderizaria seq fora de ordem (texto torto).
 	outMu sync.Mutex
 
+	// consoleGen identifica a geração do console ativo: cada Start incrementa.
+	// O monitor de exit de um console SUBSTITUÍDO compara a própria geração com
+	// a corrente antes de publicar frames de exit/disparar st.onExit — sem isso
+	// um shell antigo (que só morre depois, assíncrono) encerraria a sessão NOVA
+	// (item: goroutines de exit obsoletas não podem matar o console corrente).
+	consoleGen uint64
+
+	// stopOnce garante o close único de stopCh (Stop idempotente — o select/
+	// default/close anterior tinha corrida entre goroutines).
+	stopOnce sync.Once
+
 	stopCh chan struct{}
 	doneCh chan struct{}
 	mu     sync.RWMutex
@@ -1283,9 +1298,17 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
-	// Se já existe um console ativo, fecha antes de recriar (substituição limpa)
+	// Se já existe um console ativo, desanexa antes de recriar (substituição
+	// limpa). O Shell.Close fica FORA do lock: ele pode BLOQUEAR em
+	// cmd.Process.Wait() e travaria todo o terminal (input/resize/start).
+	var staleShell terminal.IShell
 	if st.terminal != nil {
-		st.closeTerminalLocked()
+		staleShell = st.releaseTerminalLocked()
+	}
+	if staleShell != nil {
+		st.mu.Unlock()
+		closeShellBounded(staleShell)
+		st.mu.Lock()
 	}
 
 	if cols <= 0 {
@@ -1297,6 +1320,10 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 	// O servidor manda termCols/termRows sem validação; dimensão absurda não
 	// pode chegar ao CreatePseudoConsole/console real.
 	cols, rows = clampTermDims(cols, rows)
+
+	// Nova geração de console: goroutines do console anterior (monitor de exit)
+	// passam a ser obsoletas (checam consoleGen antes de agir).
+	st.consoleGen++
 
 	term := &TerminalSession{
 		ID:        "main",
@@ -1428,9 +1455,23 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		}
 	}
 
-	// Monitor de exit do shell — notifica viewer e encerra a sessão
+	// Monitor de exit do shell — notifica viewer e encerra a sessão.
+	// Captura a geração deste console: se um novo console substituir este,
+	// a goroutine fica obsoleta e NÃO pode publicar frames de exit (no fluxo
+	// term.out do console NOVO) nem disparar st.onExit (encerraria a sessão
+	// nova por erro de um shell antigo).
+	gen := st.consoleGen
 	go func() {
 		err := shell.Wait()
+
+		st.mu.RLock()
+		currentGen := st.consoleGen
+		st.mu.RUnlock()
+		if currentGen != gen {
+			log.Printf("[session-terminal] monitor de exit obsoleto (gen=%d, atual=%d) — frames de exit suprimidos", gen, currentGen)
+			return
+		}
+
 		exitMsg := "shell encerrado"
 		if err != nil {
 			exitMsg = err.Error()
@@ -1568,13 +1609,17 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 				// R2: limite por sessão.
 				stats.resizeRateLimited.Add(1)
 				log.Printf("[session-terminal] resize acima do limite (sessao %s)", st.sessionID)
-			} else if rerr := shell.Resize(req.Cols, req.Rows); rerr != nil {
-				log.Printf("[session-terminal] resize falhou: %v", rerr)
 			} else {
-				c, r := req.Cols, req.Rows
-				st.recordFrame("resize", "", nil, &c, &r)
-				term.Cols = req.Cols
-				term.Rows = req.Rows
+				// ConPTY COORD é int16: valores absurdos do server não podem
+				// chegar direto ao Resize (overflow/erro de API).
+				c, r := clampTermDims(req.Cols, req.Rows)
+				if rerr := shell.Resize(c, r); rerr != nil {
+					log.Printf("[session-terminal] resize falhou: %v", rerr)
+				} else {
+					st.recordFrame("resize", "", nil, &c, &r)
+					term.Cols = c
+					term.Rows = r
+				}
 			}
 			if !isHello {
 				return
@@ -1598,18 +1643,21 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		// Um único PUB acima do teto é REJEITADO com aviso — antes era
 		// descartado em silêncio (parecia "o terminal engoliu o paste"). O
 		// front fatia pastes grandes em vários PUBs abaixo deste limite.
-		if len(req.Data) > termMaxInputSize {
-			stats.inputTooLarge.Add(1)
-			log.Printf("[session-terminal] term.in acima do limite: %d bytes base64 (max %d)",
-				len(req.Data), termMaxInputSize)
-			emitError("input_too_large",
-				fmt.Sprintf("entrada de %d bytes excede o limite de %d", len(req.Data), termMaxInputSize))
-			return
-		}
-
 		decoded, err := base64.StdEncoding.DecodeString(req.Data)
 		if err != nil {
 			log.Printf("[session-terminal] term.in base64 invalido: %v\n", err)
+			return
+		}
+		// O limite vale sobre os bytes DECODIFICADOS (payload real que chega ao
+		// shell). O payload NATS já é teto (2MB), então decodificar antes de
+		// comparar não abre crescimento sem limite — e evita misturar
+		// semânticas base64/bytes.
+		if len(decoded) > termMaxInputSize {
+			stats.inputTooLarge.Add(1)
+			log.Printf("[session-terminal] term.in acima do limite: %d bytes decodificados (max %d)",
+				len(decoded), termMaxInputSize)
+			emitError("input_too_large",
+				fmt.Sprintf("entrada de %d bytes excede o limite de %d", len(decoded), termMaxInputSize))
 			return
 		}
 		stats.inputBytes.Add(int64(len(decoded)))
@@ -1659,17 +1707,22 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 	return term, nil
 }
 
-// closeTerminalLocked fecha o console atual (assume st.mu travado).
-func (st *SessionTerminal) closeTerminalLocked() {
+// releaseTerminalLocked desanexa o console atual SEM fechar o shell (assume
+// st.mu travado). O Shell.Close do ConPTY pode BLOQUEAR em cmd.Process.Wait()
+// — nunca pode rodar sob st.mu (input/resize/Start ficariam presos atrás do
+// lock). Retorna o shell para o chamador fechá-lo FORA do lock, com teto de
+// tempo (closeShellBounded).
+func (st *SessionTerminal) releaseTerminalLocked() terminal.IShell {
 	term := st.terminal
 	st.terminal = nil
 	// O stats do console encerrado não deve mais contabilizar publicações.
 	st.stats = nil
 	st.seqAlloc = nil
 	if term == nil {
-		return
+		return nil
 	}
 
+	// Sinaliza o fim para as goroutines da sessão (stats/cleanup).
 	select {
 	case <-term.stopCh:
 		// ja fechado
@@ -1677,18 +1730,36 @@ func (st *SessionTerminal) closeTerminalLocked() {
 		close(term.stopCh)
 	}
 
-	if term.Shell != nil {
-		_ = term.Shell.Close()
-	}
-
-	log.Printf("[session-terminal] console encerrado: session=%s", st.sessionID)
+	shell := term.Shell
+	log.Printf("[session-terminal] console desanexado: session=%s", st.sessionID)
+	return shell
 }
 
-// CloseTerminal fecha o console atual.
+// closeShellBounded fecha o shell FORA do lock, com teto de tempo (o Close do
+// ConPTY pode bloquear em cmd.Process.Wait(); mesmo padrão do teto de 5s do
+// dispatcher). Excedido o teto, o Close continua em segundo plano.
+func closeShellBounded(shell terminal.IShell) {
+	if shell == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = shell.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Printf("[session-terminal] Shell.Close excedeu 5s — seguindo sem esperar")
+	}
+}
+
+// CloseTerminal fecha o console atual. O shell é fechado FORA do lock.
 func (st *SessionTerminal) CloseTerminal() {
 	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.closeTerminalLocked()
+	shell := st.releaseTerminalLocked()
+	st.mu.Unlock()
+	closeShellBounded(shell)
 }
 
 // HasTerminal indica se há um console ativo.
@@ -1705,18 +1776,18 @@ func (st *SessionTerminal) GetTerminal() *TerminalSession {
 	return st.terminal
 }
 
-// Stop encerra o console e libera recursos.
+// Stop encerra o console e libera recursos. Idempotente: o close de stopCh é
+// protegido por sync.Once (duas goroutines podiam passar pelo select/default
+// juntos e o segundo close panicaria).
 func (st *SessionTerminal) Stop() {
-	select {
-	case <-st.stopCh:
-		return
-	default:
+	st.stopOnce.Do(func() {
 		close(st.stopCh)
-	}
+	})
 
 	st.mu.Lock()
-	st.closeTerminalLocked()
+	shell := st.releaseTerminalLocked()
 	st.mu.Unlock()
+	closeShellBounded(shell)
 
 	if st.recordingTap != nil {
 		st.recordingTap.SetEnabled(false)

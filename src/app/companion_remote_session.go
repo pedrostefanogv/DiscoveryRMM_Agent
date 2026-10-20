@@ -63,8 +63,20 @@ func (a *App) ensureCompanionNats() error {
 	}
 	companionNats.mu.Lock()
 	defer companionNats.mu.Unlock()
-	if companionNats.started && companionNats.nc != nil && companionNats.nc.Status() == nats.CONNECTED {
-		return nil
+	if companionNats.started && companionNats.nc != nil {
+		switch status := companionNats.nc.Status(); status {
+		case nats.CONNECTED, nats.CONNECTING:
+			// Conexão estabelecida (ou em curso): NÃO abrir uma segunda —
+			// antes, um reconnect em andamento derrubava o guard e criávamos
+			// uma conexão paralela (duas conexões de streaming do mesmo agent).
+			return nil
+		default:
+			// Estado terminal/reconnect degradado (CLOSED/DISCONNECTED/...):
+			// fecha a conexão antiga ANTES de substituir, para não vazar o
+			// socket e o flusher do nats.go.
+			companionNats.nc.Close()
+			companionNats.nc = nil
+		}
 	}
 
 	cfg := a.GetDebugConfig()
@@ -157,6 +169,11 @@ func (a *App) ensureCompanionNats() error {
 		if err != nil {
 			lastErr = err
 			continue
+		}
+		// Defensivo: nenhuma conexão antiga sobrevive à substituição (o guard
+		// acima já fecha, mas manter aqui cobre caminhos que pulem o guard).
+		if old := companionNats.nc; old != nil && old != nc {
+			old.Close()
 		}
 		companionNats.nc = nc
 		companionNats.started = true

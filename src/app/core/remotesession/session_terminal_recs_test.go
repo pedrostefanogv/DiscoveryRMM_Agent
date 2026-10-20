@@ -49,13 +49,13 @@ func TestRecordFrame_AllocatesSeqFromSeqAlloc(t *testing.T) {
 	t.Cleanup(nc.Close)
 
 	h := NewNatsStreamHandler(nc, "client-1", "site-1", "agent-1")
-	tap := &RecordingTap{sessionID: "sess-seq", natsStream: h, enabled: true}
-	st := &SessionTerminal{sessionID: "sess-seq", natsStream: h, recordingTap: tap}
+	tap := &RecordingTap{sessionID: "1a2b3c4d0003", natsStream: h, enabled: true}
+	st := &SessionTerminal{sessionID: "1a2b3c4d0003", natsStream: h, recordingTap: tap}
 
 	var n int64
 	st.seqAlloc = func() int64 { n++; return n }
 
-	subject := h.publishSubject("sess-seq", "recording.term")
+	subject := h.publishSubject("1a2b3c4d0003", "recording.term")
 	msgs := make(chan TermRecordingFrame, 4)
 	sub, err := nc.Subscribe(subject, func(msg *nats.Msg) {
 		var f TermRecordingFrame

@@ -209,10 +209,24 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		return false, "nats stream not ready"
 	}
 
-	// Consentimento: SOMENTE desktop (screen/all). Terminal, arquivos, proxy e
+	// Valida o kind ANTES de registrar: um kind desconhecido criava sessão
+	// fantasma (banner/tray/liveness ativos, nenhum stream de dados) e ainda
+	// consumia a vaga do kind no mapa de sessões ("uma por kind"). Recusa o
+	// start na fonte — nada é criado e o servidor recebe o erro.
+	switch kind {
+	case "screen", "all", "terminal", "files", "processes", "proxy":
+	default:
+		log.Printf("[remote-session] handleStart: kind não suportado %q sessionId=%s — rejeitando\n", kind, sessionID)
+		return false, "kind não suportado: " + kind
+	}
+
+	// Consentimento: desktop (screen/all) e TERMINAL. Um start de terminal com
+	// consent.required=true não pode conceder um shell remoto sem prompt
+	// (shell = execução de comandos na máquina do usuário). Arquivos, proxy e
 	// processos seguem sem prompt, como antes.
 	consentCfg := ParseConsentConfig(payload)
-	if consentCfg != nil && (kind == "screen" || kind == "all") {
+	consentKind := kind == "screen" || kind == "all" || kind == "terminal"
+	if consentCfg != nil && consentKind {
 		skipConsent := false
 		// REPLAY do worker (watchdog de crash/logoff): a sessão pode JÁ ter sido
 		// autorizada (ou já ter sido negada/encerrada) no servidor. Consulta o
@@ -314,6 +328,15 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	})
 	if cerr != nil {
 		log.Printf("[remote-session] handleStart: ERRO ao subscrever control sessionId=%s: %v\n", sessionID, cerr)
+		// A falha aqui acontece DEPOIS do consentimento concedido/reportado: sem
+		// evento, o servidor via uma sessão aceita que nunca existiu (o viewer
+		// ficava preso no "conectando"). Publica erro + closed para o viewer e o
+		// servidor encerrarem a sessão limpo.
+		m.publishEvent(sessionID, "error", map[string]string{
+			"scope": "control",
+			"error": cerr.Error(),
+		})
+		m.publishEvent(sessionID, "closed", map[string]string{"reason": "subscribe-control-failed"})
 		return false, "subscribe control: " + cerr.Error()
 	}
 	session.controlSub = controlSub
@@ -606,22 +629,33 @@ func (m *Manager) closeSessionLocked(sessionID, reason string) bool {
 		s.runner.Stop()
 	}
 
+	// Snapshot do estado que a publicação precisa: sendControl, Unsubscribe,
+	// PublishEvent e onSessionEnded rodam FORA do m.mu — publicar no NATS com
+	// o mutex do manager preso bloqueava TODAS as sessões/comandos atrás de
+	// I/O de rede (e o callback onSessionEnded pode reentrar no manager).
+	controlSub := s.controlSub
+	hasStream := m.natsStream != nil
+	onEnded := m.onSessionEnded
+
+	m.mu.Unlock()
+	defer m.mu.Lock()
+
 	// Avisa o viewer pelo canal .control (motivo do encerramento), para que a
 	// popup mostre o placeholder em vez de continuar tentando conectar.
 	m.sendControl(s, ControlTypeClosed, map[string]any{"reason": strings.TrimSpace(reason)})
 
-	if s.controlSub != nil {
-		_ = s.controlSub.Unsubscribe()
+	if controlSub != nil {
+		_ = controlSub.Unsubscribe()
 	}
 
-	if m.natsStream != nil {
+	if hasStream {
 		m.natsStream.PublishEvent(sessionID, "closed", map[string]string{"reason": reason})
 	} else {
 		m.publishEventLegacy(sessionID, "closed", nil)
 	}
 
-	if m.onSessionEnded != nil {
-		m.onSessionEnded(sessionID, reason)
+	if onEnded != nil {
+		onEnded(sessionID, reason)
 	}
 	return true
 }

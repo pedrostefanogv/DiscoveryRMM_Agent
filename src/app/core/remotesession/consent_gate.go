@@ -26,8 +26,20 @@ func (m *Manager) cancelPendingConsent() bool {
 // decisão ao servidor. Fail-closed: sem prompt/report, a sessão NÃO inicia.
 func (m *Manager) runConsentGate(ctx context.Context, sessionID string, payload map[string]any) (bool, string) {
 	cfg := ParseConsentConfig(payload)
-	if cfg == nil || cfg.Mode != "prompt" {
+	if cfg == nil {
 		return true, ""
+	}
+	// Fail-closed em modo desconhecido: um servidor que manda um modo que este
+	// agent não conhece NÃO pode ganhar acesso sem prompt (antes cai fora do
+	// gate com return true e a sessão iniciava sem autorização).
+	switch cfg.Mode {
+	case "prompt":
+		// segue para o prompt abaixo
+	case "off", "notify":
+		return true, ""
+	default:
+		log.Printf("[remote-consent] modo de consentimento desconhecido %q sessionId=%s — recusando (fail-closed)\n", cfg.Mode, sessionID)
+		return false, "consentimento: modo desconhecido (" + cfg.Mode + ")"
 	}
 
 	// Cancela prompt anterior (novo start substitui a espera anterior).

@@ -125,6 +125,15 @@ func NewDispatcherShell(shell ShellKind, cols, rows int, onOutput func(string)) 
 		time.Sleep(50 * time.Millisecond)
 	}
 	if inConn == nil || outConn == nil {
+		// Dial parcial: fechar as conexões já abertas ANTES de matar o
+		// processo — sem isso o handle ficava preso até o GC/finalizer (o
+		// dispatcher morto mantém o server-side do pipe pendurado).
+		if inConn != nil {
+			_ = inConn.Close()
+		}
+		if outConn != nil {
+			_ = outConn.Close()
+		}
 		_ = cmd.Process.Kill()
 		return nil, fmt.Errorf("dispatcher não conectou aos pipes em 5s")
 	}

@@ -11,8 +11,13 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
+
+// conptyCloseWaitTimeout limita a espera pelo reap do processo em Close
+// (goroutine+timer: o Close nunca bloqueia indefinidamente no Process.Wait).
+const conptyCloseWaitTimeout = 5 * time.Second
 
 // ConPTYShell representa um terminal interativo usando a API ConPTY do Windows.
 // Usa CreatePseudoConsole para fornecer um PTY real, suportando aplicativos TUI
@@ -215,16 +220,20 @@ func containsFold(list []string, want string) bool {
 }
 
 // buildCommandLine monta a command line para CreateProcessW. Argumentos que
-// contêm espaço são entre aspas (A14: a distro WSL pode ter espaço legítimo,
-// ex.: "Ubuntu 22.04 LTS", e não pode virar dois argumentos).
+// contêm espaço, tab ou aspas são entre aspas (A14: a distro WSL pode ter
+// espaço legítimo, ex.: "Ubuntu 22.04 LTS", e não pode virar dois argumentos).
+// Aspas EMBUTIDAS são dobradas conforme a regra do CommandLineToArgvW:
+// dentro de um argumento entre aspas, "" vira uma aspa literal — uma aspa
+// solta encerraria o argumento antes da hora (injeção de argumento no shell
+// spawnado pelo ConPTY).
 func buildCommandLine(exePath string, args []string) *uint16 {
 	var b strings.Builder
 	fmt.Fprintf(&b, `%s`, "\""+exePath+"\"")
 	for _, a := range args {
 		b.WriteString(" ")
-		if strings.ContainsAny(a, " \t") {
+		if strings.ContainsAny(a, " \t\"") {
 			b.WriteString("\"")
-			b.WriteString(a)
+			b.WriteString(strings.ReplaceAll(a, "\"", "\"\""))
 			b.WriteString("\"")
 		} else {
 			b.WriteString(a)
@@ -480,9 +489,22 @@ func (s *ConPTYShell) Close() error {
 		_ = cmd.Process.Kill()
 		// Reaproveita o mesmo sync.Once do Wait() para não chamar
 		// Process.Wait() duas vezes (a goroutine de exit já pode tê-lo feito).
-		s.waitOnce.Do(func() {
-			_, _ = cmd.Process.Wait()
-		})
+		// Teto de espera (5s): se o Kill não matar o processo (handle/injetor),
+		// Wait bloqueava INDEFINIDAMENTE e o encerramento da sessão inteira
+		// travava (inclusive closeTerminalLocked com st.mu preso). O reap
+		// continua em background; quem desistir do Close segue adiante.
+		reaped := make(chan struct{})
+		go func() {
+			s.waitOnce.Do(func() {
+				_, _ = cmd.Process.Wait()
+			})
+			close(reaped)
+		}()
+		select {
+		case <-reaped:
+		case <-time.After(conptyCloseWaitTimeout):
+			log.Printf("[conpty] timeout (%v) aguardando o processo shell encerrar após close", conptyCloseWaitTimeout)
+		}
 	}
 
 	s.stdoutPipe.Close()

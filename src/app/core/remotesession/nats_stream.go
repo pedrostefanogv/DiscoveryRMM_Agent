@@ -20,6 +20,27 @@ func stripHyphens(id string) string {
 	return strings.ReplaceAll(id, "-", "")
 }
 
+// validSessionIDCharset informa se o sessionId só contém os caracteres
+// permitidos (hex/hífen — formato UUID). O sessionId vira SEGMENTO de subject
+// NATS e o separador de tokens é '.': um sessionId com '.' (ou espaço) criaria
+// subjects fora do escopo pretendido (injeção de token no subject, escapando
+// do sufixo literal). Nada além de ^[0-9a-fA-F-]+$ é aceito; a validação é
+// feita no sessionId BRUTO (antes do stripHyphens — hífens são permitidos).
+func validSessionIDCharset(id string) bool {
+	if id == "" {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // NatsStreamHandler manages NATS-based bidirectional communication for remote sessions.
 type NatsStreamHandler struct {
 	nc       *nats.Conn
@@ -77,6 +98,10 @@ func (h *NatsStreamHandler) subjectBase() string {
 // destinadas a outros agentes/sites/tenants. O literal é um subconjunto exato da
 // permissão `tenant.{c}.site.{s}.agent.{a}.remote.session.>` emitida pelo backend.
 func (h *NatsStreamHandler) subscribePattern(sessionID, suffix string) string {
+	if !validSessionIDCharset(sessionID) {
+		log.Printf("[nats-stream] sessionId com caracteres invalidos (subscribe) — subject suprimido")
+		return ""
+	}
 	return fmt.Sprintf("%s.%s.%s", h.subjectBase(), stripHyphens(sessionID), suffix)
 }
 
@@ -84,6 +109,10 @@ func (h *NatsStreamHandler) subscribePattern(sessionID, suffix string) string {
 // Format: tenant.{tenantID}.site.{siteID}.agent.{agentID}.remote.session.{sessionID}.{suffix}
 // All UUIDs are normalized (hyphens stripped) to match server subject format.
 func (h *NatsStreamHandler) publishSubject(sessionID, suffix string) string {
+	if !validSessionIDCharset(sessionID) {
+		log.Printf("[nats-stream] sessionId com caracteres invalidos (publish) — subject suprimido")
+		return ""
+	}
 	return fmt.Sprintf("%s.%s.%s", h.subjectBase(), stripHyphens(sessionID), suffix)
 }
 

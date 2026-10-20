@@ -71,7 +71,7 @@ func TestManager_LivenessPingPongAndViewerTimeout(t *testing.T) {
 	mgr := NewManager(agentConn)
 	mgr.SetNatsConn(agentConn, "client-1", "site-1", "agent-1")
 
-	subject := livenessControlSubject("sess-1")
+	subject := livenessControlSubject("1a2b3c4d0001")
 	pongs := make(chan struct{}, 8)
 	closed := make(chan string, 4)
 	var replied atomic.Bool
@@ -83,7 +83,7 @@ func TestManager_LivenessPingPongAndViewerTimeout(t *testing.T) {
 		switch env.Type {
 		case ControlTypePing:
 			if env.From == sessioncontrol.RoleAgent && replied.CompareAndSwap(false, true) {
-				publishViewerPing(t, viewerConn, subject, "sess-1")
+				publishViewerPing(t, viewerConn, subject, "1a2b3c4d0001")
 			}
 		case ControlTypePong:
 			select {
@@ -107,7 +107,7 @@ func TestManager_LivenessPingPongAndViewerTimeout(t *testing.T) {
 	now := time.Now().UTC()
 	ok, msg := mgr.HandleCommand(ctx, map[string]any{
 		"action":          "start",
-		"sessionId":       "sess-1",
+		"sessionId":       "1a2b3c4d0001",
 		"kind":            "proxy",
 		"expiresAtUtc":    now.Add(10 * time.Minute).Format(time.RFC3339),
 		"maxExpiresAtUtc": now.Add(2 * time.Hour).Format(time.RFC3339),
@@ -163,7 +163,7 @@ func TestManager_LegacyKeyframeDoesNotCountAsPresence(t *testing.T) {
 	mgr := NewManager(agentConn)
 	mgr.SetNatsConn(agentConn, "client-1", "site-1", "agent-1")
 
-	subject := livenessControlSubject("sess-2")
+	subject := livenessControlSubject("1a2b3c4d0002")
 	if _, err := viewerConn.Subscribe(subject, func(*nats.Msg) {}); err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestManager_LegacyKeyframeDoesNotCountAsPresence(t *testing.T) {
 	now := time.Now().UTC()
 	ok, msg := mgr.HandleCommand(ctx, map[string]any{
 		"action":          "start",
-		"sessionId":       "sess-2",
+		"sessionId":       "1a2b3c4d0002",
 		"kind":            "proxy",
 		"expiresAtUtc":    now.Add(10 * time.Minute).Format(time.RFC3339),
 		"maxExpiresAtUtc": now.Add(2 * time.Hour).Format(time.RFC3339),

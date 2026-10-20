@@ -84,25 +84,25 @@ Detalhes em [BRANCHING.md](BRANCHING.md).
 
 ---
 
-## Debug Mode / Modo Debug
+## � Modo Debug / Debug Mode
 
 **PT_BR:** Para abrir a interface do agente em modo debug:
 
 1. Feche o agente pelo ícone na bandeja do sistema (clique com botão direito → **Sair / Exit**).
-2. Abra o agente novamente **segurando `Shift` ou `Ctrl`** ao clicar no ícone/atalho (**qualquer uma das duas teclas funciona**).
+2. Abra o agente novamente **segurando `Shift`** ao clicar no ícone/atalho.
 
 > O modo debug exibe logs detalhados na interface e habilita painéis de diagnóstico internos.
 
 **EN:** To open the agent UI in debug mode:
 
 1. Close the agent from the system tray icon (right-click → **Exit**).
-2. Reopen the agent **while holding `Shift` or `Ctrl`** when clicking the icon/shortcut (**either key works**).
+2. Reopen the agent **while holding `Shift`** when clicking the icon/shortcut.
 
 > Debug mode shows detailed logs in the UI and enables internal diagnostics panels.
 
 ---
 
-## Documentation / Documentação
+## �📚 Documentation / Documentação
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — visão arquitetural / architecture overview
 - [SECURITY.md](SECURITY.md) — política de segurança / security policy

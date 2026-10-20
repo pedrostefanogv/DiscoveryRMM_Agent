@@ -49,10 +49,10 @@ func TestPublishCwd_SubjectPayload(t *testing.T) {
 	t.Cleanup(nc.Close)
 
 	h := NewNatsStreamHandler(nc, "client-1", "site-1", "agent-1")
-	st := &SessionTerminal{sessionID: "sess-cwd-pub", natsStream: h, termShellKind: "powershell"}
+	st := &SessionTerminal{sessionID: "1a2b3c4d0005", natsStream: h, termShellKind: "powershell"}
 
 	msgs := make(chan termCwdPayload, 4)
-	sub, err := nc.Subscribe(h.publishSubject("sess-cwd-pub", "term.cwd"), func(msg *nats.Msg) {
+	sub, err := nc.Subscribe(h.publishSubject("1a2b3c4d0005", "term.cwd"), func(msg *nats.Msg) {
 		var p termCwdPayload
 		if json.Unmarshal(msg.Data, &p) == nil {
 			msgs <- p

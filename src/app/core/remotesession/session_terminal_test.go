@@ -213,9 +213,9 @@ func TestRecordingTap_ExitFrame(t *testing.T) {
 	t.Cleanup(nc.Close)
 
 	h := NewNatsStreamHandler(nc, "client-1", "site-1", "agent-1")
-	tap := &RecordingTap{sessionID: "sess-rec", natsStream: h, enabled: true}
+	tap := &RecordingTap{sessionID: "1a2b3c4d0004", natsStream: h, enabled: true}
 
-	subject := h.publishSubject("sess-rec", "recording.term")
+	subject := h.publishSubject("1a2b3c4d0004", "recording.term")
 	msgs := make(chan TermRecordingFrame, 4)
 	sub, err := nc.Subscribe(subject, func(msg *nats.Msg) {
 		var f TermRecordingFrame

@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -734,6 +735,24 @@ func ipcRemoteSessionAllowed(identity ipcAuthIdentity, admin, tokenValid bool, p
 				return nil
 			}
 			if uint32(v) != identity.SessionID {
+				return errIPCTokenBinding
+			}
+		case string:
+			// O JSON pode trazer pid/sessionId como STRING ("1234") — o binding
+			// precisa valer igual, senão o valor em texto escapa da checagem
+			// (bypass de binding). Valor não-numérico não é uma identidade
+			// numérica a validar (comportamento antigo mantido).
+			n, perr := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+			if perr != nil {
+				return nil
+			}
+			if key == "pid" {
+				if uint32(n) != identity.PID {
+					return errIPCTokenBinding
+				}
+				return nil
+			}
+			if uint32(n) != identity.SessionID {
 				return errIPCTokenBinding
 			}
 		}

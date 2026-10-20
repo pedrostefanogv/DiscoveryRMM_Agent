@@ -27,6 +27,11 @@ const (
 	pipeOutQueueItems = 256
 	pipeOutQueueBytes = 1 << 20 // 1MB
 	pipeWriteTimeout  = 2 * time.Second
+
+	// Teto do buffer de input pendente (bytes recebidos SEM '\n' que fecha a
+	// linha base64). Um cliente que nunca envia linha completa não pode fazer
+	// o dispatcher crescer sem limite — acima do teto, desconecta.
+	pipeInPendingMax = 1 << 20 // 1MB
 )
 
 // bufferedWriter desacopla o callback de output do ConPTY da escrita no named
@@ -231,6 +236,60 @@ func (w *bufferedWriter) Dropped() int64 {
 // Opt-out explícito: DISCOVERY_TERM_DISPATCHER=0/false/no volta ao comportamento
 // antigo (ConPTY in-process → legacy). Opt-in continua aceito (1/true/yes).
 
+// dispatcherPipeSDDL monta o descritor de segurança dos named pipes do
+// dispatcher: SYSTEM (GA) + o usuário do PRÓPRIO processo (o dispatcher é um
+// filho do binário do agente, então o usuário é o mesmo do pai). Sem SDDL
+// explícito, o default do winio não restringe quem conecta: qualquer processo
+// da máquina poderia abrir o pipe e injetar input no shell do usuário (ou ler
+// o output — keylog de terminal). Mesma política do canal IPC
+// (ipc_windows.go: SDDL explícito obrigatório, revisão 2026-09-04).
+func dispatcherPipeSDDL() string {
+	sddl := "D:(A;;GA;;;SY)"
+	var token windows.Token
+	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token); err == nil {
+		if user, uerr := token.GetTokenUser(); uerr == nil {
+			sddl += "(A;;GA;;;" + user.User.Sid.String() + ")"
+		}
+		_ = token.Close()
+	}
+	return sddl
+}
+
+// validSessionToken verifica o charset do token de sessão recebido na command
+// line. O token vira parte do NOME do pipe (\\.\pipe\discovery-term-<session>-*):
+// aceitar qualquer charset permitiria injetar namespace/caminho no nome
+// (segmento com '\\' apontando para o pipe de OUTRA sessão). Aceita apenas o
+// formato UUID: ^[0-9a-fA-F-]+$.
+func validSessionToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// pipeClientPID devolve o PID do processo cliente conectado no named pipe
+// (GetNamedPipeClientProcessId). 0 quando não é possível determinar (conexão
+// sem handle de pipe, ex.: net.Pipe em teste).
+func pipeClientPID(conn net.Conn) uint32 {
+	fdConn, ok := conn.(interface{ Fd() uintptr })
+	if !ok {
+		return 0
+	}
+	var pid uint32
+	if err := windows.GetNamedPipeClientProcessId(windows.Handle(fdConn.Fd()), &pid); err != nil {
+		return 0
+	}
+	return pid
+}
+
 // RunDispatcher executa o modo dispatcher e bloqueia até o shell encerrar.
 // É chamado do main.go quando "--terminal-dispatcher" está presente nos args.
 func RunDispatcher() {
@@ -258,6 +317,13 @@ func RunDispatcher() {
 		log.Printf("[term-dispatcher] args invalidos: session vazio ou shell vazio (%v)", args[1:])
 		os.Exit(1)
 	}
+	// Segurança: o token da sessão vira parte do NOME do pipe — só o charset
+	// UUID (hex/hífen) é aceito; qualquer outro caractere permitiria injetar
+	// namespace/caminho no nome do pipe (ver validSessionToken).
+	if !validSessionToken(session) {
+		log.Printf("[term-dispatcher] token de sessao invalido (charset fora de ^[0-9a-fA-F-]+$)")
+		os.Exit(1)
+	}
 
 	// B23: monitor de morte do pai — sem isso, se o agente crashar ANTES de
 	// conectar nos pipes, o dispatcher fica órfão em Accept() eterno, zumbi
@@ -269,13 +335,16 @@ func RunDispatcher() {
 	outPipe := fmt.Sprintf(`\\.\pipe\discovery-term-%s-out`, session)
 
 	// Cria os listeners (server) dos dois pipes antes de qualquer conexão.
-	outL, err := winio.ListenPipe(outPipe, nil)
+	// SDDL explícito: sem isso o default do winio deixa o pipe aberto a
+	// qualquer processo local (injeção de input/leitura de output).
+	sddl := dispatcherPipeSDDL()
+	outL, err := winio.ListenPipe(outPipe, &winio.PipeConfig{SecurityDescriptor: sddl})
 	if err != nil {
 		log.Printf("[dispatcher] ListenPipe(out): %v", err)
 		os.Exit(1)
 	}
 	defer outL.Close()
-	inL, err := winio.ListenPipe(inPipe, nil)
+	inL, err := winio.ListenPipe(inPipe, &winio.PipeConfig{SecurityDescriptor: sddl})
 	if err != nil {
 		log.Printf("[dispatcher] ListenPipe(in): %v", err)
 		os.Exit(1)
@@ -297,6 +366,19 @@ func RunDispatcher() {
 		os.Exit(1)
 	}
 	defer outConn.Close()
+
+	// Valida o chamador conectado: só o processo pai (o agente que lançou este
+	// dispatcher) pode se conectar. O SDDL já restringe por usuário; aqui
+	// fechamos a janela de outro processo DO MESMO usuário. Se o PID não puder
+	// ser determinado (handle indisponível), o SDDL permanece como defesa.
+	if ppid := parentPID(); ppid != 0 {
+		for name, c := range map[string]net.Conn{"in": inConn, "out": outConn} {
+			if pid := pipeClientPID(c); pid != 0 && pid != ppid {
+				log.Printf("[dispatcher] cliente do pipe %s não é o agente pai (pid=%d, esperado=%d) — recusando", name, pid, ppid)
+				os.Exit(1)
+			}
+		}
+	}
 
 	// Cria o ConPTY + shell com retry por morte prematura — a MESMA política
 	// do caminho in-process (iserial_windows.go): o 0xC0000142 do AV/injetor
@@ -379,6 +461,13 @@ func RunDispatcher() {
 		n, err := inConn.Read(buf)
 		if n > 0 {
 			pending = append(pending, buf[:n]...)
+			if len(pending) > pipeInPendingMax {
+				// Overflow do buffer de input: nenhum '\n' chegou — cliente
+				// mal-comportado (ou hostil). Desconecta em vez de crescer
+				// sem limite.
+				log.Printf("[dispatcher] buffer de input excedeu %d bytes sem linha completa — desconectando", pipeInPendingMax)
+				break
+			}
 			// Processa linhas completas (separadas por \n).
 			for {
 				idx := -1
