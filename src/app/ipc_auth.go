@@ -742,7 +742,10 @@ func ipcRemoteSessionAllowed(identity ipcAuthIdentity, admin, tokenValid bool, p
 			// precisa valer igual, senão o valor em texto escapa da checagem
 			// (bypass de binding). Valor não-numérico não é uma identidade
 			// numérica a validar (comportamento antigo mantido).
-			n, perr := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+			// BitSize 32: valores acima de uint32 (ex. "4294967297") NÃO podem
+			// truncar em uint32(n) — truncado, "…297" viraria 1 e poderia bater
+			// com identity.PID=1 (falso match de binding).
+			n, perr := strconv.ParseUint(strings.TrimSpace(v), 10, 32)
 			if perr != nil {
 				return nil
 			}

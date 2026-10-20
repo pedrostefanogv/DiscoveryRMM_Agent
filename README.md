@@ -84,7 +84,7 @@ Detalhes em [BRANCHING.md](BRANCHING.md).
 
 ---
 
-## � Modo Debug / Debug Mode
+## 🐞 Modo Debug / Debug Mode
 
 **PT_BR:** Para abrir a interface do agente em modo debug:
 
@@ -102,7 +102,7 @@ Detalhes em [BRANCHING.md](BRANCHING.md).
 
 ---
 
-## �📚 Documentation / Documentação
+## 📚 Documentation / Documentação
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — visão arquitetural / architecture overview
 - [SECURITY.md](SECURITY.md) — política de segurança / security policy

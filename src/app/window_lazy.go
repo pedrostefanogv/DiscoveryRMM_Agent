@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"log"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -50,6 +51,13 @@ func (a *App) ensureMainWindow() (application.Window, error) {
 	if a.windowFactory == nil {
 		return nil, errors.New("fabrica da janela principal nao registrada")
 	}
+	// Marca o inicio da primeira tentativa: a abertura do chat usa essa marca
+	// para NAO criar a janela do chat em cima de um WebView2 ainda nascendo
+	// (main thread ocupada = interface congelada). So a primeira conta: a
+	// carencia e medida a partir do comeco da criacao.
+	if a.windowInitStarted.IsZero() {
+		a.windowInitStarted = time.Now()
+	}
 	window := a.windowFactory()
 	if window == nil {
 		return nil, errors.New("fabrica da janela principal devolveu nil")
@@ -68,4 +76,34 @@ func (a *App) EnsureMainWindow() error {
 // HasMainWindow informa se a janela principal já foi criada.
 func (a *App) HasMainWindow() bool {
 	return a.mainWindow != nil
+}
+
+// mainWindowInitGrace e quanto tempo a criacao preguicosa da janela principal
+// e considerada "em curso" depois de comecar. Dentro desse periodo, abrir a
+// janela do chat em paralelo custa dois WebView2 nascendo juntos na mesma main
+// thread — o travamento completo da interface observado no log (UI para de
+// responder ao IPC logo apos "janela principal criada sob demanda").
+const mainWindowInitGrace = 15 * time.Second
+
+// mainWindowInitPendingState e a decisao pura (testavel) de mainWindowInitPending:
+// o lazy load da janela principal esta em curso (ou acabou de terminar dentro
+// da carencia)?
+func mainWindowInitPendingState(windowExists, factorySet bool, started, now time.Time) bool {
+	if windowExists || !factorySet {
+		return false
+	}
+	if started.IsZero() {
+		return false
+	}
+	return now.Sub(started) < mainWindowInitGrace
+}
+
+// mainWindowInitPending informa se a criacao preguicosa da janela principal
+// esta em curso (ou dentro da carencia logo apos). Enquanto estiver, a
+// janela do chat NAO deve ser criada: espera o carregamento terminar e abre
+// depois (ver scheduleSupportChatOpenAfterLazyLoad).
+func (a *App) mainWindowInitPending() bool {
+	a.windowMu.Lock()
+	defer a.windowMu.Unlock()
+	return mainWindowInitPendingState(a.mainWindow != nil, a.windowFactory != nil, a.windowInitStarted, time.Now())
 }

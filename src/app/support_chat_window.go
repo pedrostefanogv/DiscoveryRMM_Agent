@@ -689,6 +689,19 @@ func (a *App) openSupportChatWindow() {
 		return
 	}
 
+	// LAZY LOAD em curso: a janela principal (WebView2) está nascendo NESTE
+	// instante (tray, toast, pedido do serviço). Criar a janela do chat agora
+	// coloca DOIS WebView2 nascendo juntos na mesma main thread — é exatamente
+	// o cenário em que a interface congela por completo (log 20/10: a UI para de
+	// responder ao IPC logo após "janela principal criada sob demanda" e o chat
+	// nunca abre). Espera o carregamento terminar e abre em seguida; se o
+	// carregamento não terminar no prazo, a reconciliação cobre a abertura.
+	if a.mainWindowInitPending() {
+		a.Logs.Append("[supportchat] janela principal em lazy load; aguardando carregar para abrir o chat")
+		a.scheduleSupportChatOpenAfterLazyLoad()
+		return
+	}
+
 	state := a.supportChatService().State()
 	if status := state.Status; !supportChatWindowMayOpen(status) && !a.supportChatLegacyInviteWindowMode() {
 		a.Logs.Append("[supportchat] janela do chat nao aberta: conversa ainda nao foi aceita (status=" + status + ")")
@@ -813,6 +826,46 @@ func (a *App) openSupportChatWindowForAcceptedSession(sessionID string) {
 		a.hideSupportChatInviteSurface()
 	}
 	a.openSupportChatWindow()
+}
+
+// supportChatLazyOpenWait e quanto tempo a reabertura do chat espera o lazy
+// load da janela principal terminar. Estourou (WebView2 travou de vez), o
+// agendador desiste e a reconciliacao/retomada cobre a abertura.
+var supportChatLazyOpenWait = 30 * time.Second
+var supportChatLazyOpenPoll = 500 * time.Millisecond
+
+// scheduleSupportChatOpenAfterLazyLoad agenda UMA reabertura da janela do
+// chat depois de a janela principal terminar o lazy load. Single-flight via
+// supportChatLazyOpenRequested: N convites/cliques concorrentes nao criam N
+// agendadores. Quando o carregamento termina (janela existe ou a carencia
+// expira), a abertura e tentada normalmente; se o prazo estourar, desiste
+// registrando o motivo no log.
+func (a *App) scheduleSupportChatOpenAfterLazyLoad() {
+	if !a.supportChatLazyOpenRequested.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		// Garante a liberacao da deduplicacao em TODAS as saidas.
+		defer a.supportChatLazyOpenRequested.Store(false)
+		deadline := time.Now().Add(supportChatLazyOpenWait)
+		for {
+			select {
+			case <-a.supportChatContext().Done():
+				return
+			case <-time.After(supportChatLazyOpenPoll):
+			}
+			if !a.mainWindowInitPending() {
+				a.Logs.Append("[supportchat] janela principal carregada; abrindo o chat")
+				a.openSupportChatWindow()
+				return
+			}
+			if time.Now().After(deadline) {
+				a.Logs.Append("[supportchat] janela principal nao terminou de carregar no prazo; a reconciliacao cobrira a abertura do chat")
+				go a.resumeSupportChatIfActive(time.Second)
+				return
+			}
+		}
+	}()
 }
 
 // supportChatContentDeadline é quanto tempo a janela do chat ganha para ter o

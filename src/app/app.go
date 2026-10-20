@@ -161,6 +161,13 @@ type App struct {
 	// openSupportChatWindow: várias tentativas de abertura no mesmo instante
 	// pediam vários resumos (e vários GET /active) para o mesmo evento.
 	supportChatResumeRequested atomic.Bool
+	// supportChatLazyOpenRequested deduplica a reabertura do chat após o lazy
+	// load da janela principal: enquanto a janela principal (WebView2) está
+	// nascendo, criar a janela do chat junto pode congelar o processo inteiro
+	// (main thread presa na criação). O agendador único espera o carregamento
+	// terminar — ou abre mesmo assim depois da carência; ver
+	// scheduleSupportChatOpenAfterLazyLoad em support_chat_window.go.
+	supportChatLazyOpenRequested atomic.Bool
 	// supportChatWindowContentReady: o frontend da JANELA DO CHAT já montou o
 	// DOM. Usado pela blindagem de navegação (ensureSupportChatWindowContent):
 	// sem esse sinal no prazo, a janela é recarregada/renavegada.
@@ -348,6 +355,11 @@ type App struct {
 	// janela quase ao mesmo tempo. Ver window_lazy.go.
 	windowMu      sync.Mutex
 	windowFactory func() application.Window
+	// windowInitStarted marca o INÍCIO da primeira criação preguiçosa da janela
+	// principal. Enquanto a criação não termina (e por uma carência curta
+	// depois), a abertura da janela do chat é adiada — criar outra janela com
+	// WebView2 em cima de uma main thread ocupada é o travamento relatado.
+	windowInitStarted time.Time
 
 	// ── Notificação nativa da resposta do chat (Wails v3 notifications) ──
 	// nativeNotifications é o serviço nativo do Wails v3 (registrado em

@@ -1718,6 +1718,12 @@ func (st *SessionTerminal) releaseTerminalLocked() terminal.IShell {
 	// O stats do console encerrado não deve mais contabilizar publicações.
 	st.stats = nil
 	st.seqAlloc = nil
+	// Bump de geração: o monitor de exit deste console (que capturou a geração
+	// anterior) fica obsoleto no instante do release — sem isto, um Stop()/
+	// CloseTerminal() explícito publicava frame de exit + onExit DEPOIS de
+	// closeSessionLocked já ter publicado "closed" (evento duplicado no server).
+	// O Start() incrementa a geração de novo ao instalar o console novo: sem efeito.
+	st.consoleGen++
 	if term == nil {
 		return nil
 	}
