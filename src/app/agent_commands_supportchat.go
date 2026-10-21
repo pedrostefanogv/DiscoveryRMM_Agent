@@ -589,6 +589,9 @@ func (a *App) clearSupportChatIfCurrent(sessionID string) {
 	state := svc.State()
 
 	if state.SessionID == "" || state.SessionID == sessionID {
+		// ABA EMBUTIDA 21/10: sessão limpa = conversa fora da tela — o item do
+		// menu sai e a reconciliação para de considerar a aba "exibida".
+		a.supportChatTabShown.Store(false)
 		svc.ClearState()
 	}
 }

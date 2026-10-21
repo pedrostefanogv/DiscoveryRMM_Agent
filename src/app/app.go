@@ -383,6 +383,10 @@ type App struct {
 	// mainWindowWarmRequested deduplica os pedidos de aquecimento: convite
 	// reapresentado, aceite e reconciliação podem pedir quase ao mesmo tempo.
 	mainWindowWarmRequested atomic.Bool
+	// supportChatTabShown: a conversa de suporte está EXIBIDA na aba da janela
+	// principal (substituto de "janela do chat aberta" no modo embutido — a
+	// reconciliação usa para não reexibir/elevar a janela a cada ciclo).
+	supportChatTabShown atomic.Bool
 
 	// mainWindowContentLoaded: o FRONTEND da janela principal confirmou que o
 	// WebView2 carregou (binding MainWindowContentReady, chamado no bootstrap do

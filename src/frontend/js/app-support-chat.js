@@ -12,6 +12,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 (function () {
+  // EMBEDDED_IN_MAIN_WINDOW: o chat roda na janela PRINCIPAL (aba), não numa
+  // janela dedicada. Muda comportamentos de ciclo de vida: beforeunload não
+  // encerra a sessão (close-to-tray da principal não é fim de conversa) e a
+  // aba é surface do menu, não janela.
+  var EMBEDDED_IN_MAIN_WINDOW = true;
   var api = function () { return window.go && window.go.app && window.go.app.App; };
 
   var els = {};
@@ -1075,11 +1080,23 @@
       // cujo snapshot não trouxe atendente/chamado.
       document.title = "Chat com o suporte";
     }
+    // Mensagem NOVA com a aba fora da tela (ou janela oculta no tray) =
+    // destaque no item do menu; abrir a aba limpa o destaque.
+    var grewMessages = state.messages.length > (applyState._lastCount || 0);
+    applyState._lastCount = state.messages.length;
+    if (grewMessages && !supportChatTabEmTela()) {
+      supportChatUnseen = true;
+    }
+
     render();
 
     // O ticket vem do snapshot do chat; os comentários entram assim que ele é
     // conhecido (e uma única vez por ticket).
     if (state.ticketId) loadTicketComments(false);
+
+    // Superfície da ABA EMBUTIDA: visibilidade do item do menu + destaque de
+    // "mensagem não vista" enquanto a aba não estiver em tela.
+    updateSupportChatTabSurface();
   }
 
   // ── Envio ────────────────────────────────────────────────────────────────
@@ -1626,10 +1643,18 @@
     state.closing = true;
 
     call("SupportChatConfirmClose")
+      .then(function () {
+        if (!EMBEDDED_IN_MAIN_WINDOW) return;
+        // Embutido: não há janela para fechar. O Go emite supportchat:closed
+        // (que aplica ended e esconde o item do menu); aqui a view sai logo —
+        // o usuário clicou "Encerrar chat", a intenção é sair da conversa.
+        state.closing = false;
+        if (typeof setActiveTab === "function") setActiveTab("status");
+      })
       .catch(function (err) {
-        // A janela não tem botão de fechar: se o binding falhar, travar o estado
-        // em "closing" deixaria o usuário preso numa janela que não fecha por
-        // nenhum caminho. Libera nova tentativa.
+        // Se o binding falhar, travar o estado em "closing" deixaria o usuário
+        // preso num chat que não encerra por nenhum caminho. Libera nova
+        // tentativa.
         state.closing = false;
         showBanner("Falha ao encerrar: " + describe(err));
       });
@@ -1751,6 +1776,25 @@
     window.wails.on("supportchat:error", function (message) { showBanner(String(message || "Erro no chat.")); });
     window.wails.on("supportchat:confirm_close", function () { askClose(); });
 
+    // ── ABA EMBUTIDA (janela principal) ─────────────────────────────────────
+    //
+    // O chat de suporte roda DENTRO da janela principal (sem segunda janela
+    // WebView2 — causa raiz dos congelamentos). O Go pede a exibição com o
+    // evento supportchat:show; o estado waiting/active controla a visibilidade
+    // e o destaque do item no menu lateral.
+    window.wails.on("supportchat:show", function () {
+      markSupportChatSeen();
+      showSupportChatTab();
+    });
+
+    // Sessão encerrada no Go (botão Encerrar confirmado, suporte encerrou pelo
+    // console, servidor expirou): a aba limpa a conversa e o item do menu sai
+    // (o próximo supportchat:state ended também traz a superfície para o fim).
+    window.wails.on("supportchat:closed", function () {
+      applyState({ status: "ended", connected: state.connected, messages: state.messages });
+      markSupportChatSeen();
+    });
+
     // Print anotado produzido pelo overlay assistido (janela principal).
     window.wails.on("supportchat:screenshot", function (payload) {
       var dataUrl = payload && payload.dataUrl ? payload.dataUrl : "";
@@ -1831,6 +1875,93 @@
     return result;
   }
 
+  // ── Integração com a janela principal (aba "Chat do Suporte") ─────────────
+  //
+  // A aba só EXISTE para o usuário quando há sessão de suporte (waiting ou
+  // active): o item do menu fica oculto fora disso e volta a ficar depois do
+  // fim. Enquanto a aba não estiver em tela com mensagem nova, o item fica
+  // DESTACADO (classe sidebar-link--attention + badge).
+  var supportChatUnseen = false;
+
+  function supportChatTabButton() {
+    return document.getElementById("tabSupportChat");
+  }
+
+  function supportChatSessionVisible() {
+    return state.status === "waiting" || state.status === "active";
+  }
+
+  // supportChatTabEmTela diz se a aba do chat está a view ativa agora.
+  function supportChatTabEmTela() {
+    try {
+      return (typeof activeTab !== "undefined" && activeTab === "supportChat");
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // updateSupportChatTabSurface sincroniza visibilidade/destaque do item do
+  // menu com o estado da sessão. Mensagem nova com a aba fora da tela (ou a
+  // janela principal oculta) = item destacado; abrindo a aba, limpa.
+  function updateSupportChatTabSurface() {
+    var btn = supportChatTabButton();
+    if (!btn) return;
+    var visible = supportChatSessionVisible();
+    btn.hidden = !visible;
+    if (!visible) {
+      btn.classList.remove("sidebar-link--attention");
+      var badge0 = document.getElementById("tabSupportChatBadge");
+      if (badge0) badge0.hidden = true;
+      // Sessão acabou: se o usuário estava NA aba, mantém a view por alguns
+      // segundos (ele vê o "conversa encerrada") e devolve para Status —
+      // troca imediata parecia "o chat sumiu do nada".
+      if (supportChatTabEmTela() && typeof setActiveTab === "function") {
+        if (supportChatReturnTimer) { clearTimeout(supportChatReturnTimer); }
+        supportChatReturnTimer = setTimeout(function () {
+          supportChatReturnTimer = null;
+          if (supportChatTabEmTela() && !supportChatSessionVisible() && typeof setActiveTab === "function") {
+            setActiveTab("status");
+          }
+        }, SUPPORT_CHAT_RETURN_DELAY_MS);
+      }
+      return;
+    }
+    var emTela = supportChatTabEmTela();
+    if (!emTela) {
+      supportChatUnseen = true;
+    }
+    btn.classList.toggle("sidebar-link--attention", supportChatUnseen);
+    var badge = document.getElementById("tabSupportChatBadge");
+    if (badge) badge.hidden = !supportChatUnseen;
+  }
+
+  // Timer do retorno automático pós-encerramento (ver acima).
+  var supportChatReturnTimer = null;
+  var SUPPORT_CHAT_RETURN_DELAY_MS = 6000;
+
+  function refreshSupportChatTabSurface() {
+    updateSupportChatTabSurface();
+  }
+
+  function showSupportChatTab() {
+    if (typeof setActiveTab === "function") {
+      setActiveTab("supportChat");
+    }
+    markSupportChatSeen();
+  }
+
+  function markSupportChatSeen() {
+    supportChatUnseen = false;
+    var btn = supportChatTabButton();
+    if (btn) btn.classList.remove("sidebar-link--attention");
+    var badge = document.getElementById("tabSupportChatBadge");
+    if (badge) badge.hidden = true;
+  }
+
+  // Exposto para o Go (ExecJS) e para o app.js (clique no item limpa o destaque).
+  window.__discoveryShowSupportChat = showSupportChatTab;
+  window.__discoveryClearSupportChatAttention = markSupportChatSeen;
+
   function bootstrap() {
     cacheElements();
     wireEvents();
@@ -1840,12 +1971,19 @@
     // "Encerrar". Um fechamento do SISTEMA (Alt+F4) continua sendo interceptado
     // no Go (WindowClosing) e vira supportchat:confirm_close; este handler só
     // cobre o fechamento que não passa pelo hook.
-    window.addEventListener("beforeunload", function () {
-      if (!state.closing) {
-        // Melhor esforço: encerra a sessão sem bloquear o fechamento.
-        call("SupportChatEnd", "user_closed").catch(function () {});
-      }
-    });
+    // beforeunload: na JANELA DEDICADA, fechar a janela = fim da conversa.
+    // EMBUTIDO na janela principal, o unload acontece a cada close-to-tray/
+    // refresh da UI — encerrar a sessão ali era destruir a conversa do
+    // usuário a cada minimização. O fim passa a ser EXCLUSIVAMENTE o botão
+    // "Encerrar" (com confirmação) e o encerramento pelo suporte/servidor.
+    if (!EMBEDDED_IN_MAIN_WINDOW) {
+      window.addEventListener("beforeunload", function () {
+        if (!state.closing) {
+          // Melhor esforço: encerra a sessão sem bloquear o fechamento.
+          call("SupportChatEnd", "user_closed").catch(function () {});
+        }
+      });
+    }
 
     // Política de anexos: NÃO bloqueia a abertura da janela (é uma consulta ao
     // servidor, sujeita a rede degradada). O default é permissivo e o servidor
@@ -1859,9 +1997,28 @@
       })
       .catch(function () { /* mantém o default */ });
 
-    beginOpening();
-
-    applyState({ status: "none", connected: false, messages: [] });
+    // EMBUTIDO: o boot da janela principal NÃO é "janela do chat aberta" —
+    // beginOpening + snapshot com retries eram o custo de NASCIMENTO da janela
+    // dedicada. Aqui o chat espera o primeiro supportchat:state/show (ou o
+    // refresh do aceite); sem sessão pendente, nenhuma chamada de rede extra
+    // no boot da UI.
+    if (EMBEDDED_IN_MAIN_WINDOW) {
+      call("SupportChatRefresh")
+        .then(function (next) {
+          if (next && (next.status === "waiting" || next.status === "active")) {
+            beginOpening();
+            applyState(next);
+          } else {
+            applyState({ status: "none", connected: true, messages: [] });
+          }
+        })
+        .catch(function () {
+          applyState({ status: "none", connected: false, messages: [] });
+        });
+    } else {
+      beginOpening();
+      applyState({ status: "none", connected: false, messages: [] });
+    }
 
     // Sinal de "janela com conteúdo" para o Go (SupportChatWindowReady).
     //

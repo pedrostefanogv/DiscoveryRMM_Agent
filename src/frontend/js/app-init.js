@@ -156,6 +156,14 @@ function initAppBindings() {
     });
   }
 
+  if (tabSupportChatBtn) {
+    tabSupportChatBtn.addEventListener("click", function () {
+      setActiveTab("supportChat");
+      // Aba aberta pelo usuário: limpa o destaque de "mensagem não vista".
+      if (typeof clearSupportChatAttention === "function") clearSupportChatAttention();
+    });
+  }
+
   if (tabAutomationBtn) {
     tabAutomationBtn.addEventListener("click", function () {
       setActiveTab("automation");

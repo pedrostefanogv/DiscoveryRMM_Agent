@@ -86,6 +86,35 @@ func TestOpenSupportChatWindow_AmbienteFrioAqueceEAgenda(t *testing.T) {
 	}
 }
 
+// 5) ESTRUTURAL 21/10: a janela dedicada do chat NÃO é mais criada — a
+// conversa roda na aba da janela principal. O openSupportChatWindow emite
+// supportchat:show em vez de chamar createSupportChatWindow, e a criação
+// dedicada é guardada pelo flag de rollback.
+func TestOpenSupportChatWindow_NuncaCriaSegundaJanela(t *testing.T) {
+	body := functionBody(readFileString(t, "support_chat_window.go"), "func (a *App) openSupportChatWindow()")
+	if body == "" {
+		t.Fatal("openSupportChatWindow não encontrada")
+	}
+	if strings.Contains(body, "createSupportChatWindow(") {
+		t.Fatal("openSupportChatWindow não pode mais criar a janela dedicada (segunda WebView2 = deadlock da main thread); deve exibir a aba da janela principal")
+	}
+	if !strings.Contains(body, "EmitEvent(\"supportchat:show\")") {
+		t.Fatal("openSupportChatWindow precisa pedir a exibição da aba via evento supportchat:show")
+	}
+
+	// A declaração real usa parâmetro (hidden bool) — casa exata para não pegar
+	// outra função por prefixo.
+	create := functionBody(readFileString(t, "support_chat_window.go"), "func (a *App) createSupportChatWindow(hidden bool)")
+	if !strings.Contains(create, "!supportChatSecondWindowEnabled()") {
+		t.Fatal("createSupportChatWindow precisa do guard de rollback (nenhuma segunda janela enquanto o flag estiver desativado)")
+	}
+
+	prewarm := functionBody(readFileString(t, "support_chat_window.go"), "func (a *App) prewarmSupportChatWindow()")
+	if !strings.Contains(prewarm, "supportChatSecondWindowEnabled()") {
+		t.Fatal("prewarmSupportChatWindow precisa respeitar o flag de rollback da segunda janela")
+	}
+}
+
 // 4) A criação da janela principal não prende windowMu durante o WebView2.
 func TestEnsureMainWindow_SingleFlightSemMutexNaCriacao(t *testing.T) {
 	body := functionBody(readFileString(t, "window_lazy.go"), "func (a *App) ensureMainWindow()")

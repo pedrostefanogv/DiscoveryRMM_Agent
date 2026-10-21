@@ -20,6 +20,10 @@
       path: "partials/views/knowledgeView.html",
     },
     {
+      mountId: "supportChatViewMount",
+      path: "partials/views/supportChatView.html",
+    },
+    {
       mountId: "automationViewMount",
       path: "partials/views/automationView.html",
     },
@@ -48,6 +52,9 @@
     "js/app-chat.js",
     "js/app-support.js",
     "js/app-knowledge.js",
+    // Chat de suporte embutido (aba da janela principal — sem segunda janela
+    // WebView2; ver support_chat_window.go / REVISAO_CHAT_SUPORTE_AGENT.md).
+    "js/app-support-chat.js",
     "js/app-automation.js",
     "js/app-p2p.js",
     "js/app-status.js",

@@ -682,6 +682,14 @@ func (a *App) openSupportChatInviteFromIPC(payload map[string]any) {
 // cima do cartão de aceite. Por isso a abertura é recusada enquanto não houver
 // sessão ativa; o único caminho legítimo antes disso é o fluxo fallback de
 // plataformas sem cartão nativo (que roda com "waiting" de propósito).
+//
+// AJUSTE 21/10 (estrutural): NÃO existe mais segunda janela WebView2. A
+// conversa de suporte roda em uma ABA da janela principal
+// (supportChatView + app-support-chat.js embutido) — a criação da segunda
+// janela travava a main thread (deadlock do host WebView2 em chamadas COM com
+// vtables desalinhadas, corrigido também no Wails beta.34 #6129; dump
+// ui-zombie-23468). Abertura = garantir a janela principal em tela + evento
+// supportchat:show para o frontend trocar para a aba.
 func (a *App) openSupportChatWindow() {
 	app := a.app
 	if app == nil {
@@ -689,28 +697,19 @@ func (a *App) openSupportChatWindow() {
 		return
 	}
 
-	// LAZY LOAD em curso: a janela principal (WebView2) está nascendo NESTE
-	// instante (tray, toast, pedido do serviço). Criar a janela do chat agora
-	// coloca DOIS WebView2 nascendo juntos na mesma main thread — é exatamente
-	// o cenário em que a interface congela por completo (log 20/10: a UI para de
-	// responder ao IPC logo após "janela principal criada sob demanda" e o chat
-	// nunca abre). Espera o carregamento terminar e abre em seguida; se o
-	// carregamento não terminar no prazo, a reconciliação cobre a abertura.
+	// LAZY LOAD em curso: a janela principal ainda está nascendo. O evento de
+	// exibição é emitido de qualquer forma (o frontend da principal processa
+	// quando carregar) e a reconciliação cobre o caso de falha.
 	if a.mainWindowInitPending() {
-		a.Logs.Append("[supportchat] janela principal em lazy load; aguardando carregar para abrir o chat")
-		a.scheduleSupportChatOpenAfterLazyLoad()
-		return
+		a.Logs.Append("[supportchat] janela principal em lazy load; exibindo a aba do chat quando carregar")
 	}
 
-	// FIX 21/10 — TRAY COM WEBVIEW2 FRIO: sem janela principal e sem criação em
-	// curso, criar a janela do chat aqui a tornaria o PRIMEIRO ambiente WebView2
-	// do processo, nascendo na main thread durante o convite (a interface inteira
-	// congelava — ver window_lazy.go). Nasce a JANELA PRINCIPAL oculta em segundo
-	// plano pagando o custo frio e a abertura do chat é agendada para quando o
-	// ambiente estiver quente.
+	// Janela principal inexistente (tray, WebView2 frio): nasce oculta em
+	// segundo plano e a aba do chat é exibida quando carregar — mesmo
+	// comportamento de antes, sem criar SEGUNDA janela.
 	if !a.mainWindowReady() {
 		if a.startMainWindowWarm() {
-			a.Logs.Append("[supportchat] WebView2 ainda frio (tray); aquecendo pela janela principal oculta e agendando a abertura do chat")
+			a.Logs.Append("[supportchat] WebView2 ainda frio (tray); aquecendo pela janela principal oculta e exibindo a aba do chat em seguida")
 		}
 		a.scheduleSupportChatOpenAfterLazyLoad()
 		return
@@ -718,7 +717,7 @@ func (a *App) openSupportChatWindow() {
 
 	state := a.supportChatService().State()
 	if status := state.Status; !supportChatWindowMayOpen(status) && !a.supportChatLegacyInviteWindowMode() {
-		a.Logs.Append("[supportchat] janela do chat nao aberta: conversa ainda nao foi aceita (status=" + status + ")")
+		a.Logs.Append("[supportchat] chat nao aberto: conversa ainda nao foi aceita (status=" + status + ")")
 		// A chamada pode ser a última da ação do usuário (binding do cartão):
 		// não deixa a superfície do convite perdida só porque o estado local
 		// ainda não refletiu o aceite. O pedido é único por janela de tempo —
@@ -734,7 +733,24 @@ func (a *App) openSupportChatWindow() {
 		return
 	}
 
-	a.createSupportChatWindow(false)
+	// Sem segunda janela: garante a principal em tela e pede a troca de aba.
+	a.raiseMainWindowForSupportChat()
+	a.supportChatTabShown.Store(true)
+	a.EmitEvent("supportchat:show")
+	a.Logs.Append("[supportchat] conversa de suporte exibida na aba da janela principal (sem segunda janela WebView2)")
+}
+
+// raiseMainWindowForSupportChat traz a janela principal para frente se ela
+// existir e estiver oculta (o usuário precisa VER a aba do chat). Não força
+// foco agressivo quando a janela já está visível.
+func (a *App) raiseMainWindowForSupportChat() {
+	a.windowMu.Lock()
+	win := a.mainWindow
+	a.windowMu.Unlock()
+	if win == nil {
+		return
+	}
+	raiseWindowToFront(win, false)
 }
 
 // prewarmSupportChatWindow PRÉ-CRIA a janela do chat OCULTA, fora do caminho
@@ -765,6 +781,12 @@ func (a *App) openSupportChatWindow() {
 // aquecimento é pela janela principal oculta, prewarmSupportChatEnvironment);
 // dedupe por janela já existente.
 func (a *App) prewarmSupportChatWindow() {
+	// NO-OP 21/10 (estrutural): sem segunda janela WebView2 não existe nada a
+	// pré-criar — a conversa roda na aba da janela principal. Mantido como
+	// ponto de rollback (supportChatSecondWindowEnabled).
+	if !supportChatSecondWindowEnabled() {
+		return
+	}
 	if a == nil || a.app == nil {
 		return
 	}
@@ -820,14 +842,25 @@ func (a *App) prewarmSupportChatEnvironment() {
 	if a == nil || a.app == nil {
 		return
 	}
-	// Ambiente quente = janela viva E webview dela já carregado (fora da
-	// carência). Durante o nascimento/carregamento da principal, quem aquece é
-	// a própria principal — nada de segunda janela em paralelo.
+	// Estrutural: sem segunda janela, o único "aquecimento" possível é o da
+	// janela principal (que também é o caminho do rollback). O attach do chat
+	// embutido não custa nada — é a MESMA webview.
 	if a.mainWindowReady() && !a.mainWindowInitPending() {
-		a.prewarmSupportChatWindow()
+		if supportChatSecondWindowEnabled() {
+			a.prewarmSupportChatWindow()
+		}
 		return
 	}
 	a.startMainWindowWarm()
+}
+
+// supportChatSecondWindowEnabled é o flag de ROLLBACK da segunda janela do
+// chat. false = conversa na aba da janela principal (estrutura atual). true =
+// comportamento antigo (janela dedicada; exige reativar também o prewarm).
+// Existe para reverter em uma linha caso a aba embutida mostre um problema
+// imprevisto em campo.
+func supportChatSecondWindowEnabled() bool {
+	return false
 }
 
 // createSupportChatWindow cria (ou reusa) a janela do chat. hidden=true nasce
@@ -835,6 +868,16 @@ func (a *App) prewarmSupportChatEnvironment() {
 // viva; ver prewarmSupportChatEnvironment): o webview nasce por attach rápido e
 // o aceite seguinte só exibe a janela existente.
 func (a *App) createSupportChatWindow(hidden bool) {
+	// ESTRUTURAL 21/10: sem segunda janela, ninguém deve chegar aqui (o
+	// openSupportChatWindow exibe a ABA da janela principal). Guard defensivo:
+	// qualquer chamador esquecido cai no caminho novo em vez de nascer uma
+	// segunda WebView2 (fonte do deadlock).
+	if !supportChatSecondWindowEnabled() {
+		a.Logs.Append("[supportchat] criação de janela dedicada desativada; exibindo a aba do chat na janela principal")
+		a.raiseMainWindowForSupportChat()
+		a.EmitEvent("supportchat:show")
+		return
+	}
 	app := a.app
 	if app == nil {
 		return
@@ -1155,6 +1198,15 @@ func boolLabel(value bool) string {
 
 // closeSupportChatWindow destrói a janela depois do encerramento confirmado.
 func (a *App) closeSupportChatWindow() {
+	// ESTRUTURAL 21/10: sem janela dedicada, "fechar" = avisar a ABA na janela
+	// principal (o frontend limpa a conversa da tela e esconde o item do menu
+	// quando o estado chegar a ended). Caminhos da janela dedicada só rodam no
+	// rollback (supportChatSecondWindowEnabled).
+	if !supportChatSecondWindowEnabled() {
+		a.supportChatTabShown.Store(false)
+		a.EmitEvent("supportchat:closed")
+		return
+	}
 	a.supportChatMu.Lock()
 	win := a.supportChatWin
 	allowClose := a.supportChatAllowClose
@@ -1390,6 +1442,13 @@ const supportChatActiveReconcileEvery = 10
 // continua a cada tick — é o cenário em que o convite se perde no canal unicast.
 func (a *App) reconcileSupportChat() {
 	windowOpen := a.supportChatWindowOpen()
+	// ABA EMBUTIDA 21/10: sem janela dedicada, windowOpen é sempre false — o
+	// que importaria para a frequência de reconciliação (conversa ativa e
+	// visível) agora é "a aba está sendo exibida". Sem isso, a cada 5 ticks a
+	// reconciliação chamava resume → openSupportChatWindow → raiseWindowToFront
+	// de novo: a janela PRINCIPAL saltava para a frente do usuário
+	// periodicamente durante a conversa.
+	windowOpen = windowOpen || a.supportChatTabShown.Load()
 	status := a.supportChatService().State().Status
 	tick := a.supportChatReconcileTicks.Add(1)
 

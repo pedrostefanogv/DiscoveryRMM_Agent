@@ -443,3 +443,55 @@
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* ── Modo EMBUTIDO (aba "Chat do Suporte" na janela principal) ───────────────
+   A shell ocupava 100vh da janela dedicada; dentro da view da UI principal a
+   altura vem do container da aba (a .view já dimensiona pelo shell). */
+.support-chat-view-wrap {
+  display: flex;
+  flex-direction: column;
+  /* Altura da área útil da view: o shell principal define o container;
+     fallback para min-height garante o chat esticado em qualquer viewport. */
+  height: 100%;
+  min-height: 480px;
+}
+
+#supportChatView .support-chat-shell {
+  height: 100%;
+  flex: 1 1 auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* O composer ficava fixo ao rodapé da janela dedicada (100vh); embutido, o
+   fluxo flex da shell resolve. Garante que nada vaze da view. */
+#supportChatView .support-chat-messages {
+  flex: 1 1 auto;
+  min-height: 220px;
+}
+
+/* Destaque do item do menu quando há mensagem/conversa não vista. */
+.sidebar-link--attention {
+  color: var(--accent);
+}
+.sidebar-link--attention .sidebar-badge {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  animation: supportChatPulse 1.4s ease-in-out infinite;
+}
+@keyframes supportChatPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Badge base: oculto por padrão (o item do menu só o mostra no destaque). */
+.sidebar-badge {
+  display: none;
+}
