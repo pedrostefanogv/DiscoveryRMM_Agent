@@ -159,19 +159,21 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 	// simplesmente não existia para ninguém. A ordem agora é: primeiro decidir
 	// onde mostrar, depois emitir.
 	if !a.hasSupportChatUI() {
-		a.Logs.Append("[supportchat] convite recebido SEM UI para apresentar; pedindo relancamento da interface e aguardando " +
-			supportChatInviteUIWait.String() + " (sessao " + invite.SessionID + ")")
-		// Sem interface NÃO existe onde mostrar o convite — mas a UI pode estar
-		// subindo agora (o watchdog acabou de ser acionado). Antes o convite era
-		// recusado na hora, então uma UI que aparecesse 2 s depois encontrava o
-		// convite já morto: o suporte via "usuário recusou" e o usuário nunca
-		// soube que houve convite.
+		// AJUSTE 21/10 (regra do usuário): o CHAT não lança a UI pelo serviço.
 		//
-		// Agora há uma janela de tolerância: se a UI aparecer dentro dela, o
-		// convite é reemitido e a janela abre flutuando (ver openSupportChatWindow).
-		// Só depois do prazo o agent recusa explicitamente, para o suporte não
-		// ficar esperando o convite expirar.
-		a.requestUIWatchdogSpawn("chat_invite")
+		// Por que: TODOS os congelamentos desta máquina (12:06:13Z, 12:18:23Z,
+		// 12:19:14Z) aconteceram em processos de UI LANÇADOS PELO SERVIÇO que
+		// adotaram um convite pendente logo no startup — o WebView2 da segunda
+		// janela trava ali. O convite deixa de ser motivo de relançamento: ele
+		// espera o usuário abrir o agent (replay na conexão) e é recusado
+		// ("no_ui") no fim da tolerância se ninguém abrir. UI viva e travada é
+		// problema do watchdog zumbi no ciclo dele — não do chat.
+		a.Logs.Append("[supportchat] convite recebido SEM UI aberta; NAO relancando a interface pelo servico (regra do chat: so funciona com o agent aberto) — aguardando " +
+			supportChatInviteUIWait.String() + " (sessao " + invite.SessionID + ")")
+		// Janela de tolerância: se o usuário abrir o agent dentro dela, o
+		// convite é reemitido pela replay/redelivery e o cartão aparece
+		// (ver openSupportChatWindow). Só depois do prazo o agent recusa
+		// explicitamente, para o suporte não ficar esperando o convite expirar.
 		a.scheduleSupportChatInviteRedelivery(invite)
 
 		body, _ := json.Marshal(map[string]any{
@@ -253,8 +255,7 @@ func (a *App) scheduleSupportChatInviteRedelivery(invite supportchat.Invite) {
 	go func() {
 		started := time.Now()
 		extended := false
-		zombieEscalated := false
-		deadline := time.NewTimer(supportChatInviteUIWait)
+			deadline := time.NewTimer(supportChatInviteUIWait)
 		defer deadline.Stop()
 
 		ticker := time.NewTicker(supportChatInviteUIPoll)
@@ -304,16 +305,12 @@ func (a *App) scheduleSupportChatInviteRedelivery(invite supportchat.Invite) {
 
 			case <-ticker.C:
 				if !a.hasSupportChatUI() {
-					// FIX 20/10: UI viva sem IPC durante a espera = zumbi. Escala UMA
-					// vez (depois de supportChatInviteZombieEscalateAfter) para o
-					// watchdog encerrar o processo travado e relançar dentro da
-					// tolerância — a instância nova conecta e o convite é redelivery.
-					if !zombieEscalated && time.Since(started) >= supportChatInviteZombieEscalateAfter {
-						if a.escalateUIWatchdogZombie("chat_invite_zumbi") {
-							zombieEscalated = true
-							a.Logs.Append("[supportchat] convite aguardando a UI com processo vivo SEM IPC; escalando para o caminho zumbi do watchdog (sessao " + invite.SessionID + ")")
-						}
-					}
+					// AJUSTE 21/10: o chat NÃO escala mais o caminho zumbi (encerrar
+					// + relançar a UI) — mesmo motivo da regra acima: a UI relançada
+					// pelo chat congelava ao adotar o convite. UI viva sem IPC é
+					// doença do watchdog zumbi, tratada no ciclo dele (2
+					// verificações); o convite segue esperando dentro da tolerância
+					// e vira "no_ui" se ninguém abrir o agent.
 					continue
 				}
 

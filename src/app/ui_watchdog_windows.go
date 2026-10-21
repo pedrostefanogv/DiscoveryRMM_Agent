@@ -63,7 +63,7 @@ func (a *App) startUIWatchdog(ctx context.Context) {
 	})
 	a.uiWatchdog.Store(watchdog)
 
-	a.logUIWatchdog("watchdog ativo: relança a UI minimizada no tray em CADA sessão ativa sem interface (limiar de 2 verificações, ou imediato em convite de chat)")
+	a.logUIWatchdog("watchdog ativo: relança a UI minimizada no tray em CADA sessão ativa sem interface (limiar de 2 verificações; convite de chat NÃO relança a interface — ajuste 21/10)")
 	go watchdog.Run(ctx)
 }
 
