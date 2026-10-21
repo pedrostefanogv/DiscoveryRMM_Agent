@@ -53,8 +53,14 @@ func TestHandleTicketChatInvite_SemUINaoEmiteEvento(t *testing.T) {
 	snapshot := append([]string(nil), (*lines)...) // cópia (a goroutine de redelivery também escreve)
 	found := false
 	for _, line := range snapshot {
-		if strings.Contains(line, "SEM UI para apresentar") {
+		// AJUSTE 21/10: sem UI o convite NÃO lança a interface pelo serviço
+		// (regra: chat só funciona com o agent aberto). O desfecho continua
+		// logado — mudou o texto, muda o contrato aqui junto.
+		if strings.Contains(line, "SEM UI aberta") {
 			found = true
+		}
+		if strings.Contains(line, "requestUIWatchdogSpawn") || strings.Contains(line, "relancamento") {
+			t.Fatalf("o chat não pode pedir relançamento da UI pelo serviço (ajuste 21/10): %q", line)
 		}
 		if strings.Contains(line, "UI disponivel") {
 			t.Fatalf("sem UI não pode haver reemissão imediata: %q", line)
