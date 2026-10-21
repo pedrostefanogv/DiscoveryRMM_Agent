@@ -209,6 +209,50 @@
   background: var(--surface-2);
 }
 
+/* Chip com MINIATURA (print pendente de envio), no padrão do composer do
+   Chat IA: a imagem dá contexto imediato do que está anexado. */
+.sc-pending-chip--image {
+  padding: 4px;
+}
+
+.sc-pending-chip--image img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+}
+
+.sc-pending-chip--uploading .sc-pending-chip-name {
+  color: var(--muted);
+}
+
+.sc-pending-chip-status {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sc-pending-chip-remove {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sc-pending-chip-remove:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
 /* ── Comentários do chamado (conversa do ticket) ────────────────────────────
    Ficam separados do chat ao vivo: um painel recolhível acima do composer. */
 .sc-comments {

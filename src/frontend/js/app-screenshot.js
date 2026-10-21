@@ -2554,7 +2554,14 @@ function screenshotFinishSelection(selection) {
       supportChatNotifyCaptureFailed("captura recusada pelo agent");
       return;
     }
-    var destination = screenshotOverlayDestination || screenshotDestinationDefault();
+    // O destino vem no PAYLOAD da sessão (o Go o define ao abrir o overlay
+    // para o chat de suporte/comentário). A variável local só cobre capturas
+    // pedidas pelo próprio frontend. Sem considerar o payload, uma captura
+    // pedida PELO GO para o chat de suporte voltava com destino "aiChat" e o
+    // print nunca chegava ao atendente — ficava "enviando" para sempre.
+    var destination = (state.payload && state.payload.destination)
+      || screenshotOverlayDestination
+      || screenshotDestinationDefault();
     // Consome o destino: cada captura define o seu.
     screenshotOverlayDestination = "";
     // Política: copiar a imagem automaticamente ao confirmar (cache com TTL).
@@ -3505,8 +3512,8 @@ function screenshotOpenComposerMenu() {
   menu.classList.remove("hidden");
 }
 
-// screenshotEnsureComposerControls injeta o menu da câmera e o botão da
-// galeria ao lado do ícone de câmera do composer (sem tocar no HTML do chat).
+// screenshotEnsureComposerControls injeta o botão de menu da câmera (atraso,
+// rolagem e galeria) ao lado do ícone de câmera do composer (sem tocar no HTML do chat).
 function screenshotEnsureComposerControls() {
   if (screenshotOverlayHost) return;
   var camera = document.getElementById("chatScreenshotBtn");
@@ -3517,7 +3524,11 @@ function screenshotEnsureComposerControls() {
     menuBtn.id = "chatScreenshotMenuBtn";
     menuBtn.type = "button";
     menuBtn.className = "chat-icon-btn chat-screenshot-menu-btn";
-    menuBtn.textContent = "▾";
+    // Ícone de chevron em SVG (nítido em qualquer DPI, herda a cor do tema).
+    menuBtn.innerHTML =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+      '<path d="M6 9.5 12 15.5 18 9.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>' +
+      "</svg>";
     menuBtn.setAttribute("aria-haspopup", "menu");
     menuBtn.setAttribute("aria-expanded", "false");
     menuBtn.setAttribute("aria-label", screenshotT("screenshot.menuLabel"));
@@ -3530,20 +3541,8 @@ function screenshotEnsureComposerControls() {
     camera.insertAdjacentElement("afterend", menuBtn);
   }
 
-  if (!document.getElementById("chatScreenshotGalleryBtn")) {
-    var galleryBtn = document.createElement("button");
-    galleryBtn.id = "chatScreenshotGalleryBtn";
-    galleryBtn.type = "button";
-    galleryBtn.className = "chat-icon-btn chat-screenshot-gallery-btn";
-    galleryBtn.textContent = "🖼";
-    galleryBtn.setAttribute("aria-haspopup", "dialog");
-    galleryBtn.setAttribute("aria-label", screenshotT("screenshot.galleryButton"));
-    galleryBtn.title = screenshotT("screenshot.galleryButton");
-    galleryBtn.addEventListener("click", function () { screenshotOpenGallery(); });
-    // Ordem visual: câmera, menu (▾) e galeria.
-    var menuAnchor = document.getElementById("chatScreenshotMenuBtn") || camera;
-    menuAnchor.insertAdjacentElement("afterend", galleryBtn);
-  }
+  // A galeria NÃO tem botão próprio no composer: fica apenas no item
+  // "Últimas capturas" do menu (a política que a esconde continua valendo lá).
 
   if (!screenshotMenuEl()) {
     var menu = document.createElement("div");
@@ -3578,11 +3577,6 @@ function screenshotEnsureComposerControls() {
       if (event.key === "Escape") screenshotCloseComposerMenu();
     });
   }
-  // A galeria respeita a política: sem galeria habilitada o botão não aparece.
-  screenshotLoadPolicy(false).then(function (policy) {
-    var btn = document.getElementById("chatScreenshotGalleryBtn");
-    if (btn) btn.classList.toggle("hidden", !policy.galleryEnabled);
-  });
 }
 
 // ── Captura com atraso (3/5/10 s) ────────────────────────────────────────

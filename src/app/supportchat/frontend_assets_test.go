@@ -769,7 +769,6 @@ func TestEnvio_FalhaDeRefreshNaoViraFalhaDeEnvio(t *testing.T) {
 	}
 }
 
-
 // REQUISITO (revisão por bugs 21/10): o mount da aba embutida PRECISA ser
 // display:contents como os outros. Sem isso o #supportChatViewMount era um
 // div block de altura automática dentro do .main-wrap (flex column): o
@@ -793,5 +792,64 @@ func TestAbaEmbutida_MountParticipaDoLayoutFlex(t *testing.T) {
 	}
 	if !strings.Contains(string(shell), "supportChatViewMount") {
 		t.Fatal("main-shell.html precisa montar a view do chat de suporte")
+	}
+}
+
+// REQUISITO (relato 21/10): o print capturado pelo overlay do chat de suporte
+// ficava "enviando" para sempre e nunca chegava. Causa: o destino da sessão
+// vem no PAYLOAD do overlay (o Go abre a captura com destination=supportChat),
+// mas screenshotFinishSelection decidia o encaminhamento por uma variável
+// local da janela principal — vazia nesse fluxo — e o print voltava como
+// "aiChat", sem passar pelo upload presigned do chat de suporte.
+func TestScreenshotOverlay_RoteiaPeloDestinoDoPayload(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-screenshot.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := strings.ReplaceAll(string(js), "\r\n", "\n")
+
+	// O destino do payload precisa entrar na decisão ANTES da variável local.
+	payloadIdx := strings.Index(jsText, "(state.payload && state.payload.destination)")
+	localIdx := strings.Index(jsText, "screenshotOverlayDestination\n      || screenshotDestinationDefault()")
+	if payloadIdx < 0 {
+		t.Fatal("screenshotFinishSelection precisa considerar o destination do payload do overlay")
+	}
+	if localIdx < 0 || localIdx < payloadIdx {
+		t.Fatal("o payload.destination deve preceder a variável local na escolha do destino")
+	}
+}
+
+// REQUISITO (relato 21/10): o anexo pendente precisa mostrar MINIATURA antes
+// de enviar (padrão do Chat IA), com status "enviando…" e botão de descartar —
+// antes era só um chip de texto sem contexto do que estava anexado.
+func TestAnexosPendentes_TemMiniaturaStatusEDescarte(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := strings.ReplaceAll(string(js), "\r\n", "\n")
+	for _, needle := range []string{
+		"sc-pending-chip--image",
+		"sc-pending-chip-status",
+		"sc-pending-chip-remove",
+		"entry.dataUrl = result;",
+		"state.pending = state.pending.filter(function (p) { return p !== item; });",
+	} {
+		if !strings.Contains(jsText, needle) {
+			t.Fatalf("app-support-chat.js precisa de %q para a miniatura pré-envio", needle)
+		}
+	}
+
+	cssPath := filepath.Join("..", "..", "frontend", "support-chat.css")
+	css, err := os.ReadFile(cssPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", cssPath, err)
+	}
+	for _, rule := range []string{".sc-pending-chip--image img", ".sc-pending-chip-remove:hover"} {
+		if !strings.Contains(string(css), rule) {
+			t.Fatalf("support-chat.css precisa estilizar %q", rule)
+		}
 	}
 }

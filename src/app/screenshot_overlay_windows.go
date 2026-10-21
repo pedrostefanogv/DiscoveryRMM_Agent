@@ -25,6 +25,8 @@ const (
 	hwndNotTopMost = ^uintptr(1) // HWND_NOTOPMOST (-2)
 	swpShowWindow  = 0x0040
 	swpNoActivate  = 0x0010
+	swpNoSize      = 0x0001
+	swpNoMove      = 0x0002
 )
 
 type overlayRect struct {
@@ -73,6 +75,16 @@ func (a *App) enterOverlayBounds(win application.Window, x, y, w, h int) (func()
 	// a janela apareceria preta — causa raiz do relato da captura pelo chat.
 	win.Show()
 
+	// O Show do Wails pode reposicionar a janela na ordem Z (e o foco que o
+	// usuário deu a outro app enquanto a captura era preparada empurra o overlay
+	// para trás). Reafirma o TOPMOST DEPOIS do Show: sem isso, ao capturar em
+	// atraso (3/5/10 s) com outro app em foco, a barra de seleção ficava por baixo.
+	// Mantemos SWP_NOACTIVATE: o overlay não deve roubar o foco, só ficar acima.
+	if ret2, _, _ := procSetWindowPosO.Call(hwnd, hwndTopMost, 0, 0, 0, 0,
+		swpShowWindow|swpNoActivate|swpNoSize|swpNoMove); ret2 == 0 {
+		// Falha aqui é apenas log: a janela já está visível dentro dos limites.
+		a.Logs.Append("[screenshot] aviso: nao foi possivel reafirmar o topmost do overlay")
+	}
 	// Fechar/ocultar a janela do overlay durante a sessão encerra a captura e
 	// devolve as janelas. O abort roda em goroutine para não chamar a API do
 	// Wails dentro do callback do evento.

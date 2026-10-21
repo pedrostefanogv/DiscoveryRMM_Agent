@@ -583,7 +583,8 @@ input[type="text"].screenshot-annot-input.hidden { display: none; }
 .screenshot-window-empty { padding: 10px; color: var(--muted); font-size: 12px; }
 
 /* Menu da câmera no composer (atraso, rolagem, galeria). */
-.chat-screenshot-menu-btn, .chat-screenshot-gallery-btn { position: relative; }
+.chat-screenshot-menu-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+.chat-screenshot-menu-btn svg { display: block; }
 .screenshot-menu {
   position: fixed;
   z-index: 9300;

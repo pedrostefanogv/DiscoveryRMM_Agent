@@ -605,10 +605,46 @@
     }
 
     wrap.hidden = false;
-    state.pending.forEach(function (item) {
+    state.pending.forEach(function (item, index) {
+      // Chip com MINIATURA (quando é imagem e já temos o data URL), spinner
+      // durante o upload e botão para descartar — o mesmo padrão do composer
+      // do Chat IA. Sem a miniatura o usuário não sabia o que está anexando.
       var chip = document.createElement("span");
       chip.className = "sc-pending-chip";
-      chip.textContent = item.uploading ? "enviando " + item.fileName + "…" : item.fileName;
+
+      if (item.dataUrl && isRenderableImage(item.contentType, item.fileName)) {
+        var thumb = document.createElement("img");
+        thumb.src = item.dataUrl;
+        thumb.alt = item.fileName || "print";
+        chip.appendChild(thumb);
+        chip.classList.add("sc-pending-chip--image");
+      }
+
+      var label = document.createElement("span");
+      label.className = "sc-pending-chip-name";
+      label.textContent = item.fileName || "anexo";
+      chip.appendChild(label);
+
+      if (item.uploading) {
+        var spinner = document.createElement("span");
+        spinner.className = "sc-pending-chip-status";
+        spinner.textContent = "enviando…";
+        chip.appendChild(spinner);
+        chip.classList.add("sc-pending-chip--uploading");
+      }
+
+      var remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "sc-pending-chip-remove";
+      remove.title = "Remover anexo";
+      remove.setAttribute("aria-label", "Remover anexo");
+      remove.textContent = "×";
+      remove.addEventListener("click", function () {
+        state.pending = state.pending.filter(function (p) { return p !== item; });
+        renderPending();
+      });
+      chip.appendChild(remove);
+
       wrap.appendChild(chip);
     });
   }
@@ -1429,7 +1465,7 @@
       return;
     }
 
-    var entry = { fileName: file.name || "print.png", uploading: true, attachmentId: null };
+    var entry = { fileName: file.name || "print.png", contentType: file.type || "application/octet-stream", uploading: true, attachmentId: null, dataUrl: "" };
     state.pending.push(entry);
     renderPending();
 
@@ -1437,6 +1473,9 @@
     reader.onload = function () {
       var result = String(reader.result || "");
       var base64 = result.indexOf(",") >= 0 ? result.split(",")[1] : result;
+      // Guarda o data URL para a MINIATURA do chip enquanto o upload corre.
+      entry.dataUrl = result;
+      renderPending();
 
       call("SupportChatUploadAttachment", file.name || "print.png", file.type || "application/octet-stream", base64)
         .then(function (attachmentId) {
