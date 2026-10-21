@@ -232,11 +232,15 @@
 
   function render() {
     var label = statusLabel(state.status);
-    els.statusChip.textContent = label;
+    if (els.statusChip) els.statusChip.textContent = label;
 
-    els.statusDot.className = "sc-dot " + (
-      state.status === "active" ? "sc-dot--online" :
-      state.status === "waiting" ? "sc-dot--waiting" : "sc-dot--offline");
+    // statusDot só existe na JANELA DEDICADA (rollback); na aba embutida o
+    // estado vai pelo chip/subtitle da statusbar.
+    if (els.statusDot) {
+      els.statusDot.className = "sc-dot " + (
+        state.status === "active" ? "sc-dot--online" :
+        state.status === "waiting" ? "sc-dot--waiting" : "sc-dot--offline");
+    }
 
     // Conversa terminada vem ANTES do aviso de conexão: o fim é o que está
     // acontecendo, e reconectar não muda mais nada.
@@ -249,35 +253,40 @@
       recomputeLink();
     }
 
+    var tech = String(state.supportName || "").trim();
+    var techSuffix = tech ? " — Técnico: " + tech : "";
+
     if (over) {
-      // Quem encerrou fica registrado na mensagem de sistema; a janela NÃO é
+      // Quem encerrou fica registrado na mensagem de sistema; a aba NÃO é
       // fechada sozinha para o usuário continuar lendo o que já foi conversado.
       var reason = "";
       state.messages.forEach(function (message) {
         if (isSystemMessage(message) && message.body) reason = message.body;
       });
-      els.subtitle.textContent = reason || "Conversa encerrada";
-      els.banner.hidden = true;
+      // FIX 21/10 (2): o banner de sistema repetia "Conversa encerrada" em cima
+      // do histórico (flutuando sobre as mensagens). O estado já está no chip e
+      // no subtitle da statusbar — o banner só tem utilidade para avisos de
+      // conexão/envio.
+      if (els.banner) els.banner.hidden = true;
+      if (els.subtitle) els.subtitle.textContent = (reason || "Conversa encerrada") + techSuffix;
     } else if (state.link === "opening") {
-      // Janela acabou de abrir (aceite): a conversa está vindo. Anunciar
-      // "sem conexão" aqui era EXATAMENTE o defeito relatado — o usuário
-      // abria o chat e o painel dizia que não havia conexão.
-      els.subtitle.textContent = "Abrindo a conversa…";
-      els.banner.hidden = true;
+      if (els.subtitle) els.subtitle.textContent = "Abrindo a conversa…" + techSuffix;
+      if (els.banner) els.banner.hidden = true;
     } else if (state.link === "idle") {
-      // Abriu e não há conversa carregada: diz o que é, sem prometer reconexão.
-      els.subtitle.textContent = "Sem conversa";
-      els.banner.hidden = true;
+      if (els.subtitle) els.subtitle.textContent = "Sem conversa";
+      if (els.banner) els.banner.hidden = true;
     } else if (state.link === "offline") {
-      els.subtitle.textContent = "Reconectando ao servidor…";
-      els.banner.hidden = false;
-      els.banner.textContent = "Sem conexão em tempo real. As mensagens serão reenviadas quando a conexão voltar.";
+      if (els.subtitle) els.subtitle.textContent = "Reconectando ao servidor…" + techSuffix;
+      if (els.banner) {
+        els.banner.hidden = false;
+        els.banner.textContent = "Sem conexão em tempo real. As mensagens serão reenviadas quando a conexão voltar.";
+      }
     } else if (state.status === "waiting") {
-      els.subtitle.textContent = "Aguardando o suporte iniciar a conversa";
-      els.banner.hidden = true;
+      if (els.subtitle) els.subtitle.textContent = "Aguardando o suporte iniciar a conversa" + techSuffix;
+      if (els.banner) els.banner.hidden = true;
     } else {
-      els.subtitle.textContent = "Conversa em andamento";
-      els.banner.hidden = true;
+      if (els.subtitle) els.subtitle.textContent = "Conversa em andamento" + techSuffix;
+      if (els.banner) els.banner.hidden = true;
     }
 
     renderInvite();
@@ -287,18 +296,19 @@
     renderComments();
 
     var canSend = state.status === "active" && !state.sending;
-    els.send.disabled = !canSend;
+    if (els.send) els.send.disabled = !canSend;
     // Conversa terminada também trava o campo: não há para quem escrever.
-    els.input.disabled = over;
-    els.attach.disabled = !canSend;
+    if (els.input) els.input.disabled = over;
+    if (els.attach) els.attach.disabled = !canSend;
     if (els.shot) els.shot.disabled = !canSend || state.capturePending;
-
-    // Encerrar é o ÚNICO caminho de fechamento (a janela não tem mais o X), por
-    // isso o botão fica sempre acionável — inclusive depois de a conversa já ter
-    // terminado (pelo suporte, por exemplo), quando ele vira "Fechar".
-    els.end.disabled = false;
-    els.end.textContent = state.status === "waiting" ? "Recusar" : (over ? "Fechar" : "Encerrar");
-    els.end.title = over ? "Fechar a janela do chat" : "Encerrar o chat";
+    if (els.end) {
+      // Encerrar é o ÚNICO caminho de fechamento, por isso o botão fica sempre
+      // acionável — inclusive depois de a conversa já ter terminado (pelo
+      // suporte, por exemplo), quando ele vira "Fechar".
+      els.end.disabled = false;
+      els.end.textContent = state.status === "waiting" ? "Recusar" : (over ? "Fechar" : "Encerrar");
+      els.end.title = over ? "Fechar a conversa" : "Encerrar o chat";
+    }
   }
 
   function formatTime(raw) {

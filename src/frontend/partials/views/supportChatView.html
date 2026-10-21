@@ -1,36 +1,22 @@
-<section id="supportChatView" class="view hidden" role="tabpanel">
-  <div class="support-chat-view-wrap">
-<div class="support-chat-shell">
-    <header class="support-chat-header">
-      <div class="support-chat-title">
-        <span id="scStatusDot" class="sc-dot sc-dot--offline" aria-hidden="true"></span>
-        <div class="support-chat-title-text">
-          <strong>Chat com o suporte</strong>
-          <span id="scSubtitle" class="support-chat-subtitle">Conectando…</span>
-          <!-- Técnico (atendente) que abriu a conversa: só aparece quando o
-               servidor informa o nome. -->
-          <span id="scTechnician" class="support-chat-technician" hidden></span>
-        </div>
+<main id="supportChatView" class="page-content hidden" role="tabpanel" aria-labelledby="tabSupportChat">
+  <section class="chat-panel support-chat-panel">
+    <div class="statusbar page-bar chat-statusbar">
+      <span class="meta" id="scSubtitle">Conectando…</span>
+      <span id="scStatusChip" class="sc-chip">aguardando</span>
+      <span id="scTechnician" class="sc-technician-inline" hidden></span>
+      <div class="actions">
+        <button id="scEndBtn" type="button" class="btn subtle" title="Encerrar o chat">Encerrar</button>
       </div>
-      <div class="support-chat-header-actions">
-        <span id="scStatusChip" class="sc-chip">aguardando</span>
-        <button id="scEndBtn" type="button" class="sc-btn sc-btn--ghost" title="Encerrar o chat">
-          Encerrar
-        </button>
-      </div>
-    </header>
+    </div>
 
-    <div id="scBanner" class="sc-banner" hidden></div>
+    <div id="scBanner" class="cache-stale-banner hidden" role="status" aria-live="polite"></div>
 
-    <main id="scMessages" class="support-chat-messages" aria-live="polite">
+    <div id="scMessages" class="chat-messages support-chat-messages" aria-live="polite">
       <div id="scEmpty" class="sc-empty">Aguardando o início da conversa…</div>
-    </main>
+    </div>
 
     <div id="scPending" class="sc-pending" hidden></div>
 
-    <!-- Comentários do CHAMADO (conversa assíncrona do ticket), separados do
-         chat ao vivo: o usuário vê o histórico e quem comentou. Notas internas
-         do suporte NÃO são exibidas aqui. -->
     <section id="scComments" class="sc-comments" hidden>
       <button id="scCommentsToggle" type="button" class="sc-comments-toggle" aria-expanded="false"
         aria-controls="scCommentsList">
@@ -44,10 +30,7 @@
       <div id="scCommentsList" class="sc-comments-list" hidden></div>
     </section>
 
-    <!-- Mesma caixa/botoes do composer do chat com a IA: o textarea e o corpo do
-         box e os icones (anexo = clipe, captura = camera, enviar = aviao)
-         flutuam no canto inferior direito. -->
-    <footer class="support-chat-composer">
+<div id="scComposer" class="chat-input-wrap support-chat-composer">
       <div class="chat-input-wrap">
         <textarea id="scInput" class="chat-input" rows="2"
           placeholder="Escreva uma mensagem… (Enter envia, Shift+Enter quebra linha)"></textarea>
@@ -81,10 +64,9 @@
         </button>
         </div>
       </div>
-    </footer>
-  </div>
-
-  <div id="scConfirm" class="sc-modal-overlay" hidden>
+    </div>
+  </section>
+<div id="scConfirm" class="sc-modal-overlay" hidden>
     <div class="sc-modal" role="dialog" aria-modal="true" aria-labelledby="scConfirmTitle">
       <h3 id="scConfirmTitle">Encerrar o chat?</h3>
       <p id="scConfirmText">Encerrar fecha esta janela e avisa o suporte. O histórico da conversa fica disponível no chamado.</p>
@@ -106,6 +88,4 @@
     <img id="scViewerImage" class="sc-viewer-image" alt="" />
     <div id="scViewerCaption" class="sc-viewer-caption"></div>
   </div>
-  </div>
-</section>
-
+</main>

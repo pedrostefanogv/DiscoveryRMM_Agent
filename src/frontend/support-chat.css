@@ -495,3 +495,29 @@
 .sidebar-badge {
   display: none;
 }
+
+/* ── Ajustes da view EMBUTIDA v2 (layout estilo Chat IA) ──────────────────── */
+#supportChatView .chat-panel {
+  height: 100%;
+}
+/* Banner de sistema da conversa (encerrado etc.): NÃO flutua sobre as
+   mensagens (era o "flicker" relatado) — entra como bloco no fluxo. */
+#supportChatView .sc-banner {
+  position: static;
+  margin: 8px 12px 0;
+}
+/* Técnico em linha na statusbar. */
+.sc-technician-inline {
+  font-size: 12px;
+  color: var(--text-muted, inherit);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sc-technician-inline strong {
+  font-weight: 600;
+}
+/* Composer herdado do Chat IA: margens/fundo coerentes com a view. */
+#supportChatView .support-chat-composer {
+  margin: 10px 12px 12px;
+}
