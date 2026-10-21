@@ -73,7 +73,11 @@ func (a *App) ensureMainWindow() (application.Window, error) {
 		if a.windowCreating.CompareAndSwap(false, true) {
 			// defer roda no retorno da FUNÇÃO (uma única passagem do loop cria).
 			defer a.windowCreating.Store(false)
+			// DIAGNÓSTICO 21/10: amostra a main thread durante o nascimento do
+			// WebView2; se travar, loga + minidump imediato (ver watchdog).
+			liberaVigia := a.vigiaCriacaoJanela("janela principal")
 			window := factory()
+			liberaVigia()
 			a.windowMu.Lock()
 			defer a.windowMu.Unlock()
 			if a.mainWindow != nil {

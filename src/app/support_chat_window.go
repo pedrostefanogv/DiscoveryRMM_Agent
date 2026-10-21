@@ -879,6 +879,11 @@ func (a *App) createSupportChatWindow(hidden bool) {
 	// Tela onde a janela vai nascer: a posição da ÚLTIMA janela do chat (o
 	// usuário já tem esse ponto na tela — nascer em outro monitor parece "não
 	// abriu"), depois o cursor, a janela principal e a primária.
+	// DIAGNÓSTICO 21/10: amostra a main thread durante a criação; se travar,
+	// loga + minidump IMEDIATO com a chamada nativa culpada viva no stack.
+	liberaVigia := a.vigiaCriacaoJanela("janela do chat")
+	defer liberaVigia()
+
 	screen, position := a.supportChatPlacementForNewWindow(app)
 	width, height := supportChatWindowSize(screen)
 

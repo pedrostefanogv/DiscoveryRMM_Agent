@@ -36,6 +36,11 @@ const (
 	mainThreadProbeTimeout = 90 * time.Second
 )
 
+// mainFreezeDumpAfter é quanto tempo de main thread presa durante a criação de
+// uma janela basta para gravar o minidump imediato (diagnóstico com o estado
+// vivo da chamada nativa culpada).
+const mainFreezeDumpAfter = 5 * time.Second
+
 // startMainThreadWatchdog sobe a sonda periódica da main thread. Só faz
 // sentido onde existe aplicação Wails (a UI); no modo serviço a.app é nil.
 func (a *App) startMainThreadWatchdog(ctx context.Context) {
@@ -107,12 +112,16 @@ func freezeDumpDir() string {
 // probeMainThread dispara uma tarefa trivial na main thread e espera no prazo.
 // Devolve true quando a thread respondeu.
 func (a *App) probeMainThread() bool {
+	return a.probeMainThreadWithin(mainThreadProbeTimeout)
+}
+
+// probeMainThreadWithin é a sonda com prazo configurável. O goroutine vaza de
+// propósito quando a thread não responde (uma tarefa enfileirada, no máximo) —
+// o processo encerra em seguida em qualquer caminho de timeout.
+func (a *App) probeMainThreadWithin(timeout time.Duration) bool {
 	done := make(chan struct{})
 	var once atomic.Bool
 	go func() {
-		// Shutdown da aplicação pode deixar a tarefa sem processamento: o
-		// goroutine vaza de propósito (uma no máximo por sonda) — o processo
-		// encerra em seguida em qualquer caminho de timeout.
 		defer func() { _ = recover() }()
 		application.InvokeSync(func() {
 			if once.CompareAndSwap(false, true) {
@@ -123,7 +132,59 @@ func (a *App) probeMainThread() bool {
 	select {
 	case <-done:
 		return true
-	case <-time.After(mainThreadProbeTimeout):
+	case <-time.After(timeout):
 		return false
+	}
+}
+
+// freezeDumpCooldown é o intervalo mínimo entre minidumps do congelamento no
+// MESMO processo (o relançamento em loop não pode virar tempestade de dumps).
+var freezeDumpCooldown atomic.Int64 // unix nanos do último dump
+
+// vigiaCriacaoJanela observa a main thread ENQUANTO uma janela nasce. Cada
+// falha de sonda é logada com o tempo de prisão; no primeiro sinal de prisão
+// acima de mainFreezeDumpAfter, grava o MINIDUMP IMEDIATO — não no relançamento
+// (90 s depois, quando o estado já se perdeu), e sim com a main thread AINDA
+// presa na chamada nativa culpada.
+func (a *App) vigiaCriacaoJanela(rotulo string) (libera func()) {
+	if a == nil || a.app == nil {
+		return func() {}
+	}
+	inicio := time.Now()
+	stop := make(chan struct{})
+	dumpFeito := &atomic.Bool{}
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(2 * time.Second):
+			}
+			if a.probeMainThreadWithin(3 * time.Second) {
+				continue // respondendo
+			}
+			preso := time.Since(inicio).Round(time.Second)
+			a.Logs.Append("[janela] " + rotulo + ": MAIN THREAD presa ha ~" +
+				preso.String() + " durante a criacao (sinal de travamento nativo)")
+			if preso < mainFreezeDumpAfter {
+				continue
+			}
+			if dumpFeito.CompareAndSwap(false, true) {
+				if last := freezeDumpCooldown.Load(); last == 0 || time.Since(time.Unix(0, last)) > 2*time.Minute {
+					freezeDumpCooldown.Store(time.Now().UnixNano())
+					a.Logs.Append("[janela] capturando minidump IMEDIATO com a main thread presa (" + rotulo + ")")
+					captureMainThreadFreezeDump(a)
+				} else {
+					a.Logs.Append("[janela] minidump recente ja existe; pulando captura extra")
+				}
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		dur := time.Since(inicio).Round(time.Millisecond)
+		if dur > 3*time.Second {
+			a.Logs.Append("[janela] " + rotulo + ": criacao concluida em " + dur.String())
+		}
 	}
 }
