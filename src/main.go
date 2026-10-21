@@ -269,6 +269,11 @@ func main() {
 		}
 	}
 
+	// Limpa browser processes órfãos de UIs mortas abruptamente (watchdog/
+	// instalador): anexar neles trava a SEGUNDA janela WebView2 no host
+	// (deadlock cross-thread — ver webview_orphan_cleanup.go).
+	appkg.LogOrphanCleanup(app)
+
 	// ── Fábrica da janela principal (criação preguiçosa) ──
 	//
 	// A janela NÃO é criada aqui no boot quando a execução é automática

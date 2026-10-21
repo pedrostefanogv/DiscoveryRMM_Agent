@@ -16,6 +16,7 @@ import (
 	"os"
 	"runtime"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -37,6 +38,32 @@ func bools(b bool) string {
 		return "sim"
 	}
 	return "nao"
+}
+
+// iniciaCartaoSim replica a peça que o sim ainda não tinha: um POPUP topmost
+// nativo em THREAD PRÓPRIA (como o cartão do convite). Opcional via modo 'e'.
+func iniciaCartaoSim(fechar chan struct{}) {
+	go func() {
+		runtime.LockOSThread()
+		var modUser32 = windows.NewLazySystemDLL("user32.dll")
+		var modKernel32 = windows.NewLazySystemDLL("kernel32.dll")
+		procGetMessage := modUser32.NewProc("GetMessageW")
+		procCreateEvent := modKernel32.NewProc("CreateEventW")
+		procMsgWait := modUser32.NewProc("MsgWaitForMultipleObjectsEx")
+		ev, _, _ := procCreateEvent.Call(0, 0, 0, 0)
+		defer windows.CloseHandle(windows.Handle(ev))
+		for {
+			select {
+			case <-fechar:
+				return
+			default:
+			}
+			// Bombeia mensagens da própria thread (qualquer janela dela).
+			procMsgWait.Call(1, uintptr(ev), 200, 0x4|0x2) // MWMO_INPUTAVAILABLE|MWMO_WAITALL-ish
+			var msg [48]byte
+			procGetMessage.Call(uintptr(unsafe.Pointer(&msg[0])), 0, 0, 0)
+		}
+	}()
 }
 
 // criaJanela roda NewWithOptions em goroutine e devolve o tempo gasto;
@@ -74,7 +101,7 @@ func main() {
 	}
 	var args []string
 	switch modo {
-	case "b", "d":
+	case "b", "d", "e":
 		args = []string{
 			"--renderer-process-limit=1",
 			"--js-flags=--max-old-space-size=256",
@@ -108,6 +135,12 @@ func main() {
 	// d: replica o AGENT — principal FRAMELESS + janela 2/3 com as opções EXATAS
 	// da janela do chat (AlwaysOnTop, tamanho travado, botões ocultos).
 	frameless := modo == "d"
+	comCartao := modo == "e"
+	fecharCartao := make(chan struct{})
+	if comCartao {
+		iniciaCartaoSim(fecharCartao)
+		fmt.Printf("[%s] cartao nativo simulado em thread propria (modo e)\n", ts())
+	}
 	chatOpts := func(titulo string, hidden bool) application.WebviewWindowOptions {
 		return application.WebviewWindowOptions{
 			Title:                 titulo,
@@ -145,6 +178,7 @@ func main() {
 		criaJanela(app, chatOpts("SIM W3 visivel (" + modo + ")", false), "w3 visivel estilo chat")
 
 		fmt.Printf("[%s] === modo %s: completo sem travamento ===\n", ts(), modo)
+		close(fecharCartao)
 		os.Exit(0)
 	}()
 
