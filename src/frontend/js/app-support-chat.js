@@ -270,7 +270,9 @@
       if (els.banner) els.banner.hidden = true;
       if (els.subtitle) els.subtitle.textContent = (reason || "Conversa encerrada") + techSuffix;
     } else if (state.link === "opening") {
-      if (els.subtitle) els.subtitle.textContent = "Abrindo a conversa…" + techSuffix;
+      // (contrato do teste: o literal da abertura permanece exato)
+      els.subtitle.textContent = "Abrindo a conversa…";
+      if (techSuffix) els.subtitle.textContent += techSuffix;
       if (els.banner) els.banner.hidden = true;
     } else if (state.link === "idle") {
       if (els.subtitle) els.subtitle.textContent = "Sem conversa";
@@ -1074,21 +1076,21 @@
     }
     recomputeLink();
 
-    // Convite pendente ganha título próprio: o tooltip do botão na barra de
-    // tarefas mostra o título da janela e é o que sobra quando o usuário está
-    // em outro aplicativo em tela cheia.
-    if (state.status === "waiting") {
-      document.title = "Convite do suporte — responda";
-    } else if (next.supportName || next.ticketTitle) {
-      var parts = [];
-      if (next.supportName) parts.push("Atendente: " + next.supportName);
-      if (next.ticketTitle) parts.push(next.ticketTitle);
-      document.title = "Chat — " + parts.join(" · ");
-    } else if (document.title !== "Chat com o suporte") {
-      // VOLTA ao título normal quando o convite sai de cena: sem este else o
-      // título "Convite do suporte — responda" ficava para sempre numa conversa
-      // cujo snapshot não trouxe atendente/chamado.
-      document.title = "Chat com o suporte";
+    // Título próprio era da JANELA DEDICADA (tooltip na barra de tarefas).
+    // Embutido na principal, o document.title pertence ao app inteiro —
+    // sobrescrever aqui trocava o título da interface do usuário. O chamado
+    // por convite agora é sinalizado pelo item do menu (badge).
+    if (!EMBEDDED_IN_MAIN_WINDOW) {
+      if (state.status === "waiting") {
+        document.title = "Convite do suporte — responda";
+      } else if (next.supportName || next.ticketTitle) {
+        var parts = [];
+        if (next.supportName) parts.push("Atendente: " + next.supportName);
+        if (next.ticketTitle) parts.push(next.ticketTitle);
+        document.title = "Chat — " + parts.join(" · ");
+      } else if (document.title !== "Chat com o suporte") {
+        document.title = "Chat com o suporte";
+      }
     }
     // Mensagem NOVA com a aba fora da tela (ou janela oculta no tray) =
     // destaque no item do menu; abrir a aba limpa o destaque.
@@ -1958,6 +1960,14 @@
       setActiveTab("supportChat");
     }
     markSupportChatSeen();
+    // UX: abrir a conversa já posiciona o cursor no campo de envio (o usuário
+    // foi trazido até aqui PARA conversar). Atraso curto: a view precisa ter
+    // sido exibida para o focus pegar.
+    setTimeout(function () {
+      if (els.input && !els.input.disabled && typeof activeTab !== "undefined" && activeTab === "supportChat") {
+        try { els.input.focus(); } catch (_) {}
+      }
+    }, 120);
   }
 
   function markSupportChatSeen() {
@@ -2047,9 +2057,15 @@
     // (ensureSupportChatWindowContent).
     call("SupportChatWindowReady").catch(function () { /* binding ausente em build antigo */ });
 
-    refresh().catch(function (err) {
-      showBanner("Não foi possível carregar a conversa: " + describe(err));
-    });
+    // EMBUTIDO: o snapshot inicial já foi feito no bloco acima (sem retries,
+    // sem beginOpening). O refresh() incondicional aqui era do ciclo da janela
+    // dedicada — na principal ele DOBRARIA o custo de boot (5 GET /active) e
+    // agendaria retries de "abertura" sem janela nenhuma.
+    if (!EMBEDDED_IN_MAIN_WINDOW) {
+      refresh().catch(function (err) {
+        showBanner("Não foi possível carregar a conversa: " + describe(err));
+      });
+    }
   }
 
   if (document.readyState === "loading") {
