@@ -775,10 +775,18 @@ func (a *App) prewarmSupportChatWindow() {
 	// principal nunca começou" como LIVRE — no tray o prewarm virava o PRIMEIRO
 	// ambiente WebView2 do processo, nascendo na main thread no meio do convite
 	// (a interface inteira congelava com o cartão na tela e o ui-watchdog matava
-	// a UI). Agora o prewarm só roda com a janela principal VIVA: o ambiente já
-	// existe e o nascimento da janela do chat é attach rápido. No tray o
-	// aquecimento é pela janela principal (prewarmSupportChatEnvironment).
-	if !a.mainWindowReady() {
+	// a UI). No tray o aquecimento é pela janela principal
+	// (prewarmSupportChatEnvironment).
+	//
+	// FIX 21/10 (revisão 2): mainWindowReady SOZINHO TAMBÉN NÃO BASTA. O log da
+	// máquina real (12:06:13.4296Z) mostra o prewarm nascendo 11 ms ANTES do
+	// ambiente da janela principal terminar ("Environment created successfully"
+	// em 12:06:13.4407Z) e do conteúdo carregar (12:06:13.9797Z) — criar outro
+	// WebView2 nesse intervalo é exatamente o congelamento que a carência
+	// (mainWindowInitContentLoadedGrace) existe para evitar (dump 20/10 16:38:
+	// ServeWebViewRequest em voo). O gate correto é: janela viva E FORA da
+	// pendência (criação em curso OU webview ainda carregando).
+	if !a.mainWindowReady() || a.mainWindowInitPending() {
 		return
 	}
 	// Dedupe: reapresentações do convite e reentregas disparam vários prewarms;
@@ -812,7 +820,10 @@ func (a *App) prewarmSupportChatEnvironment() {
 	if a == nil || a.app == nil {
 		return
 	}
-	if a.mainWindowReady() {
+	// Ambiente quente = janela viva E webview dela já carregado (fora da
+	// carência). Durante o nascimento/carregamento da principal, quem aquece é
+	// a própria principal — nada de segunda janela em paralelo.
+	if a.mainWindowReady() && !a.mainWindowInitPending() {
 		a.prewarmSupportChatWindow()
 		return
 	}

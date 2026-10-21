@@ -53,11 +53,14 @@ func TestPrewarmChatWindow_ExigeJanelaPrincipalViva(t *testing.T) {
 	if body == "" {
 		t.Fatal("prewarmSupportChatWindow não encontrada")
 	}
-	if !strings.Contains(body, "!a.mainWindowReady()") {
-		t.Fatal("o prewarm da janela do chat precisa exigir a janela principal VIVA (ambiente quente); o gate antigo (mainWindowInitPending) tratava 'nunca tentou criar' como livre e a janela do chat virava o primeiro WebView2 do processo no meio do convite")
-	}
-	if strings.Contains(body, "a.mainWindowInitPending()") {
-		t.Fatal("o prewarm não pode voltar ao gate fraco mainWindowInitPending")
+	// Gate correto (revisão 2): janela principal VIVA e FORA da pendência — o
+	// "viva sozinho" deixava o prewarm nascer durante o carregamento do webview
+	// da principal (log real 12:06:13.4296Z: prewarm 11 ms antes de
+	// "Environment created successfully"), e o "não pendente sozinho" tratava
+	// "nunca tentou criar" como livre (primeiro WebView2 do processo no meio do
+	// convite). As duas condições juntas são o contrato.
+	if !strings.Contains(body, "!a.mainWindowReady() || a.mainWindowInitPending()") {
+		t.Fatal("o prewarm da janela do chat exige janela principal VIVA E fora da carência de carregamento (mainWindowReady + !mainWindowInitPending); qualquer um dos dois sozinho reproduz um congelamento conhecido")
 	}
 }
 
