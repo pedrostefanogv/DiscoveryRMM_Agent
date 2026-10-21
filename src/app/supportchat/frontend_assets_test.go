@@ -768,3 +768,30 @@ func TestEnvio_FalhaDeRefreshNaoViraFalhaDeEnvio(t *testing.T) {
 		t.Fatal("o refresh pós-envio precisa ser desacoplado do catch de envio")
 	}
 }
+
+
+// REQUISITO (revisão por bugs 21/10): o mount da aba embutida PRECISA ser
+// display:contents como os outros. Sem isso o #supportChatViewMount era um
+// div block de altura automática dentro do .main-wrap (flex column): o
+// .page-content não esticava, o painel do chat não preenchia a altura, o
+// composer ficava grudado no topo das mensagens e sobrava um vazio enorme
+// embaixo (o layout "estranho" da captura do usuário).
+func TestAbaEmbutida_MountParticipaDoLayoutFlex(t *testing.T) {
+	cssPath := filepath.Join("..", "..", "frontend", "styles", "base.css")
+	css, err := os.ReadFile(cssPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", cssPath, err)
+	}
+	if !strings.Contains(string(css), "#supportChatViewMount") {
+		t.Fatal("base.css precisa incluir #supportChatViewMount na regra display:contents — sem isso o painel do chat não preenche a altura da janela")
+	}
+
+	shellPath := filepath.Join("..", "..", "frontend", "partials", "main-shell.html")
+	shell, err := os.ReadFile(shellPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", shellPath, err)
+	}
+	if !strings.Contains(string(shell), "supportChatViewMount") {
+		t.Fatal("main-shell.html precisa montar a view do chat de suporte")
+	}
+}
