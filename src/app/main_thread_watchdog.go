@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -208,6 +209,12 @@ func (a *App) vigiaCriacaoJanela(rotulo string) (libera func()) {
 			preso := time.Since(inicio).Round(time.Second)
 			a.Logs.Append("[janela] " + rotulo + ": MAIN THREAD presa ha ~" +
 				preso.String() + " durante a criacao (sinal de travamento nativo)")
+			// CONTENÇÃO 21/10: trava na janela do chat = disjuntor persistente
+			// (impede o loop congelar-relançar-congelar enquanto a sessão viva
+			// força a reconciliação a recriar a janela em cada relançamento).
+			if strings.Contains(rotulo, "janela do chat") {
+				chatWindowBreakerDisparaSeTravado(rotulo, preso)
+			}
 			if preso < mainFreezeDumpAfter {
 				continue
 			}

@@ -847,6 +847,18 @@ func (a *App) createSupportChatWindow(hidden bool) {
 	} else {
 		trace.mark("open")
 	}
+	// DISJUNTOR (contenção 21/10): se a criação da janela do chat travou
+	// recentemente (main thread morta no nascimento nativo), NÃO tenta de
+	// novo — era o loop que congelava a máquina em cada relançamento com
+	// sessão ativa. A janela volta quando o marcador expirar (30 min) ou
+	// em um build novo; o resto do agent segue funcionando.
+	if chatWindowBreakerAtiva() {
+		restante := chatWindowBreakerRestante().Round(time.Second)
+		a.Logs.Append("[supportchat] janela do chat DESATIVADA pelo disjuntor (criacao anterior travou a main thread); liberando em " +
+			restante.String() + " — sessao " + state.SessionID + " segue sem janela ate la")
+		trace.mark("disjuntor")
+		return
+	}
 	float := a.supportChatWindowFloat()
 
 	a.supportChatMu.Lock()
