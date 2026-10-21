@@ -114,6 +114,10 @@ func main() {
 		}
 	}
 	udf := os.TempDir() + string(os.PathSeparator) + "webview-sim-" + modo
+	// SIM_UDF sobrepõe a pasta de dados (teste contra UDF real copiada).
+	if v := os.Getenv("SIM_UDF"); v != "" {
+		udf = v
+	}
 	os.MkdirAll(udf, 0o755)
 
 	fmt.Printf("[%s] === modo %s: iniciando (udf=%s) ===\n", ts(), modo, udf)
