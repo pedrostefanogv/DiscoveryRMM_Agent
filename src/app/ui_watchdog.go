@@ -109,7 +109,15 @@ type uiWatchdog struct {
 	// volte a conectar — serve de backoff para não criar um ciclo patológico de
 	// matar/relançar. Zera assim que uma UI conecta.
 	zombieStreak int
-	lastSpawn    time.Time
+	// uiHadConnected: a UI que está sendo morta chegou a conectar no IPC alguma
+	// vez desde o último spawn/kill? Diferencia DOIS travamentos: a UI que
+	// CONECTOU e depois congelou (freeze de AÇÃO — ex.: WebView2 na criação de
+	// janela; relanço imediato é seguro, o gatilho não se repete no boot) da UI
+	// que morre sem nunca conectar (travada NO PARTO — reincidindo, o relanço
+	// segue o backoff longo). Achado aberto nº 2 da revisão: sem isto, duas
+	// travadas seguidas deixavam a máquina até 5 min sem interface.
+	uiHadConnected bool
+	lastSpawn      time.Time
 	// lastNoticeKey deduplica mensagens de estado (ver logOnceLocked).
 	lastNoticeKey string
 
@@ -198,6 +206,7 @@ func (w *uiWatchdog) RequestSpawn(reason string) {
 	if w.deps.HasUI() {
 		w.misses = 0
 		w.zombieChecks = 0
+		w.uiHadConnected = true
 		w.logOnceLocked("pedido-com-ui", "pedido de relançamento da UI ("+reason+") ignorado: interface JA conectada no IPC")
 		return
 	}
@@ -221,11 +230,9 @@ func (w *uiWatchdog) RequestSpawn(reason string) {
 		if killed := w.deps.KillZombieUI(); killed > 0 {
 			w.deps.Log(fmt.Sprintf("UI travada encerrada por pedido (%d processo(s))", killed))
 			w.zombieChecks = 0
-			cooldown := time.Duration(0)
-			if w.zombieStreak >= 2 {
-				cooldown = uiWatchdogSpawnCooldown
-			}
+			cooldown := w.zombieRelaunchCooldownLocked()
 			w.zombieStreak++
+			w.uiHadConnected = false // a morta já foi: a observação recomeça
 			if w.sessionMode() {
 				sessions := w.activeSessionsLocked()
 				w.spawnSessionsLocked(sessions, "pedido:"+reason, cooldown, true)
@@ -290,6 +297,7 @@ func (w *uiWatchdog) checkLocked() {
 		w.misses = 0
 		w.zombieChecks = 0
 		w.zombieStreak = 0
+		w.uiHadConnected = true
 		return
 	}
 
@@ -318,12 +326,10 @@ func (w *uiWatchdog) checkLocked() {
 		// então não há risco de duplicar). REINCIDÊNCIA (a UI sobe e trava de
 		// novo sem nunca conectar): usa o cooldown longo para não martelar a
 		// máquina em ciclo matar/relançar.
-		cooldown := uiWatchdogRequestCooldown
-		if w.zombieStreak > 0 {
-			cooldown = uiWatchdogSpawnCooldown
-		}
+		cooldown := w.zombieRelaunchCooldownLocked()
 		w.zombieStreak++
 		w.spawnLocked("zumbi", cooldown)
+		w.uiHadConnected = false
 		return
 	}
 
@@ -336,6 +342,25 @@ func (w *uiWatchdog) checkLocked() {
 	// de usuário barram o relançamento, a mensagem "relançando" seria mentira.
 	// Quem relata o desfecho é spawnLocked (sucesso, falha ou espera).
 	w.spawnLocked("ausente", uiWatchdogSpawnCooldown)
+}
+
+// zombieRelaunchCooldownLocked devolve o cooldown do relanço APÓS matar uma UI
+// travada:
+//   - a UI morta CONECTOU alguma vez (freeze de ação, não de boot): relanço
+//     imediato — o gatilho é uma ação de janela, que não se repete no boot;
+//   - nunca conectou e é REINCIDÊNCIA (sobe e trava no parto): cooldown longo;
+//   - nunca conectou, primeira ocorrência: imediato (a graça pós-spawn é quem
+//     protege o nascimento).
+//
+// Chamado com w.mu preso.
+func (w *uiWatchdog) zombieRelaunchCooldownLocked() time.Duration {
+	if w.uiHadConnected {
+		return 0
+	}
+	if w.zombieStreak > 0 {
+		return uiWatchdogSpawnCooldown
+	}
+	return 0
 }
 
 // sessionMode informa se o watchdog tem as dependências para raciocinar por
@@ -420,6 +445,7 @@ func (w *uiWatchdog) checkSessionsLocked() {
 		w.misses = 0
 		w.zombieChecks = 0
 		w.zombieStreak = 0
+		w.uiHadConnected = true
 		missing := sessionsMissingUI(sessions, counts)
 		if len(missing) == 0 {
 			w.lastNoticeKey = ""
@@ -451,12 +477,10 @@ func (w *uiWatchdog) checkSessionsLocked() {
 			w.deps.Log(fmt.Sprintf("UI travada encerrada (%d processo(s))", killed))
 		}
 		// Depois do kill não existe UI em sessão nenhuma: relança em todas.
-		cooldown := uiWatchdogRequestCooldown
-		if w.zombieStreak > 0 {
-			cooldown = uiWatchdogSpawnCooldown
-		}
+		cooldown := w.zombieRelaunchCooldownLocked()
 		w.zombieStreak++
 		w.spawnSessionsLocked(sessions, "zumbi", cooldown, true)
+		w.uiHadConnected = false
 		return
 	}
 

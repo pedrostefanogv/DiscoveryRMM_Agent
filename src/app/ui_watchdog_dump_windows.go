@@ -69,7 +69,17 @@ func (a *App) killAgentUIProcessesWithForensics() int {
 			a.logUIWatchdog(fmt.Sprintf("minidump da UI travada gravado (pid=%d): %s", pid, path))
 		}
 	}
-	return killAgentUIProcesses()
+	killed := killAgentUIProcesses()
+	// CRÍTICO para o relanço: os filhos msedgewebview2 da UI morta sobrevivem ao
+	// TerminateProcess e seguram o lock da pasta de dados do WebView2 — a UI
+	// relançada 2 s depois congela no CreateCoreWebView2EnvironmentWithOptions
+	// esperando esse lock SEM PRAZO (o ciclo do log 20/10: kill às 00:46:55,
+	// aceite às 00:46:56, travado; e o "UI sobe e trava sem nunca conectar").
+	// Mata os órfãos e espera sumirem antes de devolver o controle ao relanço.
+	if orphans := killAgentWebviewOrphans(); orphans > 0 {
+		a.logUIWatchdog(fmt.Sprintf("%d webview(s) órfão(s) do agent encerrado(s) para liberar a pasta de dados do WebView2", orphans))
+	}
+	return killed
 }
 
 // captureUIProcessDump grava um minidump do pid em <LogDir>/dumps/. Nunca

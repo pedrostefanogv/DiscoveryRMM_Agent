@@ -292,6 +292,13 @@ func main() {
 		// Se o app deve esconder em vez de fechar, cancela o evento (impede o
 		// hook interno de marcar a janela como "unconditionallyClose").
 		window.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
+			// DIAGNÓSTICO ("a janela principal fecha sozinha quando a notificação
+			// de chat aparece"): nenhum caminho do fluxo do convite fecha a janela
+			// principal — esta linha prova se o fechamento passou AQUI (evento de
+			// close de verdade) ou se a janela sumiu por outro motivo (crash do
+			// webview, app encerrado). Com timestamp o correlacionamos com o
+			// [main-watchdog]/minidumps.
+			log.Println("[window] fechamento da janela principal solicitado; ShouldHideOnClose=", app.ShouldHideOnClose())
 			if !app.ShouldHideOnClose() {
 				return
 			}

@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"sync"
 
@@ -237,11 +238,21 @@ func (s *supportChatNotifyState) resolve(hwnd uintptr, accepted bool) {
 
 	// 1) Envio ao servidor, sem bloquear a UI nem o fechamento.
 	go func() {
+		// Publicador EXCLUSIVO da decisão: com o erro REAL do POST, sempre
+		// publicado (mesmo com pânico no caminho de rede). Antes, o WM_DESTROY
+		// podia publicar antes e mascarar uma falha transitória: uma RECUSA com
+		// POST falho virava "publicada sem erro" e o retry de cortesia nunca
+		// rodava (console ficava em "Aguardando confirmação" até expirar).
 		var err error
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panico ao reportar a decisao do convite: %v", r)
+			}
+			s.publishDecision(err)
+		}()
 		if onDecided != nil {
 			err = onDecided(result)
 		}
-		s.publishDecision(err)
 	}()
 
 	// 2) Fecha o cartão imediatamente (mesmo comportamento de "Agora não").
@@ -314,12 +325,6 @@ func (s *supportChatNotifyState) publishDecision(err error) {
 	default:
 	}
 	close(s.resultCh)
-}
-
-// publishDecided publica a decisão já tomada (chamado no WM_DESTROY, na thread
-// da janela, quando o cartão sai da tela depois de o usuário responder).
-func (s *supportChatNotifyState) publishDecided(err error) {
-	go s.publishDecision(err)
 }
 
 // abort fecha o cartão sem decisão (cancelado por outro caminho: convite
@@ -463,10 +468,10 @@ func supportChatNotifyWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	case winui.MsgDestroy:
 		state.fonts.release()
 		supportChatNotifyStates.Delete(hwnd)
-		// Decisão já tomada: publica AQUI (thread da janela) — o processo de UI
-		// abre a janela do chat / fecha a superfície do convite. Se o cartão foi
-		// fechado sem decisão, o canal é fechado vazio (delete pós-destroy).
-		state.publishDecided(nil)
+		// SEM publicação aqui. Com decisão, o publicador exclusivo é o goroutine
+		// do resolve (com o erro real do POST — ver resolve). Publicar aqui era
+		// a corrida que mascarava falha de rede. Sem decisão, publishDecision
+		// com decided==nil era no-op (abort/cancel já fecham o canal).
 		winui.PostQuitMessage(0)
 		return 0
 	}

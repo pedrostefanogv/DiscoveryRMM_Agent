@@ -720,8 +720,79 @@ func (a *App) openSupportChatWindow() {
 		return
 	}
 
+	a.createSupportChatWindow(false)
+}
+
+// prewarmSupportChatWindow PRÉ-CRIA a janela do chat OCULTA, fora do caminho
+// do aceite.
+//
+// CAUSA RAIZ (dump 20/10 21:29 e 21:49; reproduz em outras máquinas, com e sem
+// antivírus): a criação do WebView2 da janela do chat trava a main thread — a
+// chamada nativa CreateCoreWebView2EnvironmentWithOptions espera a subida do
+// processo do navegador SEM PRAZO (o pump do Wails com timeout de 60 s roda
+// DEPOIS; a espera travada é antes dele). Resultado: o usuário aceita o convite
+// e a interface inteira congela — a janela do chat nunca abre.
+//
+// A criação do WebView2 não pode receber timeout do nosso lado. O que dá para
+// mudar é QUANDO ela acontece: aqui, no instante em que o convite é
+// APRESENTADO (estado waiting) — enquanto o usuário decide, o WebView2 nasce em
+// paralelo (janela oculta). No aceite, openSupportChatWindow REUSA a janela
+// existente: só Show()+foco+refresh, instantâneo, sem criação de WebView2.
+//
+// Se a pré-criação travar, é o mesmo travamento de antes — só que antes do
+// clique e com o main-thread watchdog (main_thread_watchdog.go) encerrando a UI
+// para relançamento limpo. No caso comum (criação rápida, como às 21:46:30),
+// o aceite vira instantâneo.
+//
+// Regras: só no fluxo de cartão nativo (no fallback a janela É a superfície do
+// convite); nunca com a janela principal nascendo (dois WebView2 juntos);
+// dedupe por janela já existente.
+func (a *App) prewarmSupportChatWindow() {
+	if a == nil || a.app == nil {
+		return
+	}
+	if !supportChatNativeInviteCard {
+		return
+	}
+	// Dois WebView2 nascendo juntos congelam a main thread (regra do lazy load):
+	// com a janela principal em inicialização não pré-cria agora — a
+	// reconciliação/aceite segue o fluxo atual.
+	if a.mainWindowInitPending() {
+		return
+	}
+	// Dedupe: reapresentações do convite e reentregas disparam vários prewarms;
+	// sem este CAS, dois prewarms concorrentes criariam DUAS janelas (o segundo
+	// passaria direto pelo suporteChatWin nil antes do primeiro registrar).
+	if !a.supportChatPrewarmRequested.CompareAndSwap(false, true) {
+		return
+	}
+	defer a.supportChatPrewarmRequested.Store(false)
+	a.supportChatMu.Lock()
+	already := a.supportChatWin != nil
+	a.supportChatMu.Unlock()
+	if already {
+		return
+	}
+	a.Logs.Append("[supportchat] pre-criando a janela do chat oculta (prewarm do WebView2 fora do caminho do aceite)")
+	a.createSupportChatWindow(true)
+}
+
+// createSupportChatWindow cria (ou reusa) a janela do chat. hidden=true nasce
+// OCULTA (prewarm): o WebView2 nasce em paralelo ao convite pendente e o
+// aceite seguinte só exibe a janela existente.
+func (a *App) createSupportChatWindow(hidden bool) {
+	app := a.app
+	if app == nil {
+		return
+	}
+
+	state := a.supportChatService().State()
 	trace := a.supportChatTraceFor(state.SessionID)
-	trace.mark("open")
+	if hidden {
+		trace.mark("prewarm")
+	} else {
+		trace.mark("open")
+	}
 	float := a.supportChatWindowFloat()
 
 	a.supportChatMu.Lock()
@@ -735,6 +806,12 @@ func (a *App) openSupportChatWindow() {
 		trace.setReuse(true)
 		trace.setWebview("reaproveitado")
 		trace.mark("janela")
+		if hidden {
+			// Prewarm concorrente achou a janela nascendo/pronta: NADA a exibir
+			// aqui — exibir a janela oculta antes do aceite recriava o bug do
+			// "painel por cima do cartão de aceite".
+			return
+		}
 		a.raiseSupportChatWindow(win, float)
 		// A janela pode estar mostrando OUTRA conversa (ou o encerramento
 		// anterior): pede ao frontend um snapshot da sessão corrente.
@@ -758,6 +835,11 @@ func (a *App) openSupportChatWindow() {
 		opts.Y = position.Y
 	}
 	opts = supportChatWindowOptionsWithContext(opts, state)
+	if hidden {
+		// Prewarm: nasce oculta de propósito — o WebView2 e o conteúdo carregam
+		// em paralelo ao convite pendente; o aceite apenas exibe a janela.
+		opts.Hidden = true
+	}
 
 	win := app.Window.NewWithOptions(opts)
 	// Portão por janela: o hook consulta ESTA janela e não um estado global que
@@ -781,8 +863,12 @@ func (a *App) openSupportChatWindow() {
 		a.EmitEvent("supportchat:confirm_close")
 	})
 
-	a.raiseSupportChatWindow(win, float)
-	a.Logs.Append("[supportchat] janela do chat aberta (sempre no topo=" + boolLabel(float) + ")")
+	if hidden {
+		a.Logs.Append("[supportchat] janela do chat pre-criada oculta (webview nascendo em paralelo ao convite)")
+	} else {
+		a.raiseSupportChatWindow(win, float)
+		a.Logs.Append("[supportchat] janela do chat aberta (sempre no topo=" + boolLabel(float) + ")")
+	}
 
 	// Blindagem de NAVEGAÇÃO do WebView2 desta janela.
 	//
@@ -1544,6 +1630,9 @@ func (a *App) ensureSupportChatInviteSurface(state supportchat.State) {
 		return
 	}
 	a.Logs.Append("[supportchat] estado waiting sem cartao na tela; reapresentando o convite (sessao " + invite.SessionID + ")")
+	// Prewarm em paralelo: o WebView2 da janela do chat nasce enquanto o usuário
+	// decide (ver prewarmSupportChatWindow). No aceite, só Show() + refresh.
+	go a.prewarmSupportChatWindow()
 	go a.presentSupportChatInvite(invite)
 }
 
@@ -1741,6 +1830,15 @@ func (a *App) HideSupportChatInviteWindow() error {
 // janela é a única superfície de aceite e não pode desaparecer.
 func (a *App) hideSupportChatInviteSurface() {
 	if a == nil {
+		return
+	}
+	// MODO NATIVO (cartão de convite do Windows): a superfície do convite é o
+	// CARTÃO, não a janela do chat — não existe "janela de convite" para
+	// esconder aqui. Sem esta guarda, o aceite fechava a janela do chat
+	// PRÉ-CRIADA (prewarm) quando ela ainda não pintou (janela oculta tem
+	// requestAnimationFrame limitado), desregistrava-a e a abertura seguinte
+	// recriava o WebView2 NO CAMINHO DO ACEITE — o congelamento de volta.
+	if supportChatNativeInviteCard {
 		return
 	}
 	if status := a.supportChatService().State().Status; supportChatShouldFloat(status) {

@@ -364,6 +364,10 @@ type App struct {
 	// WebView2 continua carregando DEPOIS disso (o travamento observado começa
 	// ~3 s após a criação), então a carência pos-criação usa esta marca.
 	windowInitCompletedAt time.Time
+	// supportChatPrewarmRequested deduplica a pré-criação oculta da janela do
+	// chat (prewarmSupportChatWindow): reapresentações do convite e reentregas
+	// disparam o prewarm várias vezes no mesmo instante.
+	supportChatPrewarmRequested atomic.Bool
 	// mainWindowContentLoaded: o FRONTEND da janela principal confirmou que o
 	// WebView2 carregou (binding MainWindowContentReady, chamado no bootstrap do
 	// app-init.js). É o sinal REAL de prontidão: a carência por relógio expirava
@@ -1309,6 +1313,11 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 	go a.resumeSupportChatIfActive(3 * time.Second)
 	// Reconciliação periódica (só na UI: é ela que abre janelas).
 	go a.runSupportChatReconcileLoop()
+
+	// Autoproteção: a main thread presa no WebView2 (travamento de 20/10) não
+	// tem timeout no lado nativo — a UI passa a se encerrar sozinha quando a
+	// thread não responde, e o ui-watchdog do serviço relança em segundos.
+	a.startMainThreadWatchdog(ctx)
 
 	return nil
 }

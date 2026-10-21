@@ -240,6 +240,139 @@ func findAgentUIPIDs() ([]uint32, error) {
 	return pids, nil
 }
 
+// ── Órfãos do WebView2 (ciclo matar/relançar) ───────────────────────────────
+//
+// CAUSA RAIZ do "UI sobe e trava sem nunca conectar" e do congelamento no
+// aceite logo depois de um kill (log 20/10: 00:46:55 kill+relanço → 00:46:56
+// aceite → travado): o TerminateProcess na UI NÃO mata os filhos
+// msedgewebview2.exe. O browser órfão continua vivo segurando o lock da pasta
+// de dados do WebView2 (ProgramData\Discovery\EBWebView); a UI nova nasce
+// 2 s depois e o CreateCoreWebView2EnvironmentWithOptions fica esperando esse
+// lock SEM PRAZO na main thread — a interface nova congela de novo. Limpar os
+// órfãos antes do relanço quebra o ciclo.
+
+// webviewOrphanName é o processo do navegador do WebView2.
+const webviewOrphanName = "msedgewebview2.exe"
+
+// procRecord é o mínimo do snapshot de processos para a análise de linhagem.
+type procRecord struct {
+	pid  uint32
+	ppid uint32
+	name string
+}
+
+// processSnapshot captura pid/ppid/nome de todos os processos (toolhelp).
+func processSnapshot() ([]procRecord, error) {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil, fmt.Errorf("CreateToolhelp32Snapshot: %w", err)
+	}
+	defer windows.CloseHandle(snapshot)
+
+	var entry windows.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	if err := windows.Process32First(snapshot, &entry); err != nil {
+		return nil, fmt.Errorf("Process32First: %w", err)
+	}
+	var procs []procRecord
+	for {
+		procs = append(procs, procRecord{
+			pid:  entry.ProcessID,
+			ppid: entry.ParentProcessID,
+			name: strings.ToLower(windows.UTF16ToString(entry.ExeFile[:])),
+		})
+		if err := windows.Process32Next(snapshot, &entry); err != nil {
+			break
+		}
+	}
+	return procs, nil
+}
+
+// agentWebviewOrphans devolve os pids de msedgewebview2.exe órfãos do agent:
+// aqueles cuja linhagem NÃO alcança nenhum host VIVO. Regras, na ordem:
+//   - sobe a árvore pai-a-pai (webview → webview → ... → host);
+//   - se alcança um discovery-agent.exe VIVO: não é órfão (é o browser da UI
+//     corrente) — NUNCA mexer;
+//   - se alcança qualquer OUTRO processo vivo (SearchHost, OneDrive...): é
+//     webview de outro app — NUNCA mexer;
+//   - se a subida bate num pai que JÁ MORREU (pid ausente do snapshot): resíduo
+//     do agent recém-morto — órfão. No fluxo de relanço (chamado segundos
+//     depois do TerminateProcess da UI) é exatamente o resíduo que segura o
+//     lock da pasta de dados. Webview de outros apps tem a árvore viva.
+func agentWebviewOrphans(procs []procRecord) []uint32 {
+	byPid := make(map[uint32]procRecord, len(procs))
+	for _, p := range procs {
+		byPid[p.pid] = p
+	}
+	lowerUI := strings.ToLower(agentUIExecutableName)
+	var orphans []uint32
+	for _, p := range procs {
+		if p.name != webviewOrphanName {
+			continue
+		}
+		cur := p
+		hostAlive := false
+		hostDead := false
+		for guard := 0; guard < 16; guard++ {
+			parent, ok := byPid[cur.ppid]
+			if !ok {
+				hostDead = true // pai não existe mais: subida quebrou num morto
+				break
+			}
+			switch parent.name {
+			case lowerUI:
+				hostAlive = true // host do agent VIVO: browser da UI corrente
+			case webviewOrphanName:
+				cur = parent // intermediário webview: sobe mais um nível
+				continue
+			default:
+				hostAlive = true // host de outro app VIVO: não é nosso
+			}
+			break
+		}
+		if !hostAlive && hostDead {
+			orphans = append(orphans, p.pid)
+		}
+	}
+	return orphans
+}
+
+// killAgentWebviewOrphans encerra os webviews órfãos do agent e devolve
+// quantos. Log é responsabilidade do chamador.
+func killAgentWebviewOrphans() int {
+	procs, err := processSnapshot()
+	if err != nil {
+		return 0
+	}
+	killed := 0
+	for _, pid := range agentWebviewOrphans(procs) {
+		h, openErr := windows.OpenProcess(windows.PROCESS_TERMINATE, false, pid)
+		if openErr != nil {
+			continue
+		}
+		if termErr := windows.TerminateProcess(h, 1); termErr == nil {
+			killed++
+		}
+		windows.CloseHandle(h)
+	}
+	if killed == 0 {
+		return 0
+	}
+	// Espera curta: o relanço precisa da pasta de dados LIVRE.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		procs, err = processSnapshot()
+		if err != nil {
+			break
+		}
+		if len(agentWebviewOrphans(procs)) == 0 {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	return killed
+}
+
 // killAgentUIProcesses encerra as UIs que estão sem IPC (travadas). Como o
 // watchdog só chega aqui quando NENHUMA UI está conectada, todo processo vivo é
 // inútil para o core — inclusive em outra sessão, que também seguraria o lock
@@ -340,6 +473,13 @@ func (a *App) startAgentUIProcess(userCtx context.Context, sessionID uint32, rea
 	// exec.Command (e não CommandContext): a UI não pode morrer junto com o
 	// serviço — um restart do serviço (update, sc restart) não deve fechar a
 	// janela do usuário.
+	// Última linha de defesa antes da UI nascer: qualquer webview órfão de um
+	// kill anterior segurando a pasta de dados congela a UI NO PARTO (env
+	// creation sem prazo). Limpa antes de criar o processo.
+	if orphans := killAgentWebviewOrphans(); orphans > 0 {
+		a.logUIWatchdog(fmt.Sprintf("%d webview(s) órfão(s) limpo(s) antes de relançar a UI (sessão %d)", orphans, sessionID))
+	}
+
 	cmd := exec.Command(uiPath, "--startup-minimized", "--startup-source="+StartupSourceWatchdog)
 	// O serviço roda com CWD em System32; a UI deve nascer no diretório de
 	// instalação (mesmo contexto dos autostarts do instalador).

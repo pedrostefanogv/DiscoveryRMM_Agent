@@ -34,8 +34,10 @@ func TestSupportChatNotifyState_PublicaDecisaoUmaVez(t *testing.T) {
 	state.resolve(0, true)
 	<-sent
 
-	// O fechamento (WM_DESTROY) também publica: não pode duplicar.
-	state.publishDecided(nil)
+	// Contrato NOVO (correção da corrida): o publicador EXCLUSIVO é o goroutine
+	// do resolve — com o erro real do POST. O WM_DESTROY NÃO publica mais
+	// (publishDecided foi removido: publicar ali mascarava falha transitória de
+	// rede e pulava o retry da recusa). Segunda publicação é no-op.
 	state.publishDecision(nil)
 
 	var results []supportChatInviteNotificationResult
