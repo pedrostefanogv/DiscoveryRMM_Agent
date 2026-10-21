@@ -702,6 +702,20 @@ func (a *App) openSupportChatWindow() {
 		return
 	}
 
+	// FIX 21/10 — TRAY COM WEBVIEW2 FRIO: sem janela principal e sem criação em
+	// curso, criar a janela do chat aqui a tornaria o PRIMEIRO ambiente WebView2
+	// do processo, nascendo na main thread durante o convite (a interface inteira
+	// congelava — ver window_lazy.go). Nasce a JANELA PRINCIPAL oculta em segundo
+	// plano pagando o custo frio e a abertura do chat é agendada para quando o
+	// ambiente estiver quente.
+	if !a.mainWindowReady() {
+		if a.startMainWindowWarm() {
+			a.Logs.Append("[supportchat] WebView2 ainda frio (tray); aquecendo pela janela principal oculta e agendando a abertura do chat")
+		}
+		a.scheduleSupportChatOpenAfterLazyLoad()
+		return
+	}
+
 	state := a.supportChatService().State()
 	if status := state.Status; !supportChatWindowMayOpen(status) && !a.supportChatLegacyInviteWindowMode() {
 		a.Logs.Append("[supportchat] janela do chat nao aberta: conversa ainda nao foi aceita (status=" + status + ")")
@@ -734,18 +748,21 @@ func (a *App) openSupportChatWindow() {
 // e a interface inteira congela — a janela do chat nunca abre.
 //
 // A criação do WebView2 não pode receber timeout do nosso lado. O que dá para
-// mudar é QUANDO ela acontece: aqui, no instante em que o convite é
-// APRESENTADO (estado waiting) — enquanto o usuário decide, o WebView2 nasce em
-// paralelo (janela oculta). No aceite, openSupportChatWindow REUSA a janela
-// existente: só Show()+foco+refresh, instantâneo, sem criação de WebView2.
+// mudar é QUANDO ela acontece — e essa decisão é do
+// prewarmSupportChatEnvironment: com a janela principal VIVA (ambiente quente)
+// o prewarm cria a janela do chat OCULTA no instante em que o convite é
+// apresentado (attach rápido, sem nascimento novo de WebView2) e o aceite reusa
+// a janela: só Show()+foco+refresh, instantâneo. Com o WebView2 FRIO (tray), o
+// prewarm NÃO cria a janela do chat — quem nasce oculta é a JANELA PRINCIPAL,
+// fora do caminho do aceite.
 //
-// Se a pré-criação travar, é o mesmo travamento de antes — só que antes do
-// clique e com o main-thread watchdog (main_thread_watchdog.go) encerrando a UI
-// para relançamento limpo. No caso comum (criação rápida, como às 21:46:30),
-// o aceite vira instantâneo.
+// FIX 21/10: o gate antigo (mainWindowInitPending) deixava o prewarm nascer como
+// PRIMEIRO WebView2 do processo no tray — a interface inteira congelava com o
+// cartão na tela (incidente 21/10, ver window_lazy.go).
 //
 // Regras: só no fluxo de cartão nativo (no fallback a janela É a superfície do
-// convite); nunca com a janela principal nascendo (dois WebView2 juntos);
+// convite); SÓ com a janela principal VIVA — ambiente quente (no tray o
+// aquecimento é pela janela principal oculta, prewarmSupportChatEnvironment);
 // dedupe por janela já existente.
 func (a *App) prewarmSupportChatWindow() {
 	if a == nil || a.app == nil {
@@ -754,10 +771,14 @@ func (a *App) prewarmSupportChatWindow() {
 	if !supportChatNativeInviteCard {
 		return
 	}
-	// Dois WebView2 nascendo juntos congelam a main thread (regra do lazy load):
-	// com a janela principal em inicialização não pré-cria agora — a
-	// reconciliação/aceite segue o fluxo atual.
-	if a.mainWindowInitPending() {
+	// FIX 21/10: o gate antigo (mainWindowInitPending) via "a criação da janela
+	// principal nunca começou" como LIVRE — no tray o prewarm virava o PRIMEIRO
+	// ambiente WebView2 do processo, nascendo na main thread no meio do convite
+	// (a interface inteira congelava com o cartão na tela e o ui-watchdog matava
+	// a UI). Agora o prewarm só roda com a janela principal VIVA: o ambiente já
+	// existe e o nascimento da janela do chat é attach rápido. No tray o
+	// aquecimento é pela janela principal (prewarmSupportChatEnvironment).
+	if !a.mainWindowReady() {
 		return
 	}
 	// Dedupe: reapresentações do convite e reentregas disparam vários prewarms;
@@ -777,9 +798,31 @@ func (a *App) prewarmSupportChatWindow() {
 	a.createSupportChatWindow(true)
 }
 
+// prewarmSupportChatEnvironment garante um ambiente WebView2 QUENTE antes do
+// aceite, sem nunca nascer o PRIMEIRO WebView2 do processo na main thread
+// durante o convite:
+//
+//   - janela principal viva (o ambiente já existe): pré-cria a janela do chat
+//     oculta como antes (attach quente; o aceite só Show()+refresh);
+//   - tray, janela principal inexistente (WebView2 frio): nasce a JANELA
+//     PRINCIPAL oculta em segundo plano — o custo frio é pago FORA do caminho
+//     do aceite e sem violar a regra "a janela do chat nunca é criada em
+//     status waiting".
+func (a *App) prewarmSupportChatEnvironment() {
+	if a == nil || a.app == nil {
+		return
+	}
+	if a.mainWindowReady() {
+		a.prewarmSupportChatWindow()
+		return
+	}
+	a.startMainWindowWarm()
+}
+
 // createSupportChatWindow cria (ou reusa) a janela do chat. hidden=true nasce
-// OCULTA (prewarm): o WebView2 nasce em paralelo ao convite pendente e o
-// aceite seguinte só exibe a janela existente.
+// OCULTA (prewarm) — só chamado com o ambiente WebView2 quente (janela principal
+// viva; ver prewarmSupportChatEnvironment): o webview nasce por attach rápido e
+// o aceite seguinte só exibe a janela existente.
 func (a *App) createSupportChatWindow(hidden bool) {
 	app := a.app
 	if app == nil {
@@ -1630,9 +1673,11 @@ func (a *App) ensureSupportChatInviteSurface(state supportchat.State) {
 		return
 	}
 	a.Logs.Append("[supportchat] estado waiting sem cartao na tela; reapresentando o convite (sessao " + invite.SessionID + ")")
-	// Prewarm em paralelo: o WebView2 da janela do chat nasce enquanto o usuário
-	// decide (ver prewarmSupportChatWindow). No aceite, só Show() + refresh.
-	go a.prewarmSupportChatWindow()
+	// Prewarm em paralelo: garante o ambiente WebView2 quente enquanto o usuário
+	// decide — pela janela do chat oculta (ambiente já quente) ou pela janela
+	// principal oculta (tray, WebView2 frio). O nascimento FRIO nunca acontece
+	// na main thread durante o convite (incidente 21/10).
+	go a.prewarmSupportChatEnvironment()
 	go a.presentSupportChatInvite(invite)
 }
 

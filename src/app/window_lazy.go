@@ -42,34 +42,70 @@ func (a *App) SetWindowFactory(factory func() application.Window) {
 // goroutine diferente da leitura (clique no tray vs. handler de segunda
 // instância).
 func (a *App) ensureMainWindow() (application.Window, error) {
-	a.windowMu.Lock()
-	defer a.windowMu.Unlock()
+	for {
+		a.windowMu.Lock()
+		if a.mainWindow != nil {
+			a.windowMu.Unlock()
+			return a.mainWindow, nil
+		}
+		if a.windowFactory == nil {
+			a.windowMu.Unlock()
+			return nil, errors.New("fabrica da janela principal nao registrada")
+		}
+		// Marca o inicio da primeira tentativa: a abertura do chat usa essa marca
+		// para NAO criar a janela do chat em cima de um WebView2 ainda nascendo
+		// (main thread ocupada = interface congelada). So a primeira conta: a
+		// carencia e medida a partir do comeco da criacao.
+		if a.windowInitStarted.IsZero() {
+			a.windowInitStarted = time.Now()
+		}
+		factory := a.windowFactory
+		a.windowMu.Unlock()
 
-	if a.mainWindow != nil {
-		return a.mainWindow, nil
+		// FIX 21/10: single-flight de criação SEM segurar windowMu. A factory
+		// bloqueia a goroutine chamadora até o WebView2 nascer (InvokeSync para
+		// a main thread) — segurar o mutex nesse intervalo deixaria chamadores
+		// que rodam na PRÓPRIA main thread presos no mutex enquanto a main
+		// thread é justamente quem precisa executar a criação. Com o aquecimento
+		// em segundo plano (warmMainWindowHidden) a criação passa a nascer de
+		// uma goroutine qualquer, então quem perder este CAS espera sem prender
+		// nenhum mutex.
+		if a.windowCreating.CompareAndSwap(false, true) {
+			// defer roda no retorno da FUNÇÃO (uma única passagem do loop cria).
+			defer a.windowCreating.Store(false)
+			window := factory()
+			a.windowMu.Lock()
+			defer a.windowMu.Unlock()
+			if a.mainWindow != nil {
+				// Defensivo: outra criação venceu — a publicada é a válida.
+				return a.mainWindow, nil
+			}
+			if window == nil {
+				return nil, errors.New("fabrica da janela principal devolveu nil")
+			}
+			// A janela NOVA carrega do zero: o sinal de conteudo anterior (de uma
+			// janela antiga) nao vale para ela — senao a janela do chat seria
+			// criada sobre o WebView2 ainda nascendo da janela recriada.
+			a.mainWindowContentLoaded.Store(false)
+			a.mainWindow = window
+			a.windowInitCompletedAt = time.Now()
+			log.Println("[window] janela principal criada sob demanda (WebView2 inicializado)")
+			return window, nil
+		}
+
+		// Outra goroutine está criando AGORA. Espera sem prender mutex: se ela
+		// vencer, devolve a janela publicada; se falhar, assume a criação na
+		// próxima volta do loop externo.
+		for a.windowCreating.Load() {
+			a.windowMu.Lock()
+			done := a.mainWindow
+			a.windowMu.Unlock()
+			if done != nil {
+				return done, nil
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
-	if a.windowFactory == nil {
-		return nil, errors.New("fabrica da janela principal nao registrada")
-	}
-	// Marca o inicio da primeira tentativa: a abertura do chat usa essa marca
-	// para NAO criar a janela do chat em cima de um WebView2 ainda nascendo
-	// (main thread ocupada = interface congelada). So a primeira conta: a
-	// carencia e medida a partir do comeco da criacao.
-	if a.windowInitStarted.IsZero() {
-		a.windowInitStarted = time.Now()
-	}
-	window := a.windowFactory()
-	if window == nil {
-		return nil, errors.New("fabrica da janela principal devolveu nil")
-	}
-	// A janela NOVA carrega do zero: o sinal de conteudo anterior (de uma
-	// janela antiga) nao vale para ela — senao a janela do chat seria criada
-	// sobre o WebView2 ainda nascendo da janela recriada.
-	a.mainWindowContentLoaded.Store(false)
-	a.mainWindow = window
-	a.windowInitCompletedAt = time.Now()
-	log.Println("[window] janela principal criada sob demanda (WebView2 inicializado)")
-	return window, nil
 }
 
 // EnsureMainWindow garante que a janela principal exista (idempotente).
@@ -178,4 +214,98 @@ func (a *App) MainWindowContentReady() {
 		return
 	}
 	a.Logs.Append("[window] janela principal com webview carregado (sinal do frontend)")
+}
+
+// ── Aquecimento do WebView2 fora do caminho do convite (fix 21/10) ──────────
+//
+// INCIDENTE 21/10 (convite no tray): o prewarm criava a janela do chat OCULTA
+// com a janela principal NUNCA criada (o gate mainWindowInitPending via "nunca
+// começou" como livre) e a janela do chat virava o PRIMEIRO ambiente WebView2
+// do processo, nascendo na main thread no meio do convite. A main thread parou
+// de responder ao IPC por ~96 s (dois nascimentos serializados: o do chat do
+// prewarm e o da janela principal pedida pelo clique no tray logo depois) e o
+// ui-watchdog do serviço matou a UI; o convite expirou no servidor e o clique
+// em "Abrir chat" virou no-op.
+//
+// REGRA NOVA: o nascimento FRIO do WebView2 nunca acontece no fluxo do convite.
+// No tray, quem paga o custo frio é a JANELA PRINCIPAL, nascida oculta em
+// segundo plano (fora do caminho do aceite e sem violar a regra "a janela do
+// chat nunca é criada em status waiting"). Com o ambiente quente, a janela do
+// chat nasce em attach rápido (medido: ~2 s a quente) e o aceite vira
+// instantâneo.
+
+// markMainWindowInitStarted marca o início da criação da janela principal
+// (idempotente). O aquecimento marca SINCRONAMENTE para que os agendadores
+// (scheduleSupportChatOpenAfterLazyLoad) enxerguem a criação em curso já na
+// primeira verificação, sem depender da goroutine ganhar CPU.
+func (a *App) markMainWindowInitStarted() {
+	a.windowMu.Lock()
+	if a.windowInitStarted.IsZero() {
+		a.windowInitStarted = time.Now()
+	}
+	a.windowMu.Unlock()
+}
+
+// startMainWindowWarm nasce a janela principal oculta em segundo plano quando o
+// WebView2 do processo ainda está frio (tray sem janela). Idempotente e seguro
+// para chamadores concorrentes (convite, aceite, reconciliação).
+// startMainWindowWarm nasce a janela principal oculta em segundo plano quando o
+// WebView2 do processo ainda está frio (tray sem janela). Idempotente e seguro
+// para chamadores concorrentes (convite, aceite, reconciliação). Devolve true
+// só quando ESTE pedido começou o aquecimento — chamadores em loop
+// (reconciliação, resume) usam o retorno para não spammar o log a cada passagem.
+func (a *App) startMainWindowWarm() bool {
+	if a == nil || a.app == nil {
+		return false
+	}
+	if a.mainWindowReady() {
+		return false // ambiente já existe — nada para aquecer
+	}
+	if !a.mainWindowWarmRequested.CompareAndSwap(false, true) {
+		return false // aquecimento já em curso
+	}
+	a.markMainWindowInitStarted()
+	go func() {
+		defer a.mainWindowWarmRequested.Store(false)
+		a.warmMainWindowHidden()
+	}()
+	return true
+}
+
+// warmMainWindowHidden cria a janela principal oculta (uma única vez). A
+// goroutine CHAMADORA é quem bloqueia no nascimento do WebView2 — a main thread
+// só executa o que a própria criação precisa e o restante da interface segue
+// respondendo (cartão do convite é nativo, em thread própria; o aceite vai ao
+// servidor por goroutine).
+func (a *App) warmMainWindowHidden() {
+	if a == nil || a.app == nil {
+		return
+	}
+	a.windowMu.Lock()
+	already := a.mainWindow != nil
+	a.windowMu.Unlock()
+	if already {
+		return
+	}
+	a.windowCreateHidden.Store(true)
+	log.Println("[window] WebView2 frio (tray): nascendo a janela principal oculta em segundo plano para aquecer o ambiente fora do fluxo do convite")
+	if _, err := a.ensureMainWindow(); err != nil {
+		// Sem o nascimento, o pedido de oculto não pode sobrar para uma criação
+		// futura do usuário (a janela nasceria invisível).
+		a.windowCreateHidden.Store(false)
+		log.Println("[window] aquecimento da janela principal falhou: " + err.Error())
+	}
+}
+
+//wails:ignore
+//
+// ConsumeMainWindowCreateHidden lê e ZERA o pedido de criação oculta. A fábrica
+// (main.go, outro pacote) chama na hora de construir a janela: o aquecimento
+// pede oculta; pedidos diretos do usuário (tray/toast/segunda instância) não
+// marcam nada — e se chegarem primeiro, a janela nasce visível normalmente.
+func (a *App) ConsumeMainWindowCreateHidden() bool {
+	if a == nil {
+		return false
+	}
+	return a.windowCreateHidden.Swap(false)
 }

@@ -280,10 +280,12 @@ func main() {
 			MinWidth:  appkg.WindowMinWidth,
 			MinHeight: appkg.WindowMinHeight,
 			Frameless: startupFrameless,
-			// Sempre visível: a fábrica só roda quando a janela é realmente
+			// Visível por padrão: a fábrica só roda quando a janela é realmente
 			// necessária (clique no tray/toast/segunda instância) ou em abertura
-			// manual. No autostart no tray ela nem é chamada.
-			Hidden: false,
+			// manual. No autostart no tray ela nem é chamada. A exceção é o
+			// AQUECIMENTO do WebView2 em segundo plano (warmMainWindowHidden):
+			// nascimento oculto de propósito, fora do caminho do convite.
+			Hidden: app.ConsumeMainWindowCreateHidden(),
 			// No v3 o drag de janela frameless é feito via CSS `--wails-draggable`.
 			// O frontend já usa essa propriedade (CSSDragProperty do v2).
 		})

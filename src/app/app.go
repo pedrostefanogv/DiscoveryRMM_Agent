@@ -368,6 +368,22 @@ type App struct {
 	// chat (prewarmSupportChatWindow): reapresentações do convite e reentregas
 	// disparam o prewarm várias vezes no mesmo instante.
 	supportChatPrewarmRequested atomic.Bool
+	// ── Aquecimento do WebView2 fora do caminho do convite (fix 21/10) ──
+	// windowCreating garante UMA criação da janela principal por vez SEM prender
+	// windowMu durante o nascimento do WebView2: a factory bloqueia a goroutine
+	// chamadora até o WebView2 nascer na main thread — segurar o mutex nesse
+	// intervalo deixaria chamadores que rodam na PRÓPRIA main thread presos no
+	// mutex, justamente quando a main thread é quem precisa executar a criação.
+	// Ver window_lazy.go.
+	windowCreating atomic.Bool
+	// windowCreateHidden: pedido de criação da janela principal OCULTA
+	// (aquecimento em segundo plano no tray, warmMainWindowHidden). A fábrica
+	// (main.go) consome esta marca na hora de construir a janela.
+	windowCreateHidden atomic.Bool
+	// mainWindowWarmRequested deduplica os pedidos de aquecimento: convite
+	// reapresentado, aceite e reconciliação podem pedir quase ao mesmo tempo.
+	mainWindowWarmRequested atomic.Bool
+
 	// mainWindowContentLoaded: o FRONTEND da janela principal confirmou que o
 	// WebView2 carregou (binding MainWindowContentReady, chamado no bootstrap do
 	// app-init.js). É o sinal REAL de prontidão: a carência por relógio expirava
