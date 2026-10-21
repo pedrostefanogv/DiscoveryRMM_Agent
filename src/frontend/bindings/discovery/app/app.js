@@ -1833,6 +1833,27 @@ export function LogFrontend(level, message) {
 }
 
 /**
+ * MainWindowContentReady e o binding chamado pelo FRONTEND da janela principal
+ * (app-init.js, fim do bootstrap) confirmando que o WebView2 dela carregou.
+ * 
+ * E o sinal REAL que substitui a carencia por relogio: openSupportChatWindow
+ * so cria a janela do chat quando a janela principal esta pronta (ou depois da
+ * carencia de mainWindowInitContentLoadedGrace). Antes, a carencia de 8 s
+ * expirava antes do WebView2 (~54 s nesta maquina) e a criacao da janela do
+ * chat sobre a main thread ocupada CONGELAVA a interface inteira — o incidente
+ * de 20/10 (20:37: aceito o convite, a UI trava e o chat nunca abre).
+ * 
+ * Seguranca de contexto: so a janela principal carrega app-init.js (a janela do
+ * chat usa chat-window.html + app-support-chat.js), entao uma chamada vinda da
+ * janela do chat nao existe. Um sinal tardio de um frontend antigo e inocuo:
+ * quando nao ha janela nova nascendo, o flag true e o estado correto.
+ * @returns {$CancellablePromise<void>}
+ */
+export function MainWindowContentReady() {
+    return $Call.ByID(1471542555);
+}
+
+/**
  * OcrScreenshotImage faz OCR on-device via Windows.Media.Ocr. Quando o motor ou
  * o idioma não existem, degrada com engineAvailable=false e error descritivo —
  * nunca falha o binding (a UI mostra o aviso em vez de perder a captura).

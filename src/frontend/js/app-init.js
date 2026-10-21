@@ -684,6 +684,21 @@ async function bootstrapApp() {
   if (typeof startUIRuntimeMonitor === "function") {
     startUIRuntimeMonitor("bootstrap");
   }
+
+  // Sinal REAL de prontidão do WebView2 desta janela (principal): o Go usa
+  // este sinal para decidir quando é seguro criar a janela do chat de suporte. Criar a
+  // janela do chat antes daqui congelava a interface inteira (dois WebView2
+  // nascendo na mesma main thread — incidente 20/10 20:37). O bootstrap só
+  // roda nesta janela: a janela do chat (chat-window.html) não carrega
+  // app-init.js. Idempotente no Go; falha é silenciosa (binding ausente).
+  try {
+    var readyApi = window.go && window.go.app && window.go.app.App;
+    if (readyApi && typeof readyApi.MainWindowContentReady === "function") {
+      readyApi.MainWindowContentReady().catch(function () {});
+    }
+  } catch (_) {
+    // binding ainda indisponível: o fallback por carência cobre.
+  }
 }
 
 function hideTabIfNeeded(tabBtn, viewEl, flag) {

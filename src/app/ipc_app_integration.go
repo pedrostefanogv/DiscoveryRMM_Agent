@@ -230,6 +230,10 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 			reply.CorrelationID = msg.CorrelationID
 			a.ipcServer.RespondTo(conn, reply)
 		}
+	case IPCMsgDiagnosticStacks:
+		// Mensagem SERVIÇO→UI (pedido de stacks da UI zumbi). O serviço aqui é
+		// o emissor, não o destinatário — um eco de cliente antigo é ignorado.
+		log.Printf("[ipc] diagnostic:stacks recebida de cliente (eco ignorado)")
 	default:
 		log.Printf("[ipc] mensagem não tratada do tipo %s", msg.Type)
 	}
@@ -479,6 +483,14 @@ func (a *App) startIPCClient() {
 				// exigem um desktop; a sessão 0 do serviço não o tem (captura sem
 				// frames e SendInput bloqueado por UIPI).
 				a.handleCompanionRemoteSession(msg.Payload)
+
+			case IPCMsgDiagnosticStacks:
+				// FIX forense (20/10 20:37): o serviço detectou esta UI como zumbi
+				// (viva, sem IPC). O read loop desta goroutine está VIVO mesmo com
+				// a main thread presa — gravar as stacks aqui revela ONDE a main
+				// thread travou (ex.: criação do WebView2, AttachThreadInput).
+				// Em goroutine para nunca bloquear o read loop.
+				go a.writeRuntimeStacksDump("pedido-servico")
 
 			case IPCMsgEvent:
 				// Repassa eventos do serviço (notification:new, agent:connectivity,

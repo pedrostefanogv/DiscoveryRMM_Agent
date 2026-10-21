@@ -10,7 +10,7 @@ import (
 
 // Contrato da decisao pura do lazy load: enquanto a criacao preguicosa da
 // janela principal esta em curso — E enquanto o webview dela carrega depois
-// da criacao (mainWindowInitGraceAfter) — a janela do chat NAO deve ser
+// da criacao (mainWindowInitContentLoadedGrace) — a janela do chat NAO deve ser
 // criada em paralelo. O travamento de 20/10 (16:38) comecou ~3 s DEPOIS de
 // "janela principal criada sob demanda"; o dump mostra ServeWebViewRequest
 // em voo — criar outro webview nesse intervalo congela a interface.
@@ -19,7 +19,7 @@ func TestMainWindowInitPendingState(t *testing.T) {
 	inicio := now.Add(-2 * time.Second)
 	velho := now.Add(-mainWindowInitGrace - time.Second)
 	criadoAgora := now.Add(-1 * time.Second)
-	criadoVelho := now.Add(-mainWindowInitGraceAfter - time.Second)
+	criadoVelho := now.Add(-mainWindowInitContentLoadedGrace - time.Second)
 
 	casos := []struct {
 		nome     string
@@ -28,17 +28,25 @@ func TestMainWindowInitPendingState(t *testing.T) {
 		factory  bool
 		started  time.Time
 		created  time.Time
+		content  bool
 	}{
-		{"janela criada agora: webview ainda carregando", true, true, true, inicio, criadoAgora},
-		{"janela criada ha tempo: livre", false, true, true, inicio, criadoVelho},
-		{"janela existe sem marca de criacao (defensivo): livre", false, true, true, inicio, time.Time{}},
-		{"criacao em curso: pendente", true, false, true, inicio, time.Time{}},
-		{"carencia expirou sem janela: WebView2 travado (deixa o agendador desistir)", false, false, true, velho, time.Time{}},
-		{"fabrica registrada, criacao nunca comecou: nao pendente", false, false, true, time.Time{}, time.Time{}},
-		{"sem fabrica: nada para esperar", false, false, false, inicio, time.Time{}},
+		{"janela criada agora sem sinal: webview ainda carregando", true, true, true, inicio, criadoAgora, false},
+		// FIX 20/10 (20:37): com o SINAL REAL do frontend a pendencia encerra na
+		// hora, mesmo dentro da carencia — era aqui que a janela do chat era
+		// criada sobre a main thread ocupada e a interface congelava.
+		{"janela criada agora COM sinal: livre", false, true, true, inicio, criadoAgora, true},
+		{"janela criada ha tempo SEM sinal (fallback carencia longa expirada): livre", false, true, true, inicio, criadoVelho, false},
+		{"janela criada ha tempo com sinal: livre", false, true, true, inicio, criadoVelho, true},
+		{"janela existe sem marca de criacao (defensivo): livre", false, true, true, inicio, time.Time{}, false},
+		{"janela existe sem marca de criacao mas com sinal: livre", false, true, true, inicio, time.Time{}, true},
+		{"criacao em curso: pendente", true, false, true, inicio, time.Time{}, false},
+		{"criacao em curso com sinal (sem janela): pendente", true, false, true, inicio, time.Time{}, true},
+		{"carencia expirou sem janela: WebView2 travado (deixa o agendador desistir)", false, false, true, velho, time.Time{}, false},
+		{"fabrica registrada, criacao nunca comecou: nao pendente", false, false, true, time.Time{}, time.Time{}, false},
+		{"sem fabrica: nada para esperar", false, false, false, inicio, time.Time{}, false},
 	}
 	for _, c := range casos {
-		p := mainWindowInitPendingState(c.exists, c.factory, c.started, c.created, now)
+		p := mainWindowInitPendingState(c.exists, c.factory, c.started, c.created, now, c.content)
 		if p != c.esperado {
 			t.Fatalf("%s: esperado pendente=%v, obtido %v", c.nome, c.esperado, p)
 		}

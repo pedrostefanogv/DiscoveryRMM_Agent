@@ -62,6 +62,10 @@ func (a *App) ensureMainWindow() (application.Window, error) {
 	if window == nil {
 		return nil, errors.New("fabrica da janela principal devolveu nil")
 	}
+	// A janela NOVA carrega do zero: o sinal de conteudo anterior (de uma
+	// janela antiga) nao vale para ela — senao a janela do chat seria criada
+	// sobre o WebView2 ainda nascendo da janela recriada.
+	a.mainWindowContentLoaded.Store(false)
 	a.mainWindow = window
 	a.windowInitCompletedAt = time.Now()
 	log.Println("[window] janela principal criada sob demanda (WebView2 inicializado)")
@@ -86,19 +90,31 @@ func (a *App) HasMainWindow() bool {
 // responder ao IPC logo apos "janela principal criada sob demanda").
 const mainWindowInitGrace = 15 * time.Second
 
-// mainWindowInitGraceAfter e quanto tempo DEPOIS da janela principal ser
-// criada o webview dela ainda e considerado "carregando". O log do travamento
-// de 20/10 (16:38) mostra a UI parando de responder ao IPC 3 s DEPOIS de
+// mainWindowInitContentLoadedGrace e quanto tempo DEPOIS da janela principal
+// ser criada o webview dela ainda tem direito de carregar SEM o sinal do
+// frontend (build antigo, frontend quebrado). O log do travamento de 20/10
+// (16:38 e 20:37) mostra a UI parando de responder ao IPC segundos DEPOIS de
 // "janela principal criada sob demanda" — a criacao do objeto Window volta
 // antes de o WebView2 terminar de subir, e criar a janela do chat nesse
-// intervalo reproduz o congelamento (dump: ServeWebViewRequest em voo).
-const mainWindowInitGraceAfter = 8 * time.Second
+// intervalo reproduz o congelamento (dump: ServeWebViewRequest em voo). Nesta
+// maquina o WebView2 chegou a levar ~54 s para nascer: a carencia antiga de
+// 8 s expirava antes do sinal e a janela do chat era criada sobre a main
+// thread ocupada — por isso a carencia sem sinal agora cobre o nascimento
+// inteiro e, com o sinal real, a abertura acontece na hora.
+const mainWindowInitContentLoadedGrace = 90 * time.Second
 
 // mainWindowInitPendingState e a decisao pura (testavel) de mainWindowInitPending:
 // o lazy load da janela principal esta em curso — ANTES da criacao (carencia
-// de mainWindowInitGrace) ou DEPOIS dela, enquanto o webview carrega
-// (mainWindowInitGraceAfter).
-func mainWindowInitPendingState(windowExists, factorySet bool, started, completed, now time.Time) bool {
+// de mainWindowInitGrace), DEPOIS dela enquanto o webview carrega SEM o sinal
+// real do frontend (mainWindowInitContentLoadedGrace), ou ate o sinal chegar
+// (contentLoaded=true encerra a pendencia na hora).
+//
+// FIX 20/10 (20:37): a carencia antiga por RELOGIO (8 s) expirava antes de o
+// WebView2 desta maquina terminar de nascer (~54 s) e openSupportChatWindow
+// criava a janela do chat sobre a main thread ocupada — a interface inteira
+// congelava. O sinal de conteudo (MainWindowContentReady, app-init.js) agora
+// governa; a carencia e apenas o fallback para frontend que nao sinaliza.
+func mainWindowInitPendingState(windowExists, factorySet bool, started, completed, now time.Time, contentLoaded bool) bool {
 	if !factorySet {
 		return false
 	}
@@ -107,7 +123,11 @@ func mainWindowInitPendingState(windowExists, factorySet bool, started, complete
 			// Defensivo: criada sem marca (builds antigos em memoria).
 			return false
 		}
-		return now.Sub(completed) < mainWindowInitGraceAfter
+		if contentLoaded {
+			// Sinal REAL de prontidao: o webview da janela principal carregou.
+			return false
+		}
+		return now.Sub(completed) < mainWindowInitContentLoadedGrace
 	}
 	if started.IsZero() {
 		return false
@@ -123,7 +143,7 @@ func mainWindowInitPendingState(windowExists, factorySet bool, started, complete
 func (a *App) mainWindowInitPending() bool {
 	a.windowMu.Lock()
 	defer a.windowMu.Unlock()
-	return mainWindowInitPendingState(a.mainWindow != nil, a.windowFactory != nil, a.windowInitStarted, a.windowInitCompletedAt, time.Now())
+	return mainWindowInitPendingState(a.mainWindow != nil, a.windowFactory != nil, a.windowInitStarted, a.windowInitCompletedAt, time.Now(), a.mainWindowContentLoaded.Load())
 }
 
 // mainWindowReady informa se a janela principal ja existe. Usado pelo
@@ -134,4 +154,28 @@ func (a *App) mainWindowReady() bool {
 	a.windowMu.Lock()
 	defer a.windowMu.Unlock()
 	return a.mainWindow != nil
+}
+
+// MainWindowContentReady e o binding chamado pelo FRONTEND da janela principal
+// (app-init.js, fim do bootstrap) confirmando que o WebView2 dela carregou.
+//
+// E o sinal REAL que substitui a carencia por relogio: openSupportChatWindow
+// so cria a janela do chat quando a janela principal esta pronta (ou depois da
+// carencia de mainWindowInitContentLoadedGrace). Antes, a carencia de 8 s
+// expirava antes do WebView2 (~54 s nesta maquina) e a criacao da janela do
+// chat sobre a main thread ocupada CONGELAVA a interface inteira — o incidente
+// de 20/10 (20:37: aceito o convite, a UI trava e o chat nunca abre).
+//
+// Seguranca de contexto: so a janela principal carrega app-init.js (a janela do
+// chat usa chat-window.html + app-support-chat.js), entao uma chamada vinda da
+// janela do chat nao existe. Um sinal tardio de um frontend antigo e inocuo:
+// quando nao ha janela nova nascendo, o flag true e o estado correto.
+func (a *App) MainWindowContentReady() {
+	if a == nil {
+		return
+	}
+	if a.mainWindowContentLoaded.Swap(true) {
+		return
+	}
+	a.Logs.Append("[window] janela principal com webview carregado (sinal do frontend)")
 }

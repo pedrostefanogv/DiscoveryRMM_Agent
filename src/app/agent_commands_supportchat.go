@@ -224,6 +224,12 @@ const (
 	supportChatInviteUIExtend = 30 * time.Second
 	// supportChatInviteUIPoll é o intervalo de verificação da UI.
 	supportChatInviteUIPoll = 500 * time.Millisecond
+	// supportChatInviteZombieEscalateAfter é quanto tempo de espera SEM UI com
+	// processos de UI vivos (zumbi) antes de escalonar o caminho zumbi do
+	// watchdog: encerrar a UI travada e relançar — sem isso a instância nova
+	// fica presa no lock de instância única e o convite vira no_ui no fim do
+	// prazo (incidente 20/10, 20:37:19→44).
+	supportChatInviteZombieEscalateAfter = 10 * time.Second
 )
 
 // scheduleSupportChatInviteRedelivery espera a UI aparecer e reemite o convite
@@ -247,6 +253,7 @@ func (a *App) scheduleSupportChatInviteRedelivery(invite supportchat.Invite) {
 	go func() {
 		started := time.Now()
 		extended := false
+		zombieEscalated := false
 		deadline := time.NewTimer(supportChatInviteUIWait)
 		defer deadline.Stop()
 
@@ -297,6 +304,16 @@ func (a *App) scheduleSupportChatInviteRedelivery(invite supportchat.Invite) {
 
 			case <-ticker.C:
 				if !a.hasSupportChatUI() {
+					// FIX 20/10: UI viva sem IPC durante a espera = zumbi. Escala UMA
+					// vez (depois de supportChatInviteZombieEscalateAfter) para o
+					// watchdog encerrar o processo travado e relançar dentro da
+					// tolerância — a instância nova conecta e o convite é redelivery.
+					if !zombieEscalated && time.Since(started) >= supportChatInviteZombieEscalateAfter {
+						if a.escalateUIWatchdogZombie("chat_invite_zumbi") {
+							zombieEscalated = true
+							a.Logs.Append("[supportchat] convite aguardando a UI com processo vivo SEM IPC; escalando para o caminho zumbi do watchdog (sessao " + invite.SessionID + ")")
+						}
+					}
 					continue
 				}
 

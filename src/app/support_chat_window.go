@@ -829,9 +829,13 @@ func (a *App) openSupportChatWindowForAcceptedSession(sessionID string) {
 }
 
 // supportChatLazyOpenWait e quanto tempo a reabertura do chat espera o lazy
-// load da janela principal terminar. Estourou (WebView2 travou de vez), o
-// agendador desiste e a reconciliacao/retomada cobre a abertura.
-var supportChatLazyOpenWait = 30 * time.Second
+// load da janela principal terminar — agora cobre o nascimento INTEIRO do
+// WebView2 (~54 s medidos nesta maquina; 30 s expirava antes e o chat abria
+// sobre a main thread ocupada, congelando a interface). Com o sinal real de
+// conteudo (MainWindowContentReady) a espera normalmente termina antes.
+// Estourou (WebView2 travou de vez), o agendador desiste e a
+// reconciliacao/retomada cobre a abertura.
+var supportChatLazyOpenWait = 90 * time.Second
 var supportChatLazyOpenPoll = 500 * time.Millisecond
 
 // scheduleSupportChatOpenAfterLazyLoad agenda UMA reabertura da janela do

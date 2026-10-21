@@ -3,6 +3,7 @@
 package app
 
 import (
+	"os"
 	"syscall"
 	"unsafe"
 
@@ -54,6 +55,7 @@ var (
 	procSetWindowPosFg        = user32Foreground.NewProc("SetWindowPos")
 	procFlashWindowExFg       = user32Foreground.NewProc("FlashWindowEx")
 	procGetCurrentThreadIDFg  = kernel32Fg.NewProc("GetCurrentThreadId")
+	procIsHungAppWindowFg     = user32Foreground.NewProc("IsHungAppWindow")
 )
 
 // windowHandle devolve o HWND nativo da janela do Wails (0 quando indisponível).
@@ -93,10 +95,22 @@ func forceWindowToForeground(win application.Window, keepTopmost bool) bool {
 	attached := false
 	foregroundThread := uintptr(0)
 	if foreground != 0 {
-		foregroundThread, _, _ = procGetWindowThreadProcID.Call(foreground, 0)
+		// PID da janela em primeiro plano (para a guarda de travamento abaixo).
+		var foregroundPid uint32
+		foregroundThread, _, _ = procGetWindowThreadProcID.Call(foreground, uintptr(unsafe.Pointer(&foregroundPid)))
 		if foregroundThread != 0 && foregroundThread != currentThread {
-			if ok, _, _ := procAttachThreadInputFg.Call(currentThread, foregroundThread, 1); ok != 0 {
-				attached = true
+			// GUARDA DE TRAVAMENTO (20/10 20:37): AttachThreadInput sincroniza a
+			// fila de entrada com a thread de primeiro plano. Se essa thread estiver
+			// travada (janela "Não está respondendo"), a NOSSA thread trava junto —
+			// a interface inteira congela no instante em que a janela do chat tenta
+			// subir. IsHungAppWindow detecta a thread travada: nesse caso pula o
+			// attach e fica com o fallback topmost/flash (a janela continua
+			// visível, só não rouba o foco de um app morto).
+			hung, _, _ := procIsHungAppWindowFg.Call(foreground)
+			if shouldAttachForegroundInput(foregroundPid, uint32(os.Getpid()), hung != 0) {
+				if ok, _, _ := procAttachThreadInputFg.Call(currentThread, foregroundThread, 1); ok != 0 {
+					attached = true
+				}
 			}
 		}
 	}
@@ -127,6 +141,24 @@ func forceWindowToForeground(win application.Window, keepTopmost bool) bool {
 
 	foreground, _, _ = procGetForegroundWindowFg.Call()
 	return foreground == hwnd
+}
+
+// shouldAttachForegroundInput decide se o AttachThreadInput é seguro (função
+// pura, testável). Anexa quando:
+//   - a janela em primeiro plano é do PRÓPRIO agent (outra thread nossa —
+//     attach entre threads do mesmo processo não depende de app externo);
+//   - ou a thread de primeiro plano está RESPONDENDO (hung=false).
+//
+// Uma thread de OUTRO processo travada (IsHungAppWindow) é exatamente o caso
+// em que o AttachThreadInput pode bloquear a nossa thread para sempre.
+func shouldAttachForegroundInput(foregroundPid, selfPid uint32, hung bool) bool {
+	if foregroundPid == 0 {
+		return false
+	}
+	if foregroundPid == selfPid {
+		return true
+	}
+	return !hung
 }
 
 // flashWindowUntilFocused pisca a janela e o botão da barra de tarefas até ela

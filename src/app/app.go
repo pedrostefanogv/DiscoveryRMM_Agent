@@ -185,7 +185,7 @@ type App struct {
 	supportChatLink supportChatLinkState
 	// supportChatTraceMu/supportChatOpenTrace: medida do caminho
 	// "aceite -> janela visível" (uma linha de log por abertura).
-	supportChatTraceMu    sync.Mutex
+	supportChatTraceMu   sync.Mutex
 	supportChatOpenTrace *supportChatOpenTrace
 	// Dedupe do verify em background por sessionId: event/JS/IPC/reentrega podem
 	// pedir a mesma validação várias vezes; cada verify faz até 20 GETs.
@@ -364,6 +364,13 @@ type App struct {
 	// WebView2 continua carregando DEPOIS disso (o travamento observado começa
 	// ~3 s após a criação), então a carência pos-criação usa esta marca.
 	windowInitCompletedAt time.Time
+	// mainWindowContentLoaded: o FRONTEND da janela principal confirmou que o
+	// WebView2 carregou (binding MainWindowContentReady, chamado no bootstrap do
+	// app-init.js). É o sinal REAL de prontidão: a carência por relógio expirava
+	// antes de o WebView2 desta máquina terminar de nascer (~54 s medidos) e a
+	// janela do chat era criada sobre a main thread ocupada — o congelamento
+	// completo da interface de 20/10 (20:37). Ver window_lazy.go.
+	mainWindowContentLoaded atomic.Bool
 
 	// ── Notificação nativa da resposta do chat (Wails v3 notifications) ──
 	// nativeNotifications é o serviço nativo do Wails v3 (registrado em

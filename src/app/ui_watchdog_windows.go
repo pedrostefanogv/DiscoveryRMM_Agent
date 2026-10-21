@@ -50,9 +50,12 @@ func (a *App) startUIWatchdog(ctx context.Context) {
 		ProcessCount:         countAgentUIProcesses,
 		UserSessionAvailable: hasActiveUserSession,
 		SpawnUI:              a.spawnAgentUIInUserSession,
-		KillZombieUI:         killAgentUIProcesses,
-		Log:                  a.logUIWatchdog,
-		MarkUISpawn:          a.markSupportChatUISpawn,
+		// Forense antes do kill: pedido de stacks (IPC) + minidump do zumbi —
+		// sem isso o congelamento morre sem prova (o dump manual de 20/10 foi o
+		// que revelou "ServeWebViewRequest em voo").
+		KillZombieUI: a.killAgentUIProcessesWithForensics,
+		Log:          a.logUIWatchdog,
+		MarkUISpawn:  a.markSupportChatUISpawn,
 		// Multiusuário: uma UI por sessão ativa, sem duplicar a que já existe.
 		ActiveSessions:  activeUserSessions,
 		UISessionCounts: uiProcessesBySession,

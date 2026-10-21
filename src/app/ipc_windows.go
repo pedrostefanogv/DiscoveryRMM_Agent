@@ -88,6 +88,13 @@ const (
 	// mesmo CorrelationID com Payload["ok"]/Payload["data"]/Payload["error"].
 	IPCMsgRequest  IPCMessageType = "request"
 	IPCMsgResponse IPCMessageType = "response"
+
+	// IPCMsgDiagnosticStacks pede ao destinatário que grave as stacks de TODAS
+	// as goroutines (runtime.Stack) no diretório de dumps. O serviço envia à UI
+	// zumbi antes de encerrá-la: a resposta roda na goroutine do read loop do
+	// cliente IPC, que fica VIVA mesmo com a main thread presa (WebView2/Win32)
+	// — é o que torna o congelamento diagnosicável sem reproduzi-lo na mão.
+	IPCMsgDiagnosticStacks IPCMessageType = "diagnostic:stacks"
 )
 
 // IPCRequestTimeout é o fallback de espera por resposta quando o contexto do

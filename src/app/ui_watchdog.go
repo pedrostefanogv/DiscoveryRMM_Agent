@@ -204,6 +204,38 @@ func (w *uiWatchdog) RequestSpawn(reason string) {
 	// Log único por estado: um convite sem UI é evento raro, mas repetir a mesma
 	// linha a cada tentativa bloqueada pelo cooldown seria ruído no logstore.
 	w.logOnceLocked("pedido-sem-ui", "pedido de relançamento da UI ("+reason+") sem UI conectada")
+
+	// FIX 20/10 (20:37): processos vivos SEM IPC são ZUMBIS. Relançar por cima
+	// não resolve — a nova instância fica presa no lock de instância única do
+	// processo travado (no log, o pid 25056 subiu e NUNCA terminou o startup
+	// enquanto o zumbi 16616 segurava o lock) e o convite morre em no_ui com a
+	// máquina sem interface nenhuma. Matar o zumbi ANTES de relançar; cooldown
+	// zerado porque um convite está esperando a UI AGORA. Reincidência
+	// (zombieStreak >= 2, UI que sobe e trava sem nunca conectar) volta ao
+	// cooldown longo para não martelar a máquina.
+	// Tolerância pós-relanço (spawnRecentlyLocked): um processo vivo dentro da
+	// graça pode estar apenas CONECTANDO — matá-lo no parto recriava o ciclo de
+	// 18:21 do log. Fora da graça, processo vivo sem IPC é zumbi de verdade.
+	if alive := w.deps.ProcessCount(); alive > 0 && !w.spawnRecentlyLocked() {
+		w.deps.Log(fmt.Sprintf("pedido de relançamento da UI (%s) com %d processo(s) vivo(s) SEM IPC — encerrando o zumbi antes de relançar (relançar por cima ficaria preso no lock de instância única)", reason, alive))
+		if killed := w.deps.KillZombieUI(); killed > 0 {
+			w.deps.Log(fmt.Sprintf("UI travada encerrada por pedido (%d processo(s))", killed))
+			w.zombieChecks = 0
+			cooldown := time.Duration(0)
+			if w.zombieStreak >= 2 {
+				cooldown = uiWatchdogSpawnCooldown
+			}
+			w.zombieStreak++
+			if w.sessionMode() {
+				sessions := w.activeSessionsLocked()
+				w.spawnSessionsLocked(sessions, "pedido:"+reason, cooldown, true)
+			} else {
+				w.spawnLocked("pedido:"+reason, cooldown)
+			}
+			return
+		}
+		w.deps.Log("zumbi não pôde ser encerrado; seguindo o fluxo normal de relançamento")
+	}
 	if w.sessionMode() {
 		sessions := w.activeSessionsLocked()
 		if len(sessions) == 0 {
@@ -217,6 +249,33 @@ func (w *uiWatchdog) RequestSpawn(reason string) {
 		return
 	}
 	w.spawnLocked("pedido:"+reason, uiWatchdogRequestCooldown)
+}
+
+// hasZombieUIProcess informa se existem processos de UI vivos SEM IPC — a
+// definição de zumbi do watchdog. Consulta só as dependências (imutáveis
+// depois da construção), sem precisar do lock.
+func (a *App) hasZombieUIProcess() bool {
+	if a == nil {
+		return false
+	}
+	watchdog := a.uiWatchdog.Load()
+	if watchdog == nil {
+		return false
+	}
+	return watchdog.deps.ProcessCount() > 0
+}
+
+// escalateUIWatchdogZombie executa o caminho zumbi (encerra a UI travada e
+// relança) DURANTE a janela de tolerância do convite de chat. O pedido comum
+// não basta nesse caso: com o zumbi vivo, a instância relançada fica presa no
+// lock de instância única e o convite vira no_ui no fim da tolerância —
+// exatamente o incidente de 20/10 (20:37:19→20:37:44).
+func (a *App) escalateUIWatchdogZombie(reason string) bool {
+	if !a.hasZombieUIProcess() {
+		return false
+	}
+	a.requestUIWatchdogSpawn(reason)
+	return true
 }
 
 // checkLocked é a verificação periódica (chamada com w.mu preso).

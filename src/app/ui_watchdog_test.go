@@ -311,3 +311,90 @@ func TestUIWatchdog_ZombieStreakBacksOff(t *testing.T) {
 		t.Fatalf("travada após conexão deveria relançar de imediato; spawns=%v", f.spawns)
 	}
 }
+
+// FIX 20/10 (20:37): RequestSpawn com processo vivo SEM IPC (zumbi) deve
+// ENCERRAR o zumbi ANTES de relançar — relançar por cima deixava a nova
+// instância presa no lock de instância única (pid 25056 nunca terminou o
+// startup) e o convite morria em no_ui.
+func TestUIWatchdog_RequestSpawnKillsZombieBeforeRelaunch(t *testing.T) {
+	f := &uiWatchdogFake{procs: 1}
+	w := newUIWatchdogFake(f)
+
+	w.RequestSpawn("chat_invite")
+	if f.kills != 1 {
+		t.Fatalf("zumbi deveria ser encerrado antes do relançamento; kills=%d", f.kills)
+	}
+	if len(f.spawns) != 1 {
+		t.Fatalf("deveria relançar na hora (cooldown zerado com convite esperando); spawns=%v", f.spawns)
+	}
+	if !strings.Contains(f.spawns[0], "chat_invite") {
+		t.Fatalf("motivo inesperado: %q", f.spawns[0])
+	}
+	// O kill zerou procs: o spawn aconteceu SEM processo vivo.
+	if f.procs != 0 {
+		t.Fatalf("zumbi deveria ter sido encerrado antes do spawn; procs=%d", f.procs)
+	}
+}
+
+// Reincidência (UI sobe e trava sem nunca conectar): o kill continua imediato
+// (o zumbi segura o lock), mas o relançamento volta a respeitar o cooldown
+// longo para não martelar a máquina em ciclo de kill/spawn.
+func TestUIWatchdog_RequestSpawnZombieStreakBacksOff(t *testing.T) {
+	f := &uiWatchdogFake{procs: 1}
+	w := newUIWatchdogFake(f)
+
+	// 1º pedido: mata e relança (streak 0→1).
+	w.RequestSpawn("chat_invite")
+	if f.kills != 1 || len(f.spawns) != 1 {
+		t.Fatalf("1º pedido deveria matar e relançar; kills=%d spawns=%v", f.kills, f.spawns)
+	}
+
+	// Zumbi de novo (streak 1): ainda imediato (limiar de reincidência é 2).
+	// A UI relançada há pouco tem direito à tolerância pós-relanço — avança
+	// além dela antes de caracterizar o zumbi seguinte.
+	f.advance(uiWatchdogSpawnGrace + time.Second)
+	f.procs = 1
+	w.RequestSpawn("chat_invite")
+	if f.kills != 2 || len(f.spawns) != 2 {
+		t.Fatalf("reincidência 1 ainda é imediata; kills=%d spawns=%v", f.kills, f.spawns)
+	}
+
+	// 3ª reincidência (streak 2): mata o zumbi (libera o lock) mas o relanço
+	// respeita o cooldown longo.
+	f.advance(uiWatchdogSpawnGrace + time.Second)
+	f.procs = 1
+	w.RequestSpawn("chat_invite")
+	if f.kills != 3 {
+		t.Fatalf("zumbi deveria ser encerrado mesmo em reincidência; kills=%d", f.kills)
+	}
+	if len(f.spawns) != 2 {
+		t.Fatalf("reincidência (streak>=2) deveria respeitar cooldown longo; spawns=%v", f.spawns)
+	}
+}
+
+// Kill falhou (zumbi resistiu): segue o fluxo NORMAL de relançamento (com
+// cooldown de pedido) — e não pode relançar de novo imediatamente sobre um
+// lock que o zumbi ainda segura.
+func TestUIWatchdog_RequestSpawnKillFailureFallsBack(t *testing.T) {
+	f := &uiWatchdogFake{procs: 1}
+	w := newUIWatchdogFake(f)
+	kills := 0
+	w.deps.KillZombieUI = func() int {
+		kills++
+		return 0
+	}
+
+	w.RequestSpawn("chat_invite")
+	if kills != 1 {
+		t.Fatalf("deveria ter tentado o kill; kills=%d", kills)
+	}
+	if len(f.spawns) != 1 {
+		t.Fatalf("fallback deve seguir o fluxo normal de relançamento; spawns=%v", f.spawns)
+	}
+
+	// Segundo pedido imediato: cooldown do fluxo normal segura.
+	w.RequestSpawn("chat_invite")
+	if len(f.spawns) != 1 {
+		t.Fatalf("cooldown do fallback deveria barrar repetição; spawns=%v", f.spawns)
+	}
+}
