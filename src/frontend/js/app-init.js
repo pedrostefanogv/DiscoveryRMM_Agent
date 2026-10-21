@@ -158,9 +158,15 @@ function initAppBindings() {
 
   if (tabSupportChatBtn) {
     tabSupportChatBtn.addEventListener("click", function () {
-      setActiveTab("supportChat");
-      // Aba aberta pelo usuário: limpa o destaque de "mensagem não vista".
-      if (typeof clearSupportChatAttention === "function") clearSupportChatAttention();
+      // showSupportChatTab (app-support-chat.js) troca a aba, limpa o destaque
+      // de "mensagem não vista" e posiciona o cursor no composer. O handler
+      // antigo chamava setActiveTab direto e um helper inexistente
+      // (clearSupportChatAttention) — o foco ficava fora do campo.
+      if (typeof window.__discoveryShowSupportChat === "function") {
+        window.__discoveryShowSupportChat();
+      } else {
+        setActiveTab("supportChat");
+      }
     });
   }
 

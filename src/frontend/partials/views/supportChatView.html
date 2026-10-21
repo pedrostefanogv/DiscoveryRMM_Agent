@@ -9,7 +9,7 @@
       </div>
     </div>
 
-    <div id="scBanner" class="cache-stale-banner hidden" role="status" aria-live="polite"></div>
+    <div id="scBanner" class="cache-stale-banner" role="status" aria-live="polite" hidden></div>
 
     <div id="scMessages" class="chat-messages support-chat-messages" aria-live="polite">
       <div id="scEmpty" class="sc-empty">Aguardando o início da conversa…</div>
@@ -30,7 +30,21 @@
       <div id="scCommentsList" class="sc-comments-list" hidden></div>
     </section>
 
-<div id="scComposer" class="chat-input-wrap support-chat-composer">
+    <!-- Conversa encerrada: o composer sai de cena (não fica um campo que
+         parece ativo e não envia nada) e esta faixa assume o rodapé, mantendo
+         o histórico em leitura. -->
+    <div id="scEndedNotice" class="sc-ended" hidden>
+      <div class="sc-ended-text">
+        <strong>Conversa encerrada</strong>
+        <span>O histórico continua disponível para leitura.</span>
+      </div>
+      <div class="sc-ended-actions">
+        <button id="scEndedSupport" type="button" class="btn subtle">Ir para Suporte</button>
+        <button id="scEndedClose" type="button" class="btn subtle">Fechar</button>
+      </div>
+    </div>
+
+    <div id="scComposer" class="support-chat-composer">
       <div class="chat-input-wrap">
         <textarea id="scInput" class="chat-input" rows="2"
           placeholder="Escreva uma mensagem… (Enter envia, Shift+Enter quebra linha)"></textarea>

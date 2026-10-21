@@ -2038,13 +2038,32 @@ func (a *App) SupportChatEnd(reason string) error {
 // usuário confirmar no modal). O estado local é descartado — o agent não
 // mantém histórico de conversas.
 func (a *App) SupportChatConfirmClose() error {
+	svc := a.supportChatService()
+
+	// Fechar é IDEMPOTENTE. Numa conversa já encerrada (o usuário abriu o
+	// histórico e clicou em "Fechar") ou sem sessão, chamar /end de novo batia
+	// no servidor com uma sessão morta: até 3 tentativas com espera, erro
+	// devolvido ao frontend ("Falha ao encerrar") e o usuário preso na aba.
+	// Só há o que encerrar remotamente quando a conversa está ATIVA.
+	if svc.State().Status != supportchat.StatusActive {
+		svc.ClearState()
+		a.closeSupportChatWindow()
+		return nil
+	}
+
 	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
 	defer cancel()
 
-	svc := a.supportChatService()
 	err := svc.End(ctx, "user_closed")
 	svc.ClearState()
 	a.closeSupportChatWindow()
 
-	return err
+	// O fechamento LOCAL já aconteceu (estado limpo e janela/aba fechada). O
+	// /end é best-effort: a sessão também expira por inatividade no servidor.
+	// Devolver erro aqui só fazia o frontend mostrar "Falha ao encerrar" e
+	// segurar o usuário na tela por causa de uma falha remota irrelevante.
+	if err != nil {
+		a.Logs.Append("[supportchat] encerramento remoto falhou (fechamento local concluído): " + err.Error())
+	}
+	return nil
 }

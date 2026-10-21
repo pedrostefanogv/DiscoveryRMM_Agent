@@ -63,17 +63,29 @@ func TestSupportChatStateEventPayload_LevaLinkRealDoCanal(t *testing.T) {
 	a := newSupportChatTestApp(t, "http://127.0.0.1:1")
 
 	a.setSupportChatLink(false)
-	args := a.supportChatStateEventPayload(supportchat.State{Status: supportchat.StatusActive})
-	if len(args) != 2 {
-		t.Fatalf("o evento deve carregar Estado + extras; obtido %d argumento(s)", len(args))
+	args := a.supportChatStateEventPayload(supportchat.State{
+		Status:      supportchat.StatusActive,
+		SessionID:   "s1",
+		SupportName: "tecnico",
+	})
+	// UM argumento (mapa) — dois argumentos viram um slice em Event.Data e o
+	// frontend (e o IPC) não enxergam mais os campos do estado.
+	if len(args) != 1 {
+		t.Fatalf("o evento deve carregar UM mapa; obtido %d argumento(s)", len(args))
 	}
-	extras, ok := args[1].(map[string]any)
+	payload, ok := args[0].(map[string]any)
 	if !ok {
-		t.Fatalf("o segundo argumento precisa ser o mapa de extras; obtido %T", args[1])
+		t.Fatalf("o argumento precisa ser o mapa do estado; obtido %T", args[0])
 	}
-	realtime, ok := extras["realtime"].(map[string]any)
+	if payload["status"] != supportchat.StatusActive {
+		t.Fatalf("payload sem status do estado: %v", payload)
+	}
+	if payload["sessionId"] != "s1" {
+		t.Fatalf("payload sem sessionId do estado: %v", payload)
+	}
+	realtime, ok := payload["realtime"].(map[string]any)
 	if !ok {
-		t.Fatalf("extras sem realtime: %v", extras)
+		t.Fatalf("payload sem realtime: %v", payload)
 	}
 	// O serviço diz que o canal está fora; falta o link. O evento precisa
 	// carregar essa informação — antes a janela só tinha o Connected do próprio

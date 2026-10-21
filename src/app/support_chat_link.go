@@ -128,10 +128,34 @@ func (a *App) supportChatLinkCurrent() bool {
 	return link.active
 }
 
-// supportChatStateEventPayload monta os argumentos de supportchat:state para a
-// janela: o Estado + o link real do canal.
+// supportChatStateEventPayload monta o argumento de supportchat:state para a
+// janela: um ÚNICO mapa com os campos do Estado + o link real do canal.
+//
+// BUG CORRIGIDO: a versão anterior emitia DOIS argumentos (Estado + extras). No
+// Wails v3, mais de um argumento faz Event.Data ser o SLICE e o frontend recebe
+// um array; no modo companion o buildIPCEventPayload também só entende pares
+// chave/valor (string, valor) — um supportchat.State não é string, então o
+// payload IPC saía SEM os campos. Resultado nos dois caminhos: applyState(Array)
+// lia status undefined -> "none" e a UI caía para "sem conversa" a cada evento,
+// piscando a statusbar e DESABILITANDO o campo de digitação no meio da conversa.
+//
+// Um mapa único preserva o contrato do frontend (data.status, data.messages,
+// data.realtime) e passa intacto pelo IPC (que espalha os campos do mapa).
 func (a *App) supportChatStateEventPayload(state supportchat.State) []any {
-	return []any{state, map[string]any{"realtime": a.supportChatLinkPayload()}}
+	payload := map[string]any{
+		"hasSession":  state.HasSession,
+		"sessionId":   state.SessionID,
+		"ticketId":    state.TicketID,
+		"ticketTitle": state.TicketTitle,
+		"supportName": state.SupportName,
+		"status":      state.Status,
+		"expiresAt":   state.ExpiresAt,
+		"connected":   state.Connected,
+		"lastError":   state.LastError,
+		"messages":    state.Messages,
+		"realtime":    a.supportChatLinkPayload(),
+	}
+	return []any{payload}
 }
 
 // supportChatLinkFromIPC extrai o link publicado pelo serviço em um payload de

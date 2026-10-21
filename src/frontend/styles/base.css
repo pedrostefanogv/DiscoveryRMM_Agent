@@ -322,6 +322,7 @@ a:hover { text-decoration: underline; }
 #sidebarMount, #mainMount, #topbarMount,
 #statusViewMount, #storeViewMount, #updatesViewMount, #inventoryViewMount,
 #logsViewMount, #chatViewMount, #supportViewMount, #knowledgeViewMount,
+#supportChatViewMount,
 #automationViewMount, #p2pViewMount, #debugViewMount, #psadtViewMount, #zeroTouchConfigViewMount {
   display: contents;
 }
@@ -640,6 +641,12 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: 0.65; 
 
 /* Utility */
 .hidden { display: none !important; }
+/* O atributo hidden também precisa vencer regras de autor com display próprio
+   (.sidebar-link { display:flex }, .cache-stale-banner { display:flex }, ...).
+   Sem isto, esconder via el.hidden = true não funcionava no item do chat de
+   suporte do menu nem no banner da conversa — o UA só aplica display:none
+   quando NENHUM CSS do autor define display. */
+[hidden] { display: none !important; }
 .flex-center { display: flex; align-items: center; justify-content: center; }
 .gap-8 { gap: 8px; }
 .gap-12 { gap: 12px; }

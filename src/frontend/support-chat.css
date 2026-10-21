@@ -302,9 +302,20 @@
 }
 
 .support-chat-composer {
+  flex-shrink: 0;
   border-top: 1px solid var(--border);
   background: var(--surface);
   padding: 10px 14px 12px;
+}
+
+/* Na aba embutida o composer é só o container do .chat-input-wrap (a caixa
+   visível é o próprio input, como no Chat IA). Sem esta separação sobrava uma
+   "moldura dentro de moldura" com borda dupla e margem extra. */
+#supportChatView .support-chat-composer {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
 }
 
 /* O composer reusa .chat-input-wrap / .chat-input / .chat-input-actions do chat
@@ -486,7 +497,55 @@
 .sc-technician-inline strong {
   font-weight: 600;
 }
-/* Composer herdado do Chat IA: margens/fundo coerentes com a view. */
-#supportChatView .support-chat-composer {
-  margin: 10px 12px 12px;
+/* ── Conversa encerrada (leitura) ─────────────────────────────────────────
+   Substitui o composer quando o status é ended/none com histórico. Antes o
+   campo continuava na tela com o textarea desabilitado — parecia travado
+   ("não consigo digitar nada"). */
+.sc-ended {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: var(--surface-2);
+}
+
+.sc-ended-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sc-ended-text strong {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.sc-ended-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.sc-ended[hidden] { display: none; }
+
+/* Item do menu do atendimento AO VIVO: headset em tom âmbar para não se
+   confundir com o balão verde do Chat IA. O item só aparece com sessão
+   waiting/active (ver updateSupportChatTabSurface). */
+.sidebar-link--support svg {
+  color: var(--accent-2);
+  opacity: 1;
+}
+.sidebar-link--support .sidebar-badge {
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 25%, transparent);
+}
+.sidebar-link--support.sidebar-link--attention {
+  color: var(--accent-2);
 }

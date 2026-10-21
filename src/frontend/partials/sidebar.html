@@ -95,14 +95,20 @@
     </li>
 
     <li>
-      <button id="tabSupportChat" class="sidebar-link" role="tab" aria-selected="false"
-        aria-controls="supportChatView" title="Chat do Suporte" aria-label="Chat do Suporte" hidden
+      <!-- Item do chat AO VIVO: aparece só com sessão waiting/active e some no
+           encerramento. Ícone de headset + tom próprio para NÃO se confundir
+           com o Chat IA (ícone de balão). -->
+      <button id="tabSupportChat" class="sidebar-link sidebar-link--support" role="tab" aria-selected="false"
+        aria-controls="supportChatView" title="Atendimento ao vivo" aria-label="Atendimento ao vivo" hidden
         data-i18n-title="tab.supportChat" data-i18n-aria-label="tab.supportChat">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          <path d="M4 14v-2a8 8 0 0 1 16 0v2" />
+          <path d="M18 15v2a4 4 0 0 1-4 4h-2" />
+          <rect x="2" y="13" width="4" height="7" rx="1.5" />
+          <rect x="18" y="13" width="4" height="7" rx="1.5" />
         </svg>
-        <span data-i18n="tab.supportChat">Chat do Suporte</span>
+        <span data-i18n="tab.supportChat">Atendimento ao vivo</span>
         <span id="tabSupportChatBadge" class="sidebar-badge" hidden></span>
       </button>
     </li>

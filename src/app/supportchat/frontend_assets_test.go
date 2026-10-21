@@ -20,10 +20,10 @@ import (
 // RELATO: "mando abrir o chat, às vezes demora e aparece a mensagem de sem
 // conexão". O banner depende de state.link, com quatro valores:
 //
-//   opening  janela recém-aberta sem conversa carregada (NUNCA mostra o aviso);
-//   live     conversa carregada / canal saudável;
-//   offline  SÓ com o último snapshot falhando e sem conversa viva;
-//   over     conversa encerrada.
+//	opening  janela recém-aberta sem conversa carregada (NUNCA mostra o aviso);
+//	live     conversa carregada / canal saudável;
+//	offline  SÓ com o último snapshot falhando e sem conversa viva;
+//	over     conversa encerrada.
 //
 // A ordem dos ramos do render() e a fonte do link (o BACKEND, não o processo de
 // UI) são o contrato deste teste.
@@ -561,5 +561,210 @@ func TestChatWindow_SeletorUsaPoliticaDoServidor(t *testing.T) {
 	}
 	if strings.Contains(bootstrap[catchIdx:applyIdx], ".then(") {
 		t.Fatal("o bootstrap não pode encadear a política antes de carregar a conversa (consulta não pode bloquear a janela)")
+	}
+}
+
+// REQUISITO (relato 21/10): a conversa aparecia como texto puro, sem bolhas/
+// destaque, porque support-chat.css só era linkado em chat-window.html — a aba
+// EMBUTIDA da janela principal usa o mesmo CSS e ficava sem TODAS as classes
+// .sc-*. Este teste falha se o link sumir do index.html.
+func TestAbaEmbutida_CarregaCssDoChatDeSuporte(t *testing.T) {
+	htmlPath := filepath.Join("..", "..", "frontend", "index.html")
+	html, err := os.ReadFile(htmlPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", htmlPath, err)
+	}
+	if !strings.Contains(string(html), "href=\"support-chat.css\"") {
+		t.Fatal("index.html precisa linkar support-chat.css — sem isso a aba embutida perde bolhas, statusbar e composer do chat")
+	}
+}
+
+// REQUISITO (relato 21/10): o item do menu só pode aparecer com sessão de
+// suporte (waiting/active) e PRECISA sumir no encerramento. O atributo hidden
+// era ignorado porque .sidebar-link define display:flex; a regra global
+// [hidden] do base.css é o que faz o item realmente desaparecer. O ícone também
+// não pode ser o mesmo balão do Chat IA.
+func TestMenuAtendimentoAoVivo_SomeSemSessaoEIconeProprio(t *testing.T) {
+	sidebarPath := filepath.Join("..", "..", "frontend", "partials", "sidebar.html")
+	sidebar, err := os.ReadFile(sidebarPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", sidebarPath, err)
+	}
+	sidebarText := string(sidebar)
+
+	for _, needle := range []string{"id=\"tabSupportChat\"", "sidebar-link--support"} {
+		if !strings.Contains(sidebarText, needle) {
+			t.Fatalf("sidebar.html precisa conter %q", needle)
+		}
+	}
+	// O balão do Chat IA continua existindo no item tabChat; a checagem precisa
+	// olhar SÓ o bloco do item de atendimento ao vivo.
+	start := strings.Index(sidebarText, "id=\"tabSupportChat\"")
+	if start < 0 {
+		t.Fatal("item tabSupportChat não encontrado no sidebar.html")
+	}
+	endRel := strings.Index(sidebarText[start:], "</button>")
+	if endRel < 0 {
+		t.Fatal("não foi possível delimitar o item tabSupportChat no sidebar.html")
+	}
+	button := sidebarText[start : start+endRel]
+	if strings.Contains(button, "M21 15a2 2 0 0 1-2 2H7l-4 4V5") {
+		t.Fatal("o item do atendimento ao vivo não pode reusar o ícone/balão do Chat IA")
+	}
+	if !strings.Contains(button, "M4 14v-2a8 8 0 0 1 16 0v2") {
+		t.Fatal("o item do atendimento ao vivo precisa do ícone de headset (distinto do Chat IA)")
+	}
+
+	baseCssPath := filepath.Join("..", "..", "frontend", "styles", "base.css")
+	baseCss, err := os.ReadFile(baseCssPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", baseCssPath, err)
+	}
+	if !strings.Contains(string(baseCss), "[hidden] { display: none !important; }") {
+		t.Fatal("base.css precisa da regra global [hidden] — sem ela display:flex do .sidebar-link vence o hidden e o item não some no encerramento")
+	}
+
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	if !strings.Contains(string(js), "btn.hidden = !visible") {
+		t.Fatal("updateSupportChatTabSurface precisa esconder o item quando não há sessão (waiting/active)")
+	}
+}
+
+// REQUISITO (relato 21/10): o nome do técnico aparecia DUAS vezes na statusbar
+// (subtitle com sufixo + elemento #scTechnician) e o chip piscava entre
+// "encerrado" e "sem conversa". O técnico fica só no elemento próprio e o chip
+// deriva do estado "conversa encerrada".
+func TestStatusbar_NaoDuplicaTecnicoNemPiscaNoEncerramento(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+
+	if strings.Contains(jsText, "techSuffix") {
+		t.Fatal("render() não pode concatenar o técnico no subtitle: o nome já aparece em #scTechnician")
+	}
+	if !strings.Contains(jsText, "var label = over ? statusLabel(\"ended\") : statusLabel(state.status);") {
+		t.Fatal("o chip precisa derivar de over (encerrado) para não piscar entre encerrado e sem conversa")
+	}
+	if !strings.Contains(jsText, "Conversa encerrada") {
+		t.Fatal("o subtitle no fim deve ser estável (Conversa encerrada)")
+	}
+}
+
+// REQUISITO (relato 21/10): "não consigo digitar nada" — o campo era
+// desabilitado por um estado none aplicado por eventos com payload em ARRAY
+// (Wails v3 entrega Event.Data como slice quando há mais de um argumento) e o
+// composer continuava na tela parecendo disponível. O payload precisa ser
+// normalizado e o composer precisa sair de cena no encerramento.
+func TestEstado_NormalizaPayloadArrayEComposerSomeAoEncerrar(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+
+	for _, needle := range []string{
+		"function normalizeStatePayload(",
+		"Array.isArray(payload)",
+		"typeof next.hasSession !== \"boolean\"",
+		"els.composer.hidden = over",
+	} {
+		if !strings.Contains(jsText, needle) {
+			t.Fatalf("app-support-chat.js precisa de %q para não travar o campo no meio da conversa", needle)
+		}
+	}
+
+	htmlPath := filepath.Join("..", "..", "frontend", "partials", "views", "supportChatView.html")
+	html, err := os.ReadFile(htmlPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", htmlPath, err)
+	}
+	for _, id := range []string{"scComposer", "scEndedNotice", "scEndedClose"} {
+		if !strings.Contains(string(html), "id=\""+id+"\"") {
+			t.Fatalf("supportChatView.html precisa conter id=%s", id)
+		}
+	}
+
+	cssPath := filepath.Join("..", "..", "frontend", "support-chat.css")
+	css, err := os.ReadFile(cssPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", cssPath, err)
+	}
+	if !strings.Contains(string(css), ".sc-ended") {
+		t.Fatal("support-chat.css precisa estilizar a faixa de conversa encerrada (.sc-ended)")
+	}
+}
+
+// REQUISITO (revisão por bugs 21/10): colar/arrastar arquivo só pode anexar ao
+// chat de suporte quando a aba está em tela e o alvo está dentro dela. O
+// listener global antigo enviava o print para o suporte mesmo colando no Chat
+// IA e bloqueava o drag&drop nativo das outras telas. Também: o erro de envio
+// precisa sobreviver ao render() (antes o banner era escondido no mesmo tick).
+func TestAnexosPorPasteDropPertencemAoChatDeSuporte(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	// O working tree desta máquina usa CRLF; normaliza antes de comparar
+	// trechos multilinha.
+	jsText := strings.ReplaceAll(string(js), "\r\n", "\n")
+
+	for _, needle := range []string{
+		"function supportChatOwnsAttachmentTarget(",
+		"if (!supportChatOwnsAttachmentTarget(event.target)) return;",
+	} {
+		if !strings.Contains(jsText, needle) {
+			t.Fatalf("app-support-chat.js precisa de %q para não capturar paste/drop de outras abas", needle)
+		}
+	}
+
+	if !strings.Contains(jsText, "render();\n        showBanner(\"Falha ao enviar: \" + describe(err));") {
+		t.Fatal("o banner de falha ao enviar precisa ser mostrado DEPOIS do render() — senão é escondido no mesmo tick")
+	}
+}
+
+// REQUISITO (revisão por bugs 21/10): o handler de supportchat:state não pode
+// pedir um snapshot a cada evento. refresh() emite supportchat:state; pedir
+// refresh de novo no handler vira loop (GET /active contínuo + re-render).
+// O snapshot inicial de mensagens é pedido UMA vez por sessão (aceite com
+// transcript vazio).
+func TestEstado_NaoDisparaRefreshEmLoop(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+	for _, needle := range []string{
+		"snapshotRequestedSession",
+		"state.status === \"active\" && state.messages.length === 0",
+		"snapshotRequestedSession !== state.chatSessionId",
+	} {
+		if !strings.Contains(jsText, needle) {
+			t.Fatalf("app-support-chat.js precisa de %q para não entrar em loop de refresh", needle)
+		}
+	}
+}
+
+// REQUISITO (revisão por bugs 21/10): falha do refresh depois de um envio bem
+// sucedido não pode ser reportada como "Falha ao enviar" (o usuário reenviaria
+// a mensagem que já foi). O send e o refresh precisam ser promessas separadas.
+func TestEnvio_FalhaDeRefreshNaoViraFalhaDeEnvio(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := strings.ReplaceAll(string(js), "\r\n", "\n")
+	if !strings.Contains(jsText, "refresh().catch(function () { /* refresh() já avisa */ });") {
+		t.Fatal("o refresh pós-envio precisa ser desacoplado do catch de envio")
 	}
 }

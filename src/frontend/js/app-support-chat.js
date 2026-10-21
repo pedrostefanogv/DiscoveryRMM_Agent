@@ -120,6 +120,12 @@
     els.shot = byId("scShotBtn");
     els.fileInput = byId("scFileInput");
     els.end = byId("scEndBtn");
+    // Composer: na aba embutida é o wrapper #scComposer; na janela dedicada
+    // (rollback) é o <footer class="support-chat-composer">, sem id.
+    els.composer = byId("scComposer") || document.querySelector(".support-chat-composer");
+    els.ended = byId("scEndedNotice");
+    els.endedClose = byId("scEndedClose");
+    els.endedSupport = byId("scEndedSupport");
     els.confirm = byId("scConfirm");
     els.confirmTitle = byId("scConfirmTitle");
     els.confirmText = byId("scConfirmText");
@@ -231,20 +237,23 @@
   }
 
   function render() {
-    var label = statusLabel(state.status);
+    // Conversa terminada vem ANTES do aviso de conexão: o fim é o que está
+    // acontecendo, e reconectar não muda mais nada.
+    var over = isConversationOver();
+    // O chip deriva de `over`, não do status bruto: um snapshot vazio depois do
+    // fim deixava o status local em "none" e o chip piscava para "sem conversa"
+    // por cima do histórico (relato de "friz" na statusbar).
+    var label = over ? statusLabel("ended") : statusLabel(state.status);
     if (els.statusChip) els.statusChip.textContent = label;
 
     // statusDot só existe na JANELA DEDICADA (rollback); na aba embutida o
     // estado vai pelo chip/subtitle da statusbar.
     if (els.statusDot) {
       els.statusDot.className = "sc-dot " + (
+        over ? "sc-dot--offline" :
         state.status === "active" ? "sc-dot--online" :
         state.status === "waiting" ? "sc-dot--waiting" : "sc-dot--offline");
     }
-
-    // Conversa terminada vem ANTES do aviso de conexão: o fim é o que está
-    // acontecendo, e reconectar não muda mais nada.
-    var over = isConversationOver();
     // Rede de segurança do link: se o ramo que colocou a janela em
     // "opening" já venceu (OPENING_WINDOW_MS) e nenhum snapshot trouxe a
     // conversa, o aviso aparece mesmo sem uma chamada de render() nova.
@@ -253,9 +262,9 @@
       recomputeLink();
     }
 
-    var tech = String(state.supportName || "").trim();
-    var techSuffix = tech ? " — Técnico: " + tech : "";
-
+    // O técnico aparece UMA vez, no elemento próprio da statusbar
+    // (#scTechnician). Antes o subtitle repetia "— Técnico: nome" e o nome
+    // aparecia duas vezes na mesma linha.
     if (over) {
       // Quem encerrou fica registrado na mensagem de sistema; a aba NÃO é
       // fechada sozinha para o usuário continuar lendo o que já foi conversado.
@@ -268,26 +277,43 @@
       // no subtitle da statusbar — o banner só tem utilidade para avisos de
       // conexão/envio.
       if (els.banner) els.banner.hidden = true;
-      if (els.subtitle) els.subtitle.textContent = (reason || "Conversa encerrada") + techSuffix;
+      if (els.subtitle) {
+        els.subtitle.textContent = "Conversa encerrada";
+        els.subtitle.title = reason || "";
+      }
     } else if (state.link === "opening") {
       // (contrato do teste: o literal da abertura permanece exato)
-      els.subtitle.textContent = "Abrindo a conversa…";
-      if (techSuffix) els.subtitle.textContent += techSuffix;
+      if (els.subtitle) {
+        els.subtitle.textContent = "Abrindo a conversa…";
+        els.subtitle.title = "";
+      }
       if (els.banner) els.banner.hidden = true;
     } else if (state.link === "idle") {
-      if (els.subtitle) els.subtitle.textContent = "Sem conversa";
+      if (els.subtitle) {
+        els.subtitle.textContent = "Sem conversa";
+        els.subtitle.title = "";
+      }
       if (els.banner) els.banner.hidden = true;
     } else if (state.link === "offline") {
-      if (els.subtitle) els.subtitle.textContent = "Reconectando ao servidor…" + techSuffix;
+      if (els.subtitle) {
+        els.subtitle.textContent = "Reconectando ao servidor…";
+        els.subtitle.title = "";
+      }
       if (els.banner) {
         els.banner.hidden = false;
         els.banner.textContent = "Sem conexão em tempo real. As mensagens serão reenviadas quando a conexão voltar.";
       }
     } else if (state.status === "waiting") {
-      if (els.subtitle) els.subtitle.textContent = "Aguardando o suporte iniciar a conversa" + techSuffix;
+      if (els.subtitle) {
+        els.subtitle.textContent = "Aguardando o suporte iniciar a conversa";
+        els.subtitle.title = "";
+      }
       if (els.banner) els.banner.hidden = true;
     } else {
-      if (els.subtitle) els.subtitle.textContent = "Conversa em andamento" + techSuffix;
+      if (els.subtitle) {
+        els.subtitle.textContent = "Conversa em andamento";
+        els.subtitle.title = "";
+      }
       if (els.banner) els.banner.hidden = true;
     }
 
@@ -296,6 +322,12 @@
     renderPending();
     renderTechnician();
     renderComments();
+
+    // Conversa encerrada: o composer sai de cena. Antes ele continuava na tela
+    // com o textarea desabilitado, parecendo que "travou" — o usuário clicava e
+    // digitava sem nenhum retorno. A faixa de leitura assume o rodapé.
+    if (els.ended) els.ended.hidden = !over;
+    if (els.composer) els.composer.hidden = over;
 
     var canSend = state.status === "active" && !state.sending;
     if (els.send) els.send.disabled = !canSend;
@@ -987,6 +1019,30 @@
   }
 
   /**
+   * normalizeStatePayload aceita o estado em duas formas:
+   *
+   *   - objeto plano — contrato atual (mapa único do Go / campos do IPC);
+   *   - array [estado, extras] — o Wails v3 entrega `ev.data` como SLICE quando
+   *     o Go emite mais de um argumento (`EventManager.Emit(name, a, b)`).
+   *
+   * BUG CORRIGIDO: o handler chamava applyState(payload) direto. Quando o evento
+   * vinha como array, `payload.status` era undefined -> a UI caía para "none" a
+   * cada evento: chip piscando entre "ativo"/"encerrado"/"sem conversa" e campo
+   * de digitação DESABILITADO no meio da conversa (o usuário "não conseguia
+   * digitar"). A normalização mantém compatibilidade com build antigo do Go.
+   */
+  function normalizeStatePayload(payload) {
+    if (!Array.isArray(payload)) return payload;
+    var statePart = payload[0] || {};
+    var extras = payload[1] || {};
+    if (statePart && typeof statePart === "object" && !Array.isArray(statePart) &&
+        extras && typeof extras === "object" && extras.realtime && !statePart.realtime) {
+      statePart.realtime = extras.realtime;
+    }
+    return statePart;
+  }
+
+  /**
    * applyState aplica um snapshot/evento de estado de forma MONOTÔNICA por
    * sessão. O evento `supportchat:state` e o resultado de `SupportChatRefresh`
    * chegam por caminhos diferentes (IPC, binding) e podem se cruzar: um
@@ -997,13 +1053,38 @@
    * `waiting`; e uma sessão que já foi vista viva mantém hasSession.
    */
   function applyState(next) {
-    if (!next) return;
+    next = normalizeStatePayload(next);
+    if (!next || typeof next !== "object" || Array.isArray(next)) return;
+
+    // Evento SEM nenhum campo de estado (payload antigo do IPC, array não
+    // normalizado, objeto vazio): não pode rebaixar a conversa para "none".
+    // Um payload só com "messages" também é inválido — o status/hasSession são
+    // obrigatórios no contrato.
+    if (!next.status && !next.sessionId && typeof next.hasSession !== "boolean") {
+      return;
+    }
 
     // liveSession anterior: decide se um snapshot sem sessão da MESMA
     // conversa pode derrubar o link (ver o bloco hasSession "grudado").
     var previousLiveSession = state.liveSession;
     var nextStatus = next.status || "none";
     var nextSession = String(next.sessionId || "");
+
+    // "ended" é TERMINAL para a conversa exibida: snapshot sem sessão ou evento
+    // atrasado não pode devolver a UI para "sem conversa". Sem esta guarda o
+    // chip/serviço oscilava ("encerrado" x "sem conversa") e o campo ficava
+    // desabilitado enquanto o usuário ainda lia o histórico. Uma sessão NOVA
+    // (sessionId diferente) continua liberada.
+    if (state.status === "ended" && nextStatus !== "ended" &&
+        (!nextSession || nextSession === state.chatSessionId)) {
+      if (next.realtime && typeof next.realtime.active === "boolean") {
+        state.connected = next.realtime.active;
+      }
+      recomputeLink();
+      render();
+      updateSupportChatTabSurface();
+      return;
+    }
 
     // GUARDAS PRIMEIRO: um evento atrasado é DESCARTADO por inteiro. Antes eles
     // ficavam depois da troca de sessão abaixo — e um `waiting` atrasado da
@@ -1022,14 +1103,26 @@
       state.sessionState[nextSession] = nextStatus;
     }
 
-    // Conversa ATIVA de uma sessão DIFERENTE da anterior (janela reusada no
-    // aceite): o transcript antigo sai da tela. Só limpa quando a nova sessão
-    // está ativa e com snapshot; nada é apagado numa leitura transitória.
-    if (nextSession && state.chatSessionId && state.chatSessionId !== nextSession && nextStatus === "active") {
+    // Sessão DIFERENTE = outra conversa. O transcript, o técnico e o chamado
+    // anteriores pertencem à sessão antiga e não podem vazar para a nova —
+    // inclusive quando o próximo evento é um convite "waiting" que chega depois
+    // de uma conversa encerrada (antes o histórico antigo continuava na tela
+    // até o aceite). Snapshots SEM sessão não limpam nada (leitura transitória).
+    if (nextSession && state.chatSessionId && state.chatSessionId !== nextSession) {
       state.chatSessionId = nextSession;
       state.messages = [];
       state.pending = [];
       state.comments = [];
+      state.supportName = "";
+      state.ticketTitle = "";
+      // O chamado anterior também não pode vazar: sem zerar ticketId, o painel
+      // de comentários da nova conversa carregava os comentários do ticket
+      // antigo (sessão avulsa, sem ticket, herdava o ticket da anterior).
+      state.ticketId = "";
+      state.commentsOpen = false;
+      // Um load de comentários da sessão anterior pode estar em voo; sem este
+      // reset o painel da sessão nova podia ficar preso em "Carregando…".
+      state.commentsLoading = false;
       // REVISÃO: o contador de mensagens pertence à conversa anterior — sem o
       // reset, o primeiro snapshot da conversa nova com MAIS mensagens que a
       // antiga marcava destaque de "mensagem não vista" indevidamente.
@@ -1130,14 +1223,29 @@
     call("SupportChatSendMessage", text, attachmentIDs)
       .then(function () {
         els.input.value = "";
-        state.pending = [];
+        // Remove APENAS os anexos que foram enviados nesta mensagem. Antes um
+        // "pending = []" descartava também uploads ainda em andamento: o
+        // arquivo terminava de subir mas nunca era enviado (sumia da tela).
+        var sent = {};
+        attachmentIDs.forEach(function (id) { sent[id] = true; });
+        state.pending = state.pending.filter(function (item) {
+          return !item.attachmentId || !sent[item.attachmentId];
+        });
         state.sending = false;
-        return refresh();
+        render();
+        // O snapshot é SEPARADO do envio. Antes ele fazia parte da mesma
+        // cadeia: se a mensagem fosse enviada mas o refresh falhasse, o catch
+        // mostrava "Falha ao enviar" — e o usuário reenviava o que já tinha
+        // ido. refresh() já trata os próprios erros.
+        refresh().catch(function () { /* refresh() já avisa */ });
       })
       .catch(function (err) {
         state.sending = false;
-        showBanner("Falha ao enviar: " + describe(err));
+        // render ANTES do banner: render() esconde o banner nos estados
+        // normais e a mensagem de erro era apagada no mesmo tick — o usuário
+        // via o envio falhar sem nenhum aviso.
         render();
+        showBanner("Falha ao enviar: " + describe(err));
       });
   }
 
@@ -1709,14 +1817,29 @@
       els.fileInput.value = "";
     });
 
+    // Anexos por colar/arrastar só pertencem ao chat de suporte quando a aba
+    // está em tela e o alvo está dentro dela. Antes o listener era global:
+    // colar um print no Chat IA (ou em qualquer outra aba) também enviava o
+    // arquivo para o chat de suporte, e o dragover/drop global bloqueava o
+    // comportamento nativo de outras telas.
+    function supportChatOwnsAttachmentTarget(target) {
+      var view = byId("supportChatView");
+      if (!view) return true; // janela dedicada (rollback): só existe o chat
+      if (!supportChatTabEmTela()) return false;
+      if (!target || target === document || target === document.body) return true;
+      return view.contains(target);
+    }
+
     document.addEventListener("paste", function (event) {
       if (!event.clipboardData || !event.clipboardData.files || !event.clipboardData.files.length) return;
+      if (!supportChatOwnsAttachmentTarget(event.target)) return;
       event.preventDefault();
       attachFiles(event.clipboardData.files);
     });
 
     ["dragover", "drop"].forEach(function (name) {
       document.addEventListener(name, function (event) {
+        if (!supportChatOwnsAttachmentTarget(event.target)) return;
         event.preventDefault();
         if (name === "drop" && event.dataTransfer && event.dataTransfer.files) {
           attachFiles(event.dataTransfer.files);
@@ -1728,6 +1851,15 @@
     on(els.inviteReject, "click", function () { respondInvite(false); });
 
     on(els.end, "click", askClose);
+
+    // Faixa de conversa encerrada: "Fechar" encerra a leitura e devolve a UI
+    // para Status; "Ir para Suporte" leva ao canal assíncrono (chamados), que
+    // é onde o usuário pode abrir uma nova conversa sobre o assunto.
+    on(els.endedClose, "click", function () { finishClose(); });
+    on(els.endedSupport, "click", function () {
+      if (typeof setActiveTab === "function") setActiveTab("support");
+      if (typeof loadSupportTickets === "function") loadSupportTickets();
+    });
 
     // Visor de imagem: "Salvar imagem" grava o arquivo aberto pelo backend
     // (Shift+clique abre o "Salvar como"). O clique não pode fechar o visor.
@@ -1776,11 +1908,22 @@
   function wireRealtime() {
     if (!window.wails || typeof window.wails.on !== "function") return;
 
+    // Sessão para a qual já pedimos o snapshot inicial de mensagens.
+    // O handler de estado NÃO pode pedir um snapshot a cada evento: refresh()
+    // emite supportchat:state e o handler pedia outro refresh — loop contínuo
+    // de GET /active + re-render (flicker/"friz" e carga no servidor).
+    var snapshotRequestedSession = "";
     window.wails.on("supportchat:state", function (payload) {
       applyState(payload);
-      // Evento de estado é sinal de vida do canal: com a conversa ainda não
-      // carregada, força um snapshot em vez de esperar o próximo timer.
-      requestSnapshotSoon();
+      // Só falta snapshot quando a conversa está ATIVA e o evento chegou sem
+      // transcript (caso do aceite: o POST responde antes de as mensagens
+      // serem carregadas). Uma vez por sessão; o próprio refresh emite o
+      // estado completo depois.
+      if (state.status === "active" && state.messages.length === 0 &&
+          state.chatSessionId && snapshotRequestedSession !== state.chatSessionId) {
+        snapshotRequestedSession = state.chatSessionId;
+        requestSnapshotSoon();
+      }
     });
     // O Go pede um recarregamento explícito (janela REUSADA no aceite: a
     // mesma janela passa de "convite" para "conversa" e precisa buscar a
@@ -1943,9 +2086,10 @@
       return;
     }
     var emTela = supportChatTabEmTela();
-    if (!emTela) {
-      supportChatUnseen = true;
-    }
+    // Aba em tela = mensagens vistas: limpa o destaque. Antes a flag antiga
+    // sobrevivia e o item voltava destacado numa sessão nova mesmo com o
+    // usuário olhando para ela.
+    supportChatUnseen = !emTela;
     btn.classList.toggle("sidebar-link--attention", supportChatUnseen);
     var badge = document.getElementById("tabSupportChatBadge");
     if (badge) badge.hidden = !supportChatUnseen;
