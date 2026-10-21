@@ -2002,22 +2002,30 @@
     // dedicada. Aqui o chat espera o primeiro supportchat:state/show (ou o
     // refresh do aceite); sem sessão pendente, nenhuma chamada de rede extra
     // no boot da UI.
+    if (!EMBEDDED_IN_MAIN_WINDOW) {
+      beginOpening();
+    }
+    applyState({ status: "none", connected: false, messages: [] });
+
+    // EMBUTIDO (janela principal): o boot NÃO é "janela do chat aberta" —
+    // beginOpening + retries eram o custo de NASCIMENTO da janela dedicada.
+    // O snapshot inicial roda APÓS o applyState inicial (contrato do
+    // bootstrap: a consulta de política não pode ser encadeada antes de
+    // carregar a conversa) e só ELEVA o estado (waiting/active): regressar a
+    // none depois de um waiting real recriava o bug do evento atrasado — nos
+    // ramos sem sessão apenas o flag de conexão muda, sem novo applyState.
     if (EMBEDDED_IN_MAIN_WINDOW) {
       call("SupportChatRefresh")
         .then(function (next) {
+          state.connected = true;
           if (next && (next.status === "waiting" || next.status === "active")) {
             beginOpening();
             applyState(next);
-          } else {
-            applyState({ status: "none", connected: true, messages: [] });
           }
         })
         .catch(function () {
-          applyState({ status: "none", connected: false, messages: [] });
+          state.connected = false;
         });
-    } else {
-      beginOpening();
-      applyState({ status: "none", connected: false, messages: [] });
     }
 
     // Sinal de "janela com conteúdo" para o Go (SupportChatWindowReady).
