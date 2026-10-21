@@ -211,8 +211,13 @@ func main() {
 			// Args do WebView2 para conter a memória do Chromium embutido (a
 			// interface é uma única página local, sem abas). Cada arg é reversível
 			// e independente: se algum quebrar o frontend, basta removê-lo da lista.
+			//
+			// AJUSTE 21/10: --renderer-process-limit=1 REMOVIDO — com o limite de
+			// 1 renderer, a SEGUNDA janela WebView2 (chat) não consegue renderer
+			// próprio e a criação dela trava na main thread (deadlock dentro do
+			// EmbeddedBrowserWebView.dll, dump ui-zombie-23468; reproduz também
+			// sem antivírus). O custo é um renderer extra por janela adicional.
 			AdditionalBrowserArgs: []string{
-				"--renderer-process-limit=1",
 				"--js-flags=--max-old-space-size=256",
 				"--disable-background-networking",
 			},
