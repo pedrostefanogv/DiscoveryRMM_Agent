@@ -1030,6 +1030,10 @@
       state.messages = [];
       state.pending = [];
       state.comments = [];
+      // REVISÃO: o contador de mensagens pertence à conversa anterior — sem o
+      // reset, o primeiro snapshot da conversa nova com MAIS mensagens que a
+      // antiga marcava destaque de "mensagem não vista" indevidamente.
+      applyState._lastCount = 0;
       state.commentsLoadedFor = "";
     } else if (nextSession) {
       state.chatSessionId = nextSession;

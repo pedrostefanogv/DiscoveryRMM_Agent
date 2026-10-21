@@ -1450,6 +1450,11 @@ func (a *App) reconcileSupportChat() {
 	// periodicamente durante a conversa.
 	windowOpen = windowOpen || a.supportChatTabShown.Load()
 	status := a.supportChatService().State().Status
+	// Sessão encerrou: a aba não está mais "exibindo uma conversa" — o flag
+	// sai para a próxima sessão começar limpa.
+	if status == supportchat.StatusEnded {
+		a.supportChatTabShown.Store(false)
+	}
 	tick := a.supportChatReconcileTicks.Add(1)
 
 	if !supportChatReconcileNeeded(windowOpen, status, tick) {
