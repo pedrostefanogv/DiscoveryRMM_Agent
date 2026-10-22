@@ -79,27 +79,52 @@
         </div>
       </div>
     </div>
-  </section>
-<div id="scConfirm" class="sc-modal-overlay" hidden>
-    <div class="sc-modal" role="dialog" aria-modal="true" aria-labelledby="scConfirmTitle">
-      <h3 id="scConfirmTitle">Encerrar o chat?</h3>
-      <p id="scConfirmText">Encerrar fecha esta janela e avisa o suporte. O histórico da conversa fica disponível no chamado.</p>
-      <div class="sc-modal-actions">
-        <button id="scConfirmCancel" type="button" class="sc-btn sc-btn--ghost">Continuar conversando</button>
-        <button id="scConfirmOk" type="button" class="sc-btn sc-btn--danger">Encerrar chat</button>
+    <!-- Modais DENTRO do painel do chat: o visor de imagem e a confirmação de
+         encerramento são position:absolute no escopo do painel (ver CSS) —
+         antes eram fixed cobrindo a janela INTEIRA e ficavam atrás do menu
+         lateral (z-index maior da sidebar). -->
+    <div id="scConfirm" class="sc-modal-overlay" hidden>
+      <div class="sc-modal" role="dialog" aria-modal="true" aria-labelledby="scConfirmTitle">
+        <h3 id="scConfirmTitle">Encerrar o chat?</h3>
+        <p id="scConfirmText">Encerrar fecha esta janela e avisa o suporte. O histórico da conversa fica disponível no chamado.</p>
+        <div class="sc-modal-actions">
+          <button id="scConfirmCancel" type="button" class="sc-btn sc-btn--ghost">Continuar conversando</button>
+          <button id="scConfirmOk" type="button" class="sc-btn sc-btn--danger">Encerrar chat</button>
+        </div>
       </div>
     </div>
-  </div>
 
-  <!-- Visor do anexo de imagem: o print enviado pelo suporte abre DENTRO da
-       janela (antes o clique só baixava o arquivo). Segue o mesmo padrão dos
-       modais — começa oculto e depende da regra .sc-modal-overlay[hidden]. -->
-  <div id="scAttachmentViewer" class="sc-modal-overlay sc-viewer" hidden>
-    <button id="scViewerClose" type="button" class="sc-viewer-close" aria-label="Fechar imagem">&times;</button>
-    <button id="scViewerSave" type="button" class="sc-viewer-save" title="Salvar imagem (Shift+clique para escolher onde salvar)">
-      Salvar imagem
-    </button>
-    <img id="scViewerImage" class="sc-viewer-image" alt="" />
-    <div id="scViewerCaption" class="sc-viewer-caption"></div>
-  </div>
+    <!-- Visor do anexo de imagem: o print enviado pelo suporte abre DENTRO da
+         área do chat (antes cobria a janela inteira, inclusive o menu). Segue
+         o mesmo padrão dos modais — começa oculto e depende da regra
+         .sc-modal-overlay[hidden]. -->
+    <div id="scAttachmentViewer" class="sc-modal-overlay sc-viewer" hidden>
+      <button id="scViewerClose" type="button" class="sc-viewer-close" aria-label="Fechar imagem">&times;</button>
+      <button id="scViewerSave" type="button" class="sc-viewer-save" title="Salvar imagem (Shift+clique para escolher onde salvar)">
+        Salvar imagem
+      </button>
+      <img id="scViewerImage" class="sc-viewer-image" alt="" />
+    <!-- Cartão de DOCUMENTO (PDF, planilha, zip...): além de salvar, dá as
+         ações abrir com o app padrão e abrir a pasta (selecionando o arquivo). -->
+    <div id="scViewerDoc" class="sc-viewer-doc" hidden>
+      <div class="sc-viewer-doc-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.8"
+          stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="12" y1="18" x2="12" y2="12" />
+          <polyline points="9 15 12 18 15 15" />
+        </svg>
+      </div>
+      <div id="scViewerDocName" class="sc-viewer-doc-name"></div>
+      <div class="sc-viewer-doc-actions">
+        <button id="scViewerOpen" type="button" class="sc-btn sc-btn--primary">Abrir arquivo</button>
+        <button id="scViewerFolder" type="button" class="sc-btn sc-btn--ghost">Abrir pasta</button>
+      </div>
+      <div class="sc-viewer-doc-hint">O arquivo é salvo antes de abrir (pasta de downloads do agent).</div>
+    </div>
+
+      <div id="scViewerCaption" class="sc-viewer-caption"></div>
+    </div>
+  </section>
 </main>

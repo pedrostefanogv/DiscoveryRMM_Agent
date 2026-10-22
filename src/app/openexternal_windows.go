@@ -53,6 +53,19 @@ func launchExternalTarget(path string) error {
 	return nil
 }
 
+// revealLocalFile abre a pasta do arquivo SELECIONANDO-o no Explorer
+// (explorer /select,"caminho"). O argumento único é quotado pelo Go — sem
+// shell intermediário, sem injeção.
+func revealLocalFile(path string) error {
+	cmd := exec.Command("explorer.exe", "/select,"+path)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("falha ao abrir a pasta de %s: %w", path, err)
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
 // lookupRegisteredAppPath procura o executável em App Paths do Registro
 // (HKLM e HKCU), que é como o "Executar" do Windows resolve nomes de app.
 func lookupRegisteredAppPath(name string) (string, bool) {

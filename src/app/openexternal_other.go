@@ -17,3 +17,9 @@ func launchExternalTarget(path string) error {
 }
 
 func lookupRegisteredAppPath(name string) (string, bool) { return "", false }
+
+// revealLocalFile: fora do Windows a tool de pastas já responde com erro
+// claro; o "abrir pasta" do chat segue o mesmo princípio (sem fingir sucesso).
+func revealLocalFile(path string) error {
+	return fmt.Errorf("revelar arquivo na pasta só é suportado no Windows")
+}

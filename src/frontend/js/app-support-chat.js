@@ -75,7 +75,10 @@
     viewerOwnsUrl: false,
     // Callback para salvar a imagem ABERTA no visor (recebe askPath). null
     // quando o visor foi aberto sem um anexo associado.
-    viewerSave: null
+    viewerSave: null,
+    // viewerDoc: anexo NÃO-imagem aberto no cartão de documento (PDF, planilha
+    // etc.). Preenchido por showDocumentViewer; null no modo imagem.
+    viewerDoc: null
   };
 
   // ── Cache de miniaturas ───────────────────────────────────────────────────
@@ -140,6 +143,10 @@
     els.viewerCaption = byId("scViewerCaption");
     els.viewerClose = byId("scViewerClose");
     els.viewerSave = byId("scViewerSave");
+    els.viewerDoc = byId("scViewerDoc");
+    els.viewerDocName = byId("scViewerDocName");
+    els.viewerOpen = byId("scViewerOpen");
+    els.viewerFolder = byId("scViewerFolder");
   }
 
   /**
@@ -1601,10 +1608,19 @@
     }
 
     // PDF, log, zip, csv, executável, anexo sem tipo e formatos de imagem que o
-    // WebView2 não renderiza: grava DIRETO em disco pelo Go (sem o painel de
-    // downloads do Edge e sem baixar de novo a cada clique).
-    if (!isImage || askPath) {
-      saveSupportChatAttachment(attachment, askPath);
+    // WebView2 não renderiza: abre o CARTÃO DE DOCUMENTO (abrir arquivo / abrir
+    // pasta / salvar como). Shift+clique continua indo direto para o
+    // "Salvar como" (atalho de quem já sabe o que quer).
+    if (!isImage) {
+      if (askPath) {
+        saveSupportChatAttachment(attachment, true);
+        return;
+      }
+      showDocumentViewer(attachment);
+      return;
+    }
+    if (askPath) {
+      saveSupportChatAttachment(attachment, true);
       return;
     }
 
@@ -1697,7 +1713,12 @@
     if (els.viewerSave) {
       els.viewerSave.hidden = !state.viewerSave;
       els.viewerSave.disabled = !state.viewerSave;
+      els.viewerSave.textContent = "Salvar imagem";
+      els.viewerSave.title = "Salvar imagem (Shift+clique para escolher onde salvar)";
     }
+    if (els.viewerDoc) els.viewerDoc.hidden = true;
+    state.viewerDoc = null;
+    if (els.viewerImage) els.viewerImage.hidden = false;
     if (els.viewerCaption) els.viewerCaption.textContent = fileName || "";
     if (els.viewerImage) {
       els.viewerImage.src = url;
@@ -1737,6 +1758,13 @@
     state.viewerUrl = null;
     state.viewerOwnsUrl = false;
     state.viewerSave = null;
+    state.viewerDoc = null;
+    if (els.viewerDoc) els.viewerDoc.hidden = true;
+    if (els.viewerImage) els.viewerImage.hidden = false;
+    if (els.viewerSave) {
+      els.viewerSave.textContent = "Salvar imagem";
+      els.viewerSave.title = "Salvar imagem (Shift+clique para escolher onde salvar)";
+    }
     if (els.viewerSave) {
       els.viewerSave.hidden = true;
       els.viewerSave.disabled = true;
@@ -1748,6 +1776,69 @@
       els.viewerImage.removeAttribute("src");
     }
     if (els.viewer) els.viewer.hidden = true;
+  }
+
+  /**
+   * Cartão de DOCUMENTO (PDF, planilha, zip...): além de salvar, oferece
+   * abrir com o app padrão e abrir a pasta selecionando o arquivo. Antes o
+   * clique no chip apenas salvava em disco com um banner fácil de perder — o
+   * usuário não tinha caminho nenhum para abrir o PDF.
+   *
+   * O arquivo é salvo (cache de caminho) antes das ações; o caminho vem do
+   * próprio backend e os bindings validam que existe antes de abrir.
+   */
+  function showDocumentViewer(attachment) {
+    closeAttachmentViewer();
+    if (!attachment) return;
+
+    state.viewerDoc = attachment;
+    state.viewerSave = function (askPath) { return saveSupportChatAttachment(attachment, askPath); };
+
+    var fileName = attachment.fileName || "anexo";
+    if (els.viewerDocName) els.viewerDocName.textContent = fileName;
+    if (els.viewerImage) {
+      // Sem src no modo documento (e sem handler de erro: não há imagem).
+      els.viewerImage.onerror = null;
+      els.viewerImage.removeAttribute("src");
+      els.viewerImage.hidden = true;
+    }
+    if (els.viewerSave) {
+      els.viewerSave.hidden = false;
+      els.viewerSave.disabled = false;
+      els.viewerSave.textContent = "Salvar como…";
+      els.viewerSave.title = "Salvar como… (escolher onde salvar)";
+    }
+    if (els.viewerDoc) els.viewerDoc.hidden = false;
+    if (els.viewer) els.viewer.hidden = false;
+  }
+
+  // ensureSavedDocument devolve o caminho em disco do anexo (salvando na
+  // primeira vez; chamadas seguintes usam o cache e só avisam onde está).
+  function ensureSavedDocument(attachment) {
+    var key = "chat:" + (attachment && attachment.id ? attachment.id : "");
+    if (key !== "chat:" && savedAttachmentPaths[key]) {
+      return Promise.resolve(savedAttachmentPaths[key]);
+    }
+    return saveSupportChatAttachment(attachment, false).then(function (path) {
+      return path || null;
+    });
+  }
+
+  function documentAction(kind) {
+    var attachment = state.viewerDoc;
+    if (!attachment) return;
+    ensureSavedDocument(attachment).then(function (path) {
+      if (!path) return; // saveSupportChatAttachment já avisou o erro
+      var method = kind === "folder" ? "SupportChatRevealAttachment" : "SupportChatOpenAttachment";
+      call(method, path)
+        .then(function () {
+          if (kind === "folder") showBanner("Pasta aberta no Explorer: " + path);
+          // "open": sem banner — o app padrão assume a cena.
+        })
+        .catch(function (err) {
+          showBanner("Não foi possível " + (kind === "folder" ? "abrir a pasta" : "abrir o arquivo") + ": " + describe(err));
+        });
+    });
   }
 
   // ── Encerramento ─────────────────────────────────────────────────────────
@@ -1899,6 +1990,10 @@
       if (typeof setActiveTab === "function") setActiveTab("support");
       if (typeof loadSupportTickets === "function") loadSupportTickets();
     });
+
+    // Cartão de documento: abrir com o app padrão / abrir a pasta.
+    on(els.viewerOpen, "click", function () { documentAction("open"); });
+    on(els.viewerFolder, "click", function () { documentAction("folder"); });
 
     // Visor de imagem: "Salvar imagem" grava o arquivo aberto pelo backend
     // (Shift+clique abre o "Salvar como"). O clique não pode fechar o visor.

@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -1548,6 +1550,40 @@ func (a *App) SupportChatRequestScreenshot() error {
 	}()
 
 	return nil
+}
+
+// SupportChatOpenAttachment abre o anexo JÁ SALVO em disco com o aplicativo
+// padrão do usuário (PDF no leitor, planilha no Excel...). O caminho vem da
+// própria UI (cache de caminhos devolvidos por SupportChatSaveAttachment) — o
+// binding só valida que existe e é arquivo antes de abrir.
+func (a *App) SupportChatOpenAttachment(path string) error {
+	p := strings.TrimSpace(path)
+	if p == "" {
+		return errSupportChatInvalidAttachment
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		return fmt.Errorf("arquivo não encontrado: %s", p)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("o caminho é uma pasta, não um arquivo: %s", p)
+	}
+	a.Logs.Append("[supportchat] abrindo anexo salvo com o app padrão: " + p)
+	return launchExternalTarget(p)
+}
+
+// SupportChatRevealAttachment abre a pasta do anexo no Explorer SELECIONANDO o
+// arquivo (o usuário vê exatamente onde ele foi salvo).
+func (a *App) SupportChatRevealAttachment(path string) error {
+	p := strings.TrimSpace(path)
+	if p == "" {
+		return errSupportChatInvalidAttachment
+	}
+	if _, err := os.Stat(p); err != nil {
+		return fmt.Errorf("arquivo não encontrado: %s", p)
+	}
+	a.Logs.Append("[supportchat] revelando anexo na pasta: " + p)
+	return revealLocalFile(p)
 }
 
 // SupportChatDownloadAttachment devolve o anexo em base64 + content type para

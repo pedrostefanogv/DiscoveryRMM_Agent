@@ -853,3 +853,108 @@ func TestAnexosPendentes_TemMiniaturaStatusEDescarte(t *testing.T) {
 		}
 	}
 }
+
+// REQUISITO (relato 21/10): o visor de imagem do chat de suporte abria com
+// position:fixed cobrindo a JANELA INTEIRA e ficava ATRÁS do menu lateral
+// (a sidebar tem z-index maior). Na aba embutida os modais precisam ser
+// absolute no escopo do painel do chat — só a área da conversa.
+func TestModaisDoChat_VisiveisSoNaAreaDoChat(t *testing.T) {
+	viewPath := filepath.Join("..", "..", "frontend", "partials", "views", "supportChatView.html")
+	view, err := os.ReadFile(viewPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", viewPath, err)
+	}
+	viewText := string(view)
+
+	panelClose := strings.LastIndex(viewText, "</section>")
+	if panelClose < 0 {
+		t.Fatal("painel do chat não encontrado na view")
+	}
+	for _, id := range []string{"scConfirm", "scAttachmentViewer"} {
+		idx := strings.Index(viewText, "id=\""+id+"\"")
+		if idx < 0 {
+			t.Fatalf("a view precisa conter %s", id)
+		}
+		if idx > panelClose {
+			t.Fatalf("%s precisa estar DENTRO do painel do chat (fora dele o modal fixed cobre a janela inteira e fica atrás do menu)", id)
+		}
+	}
+
+	cssPath := filepath.Join("..", "..", "frontend", "support-chat.css")
+	css, err := os.ReadFile(cssPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", cssPath, err)
+	}
+	cssText := string(css)
+	for _, rule := range []string{
+		"#supportChatView .chat-panel.support-chat-panel {\n  position: relative;",
+		"#supportChatView .sc-modal-overlay {\n  position: absolute;",
+		"#supportChatView .sc-viewer-image",
+	} {
+		if !strings.Contains(cssText, rule) {
+			t.Fatalf("support-chat.css precisa da regra %q para confinar os modais à área do chat", rule)
+		}
+	}
+
+	// A janela dedicada (rollback) continua com o modal na raiz do body
+	// (fixed): lá a janela inteira É o chat.
+	windowPath := filepath.Join("..", "..", "frontend", "chat-window.html")
+	windowHtml, err := os.ReadFile(windowPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", windowPath, err)
+	}
+	if !strings.Contains(string(windowHtml), "id=\"scAttachmentViewer\" class=\"sc-modal-overlay sc-viewer\" hidden") {
+		t.Fatal("chat-window.html precisa manter o visor de imagem no padrão dedicado")
+	}
+}
+
+// REQUISITO (relato 21/10): anexo NÃO-imagem (PDF, planilha, zip...) não tinha
+// nenhuma opção de abrir — o clique só salvava em disco com um banner fácil de
+// perder. Agora abre um cartão de documento com "Abrir arquivo" (app padrão),
+// "Abrir pasta" (explorer /select) e "Salvar como…", com bindings que validam
+// o caminho antes de executar.
+func TestAnexosDocumento_TemCartaoComAbrirAbrirPastaESalvar(t *testing.T) {
+	viewPath := filepath.Join("..", "..", "frontend", "partials", "views", "supportChatView.html")
+	windowPath := filepath.Join("..", "..", "frontend", "chat-window.html")
+	for _, f := range []string{viewPath, windowPath} {
+		html, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("não foi possível ler %s: %v", f, err)
+		}
+		for _, id := range []string{"scViewerDoc", "scViewerDocName", "scViewerOpen", "scViewerFolder"} {
+			if !strings.Contains(string(html), "id=\""+id+"\"") {
+				t.Fatalf("%s precisa conter id=%s (cartão de documento do visor)", f, id)
+			}
+		}
+	}
+
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := strings.ReplaceAll(string(js), "\r\n", "\n")
+	for _, needle := range []string{
+		"function showDocumentViewer(",
+		"SupportChatOpenAttachment",
+		"SupportChatRevealAttachment",
+		"scViewerOpen",
+		"scViewerFolder",
+		"Salvar como…",
+	} {
+		if !strings.Contains(jsText, needle) {
+			t.Fatalf("app-support-chat.js precisa de %q para o cartão de documento", needle)
+		}
+	}
+
+	cssPath := filepath.Join("..", "..", "frontend", "support-chat.css")
+	css, err := os.ReadFile(cssPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", cssPath, err)
+	}
+	for _, rule := range []string{".sc-viewer-doc {", ".sc-viewer-doc[hidden] { display: none; }", ".sc-viewer-doc-actions {"} {
+		if !strings.Contains(string(css), rule) {
+			t.Fatalf("support-chat.css precisa da regra %q do cartão de documento", rule)
+		}
+	}
+}

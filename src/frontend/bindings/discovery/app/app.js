@@ -2771,6 +2771,18 @@ export function SupportChatEnd(reason) {
 }
 
 /**
+ * SupportChatOpenAttachment abre o anexo JÁ SALVO em disco com o aplicativo
+ * padrão do usuário (PDF no leitor, planilha no Excel...). O caminho vem da
+ * própria UI (cache de caminhos devolvidos por SupportChatSaveAttachment) — o
+ * binding só valida que existe e é arquivo antes de abrir.
+ * @param {string} path
+ * @returns {$CancellablePromise<void>}
+ */
+export function SupportChatOpenAttachment(path) {
+    return $Call.ByID(1878413478, path);
+}
+
+/**
  * SupportChatOpenInviteWindow apresenta o CONVITE (cartão nativo) e é chamado
  * pelo processo de UI quando recebe `supportchat:invite` (o serviço, que recebe
  * o comando do servidor, não tem Wails para abrir janela).
@@ -2838,6 +2850,16 @@ export function SupportChatRequestScreenshot() {
  */
 export function SupportChatRespondInvite(accepted, reason) {
     return $Call.ByID(1226572069, accepted, reason);
+}
+
+/**
+ * SupportChatRevealAttachment abre a pasta do anexo no Explorer SELECIONANDO o
+ * arquivo (o usuário vê exatamente onde ele foi salvo).
+ * @param {string} path
+ * @returns {$CancellablePromise<void>}
+ */
+export function SupportChatRevealAttachment(path) {
+    return $Call.ByID(3768267911, path);
 }
 
 /**

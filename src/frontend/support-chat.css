@@ -441,6 +441,50 @@
   cursor: default;
 }
 
+/* ── Cartão de DOCUMENTO (PDF, planilha...) ─────────────────────────────
+   Anexo não-imagem não tem o que mostrar: em vez do visor vazio, um cartão
+   com o nome do arquivo e as ações abrir/salvar/abrir pasta. */
+.sc-viewer-doc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: min(420px, 86%);
+  padding: 20px 24px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+
+.sc-viewer-doc[hidden] { display: none; }
+
+.sc-viewer-doc-icon {
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.sc-viewer-doc-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: center;
+  word-break: break-all;
+}
+
+.sc-viewer-doc-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.sc-viewer-doc-hint {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+}
+
 .sc-viewer-caption {
   color: #fff;
   font-size: 12px;
@@ -530,6 +574,40 @@
   position: static;
   margin: 8px 12px 0;
 }
+/* ── Modais confinados à área do chat (view embutida) ────────────────────
+   O visor de imagem e a confirmação de encerramento eram position:fixed
+   cobrindo a JANELA INTEIRA — inclusive o menu lateral, sobre o qual ficavam
+   ATRÁS (a sidebar tem z-index maior). Dentro da aba embutida eles viram
+   absolute no escopo do painel do chat: cobrem só a área da conversa. A
+   janela dedicada (rollback) continua fixed — lá a janela inteira É o chat. */
+#supportChatView .chat-panel.support-chat-panel {
+  position: relative;
+}
+
+#supportChatView .sc-modal-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+}
+
+/* Os limites da imagem passam a ser do PAINEL (não do viewport). */
+#supportChatView .sc-viewer-image {
+  max-width: 94%;
+  max-height: 82%;
+}
+
+/* O painel inclui a statusbar no topo: desce os botões do visor para não
+   colidir com o chip/técnico/Encerrar (na janela dedicada ficam no topo mesmo). */
+#supportChatView .sc-viewer-close {
+  top: 58px;
+  right: 18px;
+}
+
+#supportChatView .sc-viewer-save {
+  top: 60px;
+  left: 18px;
+}
+
 /* Técnico em linha na statusbar. */
 .sc-technician-inline {
   font-size: 12px;

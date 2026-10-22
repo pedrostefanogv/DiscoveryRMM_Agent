@@ -65,3 +65,26 @@ func TestSupportChatConfirmClose_FalhaRemotaNaoImpedeFechamentoLocal(t *testing.
 		t.Fatalf("o estado local deveria ser limpo; obtido %q", got)
 	}
 }
+
+// Os bindings validam o caminho ANTES de executar qualquer abertura (os erros
+// abaixo não tocam no Explorer).
+func TestSupportChatOpenRevealAttachment_ValidaCaminho(t *testing.T) {
+	a := newSupportChatTestApp(t, "http://127.0.0.1:1")
+
+	if err := a.SupportChatOpenAttachment(""); err == nil {
+		t.Fatal("caminho vazio precisa ser recusado")
+	}
+	if err := a.SupportChatOpenAttachment("Z:\\definitivamente\\nao\\existe\\arquivo.pdf"); err == nil {
+		t.Fatal("arquivo inexistente precisa ser recusado")
+	}
+	if err := a.SupportChatRevealAttachment(""); err == nil {
+		t.Fatal("caminho vazio precisa ser recusado (reveal)")
+	}
+	if err := a.SupportChatRevealAttachment("Z:\\definitivamente\\nao\\existe\\arquivo.pdf"); err == nil {
+		t.Fatal("arquivo inexistente precisa ser recusado (reveal)")
+	}
+	dir := t.TempDir()
+	if err := a.SupportChatOpenAttachment(dir); err == nil {
+		t.Fatal("abrir uma PASTA precisa ser recusado (é arquivo que se abre)")
+	}
+}
