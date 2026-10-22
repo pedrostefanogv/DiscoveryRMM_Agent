@@ -671,12 +671,18 @@ func (m *Manager) publishEventLegacy(sessionID, eventType string, data any) {
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})
 	// Fallback: publica no subject legacy; sera substituido quando natsStream configurado
-	_ = m.nc.Publish(fmt.Sprintf("agent.remote.session.%s.event", sessionID), payload)
+	if pubErr := m.nc.Publish(fmt.Sprintf("agent.remote.session.%s.event", sessionID), payload); pubErr != nil {
+		// A5 (auditoria 2026-10-21): entrega silenciada dificultava diagnosticar
+		// sessões sem eventos no console.
+		log.Printf("[remote-session] falha ao publicar evento %s da sessão %s: %v\n", eventType, sessionID, pubErr)
+	}
 }
 
 func (m *Manager) publishEvent(sessionID, eventType string, data any) {
 	if m.natsStream != nil {
-		_ = m.natsStream.PublishEvent(sessionID, eventType, data)
+		if pubErr := m.natsStream.PublishEvent(sessionID, eventType, data); pubErr != nil {
+			log.Printf("[remote-session] falha no PublishEvent %s da sessão %s: %v\n", eventType, sessionID, pubErr)
+		}
 		return
 	}
 	m.publishEventLegacy(sessionID, eventType, data)
@@ -906,8 +912,11 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 
 	// Publica a lista de monitores do agent para o viewer (seletor dinâmico).
 	if mons, err := screen.GetMonitors(); err == nil && len(mons) > 0 {
-		_ = m.natsStream.PublishMonitors(session.ID, mons)
-		log.Printf("[remote-session-screen] %d monitor(es) publicado(s) para sessao %s\n", len(mons), session.ID)
+		if pubErr := m.natsStream.PublishMonitors(session.ID, mons); pubErr != nil {
+			log.Printf("[remote-session-screen] falha ao publicar monitors da sessao %s: %v\n", session.ID, pubErr)
+		} else {
+			log.Printf("[remote-session-screen] %d monitor(es) publicado(s) para sessao %s\n", len(mons), session.ID)
+		}
 	}
 
 	// Registra referencia para permitir handleQuality propagar mudancas

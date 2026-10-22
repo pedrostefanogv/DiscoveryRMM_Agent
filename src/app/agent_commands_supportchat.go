@@ -255,7 +255,7 @@ func (a *App) scheduleSupportChatInviteRedelivery(invite supportchat.Invite) {
 	go func() {
 		started := time.Now()
 		extended := false
-			deadline := time.NewTimer(supportChatInviteUIWait)
+		deadline := time.NewTimer(supportChatInviteUIWait)
 		defer deadline.Stop()
 
 		ticker := time.NewTicker(supportChatInviteUIPoll)

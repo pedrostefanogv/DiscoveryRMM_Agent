@@ -12,5 +12,7 @@ export {
     AgentNotificationStyleOverride,
     AgentPSADTConfig,
     AgentRolloutConfig,
+    MCPToolPolicyConfig,
+    MaintenanceWindowConfig,
     NotificationThemeConfig
 } from "./models.js";

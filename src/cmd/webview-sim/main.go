@@ -91,7 +91,7 @@ func main() {
 	runtime.LockOSThread()
 	var modOle32 = windows.NewLazySystemDLL("ole32.dll")
 	hr, _, _ := modOle32.NewProc("CoInitializeEx").Call(0, 2) // 2 = COINIT_APARTMENTTHREADED
-	if hr != 0 && hr != 1 { // S_OK=0, S_FALSE=1
+	if hr != 0 && hr != 1 {                                   // S_OK=0, S_FALSE=1
 		fmt.Printf("CoInitializeEx: HRESULT 0x%08x\n", hr)
 		os.Exit(1)
 	}
@@ -125,9 +125,9 @@ func main() {
 	app := application.New(application.Options{
 		Name: "webview-sim-" + modo,
 		Windows: application.WindowsOptions{
-			WebviewUserDataPath:  udf,
+			WebviewUserDataPath:   udf,
 			AdditionalBrowserArgs: args,
-			DisabledFeatures:     []string{"msEdgeSidebarV2", "msEdgeAutofill"},
+			DisabledFeatures:      []string{"msEdgeSidebarV2", "msEdgeAutofill"},
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -171,15 +171,15 @@ func main() {
 			Height:    300,
 			URL:       "/index.html",
 			Frameless: frameless,
-		}, "w1 visivel (frameless=" + bools(frameless) + ")")
+		}, "w1 visivel (frameless="+bools(frameless)+")")
 
 		time.Sleep(4 * time.Second) // assenta: navegação/pintura da w1 concluída
 
-		criaJanela(app, chatOpts("SIM W2 oculta (" + modo + ")", true), "w2 oculta estilo chat")
+		criaJanela(app, chatOpts("SIM W2 oculta ("+modo+")", true), "w2 oculta estilo chat")
 
 		time.Sleep(2 * time.Second)
 
-		criaJanela(app, chatOpts("SIM W3 visivel (" + modo + ")", false), "w3 visivel estilo chat")
+		criaJanela(app, chatOpts("SIM W3 visivel ("+modo+")", false), "w3 visivel estilo chat")
 
 		fmt.Printf("[%s] === modo %s: completo sem travamento ===\n", ts(), modo)
 		close(fecharCartao)

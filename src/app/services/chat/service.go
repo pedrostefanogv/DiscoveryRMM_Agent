@@ -107,6 +107,11 @@ type DebugConfig struct {
 // AgentConfiguration is a minimal view used by chat.
 type AgentConfiguration struct {
 	ChatAIEnabled *bool
+	// MCPToolMode: "all" (default/compat) | "allowlist" — política de tools
+	// MCP por tenant. Vazio = "all".
+	MCPToolMode string
+	// MCPToolAllow: tools permitidas quando MCPToolMode == "allowlist".
+	MCPToolAllow []string
 }
 
 // Service encapsulates the chat domain logic.
@@ -571,8 +576,29 @@ func parseToolArgs(argsJSON string) (map[string]any, error) {
 	return args, nil
 }
 
+// mcpToolPolicy devolve a política de tools MCP efetiva (mode + allow).
+// Dep nil/ausente → "all" (compat: zero mudança de comportamento).
+func (s *Service) mcpToolPolicy() (string, []string) {
+	if s == nil || s.getAgentConfig == nil {
+		return mcp.MCPToolPolicyModeAll, nil
+	}
+	cfg := s.getAgentConfig()
+	if cfg.MCPToolMode == "" && len(cfg.MCPToolAllow) == 0 {
+		return mcp.MCPToolPolicyModeAll, nil
+	}
+	return cfg.MCPToolMode, cfg.MCPToolAllow
+}
+
 func (s *Service) mcpExecuteForChat(ctx context.Context, toolName, argsJSON string) (string, error) {
 	args, argsErr := parseToolArgs(argsJSON)
+
+	// Gate de allowlist de tools MCP por tenant (mcpToolPolicy): mode
+	// "allowlist" só executa tools da lista; "all" (default/compat) não muda
+	// nada. Camada ADICIONAL: o consentimento de destrutivas continua valendo.
+	mode, allow := s.mcpToolPolicy()
+	if err := mcp.ToolAllowedByPolicy(mode, allow, toolName); err != nil {
+		return "", err
+	}
 
 	// Gate de consentimento: tools/ações com efeito no computador (gravar
 	// arquivo, instalar/desinstalar, parar serviço, reiniciar...) exigem

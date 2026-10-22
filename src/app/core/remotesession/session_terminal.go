@@ -23,9 +23,9 @@ import (
 // ── Constantes de timing do terminal ──
 
 const (
-	termOutputCoalesceMs = 16        // debounce de coalescimento (~60Hz)
-	termMaxMsgPerSec     = 60        // rate limit maximo de mensagens/segundo
-	termRateWindowMs     = 100       // janela deslizante para rate limit
+	termOutputCoalesceMs = 16  // debounce de coalescimento (~60Hz)
+	termMaxMsgPerSec     = 60  // rate limit maximo de mensagens/segundo
+	termRateWindowMs     = 100 // janela deslizante para rate limit
 	// termMaxInputSize: limite de input por mensagem medido em bytes
 	// DECODIFICADOS (base64 decodificado — o payload real que chega ao shell).
 	// A comparação é sempre sobre o tamanho decodificado, nunca sobre o texto
@@ -631,7 +631,11 @@ func (rt *RecordingTap) WriteFrame(kind, data string, seq int64, exitCode *int, 
 	if err != nil {
 		return
 	}
-	_ = rt.natsStream.PublishRecordingTerm(rt.sessionID, payload)
+	if pubErr := rt.natsStream.PublishRecordingTerm(rt.sessionID, payload); pubErr != nil {
+		// A5 (auditoria 2026-10-21): perda de frames de gravação silenciada
+		// produzia gravações truncadas sem rastro.
+		log.Printf("[remote-terminal] falha ao publicar frame de gravação da sessão %s: %v\n", rt.sessionID, pubErr)
+	}
 }
 
 // SetEnabled habilita/desabilita gravacao, thread-safe.
@@ -915,7 +919,9 @@ func (st *SessionTerminal) SetReadyPayload(payload []byte) {
 	st.readyRequested = false
 	st.mu.Unlock()
 	if send {
-		_ = st.natsStream.PublishTermOut(st.sessionID, string(payload))
+		if pubErr := st.natsStream.PublishTermOut(st.sessionID, string(payload)); pubErr != nil {
+			log.Printf("[remote-terminal] falha ao publicar saída do terminal da sessão %s: %v\n", st.sessionID, pubErr)
+		}
 	}
 }
 
@@ -1564,7 +1570,9 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		}
 		st.mu.Unlock()
 		if len(rp) > 0 {
-			_ = st.natsStream.PublishTermOut(st.sessionID, string(rp))
+			if pubErr := st.natsStream.PublishTermOut(st.sessionID, string(rp)); pubErr != nil {
+				log.Printf("[remote-terminal] falha ao publicar replay da sessão %s: %v\n", st.sessionID, pubErr)
+			}
 		}
 
 		// Replay do que o viewer perdeu enquanto o WebSocket esteve caído.

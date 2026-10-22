@@ -29,6 +29,11 @@ type RestPollerConfig struct {
 	AgentID      string
 	Limit        int
 	PollInterval time.Duration
+
+	// C2: pin de TLS do certificado da API (SHA-256 hex) e chave de enforce.
+	// Enforce=false mantém o comportamento anterior (validação padrão apenas).
+	TLSHash    string
+	EnforceTLS bool
 }
 
 // RestCommand representa um comando recebido via REST polling.
@@ -57,7 +62,7 @@ func NewRestCommandPoller(cfg RestPollerConfig) *RestCommandPoller {
 		cfg.PollInterval = 30 * time.Second
 	}
 	return &RestCommandPoller{
-		httpClient: tlsutil.NewHTTPClient(20 * time.Second),
+		httpClient: tlsutil.NewPinnedHTTPClient(20*time.Second, cfg.TLSHash, cfg.EnforceTLS),
 		config:     cfg,
 	}
 }

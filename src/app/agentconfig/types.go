@@ -81,6 +81,31 @@ type AgentConsolidationPolicy struct {
 	WindowMode string `json:"windowMode"`
 }
 
+// MaintenanceWindowConfig define a janela de manutenção (herdável
+// server→client→site). Campos em pointer seguem o padrão existente: nil =
+// herda/usa default.
+type MaintenanceWindowConfig struct {
+	// Enabled é o kill switch: nil/false = janela desligada (comportamento atual).
+	Enabled *bool `json:"enabled"`
+	// DaysOfWeek: 1=domingo..7=sábado; vazio = todos os dias.
+	DaysOfWeek []int `json:"daysOfWeek"`
+	// StartUTC é o início da janela em UTC ("HH:mm").
+	StartUTC string `json:"startUtc"`
+	// DurationMinutes: duração em minutos; nil = 60.
+	DurationMinutes *int `json:"durationMinutes"`
+	// RebootGraceSeconds: aviso ao usuário antes do reboot coordenado;
+	// nil = 60; 0 = sem aviso (reboot imediato como hoje).
+	RebootGraceSeconds *int `json:"rebootGraceSeconds"`
+}
+
+// MCPToolPolicyConfig define a allowlist de tools MCP por tenant.
+type MCPToolPolicyConfig struct {
+	// Mode: "all" (default, compat) | "allowlist".
+	Mode *string `json:"mode"`
+	// Allow: nomes de tools permitidas quando mode=allowlist.
+	Allow []string `json:"allow"`
+}
+
 // AgentConsolidationConfig groups feature flags and policies for send windows.
 type AgentConsolidationConfig struct {
 	Enabled  *bool                      `json:"enabled"`
@@ -136,6 +161,10 @@ type AgentConfiguration struct {
 	// (registro/log/serviço, sem WUA) que dispara o scan quando a assinatura
 	// muda. nil = default (5 min, mínimo 30s — abaixo de 1 min é arredondado).
 	WindowsUpdateStateIntervalMinutes *int `json:"windowsUpdateStateIntervalMinutes"`
+	// MaintenanceWindow: janela de manutenção (nil = desligada).
+	MaintenanceWindow *MaintenanceWindowConfig `json:"maintenanceWindow"`
+	// MCPToolPolicy: allowlist de tools MCP por tenant (nil = mode "all").
+	MCPToolPolicy *MCPToolPolicyConfig `json:"mcpToolPolicy"`
 }
 
 // ServerConfiguration representa a configuração global do servidor (API v1).
@@ -178,73 +207,80 @@ type ServerConfiguration struct {
 	WindowsUpdateEnabled *bool `json:"windowsUpdateEnabled"`
 	// Cadencia do scan WUA em minutos (nil = default 360, minimo 60).
 	WindowsUpdateScanIntervalMinutes *int `json:"windowsUpdateScanIntervalMinutes"`
+	// Janela de manutenção e allowlist de tools MCP (server level).
+	MaintenanceWindow *MaintenanceWindowConfig `json:"maintenanceWindow"`
+	MCPToolPolicy     *MCPToolPolicyConfig     `json:"mcpToolPolicy"`
 }
 
 // ClientConfiguration representa a configuração no nível do cliente (API v1).
 type ClientConfiguration struct {
-	ID                                string  `json:"id"`
-	ClientID                          string  `json:"clientId"`
-	RecoveryEnabled                   *bool   `json:"recoveryEnabled"`
-	DiscoveryEnabled                  *bool   `json:"discoveryEnabled"`
-	P2PFilesEnabled                   *bool   `json:"p2PFilesEnabled"`
-	CloudBootstrapEnabled             *bool   `json:"cloudBootstrapEnabled"`
-	SupportEnabled                    *bool   `json:"supportEnabled"`
-	ChatAIEnabled                     *bool   `json:"chatAIEnabled"`
-	KnowledgeBaseEnabled              *bool   `json:"knowledgeBaseEnabled"`
-	ZeroTouchEnabled                  *bool   `json:"zeroTouchEnabled"`
-	AppStorePolicy                    *string `json:"appStorePolicy"`
-	AutomationP2PWingetInstallEnabled *bool   `json:"automationP2pWingetInstallEnabled"`
-	AgentHomeTab                      *string `json:"agentHomeTab"`
-	AIIntegrationSettingsJSON         *string `json:"aiIntegrationSettingsJson"`
-	InventoryIntervalHours            *int    `json:"inventoryIntervalHours"`
-	AgentUpdatePolicyJSON             *string `json:"agentUpdatePolicyJson"`
-	AgentHeartbeatIntervalSeconds     *int    `json:"agentHeartbeatIntervalSeconds"`
-	AgentOnlineGraceSeconds           *int    `json:"agentOnlineGraceSeconds"`
-	LockedFieldsJSON                  string  `json:"lockedFieldsJson"`
-	CreatedAt                         string  `json:"createdAt"`
-	UpdatedAt                         string  `json:"updatedAt"`
-	CreatedBy                         *string `json:"createdBy"`
-	UpdatedBy                         *string `json:"updatedBy"`
-	Version                           int     `json:"version"`
-	StartupThrottleEnabled            *bool   `json:"startupThrottleEnabled"`
-	StartupMaxCPUPercent              *int    `json:"startupMaxCPUPercent"`
-	WindowsUpdateEnabled              *bool   `json:"windowsUpdateEnabled"`
-	WindowsUpdateScanIntervalMinutes  *int    `json:"windowsUpdateScanIntervalMinutes"`
+	ID                                string                   `json:"id"`
+	ClientID                          string                   `json:"clientId"`
+	RecoveryEnabled                   *bool                    `json:"recoveryEnabled"`
+	DiscoveryEnabled                  *bool                    `json:"discoveryEnabled"`
+	P2PFilesEnabled                   *bool                    `json:"p2PFilesEnabled"`
+	CloudBootstrapEnabled             *bool                    `json:"cloudBootstrapEnabled"`
+	SupportEnabled                    *bool                    `json:"supportEnabled"`
+	ChatAIEnabled                     *bool                    `json:"chatAIEnabled"`
+	KnowledgeBaseEnabled              *bool                    `json:"knowledgeBaseEnabled"`
+	ZeroTouchEnabled                  *bool                    `json:"zeroTouchEnabled"`
+	AppStorePolicy                    *string                  `json:"appStorePolicy"`
+	AutomationP2PWingetInstallEnabled *bool                    `json:"automationP2pWingetInstallEnabled"`
+	AgentHomeTab                      *string                  `json:"agentHomeTab"`
+	AIIntegrationSettingsJSON         *string                  `json:"aiIntegrationSettingsJson"`
+	InventoryIntervalHours            *int                     `json:"inventoryIntervalHours"`
+	AgentUpdatePolicyJSON             *string                  `json:"agentUpdatePolicyJson"`
+	AgentHeartbeatIntervalSeconds     *int                     `json:"agentHeartbeatIntervalSeconds"`
+	AgentOnlineGraceSeconds           *int                     `json:"agentOnlineGraceSeconds"`
+	LockedFieldsJSON                  string                   `json:"lockedFieldsJson"`
+	CreatedAt                         string                   `json:"createdAt"`
+	UpdatedAt                         string                   `json:"updatedAt"`
+	CreatedBy                         *string                  `json:"createdBy"`
+	UpdatedBy                         *string                  `json:"updatedBy"`
+	Version                           int                      `json:"version"`
+	StartupThrottleEnabled            *bool                    `json:"startupThrottleEnabled"`
+	StartupMaxCPUPercent              *int                     `json:"startupMaxCPUPercent"`
+	WindowsUpdateEnabled              *bool                    `json:"windowsUpdateEnabled"`
+	WindowsUpdateScanIntervalMinutes  *int                     `json:"windowsUpdateScanIntervalMinutes"`
+	MaintenanceWindow                 *MaintenanceWindowConfig `json:"maintenanceWindow"`
+	MCPToolPolicy                     *MCPToolPolicyConfig     `json:"mcpToolPolicy"`
 }
 
 // SiteConfiguration representa a configuração no nível do site (API v1).
 type SiteConfiguration struct {
-	ID                                string  `json:"id"`
-	SiteID                            string  `json:"siteId"`
-	ClientID                          string  `json:"clientId"`
-	RecoveryEnabled                   *bool   `json:"recoveryEnabled"`
-	DiscoveryEnabled                  *bool   `json:"discoveryEnabled"`
-	P2PFilesEnabled                   *bool   `json:"p2PFilesEnabled"`
-	SupportEnabled                    *bool   `json:"supportEnabled"`
-	ChatAIEnabled                     *bool   `json:"chatAIEnabled"`
-	KnowledgeBaseEnabled              *bool   `json:"knowledgeBaseEnabled"`
-	ZeroTouchEnabled                  *bool   `json:"zeroTouchEnabled"`
-	AppStorePolicy                    *string `json:"appStorePolicy"`
-	AutomationP2PWingetInstallEnabled *bool   `json:"automationP2pWingetInstallEnabled"`
-	AgentHomeTab                      *string `json:"agentHomeTab"`
-	AIIntegrationSettingsJSON         *string `json:"aiIntegrationSettingsJson"`
-	InventoryIntervalHours            *int    `json:"inventoryIntervalHours"`
-	AgentUpdatePolicyJSON             *string `json:"agentUpdatePolicyJson"`
-	AgentOnlineGraceSeconds           *int    `json:"agentOnlineGraceSeconds"`
-	Timezone                          *string `json:"timezone"`
-	Location                          *string `json:"location"`
-	ContactPerson                     *string `json:"contactPerson"`
-	ContactEmail                      *string `json:"contactEmail"`
-	LockedFieldsJSON                  string  `json:"lockedFieldsJson"`
-	CreatedAt                         string  `json:"createdAt"`
-	UpdatedAt                         string  `json:"updatedAt"`
-	CreatedBy                         *string `json:"createdBy"`
-	UpdatedBy                         *string `json:"updatedBy"`
-	Version                           int     `json:"version"`
-	StartupThrottleEnabled            *bool   `json:"startupThrottleEnabled"`
-	StartupMaxCPUPercent              *int    `json:"startupMaxCPUPercent"`
-	WindowsUpdateEnabled              *bool   `json:"windowsUpdateEnabled"`
-	WindowsUpdateScanIntervalMinutes  *int    `json:"windowsUpdateScanIntervalMinutes"`
+	ID                                string                   `json:"id"`
+	SiteID                            string                   `json:"siteId"`
+	ClientID                          string                   `json:"clientId"`
+	RecoveryEnabled                   *bool                    `json:"recoveryEnabled"`
+	DiscoveryEnabled                  *bool                    `json:"discoveryEnabled"`
+	P2PFilesEnabled                   *bool                    `json:"p2PFilesEnabled"`
+	SupportEnabled                    *bool                    `json:"supportEnabled"`
+	ChatAIEnabled                     *bool                    `json:"chatAIEnabled"`
+	KnowledgeBaseEnabled              *bool                    `json:"knowledgeBaseEnabled"`
+	ZeroTouchEnabled                  *bool                    `json:"zeroTouchEnabled"`
+	AppStorePolicy                    *string                  `json:"appStorePolicy"`
+	AutomationP2PWingetInstallEnabled *bool                    `json:"automationP2pWingetInstallEnabled"`
+	AgentHomeTab                      *string                  `json:"agentHomeTab"`
+	AIIntegrationSettingsJSON         *string                  `json:"aiIntegrationSettingsJson"`
+	InventoryIntervalHours            *int                     `json:"inventoryIntervalHours"`
+	AgentUpdatePolicyJSON             *string                  `json:"agentUpdatePolicyJson"`
+	AgentOnlineGraceSeconds           *int                     `json:"agentOnlineGraceSeconds"`
+	Timezone                          *string                  `json:"timezone"`
+	Location                          *string                  `json:"location"`
+	ContactPerson                     *string                  `json:"contactPerson"`
+	ContactEmail                      *string                  `json:"contactEmail"`
+	LockedFieldsJSON                  string                   `json:"lockedFieldsJson"`
+	CreatedAt                         string                   `json:"createdAt"`
+	UpdatedAt                         string                   `json:"updatedAt"`
+	CreatedBy                         *string                  `json:"createdBy"`
+	UpdatedBy                         *string                  `json:"updatedBy"`
+	Version                           int                      `json:"version"`
+	StartupThrottleEnabled            *bool                    `json:"startupThrottleEnabled"`
+	StartupMaxCPUPercent              *int                     `json:"startupMaxCPUPercent"`
+	WindowsUpdateEnabled              *bool                    `json:"windowsUpdateEnabled"`
+	WindowsUpdateScanIntervalMinutes  *int                     `json:"windowsUpdateScanIntervalMinutes"`
+	MaintenanceWindow                 *MaintenanceWindowConfig `json:"maintenanceWindow"`
+	MCPToolPolicy                     *MCPToolPolicyConfig     `json:"mcpToolPolicy"`
 }
 
 // AgentConfigResponse é o wrapper completo retornado por GET /me/configuration (API v1).

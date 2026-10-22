@@ -54,11 +54,25 @@ func launchExternalTarget(path string) error {
 }
 
 // revealLocalFile abre a pasta do arquivo SELECIONANDO-o no Explorer
-// (explorer /select,"caminho"). O argumento único é quotado pelo Go — sem
-// shell intermediário, sem injeção.
+// (explorer /select,"caminho").
+//
+// Dois bugs corrigidos aqui (o binding "funcionava" — Start ok, log ok — e
+// nada aparecia na tela):
+//
+//  1. HideWindow fazia a janela nascer oculta. Explorer é GUI: não há console
+//     para esconder; sem o HideWindow o /select abre (verificado).
+//  2. Passar o /select como ARGV do exec não sobrevive a caminhos com espaço:
+//     o Go escapa as aspas embutidas como \" e o Explorer, que faz parsing CRU
+//     da linha de comando, ignora o /select e abre uma pasta padrão. A linha
+//     crua via SysProcAttr.CmdLine entrega exatamente
+//     explorer.exe /select,"C:\caminho com espaço\arquivo.pdf" — a única
+//     forma que o shell entende (verificado: janela abre na pasta certa, com
+//     e sem espaço no caminho).
 func revealLocalFile(path string) error {
-	cmd := exec.Command("explorer.exe", "/select,"+path)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd := exec.Command("explorer.exe")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CmdLine: "explorer.exe /select,\"" + path + "\"",
+	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("falha ao abrir a pasta de %s: %w", path, err)
 	}

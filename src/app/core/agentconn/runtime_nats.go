@@ -12,6 +12,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"discovery/app/core/tlsutil"
 	"discovery/app/netutil"
 )
 
@@ -86,6 +87,17 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 	if wsProxyPath != "" {
 		opts = append(opts, nats.ProxyPath(wsProxyPath))
 		r.logf("[transport][%s] websocket proxyPath aplicado: %s", transportLabel, wsProxyPath)
+	}
+
+	// C2: pin de TLS no transporte WSS. EnforceTLSHashValidation=true ativa o
+	// VerifyPeerCertificate que compara o SHA-256 do certificado folha com
+	// NatsTLSCertHash (publicado na configuração efetiva do servidor). Sem
+	// enforce, o comportamento anterior é preservado (pin apenas reportado).
+	if u, urlErr := url.Parse(natsURL); urlErr == nil && strings.EqualFold(u.Scheme, "wss") {
+		opts = append(opts, nats.Secure(tlsutil.PinnedTLSConfig(cfg.NatsTLSCertHash, cfg.EnforceTLSHashValidation)))
+		if cfg.EnforceTLSHashValidation {
+			r.logf("[transport][%s] pin TLS ativo (hash publicado=%t)", transportLabel, strings.TrimSpace(cfg.NatsTLSCertHash) != "")
+		}
 	}
 	authToken, err := netutil.NormalizeAgentToken(cfg.AuthToken)
 	if err != nil {

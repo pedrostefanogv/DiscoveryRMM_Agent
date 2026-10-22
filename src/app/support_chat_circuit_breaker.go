@@ -32,9 +32,9 @@ const (
 )
 
 type chatWindowBreakerState struct {
-	Until     int64   `json:"until"`      // unix nanos
-	Failures  int     `json:"failures"`
-	LastLabel string  `json:"lastLabel,omitempty"`
+	Until     int64  `json:"until"` // unix nanos
+	Failures  int    `json:"failures"`
+	LastLabel string `json:"lastLabel,omitempty"`
 }
 
 var chatWindowBreakerMu sync.Mutex

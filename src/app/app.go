@@ -522,7 +522,12 @@ func NewApp(opts AppStartupOptions) *App {
 		},
 		GetAgentConfiguration: func() chat.AgentConfiguration {
 			cfg := a.GetAgentConfiguration()
-			return chat.AgentConfiguration{ChatAIEnabled: cfg.ChatAIEnabled}
+			mode, allow := cfg.MCPToolPolicy.EffectiveMCPToolPolicy()
+			return chat.AgentConfiguration{
+				ChatAIEnabled: cfg.ChatAIEnabled,
+				MCPToolMode:   mode,
+				MCPToolAllow:  allow,
+			}
 		},
 		BeginActivity:    a.beginActivity,
 		EmitEvent:        a.EmitEvent,

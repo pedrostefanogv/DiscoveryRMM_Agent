@@ -146,7 +146,7 @@ func writeMiniDumpInProcess(path string) bool {
 		uintptr(hProcess),
 		uintptr(uint32(os.Getpid())),
 		f.Fd(),
-		0,      // MiniDumpNormal
+		0,       // MiniDumpNormal
 		0, 0, 0, // ExceptionParam, UserStreamParam, CallbackParam
 	)
 	return ret != 0

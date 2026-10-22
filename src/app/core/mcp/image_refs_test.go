@@ -229,8 +229,8 @@ func TestValidateImageDataURL(t *testing.T) {
 		validImageDataURL("image/jpeg"): "image/jpeg",
 		// image/jpg é normalizado para o MIME padrão aceito pela policy.
 		"data:image/jpg;base64," + base64.StdEncoding.EncodeToString(testJPEGData): "image/jpeg",
-		validImageDataURL("image/webp"): "image/webp",
-		validImageDataURL("image/gif"):  "image/gif",
+		validImageDataURL("image/webp"):                                            "image/webp",
+		validImageDataURL("image/gif"):                                             "image/gif",
 	}
 	for dataURL, wantType := range valid {
 		contentType, data, err := validateImageDataURL(dataURL)
@@ -248,9 +248,9 @@ func TestValidateImageDataURL(t *testing.T) {
 		"http://exemplo/imagem.png",
 		"data:text/plain;base64,AQID",
 		"data:image/svg+xml;base64,AQID",
-		"data:image/png,AQID",                // sem base64
-		"data:image/png;base64,@@@",          // base64 inválido
-		"data:image/png;base64,",             // vazia
+		"data:image/png,AQID",                 // sem base64
+		"data:image/png;base64,@@@",           // base64 inválido
+		"data:image/png;base64,",              // vazia
 		makeImageDataURL("image/png", 12<<20), // 12 MiB decodificados > 14 MiB em data URL
 		// MIME declarado não bate com a assinatura real dos bytes.
 		"data:image/png;base64," + base64.StdEncoding.EncodeToString(testJPEGData),

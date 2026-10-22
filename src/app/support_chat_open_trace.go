@@ -208,4 +208,3 @@ func (a *App) currentSupportChatSessionID() string {
 	state := a.supportChatService().State()
 	return strings.TrimSpace(state.SessionID)
 }
-

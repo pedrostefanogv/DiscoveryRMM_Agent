@@ -327,8 +327,15 @@ func TestNATSFanoutCommandHandler_DedupesByDispatchAndIdempotency(t *testing.T) 
 	}
 
 	execCount := 0
+	// Determinismo (auditoria 2026-10-21): sob -race o scheduler pode completar a
+	// goroutine de execução ANTES da 2ª chamada do handler; nesse caso o dedupe-hit
+	// republica o resultado pronto (comportamento de produção intencional) e o
+	// teste falhava por suposição de timing. O gate abaixo garante que a 2ª
+	// chamada acontece com a execução ainda em voo (cachedResult nil).
+	releaseExec := make(chan struct{})
 	runtime := NewRuntime(Options{
 		HandleCommand: func(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
+			<-releaseExec
 			execCount++
 			return true, 0, "fanout-ok", ""
 		},
@@ -354,6 +361,7 @@ func TestNATSFanoutCommandHandler_DedupesByDispatchAndIdempotency(t *testing.T) 
 
 	handler(&nats.Msg{Subject: subjects.CommandSiteFanout, Data: payload})
 	handler(&nats.Msg{Subject: subjects.CommandSiteFanout, Data: payload})
+	close(releaseExec)
 
 	msg, err := resultSub.NextMsg(2 * time.Second)
 	if err != nil {

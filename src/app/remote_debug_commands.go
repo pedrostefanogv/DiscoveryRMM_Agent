@@ -167,6 +167,14 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			pp.MaxDefers = 3
 		}
 
+		// ── Janela de manutenção: deferral ──
+		// Janela ativa e agora FORA da janela → não executa: reporta
+		// deferred_to_window + nextRunAt pelo canal de comandos existente.
+		if d := a.deferPowerForMaintenance(action); d != nil {
+			a.Logs.Append(fmt.Sprintf("[agent] %s-action [MAINTENANCE] fora da janela — adiado para %s", action, d.NextRunAt.UTC().Format(time.RFC3339)))
+			return true, 0, maintenanceDeferredResult(d), ""
+		}
+
 		// Cancela qualquer deferred restart ou power silencioso pendente se
 		// receber um novo comando de power.
 		a.cancelDeferredRestart()
@@ -230,6 +238,15 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		// atraso passa a ser contado pelo agente e o SO é acionado com /t 0.
 		strategy := resolvePowerStrategy(pp)
 		a.Logs.Append(fmt.Sprintf("[agent] %s-action [SILENT] delay=%ds force=%t mode=%d — sem notificação nativa", action, pp.DelaySeconds, pp.Force, strategy.Mode))
+		// Reboot coordenado: se rebootGraceSeconds > 0, mostra o toast local
+		// "Reboot agendado pela TI em Ns — salve seu trabalho" e garante que o
+		// timer silencioso respeite o grace (0 = sem aviso: imediato como hoje).
+		if grace := a.rebootGraceSeconds(); grace > 0 {
+			a.notifyRebootGrace(action, grace)
+			if pp.DelaySeconds < grace {
+				pp.DelaySeconds = grace
+			}
+		}
 		if pp.DelaySeconds > 0 {
 			a.scheduleSilentPowerAction(action, pp)
 			return true, 0, fmt.Sprintf("%s agendado silenciosamente em %ds (sem aviso nativo)", action, pp.DelaySeconds), ""

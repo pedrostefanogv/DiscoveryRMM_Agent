@@ -13,7 +13,7 @@ O **Discovery Agent** é um aplicativo de inventário e gerenciamento de TI para
 - **Rede P2P** para distribuição de artefatos (instaladores, políticas) entre agentes na mesma rede local
 - **Automação** de tarefas via políticas baixadas do servidor central
 
-> **Observação de verificação:** a validação ativa do workspace usa o fluxo de build do Wails e não `go build` direto, porque o frontend é processado via `//go:embed` e o CLI do Wails. A referência do código atual está alinhada com a versão `v3.0.0-beta.3` declarada em [src/go.mod](src/go.mod).
+> **Observação de verificação:** a validação ativa do workspace usa o fluxo de build do Wails e não `go build` direto, porque o frontend é processado via `//go:embed` e o CLI do Wails. A referência do código atual está alinhada com a versão `v3.0.0-beta.34` declarada em [src/go.mod](src/go.mod).
 
 ### Modos de Execução
 

@@ -270,6 +270,22 @@ export class AgentConfiguration {
              */
             this["windowsUpdateStateIntervalMinutes"] = null;
         }
+        if (!("maintenanceWindow" in $$source)) {
+            /**
+             * MaintenanceWindow: janela de manutenção (nil = desligada).
+             * @member
+             * @type {MaintenanceWindowConfig | null}
+             */
+            this["maintenanceWindow"] = null;
+        }
+        if (!("mcpToolPolicy" in $$source)) {
+            /**
+             * MCPToolPolicy: allowlist de tools MCP por tenant (nil = mode "all").
+             * @member
+             * @type {MCPToolPolicyConfig | null}
+             */
+            this["mcpToolPolicy"] = null;
+        }
 
         Object.assign(this, $$source);
     }
@@ -286,6 +302,8 @@ export class AgentConfiguration {
         const $$createField26_0 = $$createType4;
         const $$createField27_0 = $$createType5;
         const $$createField28_0 = $$createType6;
+        const $$createField34_0 = $$createType8;
+        const $$createField35_0 = $$createType10;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("agentUpdate" in $$parsedSource) {
             $$parsedSource["agentUpdate"] = $$createField23_0($$parsedSource["agentUpdate"]);
@@ -304,6 +322,12 @@ export class AgentConfiguration {
         }
         if ("rollout" in $$parsedSource) {
             $$parsedSource["rollout"] = $$createField28_0($$parsedSource["rollout"]);
+        }
+        if ("maintenanceWindow" in $$parsedSource) {
+            $$parsedSource["maintenanceWindow"] = $$createField34_0($$parsedSource["maintenanceWindow"]);
+        }
+        if ("mcpToolPolicy" in $$parsedSource) {
+            $$parsedSource["mcpToolPolicy"] = $$createField35_0($$parsedSource["mcpToolPolicy"]);
         }
         return new AgentConfiguration(/** @type {Partial<AgentConfiguration>} */($$parsedSource));
     }
@@ -342,7 +366,7 @@ export class AgentConsolidationConfig {
      * @returns {AgentConsolidationConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType8;
+        const $$createField1_0 = $$createType12;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("policies" in $$parsedSource) {
             $$parsedSource["policies"] = $$createField1_0($$parsedSource["policies"]);
@@ -481,7 +505,7 @@ export class AgentNotificationBrandingConfig {
      * @returns {AgentNotificationBrandingConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType9;
+        const $$createField3_0 = $$createType13;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("theme" in $$parsedSource) {
             $$parsedSource["theme"] = $$createField3_0($$parsedSource["theme"]);
@@ -551,8 +575,8 @@ export class AgentNotificationPolicy {
      * @returns {AgentNotificationPolicy}
      */
     static createFrom($$source = {}) {
-        const $$createField4_0 = $$createType10;
-        const $$createField5_0 = $$createType12;
+        const $$createField4_0 = $$createType14;
+        const $$createField5_0 = $$createType16;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("styleOverride" in $$parsedSource) {
             $$parsedSource["styleOverride"] = $$createField4_0($$parsedSource["styleOverride"]);
@@ -719,9 +743,9 @@ export class AgentPSADTConfig {
      * @returns {AgentPSADTConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType13;
-        const $$createField9_0 = $$createType13;
-        const $$createField10_0 = $$createType13;
+        const $$createField8_0 = $$createType17;
+        const $$createField9_0 = $$createType17;
+        const $$createField10_0 = $$createType17;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("successExitCodes" in $$parsedSource) {
             $$parsedSource["successExitCodes"] = $$createField8_0($$parsedSource["successExitCodes"]);
@@ -811,8 +835,8 @@ export class AgentRolloutConfig {
      * @returns {AgentRolloutConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType14;
-        const $$createField7_0 = $$createType14;
+        const $$createField6_0 = $$createType18;
+        const $$createField7_0 = $$createType18;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("allowedNotificationEventTypes" in $$parsedSource) {
             $$parsedSource["allowedNotificationEventTypes"] = $$createField6_0($$parsedSource["allowedNotificationEventTypes"]);
@@ -821,6 +845,121 @@ export class AgentRolloutConfig {
             $$parsedSource["blockedNotificationEventTypes"] = $$createField7_0($$parsedSource["blockedNotificationEventTypes"]);
         }
         return new AgentRolloutConfig(/** @type {Partial<AgentRolloutConfig>} */($$parsedSource));
+    }
+}
+
+/**
+ * MCPToolPolicyConfig define a allowlist de tools MCP por tenant.
+ */
+export class MCPToolPolicyConfig {
+    /**
+     * Creates a new MCPToolPolicyConfig instance.
+     * @param {Partial<MCPToolPolicyConfig>} [$$source = {}] - The source object to create the MCPToolPolicyConfig.
+     */
+    constructor($$source = {}) {
+        if (!("mode" in $$source)) {
+            /**
+             * Mode: "all" (default, compat) | "allowlist".
+             * @member
+             * @type {string | null}
+             */
+            this["mode"] = null;
+        }
+        if (!("allow" in $$source)) {
+            /**
+             * Allow: nomes de tools permitidas quando mode=allowlist.
+             * @member
+             * @type {string[]}
+             */
+            this["allow"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new MCPToolPolicyConfig instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {MCPToolPolicyConfig}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType18;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("allow" in $$parsedSource) {
+            $$parsedSource["allow"] = $$createField1_0($$parsedSource["allow"]);
+        }
+        return new MCPToolPolicyConfig(/** @type {Partial<MCPToolPolicyConfig>} */($$parsedSource));
+    }
+}
+
+/**
+ * MaintenanceWindowConfig define a janela de manutenção (herdável
+ * server→client→site). Campos em pointer seguem o padrão existente: nil =
+ * herda/usa default.
+ */
+export class MaintenanceWindowConfig {
+    /**
+     * Creates a new MaintenanceWindowConfig instance.
+     * @param {Partial<MaintenanceWindowConfig>} [$$source = {}] - The source object to create the MaintenanceWindowConfig.
+     */
+    constructor($$source = {}) {
+        if (!("enabled" in $$source)) {
+            /**
+             * Enabled é o kill switch: nil/false = janela desligada (comportamento atual).
+             * @member
+             * @type {boolean | null}
+             */
+            this["enabled"] = null;
+        }
+        if (!("daysOfWeek" in $$source)) {
+            /**
+             * DaysOfWeek: 1=domingo..7=sábado; vazio = todos os dias.
+             * @member
+             * @type {number[]}
+             */
+            this["daysOfWeek"] = [];
+        }
+        if (!("startUtc" in $$source)) {
+            /**
+             * StartUTC é o início da janela em UTC ("HH:mm").
+             * @member
+             * @type {string}
+             */
+            this["startUtc"] = "";
+        }
+        if (!("durationMinutes" in $$source)) {
+            /**
+             * DurationMinutes: duração em minutos; nil = 60.
+             * @member
+             * @type {number | null}
+             */
+            this["durationMinutes"] = null;
+        }
+        if (!("rebootGraceSeconds" in $$source)) {
+            /**
+             * RebootGraceSeconds: aviso ao usuário antes do reboot coordenado;
+             * nil = 60; 0 = sem aviso (reboot imediato como hoje).
+             * @member
+             * @type {number | null}
+             */
+            this["rebootGraceSeconds"] = null;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new MaintenanceWindowConfig instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {MaintenanceWindowConfig}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType17;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("daysOfWeek" in $$parsedSource) {
+            $$parsedSource["daysOfWeek"] = $$createField1_0($$parsedSource["daysOfWeek"]);
+        }
+        return new MaintenanceWindowConfig(/** @type {Partial<MaintenanceWindowConfig>} */($$parsedSource));
     }
 }
 
@@ -898,11 +1037,15 @@ const $$createType3 = AgentNotificationPolicy.createFrom;
 const $$createType4 = $Create.Array($$createType3);
 const $$createType5 = AgentConsolidationConfig.createFrom;
 const $$createType6 = AgentRolloutConfig.createFrom;
-const $$createType7 = AgentConsolidationPolicy.createFrom;
-const $$createType8 = $Create.Array($$createType7);
-const $$createType9 = NotificationThemeConfig.createFrom;
-const $$createType10 = AgentNotificationStyleOverride.createFrom;
-const $$createType11 = AgentNotificationAction.createFrom;
+const $$createType7 = MaintenanceWindowConfig.createFrom;
+const $$createType8 = $Create.Nullable($$createType7);
+const $$createType9 = MCPToolPolicyConfig.createFrom;
+const $$createType10 = $Create.Nullable($$createType9);
+const $$createType11 = AgentConsolidationPolicy.createFrom;
 const $$createType12 = $Create.Array($$createType11);
-const $$createType13 = $Create.Array($Create.Any);
-const $$createType14 = $Create.Array($Create.Any);
+const $$createType13 = NotificationThemeConfig.createFrom;
+const $$createType14 = AgentNotificationStyleOverride.createFrom;
+const $$createType15 = AgentNotificationAction.createFrom;
+const $$createType16 = $Create.Array($$createType15);
+const $$createType17 = $Create.Array($Create.Any);
+const $$createType18 = $Create.Array($Create.Any);

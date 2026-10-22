@@ -238,6 +238,10 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 			cfg.Rollout.BlockedNotificationEventTypes = getStringSliceFromMap(rolloutMap, "blockedNotificationEventTypes")
 		}
 	}
+	// Parse maintenance window (janela de manutenção) quando presente.
+	cfg.MaintenanceWindow = parseMaintenanceWindowFromMap(raw, "maintenanceWindow")
+	// Parse allowlist de tools MCP por tenant quando presente.
+	cfg.MCPToolPolicy = parseMCPToolPolicyFromMap(raw, "mcpToolPolicy")
 	// Parse startup throttle fields (flat format only; API v1 handled in mergeAgentConfigResponse).
 	cfg.StartupThrottleEnabled = getBoolPtr("startupThrottleEnabled")
 	cfg.StartupMaxCPUPercent = getIntPtr("startupMaxCPUPercent")
@@ -435,7 +439,183 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 	// Aba inicial do agent: site > client > server (apenas strings não vazias).
 	cfg.AgentHomeTab = resolveAgentHomeTab(site, cli, srv)
 
+	// Janela de manutenção: herança campo a campo, site > client > server.
+	cfg.MaintenanceWindow = mergeMaintenanceWindow(site.MaintenanceWindow, cli.MaintenanceWindow, srv.MaintenanceWindow)
+	// Allowlist de tools MCP: mesma herança.
+	cfg.MCPToolPolicy = mergeMCPToolPolicy(site.MCPToolPolicy, cli.MCPToolPolicy, srv.MCPToolPolicy)
+
 	return cfg
+}
+
+// parseMaintenanceWindowFromMap parseia a seção "maintenanceWindow" do formato
+// flat (objeto aninhado). Ausente → nil (janela desligada).
+func parseMaintenanceWindowFromMap(raw map[string]any, key string) *MaintenanceWindowConfig {
+	m, ok := raw[key].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return &MaintenanceWindowConfig{
+		Enabled:            getBoolPtrFromMap(m, "enabled"),
+		DaysOfWeek:         getIntSliceFromMap(m, "daysOfWeek"),
+		StartUTC:           getStringFromMap(m, "startUtc"),
+		DurationMinutes:    getIntPtrFromMap(m, "durationMinutes"),
+		RebootGraceSeconds: getIntPtrFromMap(m, "rebootGraceSeconds"),
+	}
+}
+
+// parseMCPToolPolicyFromMap parseia a seção "mcpToolPolicy" do formato flat.
+// Ausente → nil (mode "all").
+func parseMCPToolPolicyFromMap(raw map[string]any, key string) *MCPToolPolicyConfig {
+	m, ok := raw[key].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return &MCPToolPolicyConfig{
+		Mode:  getStringPtrFromMap(m, "mode"),
+		Allow: getStringSliceFromMap(m, "allow"),
+	}
+}
+
+// mergeMaintenanceWindow resolve a herança campo a campo (site > client >
+// server). Sem nenhuma seção presente → nil.
+func mergeMaintenanceWindow(site, cli, srv *MaintenanceWindowConfig) *MaintenanceWindowConfig {
+	if site == nil && cli == nil && srv == nil {
+		return nil
+	}
+	out := &MaintenanceWindowConfig{}
+	// Cada nível pode estar ausente (nil): guard por nível antes de acessar campos.
+	out.Enabled = firstBoolPtr(mwEnabled(site), mwEnabled(cli), mwEnabled(srv))
+	out.DaysOfWeek = firstIntSlice(mwDays(site), mwDays(cli), mwDays(srv))
+	out.StartUTC = firstString(mwStart(site), mwStart(cli), mwStart(srv))
+	out.DurationMinutes = firstIntPtr(mwDuration(site), mwDuration(cli), mwDuration(srv))
+	out.RebootGraceSeconds = firstIntPtr(mwGrace(site), mwGrace(cli), mwGrace(srv))
+	return out
+}
+
+func mwEnabled(c *MaintenanceWindowConfig) *bool {
+	if c == nil {
+		return nil
+	}
+	return c.Enabled
+}
+func mwDays(c *MaintenanceWindowConfig) []int {
+	if c == nil {
+		return nil
+	}
+	return c.DaysOfWeek
+}
+func mwStart(c *MaintenanceWindowConfig) string {
+	if c == nil {
+		return ""
+	}
+	return c.StartUTC
+}
+func mwDuration(c *MaintenanceWindowConfig) *int {
+	if c == nil {
+		return nil
+	}
+	return c.DurationMinutes
+}
+func mwGrace(c *MaintenanceWindowConfig) *int {
+	if c == nil {
+		return nil
+	}
+	return c.RebootGraceSeconds
+}
+
+// mergeMCPToolPolicy resolve a herança campo a campo (site > client > server).
+func mergeMCPToolPolicy(site, cli, srv *MCPToolPolicyConfig) *MCPToolPolicyConfig {
+	if site == nil && cli == nil && srv == nil {
+		return nil
+	}
+	out := &MCPToolPolicyConfig{}
+	out.Mode = firstStringPtr(polMode(site), polMode(cli), polMode(srv))
+	out.Allow = firstStringSlice(polAllow(site), polAllow(cli), polAllow(srv))
+	return out
+}
+
+func polMode(c *MCPToolPolicyConfig) *string {
+	if c == nil {
+		return nil
+	}
+	return c.Mode
+}
+func polAllow(c *MCPToolPolicyConfig) []string {
+	if c == nil {
+		return nil
+	}
+	return c.Allow
+}
+
+// firstBoolPtr devolve o primeiro pointer não-nil (ordem: mais específico primeiro).
+func firstBoolPtr(vals ...*bool) *bool {
+	for _, v := range vals {
+		if v != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+// firstIntPtr devolve o primeiro pointer não-nil.
+func firstIntPtr(vals ...*int) *int {
+	for _, v := range vals {
+		if v != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+// firstStringPtr devolve o primeiro pointer não-nil.
+func firstStringPtr(vals ...*string) *string {
+	for _, v := range vals {
+		if v != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+// firstString devolve a primeira string não vazia.
+func firstString(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// firstIntSlice devolve a primeira lista não vazia.
+func firstIntSlice(vals ...[]int) []int {
+	for _, v := range vals {
+		if len(v) > 0 {
+			return v
+		}
+	}
+	return nil
+}
+
+// firstStringSlice devolve a primeira lista não vazia.
+func firstStringSlice(vals ...[]string) []string {
+	for _, v := range vals {
+		if len(v) > 0 {
+			return v
+		}
+	}
+	return nil
+}
+
+// getStringPtrFromMap devolve um *string tolerante a tipos comuns.
+func getStringPtrFromMap(m map[string]any, keys ...string) *string {
+	for _, k := range keys {
+		if v, ok := m[k]; ok && v != nil {
+			s := strings.TrimSpace(fmt.Sprint(v))
+			return &s
+		}
+	}
+	return nil
 }
 
 // Helpers

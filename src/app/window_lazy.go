@@ -301,12 +301,12 @@ func (a *App) warmMainWindowHidden() {
 	}
 }
 
-//wails:ignore
-//
 // ConsumeMainWindowCreateHidden lê e ZERA o pedido de criação oculta. A fábrica
 // (main.go, outro pacote) chama na hora de construir a janela: o aquecimento
 // pede oculta; pedidos diretos do usuário (tray/toast/segunda instância) não
 // marcam nada — e se chegarem primeiro, a janela nasce visível normalmente.
+//
+//wails:ignore
 func (a *App) ConsumeMainWindowCreateHidden() bool {
 	if a == nil {
 		return false

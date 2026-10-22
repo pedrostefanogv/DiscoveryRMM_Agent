@@ -37,10 +37,20 @@ jobs:
 
       # O pacote main depende de Wails + CGO + frontend embedded — excluir da verificacao.
       # Verifica apenas os subpacotes de logica de negocio.
+      # NOTA (auditoria 2026-10-21): "./internal/..." apontava para um diretorio que
+      # nao existe em src/ — o Go emite apenas um warning e o job ficava verde.
       - name: go vet
         working-directory: src
         shell: pwsh
-        run: go vet ./app/... ./internal/...
+        run: go vet ./app/...
+
+      # Falha o PR se houver arquivo .go fora do formato (regressao de gofmt).
+      - name: gofmt check
+        working-directory: src
+        shell: pwsh
+        run: |
+          $out = gofmt -l . 2>$null
+          if ($out) { Write-Host $out; Write-Error "arquivos fora do gofmt: $out"; exit 1 }
 
   test:
     name: Unit Tests
@@ -61,7 +71,11 @@ jobs:
           cache: true
           cache-dependency-path: src/go.sum
 
-      - name: go test
+      # -race: detecta corridas reais (hotspots: remotesession, support chat, watchdog).
+      # No windows-latest o GCC (mingw) ja esta presente, atendendo ao requisito de CGO.
+      - name: go test (race)
         working-directory: src
         shell: pwsh
-        run: go test ./app/... ./internal/... -timeout 120s
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./app/... -timeout 300s
