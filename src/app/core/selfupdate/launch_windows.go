@@ -79,7 +79,7 @@ func (u *Updater) removeMarkOfTheWeb(exePath string) {
 //
 // NUNCA deve ser usado no modo serviço (sessão 0): lá o lançamento é feito por
 // CreateProcess — ver decideInstallerLaunchMode/isServiceModeProcess.
-// Exportado para que o callback PSADT no pacote app possa chamar a elevação UAC
+// Exportado para que fluxos do pacote app possam pedir a elevação UAC
 // diretamente de dentro da sessão PSADT.
 func LaunchInstallerElevated(exePath string, args string) (pid uint32, processHandle windows.Handle, err error) {
 	// Defesa em profundidade (A.2.3): este helper é exportado e chamado também

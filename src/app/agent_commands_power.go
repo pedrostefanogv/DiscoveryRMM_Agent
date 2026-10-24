@@ -26,7 +26,7 @@ func parsePowerCommandPayload(payload any) powerCommandPayload {
 type powerExecutionMode int
 
 const (
-	// powerModeNotify: nosso aviso Fluent com contador (PSADT).
+	// powerModeNotify: nosso aviso nativo com contador (cartão notifyui).
 	powerModeNotify powerExecutionMode = iota
 	// powerModeSilentTimer: NENHUMA notificação nativa do Windows — o atraso é
 	// contado pelo agente e o SO é acionado com /t 0.

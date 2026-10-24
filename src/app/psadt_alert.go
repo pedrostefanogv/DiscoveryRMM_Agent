@@ -144,11 +144,11 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 	var handled bool
 	switch p.Type {
 	case "toast":
-		code, body, errMsg, handled = a.nativeToastAlert(p)
+		code, body, errMsg, handled = a.nativeToastAlert(ctx, p)
 	case "modal":
-		code, body, errMsg, handled = a.nativeModalAlert(p)
+		code, body, errMsg, handled = a.nativeModalAlert(ctx, p)
 	case "update-progress":
-		code, body, errMsg, handled = a.nativeProgressAlert(p)
+		code, body, errMsg, handled = a.nativeProgressAlert(ctx, p)
 	}
 	if handled {
 		return code, body, errMsg
@@ -222,7 +222,7 @@ func (a *App) showNativePowerCountdown(action string, delaySeconds int, message 
 	cardCtx, cancel := context.WithTimeout(context.Background(), time.Duration(delaySeconds+30)*time.Second)
 	defer cancel()
 
-	result, ok := notifyui.ShowCard(cardCtx, req)
+	result, ok := runCardAsUser(cardCtx, req, time.Duration(delaySeconds+30)*time.Second)
 	if !ok || result.Outcome == notifyui.OutcomeError {
 		a.logPowerAction(action, fmt.Sprintf("cartão nativo indisponivel (%s) — fallback", result.Reason))
 		return "fallback"

@@ -45,6 +45,13 @@ func main() {
 		return
 	}
 
+	// Worker de UI das notificações nativas: o serviço spawna ESTE binário com
+	// o token do usuário interativo para desenhar cartões/toasts/progresso na
+	// sessão do usuário (janela em sessão 0 é invisível). Sai sem iniciar a GUI.
+	if appkg.HandleNotifyWorkerCLI(os.Args) {
+		return
+	}
+
 	if note := strings.TrimSpace(suppressGameBarOverlay()); note != "" {
 		logger.Info("gamebar overlay", "note", note)
 	}

@@ -42,7 +42,9 @@ func (a *App) nativeAutomationWelcome(req automation.AutomationNotificationReque
 	cardCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds+30)*time.Second)
 	defer cancel()
 
-	result, ok := notifyui.ShowCard(cardCtx, cardReq)
+	// O Welcome roda no SERVIÇO (sessão 0): sem o worker de UI o cartão seria
+	// invisível para o usuário (mesma lacuna já corrigida nos psadt-alerts).
+	result, ok := runCardAsUser(cardCtx, cardReq, time.Duration(timeoutSeconds+30)*time.Second)
 	if !ok || result.Outcome == notifyui.OutcomeError || result.Outcome == notifyui.OutcomeCanceled {
 		reason := result.Reason
 		if reason == "" {

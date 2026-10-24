@@ -31,7 +31,7 @@ func listUpgradableForDecision(ctx context.Context, packages PackageManager) (st
 }
 
 // ShouldSkipPackageActionBeforePrompt decide, ANTES do prompt de confirmação
-// (Welcome PSADT / toast), se uma ação de PACOTE não tem nada a fazer: já
+// (Welcome nativo / toast), se uma ação de PACOTE não tem nada a fazer: já
 // instalado, já atualizado ou ausente para upgrade. Sem isso o usuário era
 // interrompido para confirmar uma instalação que o executor pularia logo depois
 // (o welcome acontecia antes da checagem de estado).

@@ -23,11 +23,6 @@ const (
 	psadtExitUnknown       psadtExitCategory = "unknown"
 )
 
-func executePSAppDeployToolkit(ctx context.Context, packages PackageManager, packageID, operation string) ExecutionResult {
-	policy := normalizePSADTPolicy(PSADTPolicy{})
-	return executePSAppDeployToolkitWithPolicy(ctx, packages, packageID, operation, policy)
-}
-
 func executePSAppDeployToolkitWithPolicy(ctx context.Context, packages PackageManager, packageID, operation string, policy PSADTPolicy) ExecutionResult {
 	policy = normalizePSADTPolicy(policy)
 

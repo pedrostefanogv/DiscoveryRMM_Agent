@@ -2,17 +2,23 @@
 
 package app
 
-// Stubs não-Windows: o backend nativo não é suportado e o chamador cai no
-// caminho PSADT (que também devolve "não é Windows" nos fluxos de hoje).
+import "context"
 
-func (a *App) nativeToastAlert(p PsadtAlertPayload) (int, string, string, bool) {
+// Stubs não-Windows: o backend nativo não é suportado; os chamadores aplicam
+// seus fallbacks próprios (toast do pipeline, shutdown.exe etc.).
+
+func (a *App) nativeToastAlert(ctx context.Context, p PsadtAlertPayload) (int, string, string, bool) {
 	return 1, "", "", false
 }
 
-func (a *App) nativeModalAlert(p PsadtAlertPayload) (int, string, string, bool) {
+func (a *App) nativeModalAlert(ctx context.Context, p PsadtAlertPayload) (int, string, string, bool) {
 	return 1, "", "", false
 }
 
-func (a *App) nativePowerCountdown(action string, delaySeconds int, message string) (string, bool) {
+func (a *App) nativeProgressAlert(ctx context.Context, p PsadtAlertPayload) (int, string, string, bool) {
+	return 1, "", "", false
+}
+
+func (a *App) nativePowerCountdown(ctx context.Context, action string, delaySeconds int, message string) (string, bool) {
 	return "", false
 }

@@ -153,7 +153,7 @@ func (a *App) showPSADTCancellablePowerCountdown(action string, delaySeconds int
 		delaySeconds = powerActionMCPDefaultDelaySeconds
 	}
 
-	if outcome, handled := a.nativePowerCountdown(action, delaySeconds, message); handled {
+	if outcome, handled := a.nativePowerCountdown(context.Background(), action, delaySeconds, message); handled {
 		return outcome
 	}
 	a.logPowerAction(action, "cartao nativo indisponivel — usando fallback do shutdown.exe")

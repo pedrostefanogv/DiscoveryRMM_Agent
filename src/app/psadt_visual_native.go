@@ -38,6 +38,9 @@ func executeNativeVisualNotification(req NativeVisualNotificationRequest, result
 }
 
 func nativeBalloonNotification(req NativeVisualNotificationRequest, result *NativeToolResult) NativeToolResult {
+	// Nota: em modo worker (sessão do usuário) o diretório do asset é RX para o
+	// usuário — agentToastIconPath() devolve "" e o toast usa o ícone default
+	// do Windows. O fluxo do servidor (toast job) resolve o ícone NO SERVIÇO.
 	err := notifyui.ShowToast(notifyui.ToastRequest{
 		AppID:   notifyui.DefaultToastAppID,
 		IconPath: agentToastIconPath(),
@@ -160,7 +163,12 @@ func nativeCardNotification(req NativeVisualNotificationRequest, result *NativeT
 		}
 		cardReq.DefaultButtonID = "install"
 		cardReq.TimeoutButtonID = "install"
+		// Esc/X: com AllowDefer fecha = adiar; sem adiamento prossegue
+		// (os IDs precisam EXISTIR entre os botões — Normalize rejeita os outros).
 		cardReq.CloseButtonID = nativeCloseButton(!req.AllowDefer)
+		if req.AllowDefer {
+			cardReq.CloseButtonID = "defer"
+		}
 		cardReq.CountdownSeconds = closeCountdown
 		cardReq.CountdownLabel = "A instalacao continuara automaticamente em:"
 		cardReq.Hint = "Enter confirma · Esc adia"

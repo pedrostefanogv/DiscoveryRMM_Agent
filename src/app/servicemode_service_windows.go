@@ -305,7 +305,7 @@ func (f *serviceControlFlow) HandleControl(cmd svc.Cmd) (finish bool, reason str
 	case actionTeardownNow:
 		// grace=0 (ou Stop): o encerramento é imediato, mas o sinal de
 		// shutdown do SO continua valendo para o caminho de power action não
-		// tratar o reboot como falha do PSADT.
+		// tratar o reboot como falha do aviso.
 		if isShutdownCommand(cmd) {
 			f.effects.NoteSystemShutdown()
 		}

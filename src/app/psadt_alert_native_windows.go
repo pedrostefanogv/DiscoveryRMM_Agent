@@ -68,7 +68,7 @@ func agentToastIconPath() string {
 
 // nativeToastAlert exibe o toast nativo. Retorna handled=true quando o toast
 // foi entregue (ou decididamente não exibível por política própria).
-func (a *App) nativeToastAlert(p PsadtAlertPayload) (int, string, string, bool) {
+func (a *App) nativeToastAlert(ctx context.Context, p PsadtAlertPayload) (int, string, string, bool) {
 	req := notifyui.ToastRequest{
 		AppID:   notifyui.DefaultToastAppID,
 		IconPath: agentToastIconPath(),
@@ -78,7 +78,7 @@ func (a *App) nativeToastAlert(p PsadtAlertPayload) (int, string, string, bool) 
 	if req.Title == "" {
 		req.Title = "Discovery Agent"
 	}
-	if err := notifyui.ShowToast(req); err != nil {
+	if err := runToastAsUser(ctx, req); err != nil {
 		if a != nil {
 			a.Logs.Append("[agent] psadt-alert [WARN] toast nativo falhou (" + err.Error() + ") — caindo no PSADT")
 		}
@@ -94,7 +94,7 @@ func (a *App) nativeToastAlert(p PsadtAlertPayload) (int, string, string, bool) 
 // nativeModalAlert exibe o prompt modal nativo com até 3 botões e countdown
 // opcional. Retorna handled=true quando o cartão produziu um desfecho
 // estruturado (clicado/timeout/fechado).
-func (a *App) nativeModalAlert(p PsadtAlertPayload) (int, string, string, bool) {
+func (a *App) nativeModalAlert(ctx context.Context, p PsadtAlertPayload) (int, string, string, bool) {
 	timeout := p.TimeoutSeconds
 	if p.WaitForUser || timeout <= 0 {
 		// Mesmo limite do caminho PSADT (UI.DefaultTimeout): guarda de
@@ -154,7 +154,7 @@ func (a *App) nativeModalAlert(p PsadtAlertPayload) (int, string, string, bool) 
 		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert iniciando type=modal (cartão nativo) alertId=%s timeout=%ds", p.AlertID, timeout))
 	}
 
-	result, ok := notifyui.ShowCard(cardCtx, req)
+	result, ok := runCardAsUser(cardCtx, req, time.Duration(timeout+30)*time.Second)
 	if !ok || result.Outcome == notifyui.OutcomeError || result.Outcome == notifyui.OutcomeCanceled {
 		reason := result.Reason
 		if reason == "" {
@@ -180,7 +180,7 @@ func (a *App) nativeModalAlert(p PsadtAlertPayload) (int, string, string, bool) 
 
 // nativeProgressAlert exibe a janela nativa de progresso (substituto do
 // Show-ADTInstallationProgress) e devolve "shown" no mesmo contrato do PSADT.
-func (a *App) nativeProgressAlert(p PsadtAlertPayload) (int, string, string, bool) {
+func (a *App) nativeProgressAlert(ctx context.Context, p PsadtAlertPayload) (int, string, string, bool) {
 	duration := p.TimeoutSeconds
 	if duration <= 0 {
 		duration = 30
@@ -207,7 +207,7 @@ func (a *App) nativeProgressAlert(p PsadtAlertPayload) (int, string, string, boo
 	progressCtx, cancel := context.WithTimeout(context.Background(), time.Duration(duration+15)*time.Second)
 	defer cancel()
 
-	result, ok := notifyui.ShowProgress(progressCtx, req)
+	result, ok := runProgressAsUser(progressCtx, req)
 	if !ok || result.Outcome == notifyui.ProgressError {
 		reason := result.Reason
 		if reason == "" {
@@ -272,7 +272,7 @@ func defaultPSADTSubtitleForNative(subtitle string) string {
 //	"proceed", true  — usuario confirmou ou o contador terminou;
 //	"cancel",  true  — usuario cancelou (ação NÃO deve ser executada);
 //	"",        false — indisponível (chamador cai no PSADT/nativo fallback).
-func (a *App) nativePowerCountdown(action string, delaySeconds int, message string) (string, bool) {
+func (a *App) nativePowerCountdown(ctx context.Context, action string, delaySeconds int, message string) (string, bool) {
 	if delaySeconds <= 0 {
 		delaySeconds = 60
 	}
@@ -307,10 +307,10 @@ func (a *App) nativePowerCountdown(action string, delaySeconds int, message stri
 		CountdownLabel:   countdownLabel,
 		Hint:             "Enter confirma · Esc cancela",
 	}
-	cardCtx, cancel := context.WithTimeout(context.Background(), time.Duration(delaySeconds+30)*time.Second)
+	cardCtx, cancel := context.WithTimeout(ctx, time.Duration(delaySeconds+30)*time.Second)
 	defer cancel()
 
-	result, ok := notifyui.ShowCard(cardCtx, req)
+	result, ok := runCardAsUser(cardCtx, req, time.Duration(delaySeconds+30)*time.Second)
 	if !ok || result.Outcome == notifyui.OutcomeError {
 		if a != nil {
 			a.Logs.Append("[agent] power [WARN] cartão nativo indisponível (" + result.Reason + ") — usando fallback")
