@@ -28,7 +28,39 @@ Campos:
 - `timeoutAction` (string, opcional, default `fail`).
 - `unknownExitCodePolicy` (string, opcional, default `recoverable_failure`).
 
-### 2.2 Bloco `notificationBranding`
+### 2.2 Bloco `notifications` (histórico — substituição concluída)
+
+**A substituição do PSADT foi concluída**: o agente não usa mais a lib
+go-psadt nem o módulo PSAppDeployToolkit. Notificações visuais são nativas
+(`app/core/notifyui`: cartão Win32 + toast do Windows Runtime + MessageBox) e
+os deploys rodam `msiexec.exe`/`winget.exe` direto com kill de árvore via Job
+Object e pré-checas nativas (registro/p rede/bateria). O campo `backend` abaixo
+é aceito por compatibilidade (`psadt` é tratado como `native`); o console de
+debug preserva os mesmos bindings, agora executando o backend nativo. O valor
+`psadt` permanece documentado apenas como histórico.
+
+Backend das notificacoes visuais (alertas `psadt-alert` tipo 9, avisos de
+restart/shutdown, prompts modais):
+
+- `backend` (string, opcional, default `native`):
+  - `native` — janelas proprias do agente (`app/core/notifyui`): cartao Win32
+    com tema do Windows (mesmo visual do prompt de consentimento remoto, com
+    contador visivel) + toast do Windows Runtime com o icone GLOBAL do agente
+    (`appiconPSADT.png` embedado — um unico asset para todos os
+    clientes/agentes). NAO exige o modulo PSAppDeployToolkit nem abre
+    PowerShell;
+  - `psadt` — valor aceito apenas por compatibilidade; é tratado como
+    `native` (o caminho PSADT foi removido).
+
+Politica de fallback atual: falha do backend nativo (desktop indisponivel,
+Windows Runtime indisponivel, erro de janela) NAO tem mais caminho PSADT — os
+fluxos aplicam seus fallbacks proprios:
+- psadt-alert: erro reportado no contrato (exit 1);
+- restart/shutdown: aviso do proprio `shutdown.exe`;
+- Welcome de automacao: toast require_confirmation;
+- update-progress (console): erro reportado no contrato.
+
+### 2.3 Bloco `notificationBranding`
 
 Campos:
 

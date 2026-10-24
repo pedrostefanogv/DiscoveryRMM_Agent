@@ -226,6 +226,459 @@ export const KnowledgePage = supportmeta$0.KnowledgePage;
  */
 
 /**
+ * NativePreflightResult agrupa as pré-checas nativas (psadt_preflight_windows.go).
+ */
+export class NativePreflightResult {
+    /**
+     * Creates a new NativePreflightResult instance.
+     * @param {Partial<NativePreflightResult>} [$$source = {}] - The source object to create the NativePreflightResult.
+     */
+    constructor($$source = {}) {
+        if (!("osName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["osName"] = "";
+        }
+        if (!("osVersion" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["osVersion"] = "";
+        }
+        if (!("architecture" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["architecture"] = "";
+        }
+        if (!("isAdmin" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["isAdmin"] = false;
+        }
+        if (!("rebootPending" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["rebootPending"] = false;
+        }
+        if (!("networkAvailable" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["networkAvailable"] = false;
+        }
+        if (!("success" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["success"] = false;
+        }
+        if (!("error" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["error"] = "";
+        }
+        if (!("checkedAtUtc" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["checkedAtUtc"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new NativePreflightResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {NativePreflightResult}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new NativePreflightResult(/** @type {Partial<NativePreflightResult>} */($$parsedSource));
+    }
+}
+
+/**
+ * NativeToolResult representa o resultado de uma ação do console de debug.
+ */
+export class NativeToolResult {
+    /**
+     * Creates a new NativeToolResult instance.
+     * @param {Partial<NativeToolResult>} [$$source = {}] - The source object to create the NativeToolResult.
+     */
+    constructor($$source = {}) {
+        if (!("success" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["success"] = false;
+        }
+        if (!("exitCode" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["exitCode"] = 0;
+        }
+        if (!("output" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["output"] = "";
+        }
+        if (!("result" in $$source)) {
+            /**
+             * Result carrega a resposta estruturada do diálogo quando aplicável
+             * (texto do botão clicado).
+             * @member
+             * @type {string}
+             */
+            this["result"] = "";
+        }
+        if (!("error" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["error"] = "";
+        }
+        if (!("executedAtUtc" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["executedAtUtc"] = "";
+        }
+        if (!("durationMs" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["durationMs"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new NativeToolResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {NativeToolResult}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new NativeToolResult(/** @type {Partial<NativeToolResult>} */($$parsedSource));
+    }
+}
+
+/**
+ * NativeVisualNotificationRequest define os parâmetros do teste visual do
+ * console de debug — somente campos que o backend nativo consome.
+ */
+export class NativeVisualNotificationRequest {
+    /**
+     * Creates a new NativeVisualNotificationRequest instance.
+     * @param {Partial<NativeVisualNotificationRequest>} [$$source = {}] - The source object to create the NativeVisualNotificationRequest.
+     */
+    constructor($$source = {}) {
+        if (!("notifType" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["notifType"] = "";
+        }
+        if (!("title" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["title"] = "";
+        }
+        if (!("message" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["message"] = "";
+        }
+        if (!("subtitle" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["subtitle"] = "";
+        }
+        if (!("appName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["appName"] = "";
+        }
+        if (!("durationSeconds" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["durationSeconds"] = 0;
+        }
+        if (!("promptLeftText" in $$source)) {
+            /**
+             * Prompt (cartão nativo)
+             * @member
+             * @type {string}
+             */
+            this["promptLeftText"] = "";
+        }
+        if (!("promptRightText" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["promptRightText"] = "";
+        }
+        if (!("promptTimeout" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["promptTimeout"] = 0;
+        }
+        if (!("buttonText" in $$source)) {
+            /**
+             * Countdown / Welcome / Restart (cartão com contador)
+             * @member
+             * @type {string}
+             */
+            this["buttonText"] = "";
+        }
+        if (!("buttonCloseText" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["buttonCloseText"] = "";
+        }
+        if (!("countdownLabel" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["countdownLabel"] = "";
+        }
+        if (!("countdownNoDefer" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["countdownNoDefer"] = false;
+        }
+        if (!("restartCountdownSeconds" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["restartCountdownSeconds"] = 0;
+        }
+        if (!("allowDefer" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["allowDefer"] = false;
+        }
+        if (!("closeProcessesCountdown" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["closeProcessesCountdown"] = 0;
+        }
+        if (!("dialogButtons" in $$source)) {
+            /**
+             * Dialog Box (MessageBoxW nativa)
+             * @member
+             * @type {string}
+             */
+            this["dialogButtons"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new NativeVisualNotificationRequest instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {NativeVisualNotificationRequest}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new NativeVisualNotificationRequest(/** @type {Partial<NativeVisualNotificationRequest>} */($$parsedSource));
+    }
+}
+
+/**
+ * NotificationDebugEventRequest é o payload do teste da pipeline de eventos.
+ */
+export class NotificationDebugEventRequest {
+    /**
+     * Creates a new NotificationDebugEventRequest instance.
+     * @param {Partial<NotificationDebugEventRequest>} [$$source = {}] - The source object to create the NotificationDebugEventRequest.
+     */
+    constructor($$source = {}) {
+        if (!("title" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["title"] = "";
+        }
+        if (!("message" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["message"] = "";
+        }
+        if (!("mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["mode"] = "";
+        }
+        if (!("severity" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["severity"] = "";
+        }
+        if (!("layout" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["layout"] = "";
+        }
+        if (!("accent" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["accent"] = "";
+        }
+        if (!("requireAck" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["requireAck"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new NotificationDebugEventRequest instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {NotificationDebugEventRequest}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new NotificationDebugEventRequest(/** @type {Partial<NotificationDebugEventRequest>} */($$parsedSource));
+    }
+}
+
+/**
+ * NotificationDebugState é o estado exibido no painel "Estado Atual".
+ */
+export class NotificationDebugState {
+    /**
+     * Creates a new NotificationDebugState instance.
+     * @param {Partial<NotificationDebugState>} [$$source = {}] - The source object to create the NotificationDebugState.
+     */
+    constructor($$source = {}) {
+        if (!("runtimeDebugMode" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["runtimeDebugMode"] = false;
+        }
+        if (!("backend" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["backend"] = "";
+        }
+        if (!("configuration" in $$source)) {
+            /**
+             * @member
+             * @type {agentconfig$0.AgentConfiguration}
+             */
+            this["configuration"] = (new agentconfig$0.AgentConfiguration());
+        }
+        if (!("notificationBranding" in $$source)) {
+            /**
+             * @member
+             * @type {agentconfig$0.AgentNotificationBrandingConfig}
+             */
+            this["notificationBranding"] = (new agentconfig$0.AgentNotificationBrandingConfig());
+        }
+        if (!("notificationPolicies" in $$source)) {
+            /**
+             * @member
+             * @type {agentconfig$0.AgentNotificationPolicy[]}
+             */
+            this["notificationPolicies"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new NotificationDebugState instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {NotificationDebugState}
+     */
+    static createFrom($$source = {}) {
+        const $$createField2_0 = $$createType0;
+        const $$createField3_0 = $$createType1;
+        const $$createField4_0 = $$createType3;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("configuration" in $$parsedSource) {
+            $$parsedSource["configuration"] = $$createField2_0($$parsedSource["configuration"]);
+        }
+        if ("notificationBranding" in $$parsedSource) {
+            $$parsedSource["notificationBranding"] = $$createField3_0($$parsedSource["notificationBranding"]);
+        }
+        if ("notificationPolicies" in $$parsedSource) {
+            $$parsedSource["notificationPolicies"] = $$createField4_0($$parsedSource["notificationPolicies"]);
+        }
+        return new NotificationDebugState(/** @type {Partial<NotificationDebugState>} */($$parsedSource));
+    }
+}
+
+/**
  * NotificationDispatchRequest é o payload de uma notificação.
  */
 export const NotificationDispatchRequest = notifications$0.DispatchRequest;
@@ -341,764 +794,6 @@ export const P2PSeedPlanRecommendation = p2pmeta$0.SeedPlanRecommendation;
  * @typedef {p2pmeta$0.SeedPlanRecommendation} P2PSeedPlanRecommendation
  */
 
-export class PSADTDebugNotificationRequest {
-    /**
-     * Creates a new PSADTDebugNotificationRequest instance.
-     * @param {Partial<PSADTDebugNotificationRequest>} [$$source = {}] - The source object to create the PSADTDebugNotificationRequest.
-     */
-    constructor($$source = {}) {
-        if (!("title" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["title"] = "";
-        }
-        if (!("message" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["message"] = "";
-        }
-        if (!("mode" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["mode"] = "";
-        }
-        if (!("severity" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["severity"] = "";
-        }
-        if (!("layout" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["layout"] = "";
-        }
-        if (!("accent" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["accent"] = "";
-        }
-        if (!("requireAck" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["requireAck"] = false;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new PSADTDebugNotificationRequest instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {PSADTDebugNotificationRequest}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new PSADTDebugNotificationRequest(/** @type {Partial<PSADTDebugNotificationRequest>} */($$parsedSource));
-    }
-}
-
-export class PSADTDebugState {
-    /**
-     * Creates a new PSADTDebugState instance.
-     * @param {Partial<PSADTDebugState>} [$$source = {}] - The source object to create the PSADTDebugState.
-     */
-    constructor($$source = {}) {
-        if (!("runtimeDebugMode" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["runtimeDebugMode"] = false;
-        }
-        if (!("configuration" in $$source)) {
-            /**
-             * @member
-             * @type {agentconfig$0.AgentConfiguration}
-             */
-            this["configuration"] = (new agentconfig$0.AgentConfiguration());
-        }
-        if (!("moduleStatus" in $$source)) {
-            /**
-             * @member
-             * @type {PSADTModuleStatus}
-             */
-            this["moduleStatus"] = (new PSADTModuleStatus());
-        }
-        if (!("notificationBranding" in $$source)) {
-            /**
-             * @member
-             * @type {agentconfig$0.AgentNotificationBrandingConfig}
-             */
-            this["notificationBranding"] = (new agentconfig$0.AgentNotificationBrandingConfig());
-        }
-        if (!("notificationPolicies" in $$source)) {
-            /**
-             * @member
-             * @type {agentconfig$0.AgentNotificationPolicy[]}
-             */
-            this["notificationPolicies"] = [];
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new PSADTDebugState instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {PSADTDebugState}
-     */
-    static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType0;
-        const $$createField2_0 = $$createType1;
-        const $$createField3_0 = $$createType2;
-        const $$createField4_0 = $$createType4;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("configuration" in $$parsedSource) {
-            $$parsedSource["configuration"] = $$createField1_0($$parsedSource["configuration"]);
-        }
-        if ("moduleStatus" in $$parsedSource) {
-            $$parsedSource["moduleStatus"] = $$createField2_0($$parsedSource["moduleStatus"]);
-        }
-        if ("notificationBranding" in $$parsedSource) {
-            $$parsedSource["notificationBranding"] = $$createField3_0($$parsedSource["notificationBranding"]);
-        }
-        if ("notificationPolicies" in $$parsedSource) {
-            $$parsedSource["notificationPolicies"] = $$createField4_0($$parsedSource["notificationPolicies"]);
-        }
-        return new PSADTDebugState(/** @type {Partial<PSADTDebugState>} */($$parsedSource));
-    }
-}
-
-export class PSADTModuleStatus {
-    /**
-     * Creates a new PSADTModuleStatus instance.
-     * @param {Partial<PSADTModuleStatus>} [$$source = {}] - The source object to create the PSADTModuleStatus.
-     */
-    constructor($$source = {}) {
-        if (!("installed" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["installed"] = false;
-        }
-        if (!("version" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["version"] = "";
-        }
-        if (!("message" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["message"] = "";
-        }
-        if (!("checkedAtUtc" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["checkedAtUtc"] = "";
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new PSADTModuleStatus instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {PSADTModuleStatus}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new PSADTModuleStatus(/** @type {Partial<PSADTModuleStatus>} */($$parsedSource));
-    }
-}
-
-/**
- * PSADTPreflightResult agrupa resultados de verificacoes pre-flight do PSADT.
- */
-export class PSADTPreflightResult {
-    /**
-     * Creates a new PSADTPreflightResult instance.
-     * @param {Partial<PSADTPreflightResult>} [$$source = {}] - The source object to create the PSADTPreflightResult.
-     */
-    constructor($$source = {}) {
-        if (!("osName" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["osName"] = "";
-        }
-        if (!("osVersion" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["osVersion"] = "";
-        }
-        if (!("architecture" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["architecture"] = "";
-        }
-        if (!("psVersion" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["psVersion"] = "";
-        }
-        if (!("isAdmin" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["isAdmin"] = false;
-        }
-        if (!("rebootPending" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["rebootPending"] = false;
-        }
-        if (!("networkAvailable" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["networkAvailable"] = false;
-        }
-        if (!("userInFocusMode" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["userInFocusMode"] = false;
-        }
-        if (!("moduleVersion" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["moduleVersion"] = "";
-        }
-        if (!("activeUserSessions" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["activeUserSessions"] = 0;
-        }
-        if (!("success" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["success"] = false;
-        }
-        if (!("error" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["error"] = "";
-        }
-        if (!("checkedAtUtc" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["checkedAtUtc"] = "";
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new PSADTPreflightResult instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {PSADTPreflightResult}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new PSADTPreflightResult(/** @type {Partial<PSADTPreflightResult>} */($$parsedSource));
-    }
-}
-
-/**
- * PSADTScriptResult representa o resultado da execução de um script PSADT
- */
-export class PSADTScriptResult {
-    /**
-     * Creates a new PSADTScriptResult instance.
-     * @param {Partial<PSADTScriptResult>} [$$source = {}] - The source object to create the PSADTScriptResult.
-     */
-    constructor($$source = {}) {
-        if (!("success" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["success"] = false;
-        }
-        if (!("exitCode" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["exitCode"] = 0;
-        }
-        if (!("output" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["output"] = "";
-        }
-        if (!("result" in $$source)) {
-            /**
-             * Result carrega a resposta estruturada do diálogo quando aplicável:
-             * o texto digitado pelo usuário (InputDialogResult.Text) em prompts de
-             * entrada, ou o texto do botão clicado (DialogBoxResult).
-             * @member
-             * @type {string}
-             */
-            this["result"] = "";
-        }
-        if (!("error" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["error"] = "";
-        }
-        if (!("executedAtUtc" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["executedAtUtc"] = "";
-        }
-        if (!("durationMs" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["durationMs"] = 0;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new PSADTScriptResult instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {PSADTScriptResult}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new PSADTScriptResult(/** @type {Partial<PSADTScriptResult>} */($$parsedSource));
-    }
-}
-
-/**
- * PSADTVisualNotificationRequest define os parametros para um teste visual nativo de notificacao PSADT.
- */
-export class PSADTVisualNotificationRequest {
-    /**
-     * Creates a new PSADTVisualNotificationRequest instance.
-     * @param {Partial<PSADTVisualNotificationRequest>} [$$source = {}] - The source object to create the PSADTVisualNotificationRequest.
-     */
-    constructor($$source = {}) {
-        if (!("notifType" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["notifType"] = "";
-        }
-        if (!("appVendor" in $$source)) {
-            /**
-             * vazio = omitir (evita "Discovery <app>")
-             * @member
-             * @type {string}
-             */
-            this["appVendor"] = "";
-        }
-        if (!("appVersion" in $$source)) {
-            /**
-             * vazio = omitir (nao exibir versao) // balloon_info | balloon_warning | balloon_error | prompt_ok | prompt_yesno | prompt_continue | prompt_input | progress | dialog_box | restart_prompt | welcome
-             * @member
-             * @type {string}
-             */
-            this["appVersion"] = "";
-        }
-        if (!("title" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["title"] = "";
-        }
-        if (!("message" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["message"] = "";
-        }
-        if (!("subtitle" in $$source)) {
-            /**
-             * usado como StatusMessageDetail (progress) e Subtitle (prompt)
-             * @member
-             * @type {string}
-             */
-            this["subtitle"] = "";
-        }
-        if (!("appName" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["appName"] = "";
-        }
-        if (!("durationSeconds" in $$source)) {
-            /**
-             * utilizado apenas pelo tipo progress
-             * @member
-             * @type {number}
-             */
-            this["durationSeconds"] = 0;
-        }
-        if (!("balloonTimeSeconds" in $$source)) {
-            /**
-             * Balloon (Show-ADTBalloonTip)
-             * BalloonTipTime em segundos (0 = 10s default do PSADT)
-             * @member
-             * @type {number}
-             */
-            this["balloonTimeSeconds"] = 0;
-        }
-        if (!("balloonNoWait" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["balloonNoWait"] = false;
-        }
-        if (!("promptLeftText" in $$source)) {
-            /**
-             * Prompt (Show-ADTInstallationPrompt)
-             * @member
-             * @type {string}
-             */
-            this["promptLeftText"] = "";
-        }
-        if (!("promptMiddleText" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["promptMiddleText"] = "";
-        }
-        if (!("promptRightText" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["promptRightText"] = "";
-        }
-        if (!("promptIcon" in $$source)) {
-            /**
-             * DialogSystemIcon: Information | Question | Exclamation | Error | Hand | Shield | Asterisk | Application | WinLogo | (vazio = omitir)
-             * @member
-             * @type {string}
-             */
-            this["promptIcon"] = "";
-        }
-        if (!("promptDefaultButton" in $$source)) {
-            /**
-             * Left | Middle | Right (vazio = default do PSADT)
-             * @member
-             * @type {string}
-             */
-            this["promptDefaultButton"] = "";
-        }
-        if (!("promptTimeout" in $$source)) {
-            /**
-             * segundos, 0 = 120s (nao use o default de 55min do config.psd1)
-             * @member
-             * @type {number}
-             */
-            this["promptTimeout"] = 0;
-        }
-        if (!("promptNoWait" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["promptNoWait"] = false;
-        }
-        if (!("promptNotTopMost" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["promptNotTopMost"] = false;
-        }
-        if (!("buttonText" in $$source)) {
-            /**
-             * CountdownNotice (NotifType "countdown") — textos do strings.psd1 staged.
-             * Vazios usam "OK" / "Fechar" / "Esta janela fechara automaticamente em:".
-             * @member
-             * @type {string}
-             */
-            this["buttonText"] = "";
-        }
-        if (!("buttonCloseText" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["buttonCloseText"] = "";
-        }
-        if (!("countdownLabel" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["countdownLabel"] = "";
-        }
-        if (!("countdownNoDefer" in $$source)) {
-            /**
-             * CountdownNoDefer remove o botao de adiamento do aviso com contador
-             * (usado quando o comando de power vem com force=true).
-             * @member
-             * @type {boolean}
-             */
-            this["countdownNoDefer"] = false;
-        }
-        if (!("dialogButtons" in $$source)) {
-            /**
-             * Dialog (Show-ADTDialogBox)
-             * Ok | OkCancel | AbortRetryIgnore | YesNoCancel | YesNo | RetryCancel | CancelTryContinue
-             * @member
-             * @type {string}
-             */
-            this["dialogButtons"] = "";
-        }
-        if (!("dialogDefault" in $$source)) {
-            /**
-             * First | Second | Third
-             * @member
-             * @type {string}
-             */
-            this["dialogDefault"] = "";
-        }
-        if (!("dialogIcon" in $$source)) {
-            /**
-             * None | Stop | Question | Exclamation | Information
-             * @member
-             * @type {string}
-             */
-            this["dialogIcon"] = "";
-        }
-        if (!("dialogTimeout" in $$source)) {
-            /**
-             * segundos, 0 = 120s; maximo UI.DefaultTimeout do config.psd1 (3300s)
-             * @member
-             * @type {number}
-             */
-            this["dialogTimeout"] = 0;
-        }
-        if (!("dialogNoWait" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["dialogNoWait"] = false;
-        }
-        if (!("dialogExitOnTimeout" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["dialogExitOnTimeout"] = false;
-        }
-        if (!("dialogNotTopMost" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["dialogNotTopMost"] = false;
-        }
-        if (!("dialogForce" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["dialogForce"] = false;
-        }
-        if (!("restartCountdownSeconds" in $$source)) {
-            /**
-             * Restart (Show-ADTInstallationRestartPrompt)
-             * @member
-             * @type {number}
-             */
-            this["restartCountdownSeconds"] = 0;
-        }
-        if (!("restartNoCountdown" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["restartNoCountdown"] = false;
-        }
-        if (!("promptDefaultValue" in $$source)) {
-            /**
-             * Prompt input (Show-ADTInstallationPrompt -RequestInput)
-             * @member
-             * @type {string}
-             */
-            this["promptDefaultValue"] = "";
-        }
-        if (!("brandingIconPath" in $$source)) {
-            /**
-             * Branding (config.psd1 parcial + Initialize-ADTModule -ScriptDirectory).
-             * Aplica-se aos dialogs Fluent/Classic (prompts, progress, welcome,
-             * restart) E ao BalloonTip/toast: o PSADT usa Toolkit.CompanyName como
-             * TrayTitle (nome exibido na notificacao) e Assets.Logo como TrayIcon.
-             * Show-ADTDialogBox (Win32) usa icones de sistema e ignora isso.
-             * PNG do logo (modo claro)
-             * @member
-             * @type {string}
-             */
-            this["brandingIconPath"] = "";
-        }
-        if (!("brandingIconDark" in $$source)) {
-            /**
-             * PNG do logo (modo escuro)
-             * @member
-             * @type {string}
-             */
-            this["brandingIconDark"] = "";
-        }
-        if (!("brandingBannerPath" in $$source)) {
-            /**
-             * PNG do banner (dialogos Classic)
-             * @member
-             * @type {string}
-             */
-            this["brandingBannerPath"] = "";
-        }
-        if (!("dialogStyle" in $$source)) {
-            /**
-             * Fluent | Classic
-             * @member
-             * @type {string}
-             */
-            this["dialogStyle"] = "";
-        }
-        if (!("fluentAccentColor" in $$source)) {
-            /**
-             * hex RGB(A): 4A9EFF ou FF4A9EFF
-             * @member
-             * @type {string}
-             */
-            this["fluentAccentColor"] = "";
-        }
-        if (!("companyName" in $$source)) {
-            /**
-             * CompanyName vira Toolkit.CompanyName: e o TrayTitle do toast/balloon e o
-             * texto default de subtitulos dos dialogs Fluent. Vazio usa o branding do
-             * agent (notificationBranding.companyName) ou "Discovery Agent".
-             * @member
-             * @type {string}
-             */
-            this["companyName"] = "";
-        }
-        if (!("closeProcesses" in $$source)) {
-            /**
-             * Welcome (Show-ADTInstallationWelcome)
-             * nomes de processos separados por virgula
-             * @member
-             * @type {string}
-             */
-            this["closeProcesses"] = "";
-        }
-        if (!("allowDefer" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["allowDefer"] = false;
-        }
-        if (!("deferTimes" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["deferTimes"] = 0;
-        }
-        if (!("deferDeadline" in $$source)) {
-            /**
-             * yyyy-MM-dd (opcional)
-             * @member
-             * @type {string}
-             */
-            this["deferDeadline"] = "";
-        }
-        if (!("blockExecution" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["blockExecution"] = false;
-        }
-        if (!("closeProcessesCountdown" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["closeProcessesCountdown"] = 0;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new PSADTVisualNotificationRequest instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {PSADTVisualNotificationRequest}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new PSADTVisualNotificationRequest(/** @type {Partial<PSADTVisualNotificationRequest>} */($$parsedSource));
-    }
-}
-
 export const RealtimeStatus = debug$0.RealtimeStatus;
 
 /**
@@ -1179,7 +874,6 @@ export const p2pDiscoveredPeer = p2pmeta$0.DiscoveredPeer;
 
 // Private type creation functions
 const $$createType0 = agentconfig$0.AgentConfiguration.createFrom;
-const $$createType1 = PSADTModuleStatus.createFrom;
-const $$createType2 = agentconfig$0.AgentNotificationBrandingConfig.createFrom;
-const $$createType3 = agentconfig$0.AgentNotificationPolicy.createFrom;
-const $$createType4 = $Create.Array($$createType3);
+const $$createType1 = agentconfig$0.AgentNotificationBrandingConfig.createFrom;
+const $$createType2 = agentconfig$0.AgentNotificationPolicy.createFrom;
+const $$createType3 = $Create.Array($$createType2);

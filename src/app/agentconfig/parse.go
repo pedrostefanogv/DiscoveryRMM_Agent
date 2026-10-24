@@ -141,6 +141,14 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 			NormalizePSADTConfigDefaults(&cfg.PSADT)
 		}
 	}
+	// Parse nested notifications object if present (backend das notificações
+	// visuais). Default "native" (ver NormalizeNotificationBackend).
+	if notificationsRaw, ok := raw["notifications"]; ok {
+		if notificationsMap, ok := notificationsRaw.(map[string]any); ok {
+			cfg.Notifications.Backend = getStringFromMap(notificationsMap, "backend")
+		}
+	}
+	cfg.Notifications.Backend = NormalizeNotificationBackend(cfg.Notifications.Backend)
 	// Parse nested notificationBranding object if present.
 	if brandingRaw, ok := raw["notificationBranding"]; ok {
 		if brandingMap, ok := brandingRaw.(map[string]any); ok {

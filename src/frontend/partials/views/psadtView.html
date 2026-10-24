@@ -4,8 +4,8 @@
     <section class="panel">
       <div class="head">
         <div>
-          <h1 data-i18n="psadt.title">PSADT Debug Window</h1>
-          <div class="meta" data-i18n="psadt.subtitle">Diagnóstico real de notificações, módulo e execução PSAppDeployToolkit.</div>
+          <h1 data-i18n="psadt.title">Debug — Notificações Nativas</h1>
+          <div class="meta" data-i18n="psadt.subtitle">Teste das ferramentas nativas do agente: cartões, toasts, progresso, preflight e PowerShell.</div>
         </div>
         <div class="actions">
           <button id="refreshStateBtn" class="btn" data-i18n="psadt.refreshState">Atualizar Estado</button>
@@ -21,61 +21,20 @@
 
     <section class="grid">
       <article class="panel">
-        <h2 data-i18n="psadt.moduleTitle">Modulo PSADT</h2>
-        <div class="form-grid">
-          <div>
-            <label for="moduleVersion" data-i18n="psadt.desiredVersion">Versao desejada</label>
-            <input id="moduleVersion" type="text" value="4.1.8" />
-          </div>
-          <div>
-            <label for="installSource" data-i18n="psadt.source">Fonte</label>
-            <select id="installSource">
-              <option value="powershell_gallery">powershell_gallery</option>
-            </select>
-          </div>
+        <h2>🔍 Preflight Nativo</h2>
+        <div class="meta" style="margin-bottom:10px;">Verificações do sistema sem PSADT: versão do Windows, elevação (admin), reinicialização pendente e conectividade.</div>
+        <div class="actions" style="margin-top:8px;">
+          <button id="runPreflightBtn" class="btn primary">Executar Preflight Checks</button>
         </div>
-        <div class="actions" style="margin-top:10px;">
-          <button id="checkModuleBtn" class="btn" data-i18n="psadt.checkModule">Verificar Modulo</button>
-          <button id="installModuleBtn" class="btn primary" data-i18n="psadt.installModule">Instalar Modulo</button>
-        </div>
-        <div id="moduleStatus" class="status"></div>
-      </article>
-
-      <article class="panel">
-        <h2 data-i18n="psadt.themePreview">Tema de Preview</h2>
-        <div class="form-grid">
-          <div>
-            <label for="colorSurface">Surface</label>
-            <input id="colorSurface" type="color" value="#fffefa" />
-          </div>
-          <div>
-            <label for="colorText">Texto</label>
-            <input id="colorText" type="color" value="#1a1712" />
-          </div>
-          <div>
-            <label for="colorAccent">Accent</label>
-            <input id="colorAccent" type="color" value="#0a7a56" />
-          </div>
-          <div>
-            <label for="colorWarning">Warning</label>
-            <input id="colorWarning" type="color" value="#f0a04b" />
-          </div>
-          <div>
-            <label for="colorDanger">Danger</label>
-            <input id="colorDanger" type="color" value="#c1121f" />
-          </div>
-        </div>
-        <div class="actions" style="margin-top:10px;">
-          <button id="applyThemeBtn" class="btn primary">Aplicar Tema Preview</button>
-          <button id="resetThemeBtn" class="btn">Resetar</button>
+        <div id="preflightStatus" class="status"></div>
+        <div class="output-wrap small" style="margin-top:10px;">
+          <pre id="preflightOutput" style="margin:0;white-space:pre-wrap;font-size:0.85rem;font-family:'IBM Plex Mono',monospace;"></pre>
         </div>
       </article>
-    </section>
 
-    <section class="grid">
       <article class="panel">
         <h2>Notificação Discovery <span style="font-weight:400;font-size:0.8rem;color:var(--psadt-muted);">(pipeline interno do app)</span></h2>
-        <div class="meta" style="margin-bottom:8px;">Emite eventos via pipeline interno do Discovery. Nao usa cmdlets PSADT nativos.</div>
+        <div class="meta" style="margin-bottom:8px;">Emite eventos pela pipeline interna do Discovery (banco, consolidação e realtime).</div>
         <div class="form-grid">
           <div>
             <label for="notifTitle">Titulo</label>
@@ -123,281 +82,129 @@
       </article>
     </section>
 
-    <!-- ===== Preflight Checks ===== -->
     <section class="panel">
-      <h2>🔍 Preflight Checks <span style="font-weight:400;font-size:0.8rem;color:var(--psadt-muted);">(go-psadt nativo)</span></h2>
-      <div class="meta" style="margin-bottom:10px;">Executa verificações do sistema via lib go-psadt: ambiente, admin, reboot pendente, rede, Focus Assist, sessão.</div>
-      <div class="actions" style="margin-top:8px;">
-        <button id="runPreflightBtn" class="btn primary">Executar Preflight Checks</button>
-      </div>
-      <div id="preflightStatus" class="status"></div>
-      <div class="output-wrap small" style="margin-top:10px;">
-        <pre id="preflightOutput" style="margin:0;white-space:pre-wrap;font-size:0.85rem;font-family:'IBM Plex Mono',monospace;"></pre>
-      </div>
-    </section>
-
-    <section class="grid">
-
-
-
-      <article class="panel">
-        <h2>Executar Script PSADT Teste</h2>
+      <h2>🧪 Notificação Visual Nativa</h2>
+      <div class="meta" style="margin-bottom:10px;">Renderiza os componentes nativos do agente (<code class="code-inline">core/notifyui</code>): cartão Win32 com tema do Windows + contador, toast do Windows Runtime, janela de progresso e MessageBox. Não usa o módulo PSAppDeployToolkit.</div>
+      <div id="visualNotifForm">
         <div class="form-grid">
           <div>
-            <label for="executeAppName">Nome da App</label>
-            <input id="executeAppName" type="text" value="OfficeApp" />
+            <label for="visualNotifType">Tipo</label>
+            <select id="visualNotifType">
+              <option value="balloon_info">Toast — Info</option>
+              <option value="balloon_warning">Toast — Warning</option>
+              <option value="balloon_error">Toast — Error</option>
+              <option value="prompt_ok">Prompt — OK</option>
+              <option value="prompt_yesno">Prompt — Sim / Não</option>
+              <option value="prompt_continue">Prompt — Continuar / Adiar</option>
+              <option value="progress">Progresso (janela)</option>
+              <option value="dialog_box">Dialog Box (MessageBox)</option>
+              <option value="restart_prompt">Restart Prompt (countdown)</option>
+              <option value="welcome">Welcome — Instalar / Adiar</option>
+              <option value="countdown">Countdown — Mensagem + Contador</option>
+            </select>
+            <small class="field-help">Os campos abaixo aparecem/desaparecem conforme o tipo escolhido.</small>
           </div>
-          <div>
-            <label for="executeAppVersion">Versao</label>
-            <input id="executeAppVersion" type="text" value="2024.01" />
+          <div data-visual-group="title">
+            <label for="visualNotifTitle">Titulo</label>
+            <input id="visualNotifTitle" type="text" value="Discovery Agent" />
+            <small class="field-help">Titulo do cartão/toast/MessageBox.</small>
+          </div>
+          <div data-visual-group="subtitle">
+            <label for="visualNotifSubtitle">Subtítulo</label>
+            <input id="visualNotifSubtitle" type="text" value="Discovery Agent" />
+            <small class="field-help">Linha secundária do cartão e detalhe da janela de progresso.</small>
+          </div>
+          <div data-visual-group="progress">
+            <label for="visualNotifDuration">Duracao (seg)</label>
+            <input id="visualNotifDuration" type="number" value="5" min="1" max="60" />
+            <small class="field-help">Somente Progresso: segundos de exibição da janela.</small>
+          </div>
+          <div style="grid-column: 1 / -1;" data-visual-group="message">
+            <label for="visualNotifMessage">Mensagem</label>
+            <textarea id="visualNotifMessage">O pacote Office sera instalado. Aguarde.</textarea>
+          </div>
+          <div data-visual-group="prompt">
+            <label for="visualPromptLeft">Botao Esq.</label>
+            <input id="visualPromptLeft" type="text" value="" />
+            <small class="field-help">Botao da esquerda. Vazio usa o default do tipo (Sim/Continuar).</small>
+          </div>
+          <div data-visual-group="prompt">
+            <label for="visualPromptRight">Botao Dir.</label>
+            <input id="visualPromptRight" type="text" value="" />
+            <small class="field-help">Botao da direita (acao principal). Vazio usa o default do tipo (Nao/Adiar/OK).</small>
+          </div>
+          <div data-visual-group="prompt">
+            <label for="visualPromptTimeout">Prompt Timeout (seg)</label>
+            <input id="visualPromptTimeout" type="number" value="120" min="0" max="3300" />
+            <small class="field-help">0 = 120s de teste. No fim do prazo o cartão fecha e o resultado é "sem resposta".</small>
+          </div>
+          <div data-visual-group="countdown">
+            <label for="visualButtonText">Botao OK</label>
+            <input id="visualButtonText" type="text" value="OK" />
+            <small class="field-help">Ação principal do countdown.</small>
+          </div>
+          <div data-visual-group="countdown">
+            <label for="visualButtonCloseText">Botao Fechar</label>
+            <input id="visualButtonCloseText" type="text" value="Fechar" />
+            <small class="field-help">Botão secundário (some quando "Sem adiamento" está marcado).</small>
+          </div>
+          <div data-visual-group="countdown" style="grid-column: 1 / -1;">
+            <label for="visualCountdownLabel">Texto do Contador</label>
+            <input id="visualCountdownLabel" type="text" value="Esta janela fechara automaticamente em:" />
+            <small class="field-help">Frase acima do relógio de contagem regressiva.</small>
+          </div>
+          <div data-visual-group="countdown" style="display:flex;align-items:center;gap:6px;">
+            <label style="cursor:pointer"><input id="visualCountdownNoDefer" type="checkbox"> Sem adiamento</label>
+            <small class="field-help">Remove o botão Fechar: Esc/X também prosseguem.</small>
+          </div>
+          <div data-visual-group="restart">
+            <label for="visualRestartCountdown">Restart Countdown (seg)</label>
+            <input id="visualRestartCountdown" type="number" value="60" min="5" max="3600" />
+            <small class="field-help">Contagem regressiva exibida no cartão (o reboot real NÃO é executado — é só teste visual).</small>
+          </div>
+          <div data-visual-group="welcome">
+            <label for="visualCloseCountdown">Welcome Countdown (seg)</label>
+            <input id="visualCloseCountdown" type="number" value="60" min="0" max="3600" />
+            <small class="field-help">Contagem do Welcome de instalação (0 vira 60s no cartão).</small>
+          </div>
+          <div data-visual-group="welcome" style="display:flex;align-items:center;gap:6px;">
+            <label style="cursor:pointer"><input id="visualAllowDefer" type="checkbox" checked> Allow Defer</label>
+            <small class="field-help">Mostra o botão Adiar.</small>
+          </div>
+          <div data-visual-group="dialog">
+            <label for="visualDialogButtons">Dialog Buttons</label>
+            <select id="visualDialogButtons">
+              <option value="Ok">Ok</option>
+              <option value="OkCancel">OkCancel</option>
+              <option value="YesNo">YesNo</option>
+              <option value="YesNoCancel">YesNoCancel</option>
+              <option value="RetryCancel">RetryCancel</option>
+              <option value="AbortRetryIgnore">AbortRetryIgnore</option>
+              <option value="CancelTryContinue">CancelTryContinue</option>
+            </select>
+            <small class="field-help">Conjunto de botões da MessageBox nativa.</small>
           </div>
         </div>
-        <div class="actions" style="margin-top:10px;">
-          <button id="executeTestBtn" class="btn primary">Executar Teste PSADT</button>
-        </div>
-        <div id="executeStatus" class="status"></div>
-        <div class="output-wrap large">
-          <pre id="executeOutput" style="margin:0; white-space:pre-wrap; font-size:0.85rem; font-family:'IBM Plex Mono',monospace;"></pre>
-        </div>
-      </article>
-
-      <article class="panel">
-        <h2>Script PSADT Customizado</h2>
-        <div class="actions" style="margin-bottom:10px;">
-          <button id="getTemplateBtn" class="btn subtle">Carregar Template</button>
-          <button id="executeCustomBtn" class="btn primary">Executar Script</button>
-        </div>
-        <label for="customScript">Conteudo do Script</label>
-        <textarea id="customScript" style="min-height:120px; width:100%; border:1px solid var(--psadt-border); border-radius:8px; padding:8px 10px; font-family:'IBM Plex Mono',monospace; font-size:0.9rem;"></textarea>
-        <div id="customStatus" class="status" style="margin-top:10px;"></div>
-        <div class="output-wrap small">
-          <pre id="customOutput" style="margin:0; white-space:pre-wrap; font-size:0.85rem; font-family:'IBM Plex Mono',monospace;"></pre>
-        </div>
-      </article>
+        <div id="visualNotifHelp" class="meta" style="margin-top:10px;font-size:.8rem;line-height:1.45;border-left:3px solid var(--accent, #4a9eff);padding-left:8px"></div>
+        <div class="actions" style="margin-top:10px"><button id="visualNotifBtn" class="btn primary">Executar Notificação Nativa</button></div>
+        <div id="visualNotifStatus" class="status"></div>
+        <div class="output-wrap small"><pre id="visualNotifOutput" style="margin:0;white-space:pre-wrap;font-size:0.85rem;font-family:'IBM Plex Mono',monospace;"></pre></div>
+      </div>
     </section>
 
     <section class="panel">
-      <h2>Notificacao Visual Nativa PSADT</h2>
-      <div class="meta" style="margin-bottom:10px;">Executa cmdlets PSADT reais: <code class="code-inline">Show-ADTBalloonTip</code>, <code class="code-inline">Show-ADTInstallationPrompt</code>, <code class="code-inline">Show-ADTInstallationProgress</code>, <code class="code-inline">Show-ADTDialogBox</code>, <code class="code-inline">Show-ADTInstallationRestartPrompt</code> e <code class="code-inline">Show-ADTInstallationWelcome</code>. Timeouts de prompt/dialog limitados a 3300s (UI.DefaultTimeout do config.psd1). Personalize o logo/banner/acento dos dialogs Fluent via campos <b>Branding</b> (o PSADT exibe o logo default do toolkit quando vazio). <b>Dica:</b> passe o mouse (ou foque via <kbd>Tab</kbd>) no icone <b>?</b> ao lado do rotulo de cada campo para ver a ajuda daquele campo.</div>
-      <div id="visualNotifForm">
-      <div class="form-grid">
-        <div>
-          <label for="visualNotifType">Tipo</label>
-          <select id="visualNotifType">
-            <option value="balloon_info">Balloon — Info</option>
-            <option value="balloon_warning">Balloon — Warning</option>
-            <option value="balloon_error">Balloon — Error</option>
-            <option value="prompt_ok">Prompt — OK</option>
-            <option value="prompt_yesno">Prompt — Sim / Não</option>
-            <option value="prompt_continue">Prompt — Continuar / Adiar</option>
-            <option value="prompt_input">Prompt — Entrada de Texto (usuário digita)</option>
-            <option value="progress">Progress Bar</option>
-            <option value="dialog_box">Dialog Box</option>
-            <option value="restart_prompt">Restart Prompt (countdown)</option>
-            <option value="welcome">Installation Welcome (fechar apps + defer)</option>
-            <option value="countdown">Countdown — Mensagem + Contador (fecha sozinho)</option>
-          </select>
-          <small class="field-help">Define o cmdlet PSADT executado. Os campos abaixo aparecem/desaparecem conforme o tipo: so ficam visiveis os campos que o cmdlet realmente usa.</small>
-        </div>
-        <div data-visual-group="title">
-          <label for="visualNotifTitle">Titulo</label>
-          <input id="visualNotifTitle" type="text" value="Discovery Agent" />
-          <small class="field-help">Titulo exibido na janela/balao: -BalloonTipTitle (Balloon), -Title (Prompt) e no Dialog Box. Nao se aplica a Progress, Restart Prompt e Welcome (usam textos padrao do toolkit), por isso o campo some nesses tipos.</small>
-        </div>
-        <div data-visual-group="session">
-          <label for="visualNotifAppName">App Name (sessao PSADT)</label>
-          <input id="visualNotifAppName" type="text" value="Discovery Agent" />
-          <small class="field-help">Nome do app passado ao Open-ADTSession -AppName; aparece na marcacao dos dialogs do PSADT. Nao se aplica ao Dialog Box (Win32), que roda sem sessao PSADT.</small>
-        </div>
-        <div data-visual-group="progress">
-          <label for="visualNotifDuration">Duracao Progress (seg)</label>
-          <input id="visualNotifDuration" type="number" value="5" min="1" max="60" />
-          <small class="field-help">Somente Progress Bar: por quantos segundos a janela de progresso fica visivel antes de Close-ADTInstallationProgress fechar (1–60s).</small>
-        </div>
-        <div data-visual-group="subtitle">
-          <label for="visualNotifSubtitle">Subtitulo / Detail</label>
-          <input id="visualNotifSubtitle" type="text" value="" />
-          <small class="field-help">Linha secundaria: -Subtitle no Prompt e -StatusMessageDetail na Progress Bar. Vazio = espaco em branco (a linha reservada aparece vazia). Balloon, Dialog Box, Restart e Welcome nao usam subtitulo.</small>
-        </div>
-        <div data-visual-group="message" style="grid-column: 1 / -1;">
-          <label for="visualNotifMessage">Mensagem</label>
-          <textarea id="visualNotifMessage">O pacote Office sera instalado. Aguarde.</textarea>
-          <small class="field-help">Texto principal ao usuario: -BalloonTipText (Balloon), -Message (Prompt), -StatusMessage (Progress) e -Text (Dialog Box). Restart Prompt e Welcome usam as mensagens padrao do PSADT, entao o campo some nesses tipos.</small>
-        </div>
-        <div data-visual-group="balloon">
-          <label for="visualBalloonTime">Balloon Tempo (seg)</label>
-          <input id="visualBalloonTime" type="number" value="10" min="1" max="120" />
-          <small class="field-help">Somente Balloon: tempo (1–120s) em que o balloon fica visivel; vira -BalloonTipTime em milissegundos. Default do PSADT: 10s.</small>
-        </div>
-        <div data-visual-group="balloon" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-          <label style="cursor:pointer"><input id="visualBalloonNoWait" type="checkbox" /> Balloon NoWait (assincrono)</label>
-          <small class="field-help">Somente Balloon: -NoWait cria o balloon em thread assincrona — o script nao espera o balloon sumir (teste mais rapido, sem resposta de usuario).</small>
-        </div>
-        <div data-visual-group="promptButtons">
-          <label for="visualPromptLeft">Prompt Botao Esq.</label>
-          <input id="visualPromptLeft" type="text" value="" />
-          <small class="field-help">-ButtonLeftText do Prompt. Sobrescreve o botao padrao do tipo (ex.: "Sim" no Sim/Nao, "Continuar" no Continuar/Adiar). Vazio = mantem o padrao do PSADT.</small>
-        </div>
-        <div data-visual-group="promptButtons">
-          <label for="visualPromptMiddle">Prompt Botao Meio</label>
-          <input id="visualPromptMiddle" type="text" value="" />
-          <small class="field-help">-ButtonMiddleText do Prompt: adiciona um botao central a mais. Vazio = o botao do meio nao existe.</small>
-        </div>
-        <div data-visual-group="promptButtons">
-          <label for="visualPromptRight">Prompt Botao Dir.</label>
-          <input id="visualPromptRight" type="text" value="" />
-          <small class="field-help">-ButtonRightText do Prompt. Sobrescreve o padrao ("OK", "Nao", "Adiar"). No prompt de entrada (prompt_input) e o botao que submete o texto digitado.</small>
-        </div>
-        <div data-visual-group="promptInput">
-          <label for="visualPromptDefaultValue">Prompt — Valor Inicial</label>
-          <input id="visualPromptDefaultValue" type="text" value="" />
-          <small class="field-help">Somente prompt_input: pre-preenche a caixa de texto via -DefaultValue. O que o usuario digitar (ou deixar) volta em "Resposta do usuario".</small>
-        </div>
-        <div data-visual-group="prompt">
-          <label for="visualPromptIcon">Prompt Icon</label>
-          <select id="visualPromptIcon">
-            <option value="">(padrao Information)</option>
-            <option value="Information">Information</option>
-            <option value="Question">Question</option>
-            <option value="Exclamation">Exclamation</option>
-            <option value="Error">Error</option>
-            <option value="Hand">Hand</option>
-            <option value="Shield">Shield</option>
-            <option value="Asterisk">Asterisk</option>
-            <option value="Application">Application</option>
-            <option value="WinLogo">WinLogo</option>
-          </select>
-          <small class="field-help">Somente Prompts: -Icon do dialogo (enum DialogSystemIcon). Ex.: Question para confirmacoes, Shield para acoes que exigem admin. Vazio = padrao do PSADT.</small>
-        </div>
-        <div data-visual-group="prompt promptTimeout">
-          <label for="visualPromptTimeout">Prompt Timeout (seg)</label>
-          <input id="visualPromptTimeout" type="number" value="120" min="0" max="3300" />
-          <small class="field-help">Somente Prompts: -Timeout em segundos ate o dialogo fechar sozinho (0 = usa 120s no teste; max 3300s = UI.DefaultTimeout do config.psd1). Com NoWait marcado, o timeout e ignorado.</small>
-        </div>
-        <div data-visual-group="prompt" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-          <label style="cursor:pointer"><input id="visualPromptNoWait" type="checkbox" /> Prompt NoWait</label>
-          <label style="cursor:pointer"><input id="visualPromptNotTopMost" type="checkbox" /> NotTopMost</label>
-          <small class="field-help">Somente Prompts: NoWait (-NoWait) roda o dialogo em thread assincrona, sem esperar resposta; NotTopMost (-NotTopMost) deixa a janela sem ficar acima de todas as outras.</small>
-        </div>
-        <div data-visual-group="restart">
-          <label for="visualRestartCountdown">Restart Countdown (seg)</label>
-          <input id="visualRestartCountdown" type="number" value="60" min="5" max="3600" />
-          <small class="field-help">Somente Restart Prompt: -CountdownSeconds da contagem regressiva ate o restart forcado (5–3600s). Desativado quando "sem countdown" esta marcado.</small>
-        </div>
-        <div data-visual-group="restart" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-          <label style="cursor:pointer"><input id="visualRestartNoCountdown" type="checkbox" /> Restart sem countdown</label>
-          <small class="field-help">Somente Restart Prompt: -NoCountdown exibe a janela sem contagem regressiva — o usuario apenas decide se reinicia agora.</small>
-        </div>
-        <div data-visual-group="welcome">
-          <label for="visualCloseProcesses">Welcome — Processos (csv)</label>
-          <input id="visualCloseProcesses" type="text" value="winword,excel" />
-          <small class="field-help">Somente Welcome: -CloseProcesses, nomes de processos separados por virgula (ex.: winword,excel). Se algum estiver aberto, o PSADT avisa/oferece fechar antes de instalar.</small>
-        </div>
-        <div data-visual-group="welcome">
-          <label for="visualDeferTimes">Welcome — Defer Times</label>
-          <input id="visualDeferTimes" type="number" value="3" min="0" max="999" />
-          <small class="field-help">Somente Welcome: -DeferTimes, quantas vezes o usuario pode adiar a instalacao (0 = adia indefinidamente enquanto Allow Defer estiver ativo). Ignorado se Allow Defer estiver desmarcado.</small>
-        </div>
-        <div data-visual-group="welcome">
-          <label for="visualDeferDeadline">Welcome — Defer Deadline</label>
-          <input id="visualDeferDeadline" type="text" placeholder="yyyy-MM-dd (opcional)" />
-          <small class="field-help">Somente Welcome: -DeferDeadline, data limite (yyyy-MM-dd) depois da qual o usuario nao pode mais adiar. Vazio = sem data limite.</small>
-        </div>
-        <div data-visual-group="welcome">
-          <label for="visualCloseCountdown">Welcome — Close Countdown (seg)</label>
-          <input id="visualCloseCountdown" type="number" value="0" min="0" max="3600" />
-          <small class="field-help">Somente Welcome: -CloseProcessesCountdown, fecha os processos listados automaticamente apos N segundos sem resposta (0 = esperar para sempre).</small>
-        </div>
-        <div data-visual-group="welcome" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-          <label style="cursor:pointer"><input id="visualAllowDefer" type="checkbox" checked /> Allow Defer</label>
-          <label style="cursor:pointer"><input id="visualBlockExecution" type="checkbox" /> Block Execution</label>
-          <small class="field-help">Somente Welcome: Allow Defer (-AllowDefer) mostra o botao Adiar; Block Execution (-BlockExecution) impede que o usuario abra os processos listados enquanto o deploy roda.</small>
-        </div>
-        <div data-visual-group="branding">
-          <label for="visualBrandingIcon">Branding — Logo PNG (caminho)</label>
-          <input id="visualBrandingIcon" type="text" value="" />
-          <small class="field-help">Branding dos dialogs Fluent (Prompts, Progress, Restart, Welcome): caminho do logo PNG/.ICO. Vazio = usa o appiconPSADT.png do Discovery Agent. Balloon e Dialog Box (Win32) usam icones de sistema e ignoram isso.</small>
-        </div>
-        <div data-visual-group="branding">
-          <label for="visualBrandingIconDark">Branding — Logo PNG Dark (caminho)</label>
-          <input id="visualBrandingIconDark" type="text" value="" />
-          <small class="field-help">Logo usado quando o Windows esta em modo escuro. Vazio = usa o mesmo logo do modo claro/default.</small>
-        </div>
-        <div data-visual-group="branding">
-          <label for="visualBrandingBanner">Branding — Banner PNG (caminho, Classic)</label>
-          <input id="visualBrandingBanner" type="text" value="" />
-          <small class="field-help">Banner (faixa superior) exibido apenas nos dialogs em estilo Classic. Nao afeta Fluent nem Dialog Box Win32.</small>
-        </div>
-        <div data-visual-group="branding">
-          <label for="visualDialogStyle">Dialog Style</label>
-          <select id="visualDialogStyle">
-            <option value="">(padrao Fluent)</option>
-            <option value="Fluent">Fluent</option>
-            <option value="Classic">Classic</option>
-          </select>
-          <small class="field-help">Estilo visual dos dialogs do PSADT: Fluent (moderno, WPF) ou Classic (WinForms 3.x, usa o banner). Vazio = Fluent.</small>
-        </div>
-        <div data-visual-group="branding">
-          <label for="visualAccentColor">Accent Color (hex)</label>
-          <input id="visualAccentColor" type="text" value="" placeholder="4A9EFF ou FF4A9EFF" />
-          <small class="field-help">Cor de acento dos dialogs Fluent (hex RGB ou ARGB, ex.: 4A9EFF ou FF4A9EFF). Vazio = cor default do toolkit. Somente dialogs Fluent (nao afeta Balloon/Dialog Box).</small>
-        </div>
-        <div data-visual-group="dialog">
-          <label for="visualDialogButtons">Dialog Buttons</label>
-          <select id="visualDialogButtons">
-            <option value="OkCancel">OkCancel</option>
-            <option value="Ok">Ok</option>
-            <option value="YesNo">YesNo</option>
-            <option value="YesNoCancel">YesNoCancel</option>
-            <option value="RetryCancel">RetryCancel</option>
-            <option value="AbortRetryIgnore">AbortRetryIgnore</option>
-            <option value="CancelTryContinue">CancelTryContinue</option>
-          </select>
-          <small class="field-help">Somente Dialog Box: conjunto de botões do MessageBox (-Buttons). O texto do botão clicado volta em "Resposta do usuario".</small>
-        </div>
-        <div data-visual-group="dialog">
-          <label for="visualDialogDefault">Default Button</label>
-          <select id="visualDialogDefault">
-            <option value="First">First</option>
-            <option value="Second">Second</option>
-            <option value="Third">Third</option>
-          </select>
-          <small class="field-help">Somente Dialog Box: -DefaultButton, qual botao comeca focado (respeitando a quantidade de botões escolhida acima).</small>
-        </div>
-        <div data-visual-group="dialog">
-          <label for="visualDialogIcon">Dialog Icon</label>
-          <select id="visualDialogIcon">
-            <option value="Information">Information</option>
-            <option value="None">None</option>
-            <option value="Exclamation">Exclamation</option>
-            <option value="Question">Question</option>
-            <option value="Stop">Stop</option>
-          </select>
-          <small class="field-help">Somente Dialog Box: -Icon do MessageBox Win32 (None/Stop/Question/Exclamation/Information). Enum diferente do icon do Prompt.</small>
-        </div>
-        <div data-visual-group="dialog">
-          <label for="visualDialogTimeout">Dialog Timeout (seg, 0=120s, max 3300)</label>
-          <input id="visualDialogTimeout" type="number" value="120" min="0" max="3300" />
-          <small class="field-help">Somente Dialog Box: -Timeout em segundos (0 = 120s no teste; max 3300s = UI.DefaultTimeout). Com NoWait marcado, o script nao espera o dialogo.</small>
-        </div>
-        <div data-visual-group="dialog" style="grid-column: 1 / -1; display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
-          <label><input id="visualDialogNoWait" type="checkbox" /> NoWait</label>
-          <label><input id="visualDialogExitOnTimeout" type="checkbox" /> ExitOnTimeout</label>
-          <label><input id="visualDialogNotTopMost" type="checkbox" /> NotTopMost</label>
-          <label><input id="visualDialogForce" type="checkbox" /> Force</label>
-          <small class="field-help">Somente Dialog Box: NoWait (-NoWait) assincrono; ExitOnTimeout (-ExitOnTimeout) encerra o script ao expirar; NotTopMost (-NotTopMost) sem ficar acima de tudo; Force (-Force) exibe mesmo com DeployMode Silent/NonInteractive.</small>
-        </div>
+      <h2>📝 Script PowerShell</h2>
+      <div class="meta" style="margin-bottom:8px;">Runner genérico de PowerShell do agente (sem PSADT). Use o template como base.</div>
+      <div class="actions" style="margin-bottom:10px;">
+        <button id="getTemplateBtn" class="btn subtle">Carregar Template</button>
+        <button id="executeCustomBtn" class="btn primary">Executar Script</button>
       </div>
-      </div>
-      <div id="visualNotifHelp" class="meta" style="margin-top:10px;font-size:.8rem;line-height:1.45;border-left:3px solid var(--accent, #4a9eff);padding-left:8px;"></div>
-      <div class="actions" style="margin-top:10px;">
-        <button id="visualNotifBtn" class="btn primary">Executar Notificacao PSADT</button>
-      </div>
-      <div id="visualNotifStatus" class="status"></div>
+      <label for="customScript">Conteudo do Script</label>
+      <textarea id="customScript" style="min-height:120px; width:100%; border:1px solid var(--psadt-border); border-radius:8px; padding:8px 10px; font-family:'IBM Plex Mono',monospace; font-size:0.9rem;"></textarea>
+      <div id="customStatus" class="status" style="margin-top:10px;"></div>
       <div class="output-wrap small">
-        <pre id="visualNotifOutput" style="margin:0;white-space:pre-wrap;font-size:0.85rem;font-family:'IBM Plex Mono',monospace;"></pre>
+        <pre id="customOutput" style="margin:0; white-space:pre-wrap; font-size:0.85rem; font-family:'IBM Plex Mono',monospace;"></pre>
       </div>
     </section>
   </div>
-
 </main>

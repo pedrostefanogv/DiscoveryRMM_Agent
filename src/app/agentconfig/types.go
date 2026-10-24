@@ -2,7 +2,11 @@
 // do agente (parsing, merge hierárquico e normalização), separados do App.
 package agentconfig
 
-import "discovery/app/core/selfupdate"
+import (
+	"strings"
+
+	"discovery/app/core/selfupdate"
+)
 
 // AgentPSADTConfig defines PSAppDeployToolkit integration settings from the API.
 type AgentPSADTConfig struct {
@@ -19,6 +23,33 @@ type AgentPSADTConfig struct {
 	IgnoreExitCodes         []int  `json:"ignoreExitCodes"`
 	TimeoutAction           string `json:"timeoutAction"`
 	UnknownExitCodePolicy   string `json:"unknownExitCodePolicy"`
+}
+
+// NotificationBackend valores aceitos para o backend de notificações.
+const (
+	// NotificationBackendNative usa as janelas nativas do agente (notifyui):
+	// cartão Win32 + toast do Windows Runtime. Não exige o módulo PSADT.
+	NotificationBackendNative = "native"
+	// NotificationBackendPSADT usa os cmdlets do PSAppDeployToolkit (legado).
+	NotificationBackendPSADT = "psadt"
+)
+
+// AgentNotificationsConfig define o backend das notificações visuais do agente.
+type AgentNotificationsConfig struct {
+	// Backend: "native" (default, não exige módulo) | "psadt" (legado).
+	// Na transição, falha do backend nativo cai no PSADT (quando habilitado).
+	Backend string `json:"backend"`
+}
+
+// NormalizeNotificationBackend resolve o backend configurado. Valor vazio ou
+// desconhecido = "native" (default da substituição do PSADT).
+func NormalizeNotificationBackend(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "psadt", "psappdeploytoolkit", "psadt_backend":
+		return NotificationBackendPSADT
+	default:
+		return NotificationBackendNative
+	}
 }
 
 // NotificationThemeConfig defines base colors used by notification UI.
@@ -140,6 +171,7 @@ type AgentConfiguration struct {
 	ResolvedAt                        string                          `json:"resolvedAt"`
 	AgentUpdate                       selfupdate.Policy               `json:"agentUpdate"`
 	PSADT                             AgentPSADTConfig                `json:"psadt"`
+	Notifications                     AgentNotificationsConfig        `json:"notifications"`
 	NotificationBranding              AgentNotificationBrandingConfig `json:"notificationBranding"`
 	NotificationPolicies              []AgentNotificationPolicy       `json:"notificationPolicies"`
 	Consolidation                     AgentConsolidationConfig        `json:"consolidation"`

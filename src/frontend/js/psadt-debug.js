@@ -1,14 +1,10 @@
 "use strict";
 
-(function () {
-  var defaultThemeFallback = {
-    surface: "#fffefa",
-    text: "#1a1712",
-    accent: "#0a7a56",
-    warning: "#f0a04b",
-    danger: "#c1121f"
-  };
+// Console de debug das NOTIFICAÇÕES NATIVAS do agente (substituto do console
+// de debug do PSADT). Testa os componentes de core/notifyui, a pipeline de
+// eventos e o runner de PowerShell — nada de PSAppDeployToolkit.
 
+(function () {
   function appApi() {
     if (!window.go || !window.go.app || !window.go.app.App) {
       throw new Error("API do Wails indisponivel");
@@ -16,76 +12,79 @@
     return window.go.app.App;
   }
 
-  function getDefaultTheme() {
-    var styles = getComputedStyle(document.documentElement);
-    return {
-      surface: normalizeThemeColor(styles.getPropertyValue("--surface"), defaultThemeFallback.surface),
-      text: normalizeThemeColor(styles.getPropertyValue("--text"), defaultThemeFallback.text),
-      accent: normalizeThemeColor(styles.getPropertyValue("--accent"), defaultThemeFallback.accent),
-      warning: normalizeThemeColor(styles.getPropertyValue("--accent-2"), defaultThemeFallback.warning),
-      danger: normalizeThemeColor(styles.getPropertyValue("--danger"), defaultThemeFallback.danger)
-    };
-  }
-
-  function getPsadtThemeScope() {
-    return document.getElementById("psadtView");
-  }
-
-  var refreshStateBtn = document.getElementById("refreshStateBtn");
-  var closeBtn = document.getElementById("closeBtn");
-  var stateKvs = document.getElementById("stateKvs");
-  var stateStatus = document.getElementById("stateStatus");
-
-  var moduleVersion = document.getElementById("moduleVersion");
-  var checkModuleBtn = document.getElementById("checkModuleBtn");
-  var installModuleBtn = document.getElementById("installModuleBtn");
-  var moduleStatus = document.getElementById("moduleStatus");
-
-  var colorSurface = document.getElementById("colorSurface");
-  var colorText = document.getElementById("colorText");
-  var colorAccent = document.getElementById("colorAccent");
-  var colorWarning = document.getElementById("colorWarning");
-  var colorDanger = document.getElementById("colorDanger");
-  var applyThemeBtn = document.getElementById("applyThemeBtn");
-  var resetThemeBtn = document.getElementById("resetThemeBtn");
-
-  // Reage à troca de tema global (claro ↔ escuro) limpando inline styles
-  // para que a view PSADT herde os tokens do tema automaticamente.
-  var themeObserver = new MutationObserver(function () {
-    clearInlinePsadtTheme();
-  });
-  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-
-  var notifTitle = document.getElementById("notifTitle");
-  var notifMessage = document.getElementById("notifMessage");
-  var notifSeverity = document.getElementById("notifSeverity");
-  var notifMode = document.getElementById("notifMode");
-  var notifLayout = document.getElementById("notifLayout");
-  var emitNotifBtn = document.getElementById("emitNotifBtn");
-  var notifStatus = document.getElementById("notifStatus");
-
   function setStatus(el, message, kind) {
     if (!el) return;
     el.textContent = message || "";
     el.className = "status" + (kind ? " " + kind : "");
   }
 
-  function normalizeThemeColor(value, fallback) {
-    var normalized = String(value || "").trim();
-    if (!normalized) return fallback;
-    if (/^#[0-9a-fA-F]{3,8}$/.test(normalized)) return normalized;
-    if (/^(rgb|rgba|hsl|hsla)\(/i.test(normalized)) return normalized;
-    return fallback;
-  }
-
   function escapeHtml(text) {
     return String(text || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/\"/g, "&quot;")
-      .replace(/'/g, "&#39;");
+      .replace(/&/g, "&" + "amp;")
+      .replace(/</g, "&" + "lt;")
+      .replace(/>/g, "&" + "gt;")
+      .replace(/"/g, "&" + "quot;")
+      .replace(/'/g, "&" + "#39;");
   }
+
+  var refreshStateBtn = document.getElementById("refreshStateBtn");
+  var stateKvs = document.getElementById("stateKvs");
+  var stateStatus = document.getElementById("stateStatus");
+
+  function loadState() {
+    if (!stateKvs) return;
+    setStatus(stateStatus, "carregando estado...");
+    appApi().GetNotificationDebugState().then(function (state) {
+      var backend = (state && state.backend) || "native";
+      var kvs = [
+        ["Backend", backend],
+        ["Runtime debug", String(!!(state && state.runtimeDebugMode))],
+        ["PSADT", "removido — notificações nativas"]
+      ];
+      stateKvs.innerHTML = kvs.map(function (kv) {
+        return '<div class="kv"><span class="k">' + escapeHtml(kv[0]) + '</span><span class="v">' + escapeHtml(kv[1]) + "</span></div>";
+      }).join("");
+      setStatus(stateStatus, "estado carregado", "ok");
+    }).catch(function (err) {
+      setStatus(stateStatus, "falha ao carregar estado: " + err, "error");
+    });
+  }
+
+  if (refreshStateBtn) {
+    refreshStateBtn.addEventListener("click", loadState);
+  }
+  loadState();
+
+  // ── Preflight nativo ──
+  var runPreflightBtn = document.getElementById("runPreflightBtn");
+  var preflightStatus = document.getElementById("preflightStatus");
+  var preflightOutput = document.getElementById("preflightOutput");
+
+  if (runPreflightBtn) {
+    runPreflightBtn.addEventListener("click", function () {
+      setStatus(preflightStatus, "executando preflight...");
+      runPreflightBtn.disabled = true;
+      appApi().RunNativePreflightChecks().then(function (r) {
+        runPreflightBtn.disabled = false;
+        var lines = [
+          "OS: " + (r.osName || "?") + " " + (r.osVersion || "?") + " (" + (r.architecture || "?") + ")",
+          "Admin (elevado): " + (r.isAdmin ? "sim" : "nao"),
+          "Reboot pendente: " + (r.rebootPending ? "sim" : "nao"),
+          "Rede: " + (r.networkAvailable ? "online" : "offline"),
+          "Timestamp: " + (r.checkedAtUtc || "")
+        ];
+        if (preflightOutput) preflightOutput.textContent = lines.join("\n");
+        setStatus(preflightStatus, r.success ? "preflight concluido" : "preflight falhou: " + (r.error || ""), r.success ? "ok" : "error");
+      }).catch(function (err) {
+        runPreflightBtn.disabled = false;
+        setStatus(preflightStatus, "falha no preflight: " + err, "error");
+      });
+    });
+  }
+
+  // ── Pipeline de eventos (notificação interna) ──
+  var emitNotifBtn = document.getElementById("emitNotifBtn");
+  var notifStatus = document.getElementById("notifStatus");
 
   function appendPreviewToList(item) {
     var list = document.getElementById("previewList");
@@ -93,533 +92,164 @@
     var severityClass = item.severity === "critical" || item.severity === "high" ? "error" : (item.severity === "medium" ? "warning" : "success");
     var html = "";
     html += '<div class="preview-item ' + severityClass + '">';
-    html += '<div class="preview-title">' + escapeHtml(item.title) + '</div>';
-    html += '<div>' + escapeHtml(item.message) + '</div>';
-    html += '<div class="preview-badge">mode=' + escapeHtml(item.mode) + ' | severity=' + escapeHtml(item.severity) + ' | layout=' + escapeHtml(item.layout) + '</div>';
+    html += '<div class="preview-title">' + escapeHtml(item.title) + "</div>";
+    html += "<div>" + escapeHtml(item.message) + "</div>";
+    html += '<div class="preview-badge">mode=' + escapeHtml(item.mode) + " | severity=" + escapeHtml(item.severity) + " | layout=" + escapeHtml(item.layout) + "</div>";
     html += "</div>";
     list.insertAdjacentHTML("afterbegin", html);
   }
 
-  function currentTheme() {
-    var fallbackTheme = getDefaultTheme();
-    return {
-      surface: colorSurface ? colorSurface.value : fallbackTheme.surface,
-      text: colorText ? colorText.value : fallbackTheme.text,
-      accent: colorAccent ? colorAccent.value : fallbackTheme.accent,
-      warning: colorWarning ? colorWarning.value : fallbackTheme.warning,
-      danger: colorDanger ? colorDanger.value : fallbackTheme.danger
-    };
-  }
-
-  function applyTheme(theme) {
-    var scope = getPsadtThemeScope();
-    if (!scope) return;
-    scope.style.setProperty("--psadt-surface", theme.surface);
-    scope.style.setProperty("--psadt-text", theme.text);
-    scope.style.setProperty("--psadt-accent", theme.accent);
-    scope.style.setProperty("--psadt-warning", theme.warning);
-    scope.style.setProperty("--psadt-danger", theme.danger);
-  }
-
-  function clearInlinePsadtTheme() {
-    var scope = getPsadtThemeScope();
-    if (!scope) return;
-    scope.style.removeProperty("--psadt-surface");
-    scope.style.removeProperty("--psadt-text");
-    scope.style.removeProperty("--psadt-accent");
-    scope.style.removeProperty("--psadt-warning");
-    scope.style.removeProperty("--psadt-danger");
-  }
-
-  function renderState(state) {
-    if (!stateKvs) return;
-    var cfg = (state && state.configuration) || {};
-    var psadt = cfg.psadt || {};
-    var module = (state && state.moduleStatus) || {};
-
-    var rows = [
-      ["Debug Mode", String(!!(state && state.runtimeDebugMode))],
-      ["PSADT enabled", String(!!psadt.enabled)],
-      ["PSADT version", psadt.requiredVersion || "-"],
-      ["Auto install", String(!!psadt.autoInstallModule)],
-      ["Install source", psadt.installSource || "-"],
-      ["Module installed", String(!!module.installed)],
-      ["Module version", module.version || "-"],
-      ["Policies", String((state && state.notificationPolicies ? state.notificationPolicies.length : 0))],
-      ["Brand company", (state && state.notificationBranding && state.notificationBranding.companyName) || "-"]
-    ];
-
-    stateKvs.innerHTML = rows.map(function (row) {
-      return '<div class="kv"><span class="k">' + escapeHtml(row[0]) + '</span><span class="v mono">' + escapeHtml(row[1]) + '</span></div>';
-    }).join("");
-  }
-
-  function loadState() {
-    setStatus(stateStatus, "Carregando estado...", "");
-    appApi().GetPSADTDebugState().then(function (state) {
-      renderState(state || {});
-      setStatus(stateStatus, "Estado atualizado.", "ok");
-      if (state && state.notificationBranding && state.notificationBranding.theme) {
-        var t = state.notificationBranding.theme;
-        if (t.surface && colorSurface) colorSurface.value = t.surface;
-        if (t.text && colorText) colorText.value = t.text;
-        if (t.accent && colorAccent) colorAccent.value = t.accent;
-        if (t.warning && colorWarning) colorWarning.value = t.warning;
-        if (t.danger && colorDanger) colorDanger.value = t.danger;
-        applyTheme(currentTheme());
-      }
-    }).catch(function (err) {
-      setStatus(stateStatus, "Falha ao carregar estado: " + (err && err.message ? err.message : String(err)), "error");
-    });
-  }
-
-  function checkModule() {
-    setStatus(moduleStatus, "Verificando modulo...", "");
-    appApi().CheckPSADTModuleStatus().then(function (result) {
-      var msg = (result && result.message) || "Sem resposta";
-      if (result && result.installed) {
-        msg = msg + " (versao " + (result.version || "-") + ")";
-      }
-      setStatus(moduleStatus, msg, result && result.installed ? "ok" : "error");
-      loadState();
-    }).catch(function (err) {
-      setStatus(moduleStatus, "Falha na verificacao: " + (err && err.message ? err.message : String(err)), "error");
-    });
-  }
-
-  function installModule() {
-    setStatus(moduleStatus, "Instalando modulo PSADT...", "");
-    var version = moduleVersion ? moduleVersion.value : "4.1.8";
-    appApi().InstallPSADTModule(version).then(function (result) {
-      var ok = !!(result && result.installed);
-      var msg = (result && result.message) || (ok ? "Instalacao concluida" : "Instalacao falhou");
-      if (ok && result.version) {
-        msg += " (" + result.version + ")";
-      }
-      setStatus(moduleStatus, msg, ok ? "ok" : "error");
-      loadState();
-    }).catch(function (err) {
-      setStatus(moduleStatus, "Falha na instalacao: " + (err && err.message ? err.message : String(err)), "error");
-    });
-  }
-
-  function buildNotifFromForm() {
-    return {
-      title: notifTitle ? notifTitle.value : "Teste",
-      message: notifMessage ? notifMessage.value : "Mensagem de teste",
-      mode: notifMode ? notifMode.value : "notify_only",
-      severity: notifSeverity ? notifSeverity.value : "medium",
-      layout: notifLayout ? notifLayout.value : "toast",
-      accent: colorAccent ? colorAccent.value : "",
-      requireAck: notifMode && notifMode.value === "require_confirmation"
-    };
-  }
-
-  function emitRuntimeNotification() {
-    var payload = buildNotifFromForm();
-    appApi().EmitPSADTDebugNotification(payload).then(function () {
-      appendPreviewToList(payload);
-      setStatus(notifStatus, "Evento emitido no runtime via pipeline real de notificacao.", "ok");
-    }).catch(function (err) {
-      setStatus(notifStatus, "Falha ao emitir evento: " + (err && err.message ? err.message : String(err)), "error");
-    });
-  }
-
-  function resetTheme() {
-    var fallbackTheme = getDefaultTheme();
-    if (colorSurface) colorSurface.value = fallbackTheme.surface;
-    if (colorText) colorText.value = fallbackTheme.text;
-    if (colorAccent) colorAccent.value = fallbackTheme.accent;
-    if (colorWarning) colorWarning.value = fallbackTheme.warning;
-    if (colorDanger) colorDanger.value = fallbackTheme.danger;
-    clearInlinePsadtTheme();
-  }
-
-  function executeTestScript() {
-    var executeAppName = document.getElementById("executeAppName");
-    var executeAppVersion = document.getElementById("executeAppVersion");
-    var appName = executeAppName ? executeAppName.value : "TestApp";
-    var appVersion = executeAppVersion ? executeAppVersion.value : "1.0.0";
-    
-    var executeStatus = document.getElementById("executeStatus");
-    setStatus(executeStatus, "Executando script PSADT...", "");
-    
-    appApi().ExecutePSADTTestScript(appName, appVersion).then(function (result) {
-      var msg = result && result.success ? "✓ Script executado com sucesso" : "✗ Falha na execução";
-      if (result && result.error) msg += ": " + result.error;
-      
-      var outputEl = document.getElementById("executeOutput");
-      if (outputEl) {
-        outputEl.textContent = (result && result.output) ? result.output : "(sem saída)";
-      }
-      
-      var duration = result ? result.durationMs : 0;
-      var exitCode = result ? result.exitCode : -1;
-      setStatus(executeStatus, msg + " (ExitCode: " + exitCode + ", " + duration + "ms)", result && result.success ? "ok" : "error");
-      
-    }).catch(function (err) {
-      setStatus(executeStatus, "Falha: " + (err && err.message ? err.message : String(err)), "error");
-    });
-  }
-
-  function getScriptTemplate() {
-    appApi().GetPSADTScriptTemplate().then(function (template) {
-      var scriptEl = document.getElementById("customScript");
-      if (scriptEl) {
-        scriptEl.value = template;
-      }
-    }).catch(function (err) {
-      setStatus(document.getElementById("customStatus"), "Erro ao carregar template: " + (err && err.message ? err.message : String(err)), "error");
-    });
-  }
-
-  // =====================================================================
-  // Notificacao Visual Nativa — visibilidade por tipo e ajuda contextual
-  // =====================================================================
-
-  // Visibilidade de campos por tipo de notificacao. Espelha exatamente o que
-  // buildPSADTVisualScript (app/psadt_debug_bridge.go) consome de cada tipo:
-  // campos ignorados pelo cmdlet correspondente nao sao exibidos.
-  var VISUAL_FIELD_GROUPS = {
-    // Titulo: Balloon (-BalloonTipTitle), Prompt (-Title), Dialog Box e
-    // Restart Prompt (-Title). Progress/Welcome usam textos padrao do PSADT.
-    title:    ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "dialog_box", "restart_prompt", "countdown"],
-    // Mensagem: Balloon (-BalloonTipText), Prompt (-Message), Progress (-StatusMessage), Dialog Box (-Text).
-    message:  ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "dialog_box", "restart_prompt", "countdown"],
-    // App Name: entra no Open-ADTSession; Dialog Box nao abre sessao.
-    session:  ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "welcome", "countdown"],
-    subtitle: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "countdown"],
-    balloon:  ["balloon_info", "balloon_warning", "balloon_error"],
-    prompt:   ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input"],
-    promptButtons: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input"],
-    promptInput: ["prompt_input"],
-    dialog:   ["dialog_box"],
-    progress: ["progress"],
-    restart:  ["restart_prompt"],
-    welcome:  ["welcome"],
-    // Branding vale para os dialogs Fluent/Classic; Dialog Box (Win32) e Balloon usam icones de sistema.
-    branding: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "welcome", "countdown"],
-    // Timeout do prompt: para o tipo "countdown" e o contador do notice
-    // (ForceCountdown do Welcome), nao o -Timeout do Prompt.
-    promptTimeout: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "countdown"]
-  };
-
-  var VISUAL_TYPE_HELP = {
-    balloon_info:    "\u{1F4AC} BalloonTip \u2014 notifica\u00e7\u00e3o n\u00e3o bloqueante na bandeja (no Win10+ vira toast). Cmdlet: Show-ADTBalloonTip. \u00datil para avisos r\u00e1pidos sem interrup\u00e7\u00e3o. Campos aplic\u00e1veis: tempo de exibi\u00e7\u00e3o e NoWait.",
-    balloon_warning: "\u26A0\u{FE0F} BalloonTip de aviso \u2014 igual ao Info, com \u00edcone de alerta. N\u00e3o bloqueia o usu\u00e1rio. Cmdlet: Show-ADTBalloonTip (-BalloonTipIcon Warning).",
-    balloon_error:   "\u274C BalloonTip de erro \u2014 igual ao Info, com \u00edcone de erro. N\u00e3o bloqueia o usu\u00e1rio. Cmdlet: Show-ADTBalloonTip (-BalloonTipIcon Error).",
-    prompt_ok:       "\u{1F44D} Prompt modal com bot\u00e3o OK \u2014 bloqueante; o usu\u00e1rio responde e a sess\u00e3o aguarda. Cmdlet: Show-ADTInstallationPrompt. Retorna o texto do bot\u00e3o clicado. Os campos de bot\u00e3o sobrescrevem o OK padr\u00e3o quando preenchidos.",
-    prompt_yesno:    "\u2753 Prompt modal Sim / N\u00e3o \u2014 o usu\u00e1rio decide e o bot\u00e3o clicado volta em \"Resposta do usuario\". \u00datil para confirmar a\u00e7\u00f5es antes de prosseguir. Os bot\u00f5es padr\u00e3o (Sim/N\u00e3o) podem ser renomeados nos campos de bot\u00e3o.",
-    prompt_continue: "\u23ED\u{FE0F} Prompt Continuar / Adiar \u2014 o usu\u00e1rio prossegue com a instala\u00e7\u00e3o ou adia. Com timeout, o prompt fecha sozinho ap\u00f3s N segundos. Bot\u00f5es padr\u00e3o (Continuar/Adiar) renome\u00e1veis nos campos de bot\u00e3o.",
-    prompt_input:    "\u2328\u{FE0F} Prompt com entrada de texto \u2014 -RequestInput: exibe caixa de texto e o que o usu\u00e1rio digitar volta em \"Resposta do usuario\" (InputDialogResult.Text). O bot\u00e3o direito submete a resposta; o campo Valor Inicial pre-preenche a caixa.",
-    progress:        "\u23F3 Barra de progresso \u2014 janela fluent n\u00e3o bloqueante com mensagem de status e detalhe. Exibe por N segundos e fecha (Close-ADTInstallationProgress).",
-    dialog_box:      "\u{1F5A8}\u{FE0F} Dialog Box \u2014 MessageBox cl\u00e1ssico (Ok/OkCancel/YesNo/...) com \u00edcone, timeout e op\u00e7\u00f5es avan\u00e7adas. Cmdlet: Show-ADTDialogBox. Retorna o texto do bot\u00e3o clicado.",
-    restart_prompt:  "\u{1F501} Restart Prompt \u2014 janela de reinicializa\u00e7\u00e3o com countdown para restart for\u00e7ado (Show-ADTInstallationRestartPrompt). Sem countdown, o usu\u00e1rio apenas decide reiniciar agora.",
-    welcome:         "\u{1F44B} Installation Welcome \u2014 a experi\u00eancia completa do PSADT: avisa sobre processos abertos (fechar), permite adiar (defer times/deadline) e pode bloquear os apps durante o deploy. Show-ADTInstallationWelcome.",
-    countdown:       "\u23F3 Countdown \u2014 mensagem com bot\u00e3o OK e CONTADOR VIS\u00cdVEL na tela (Show-ADTInstallationWelcome -ForceCountdown), com mensagem/bot\u00e3o customizados via strings.psd1 no staging. Fecha sozinha quando o contador termina; OK para continuar, Fechar para dispensar."
-  };
-
-  function updateVisualFields() {
-    var typeEl = document.getElementById("visualNotifType");
-    if (!typeEl) return;
-    var t = typeEl.value;
-    try { localStorage.setItem("psadt.visualNotifType", t); } catch (e) { /* storage indisponivel */ }
-    var groups = document.querySelectorAll("[data-visual-group]");
-    var aplicaveis = [];
-    for (var i = 0; i < groups.length; i++) {
-      var keys = (groups[i].getAttribute("data-visual-group") || "").split(" ");
-      var show = false;
-      for (var j = 0; j < keys.length; j++) {
-        var list = VISUAL_FIELD_GROUPS[keys[j]] || [];
-        if (list.indexOf(t) >= 0) { show = true; break; }
-      }
-      // Usa classe em vez de style.display para preservar o display:inline
-      // original dos wrappers (flex) quando o campo volta a aparecer.
-      if (show) {
-        groups[i].classList.remove("psadt-field-hidden");
-        var lbl = groups[i].querySelector("label");
-        if (lbl && aplicaveis.indexOf(lbl.textContent.trim()) < 0) {
-          aplicaveis.push(lbl.textContent.trim());
-        }
-      } else {
-        groups[i].classList.add("psadt-field-hidden");
-      }
-    }
-    var help = document.getElementById("visualNotifHelp");
-    if (help) {
-      var text = VISUAL_TYPE_HELP[t] || "";
-      if (aplicaveis.length) {
-        text += " Campos aplicaveis neste tipo: " + aplicaveis.join(", ") + ".";
-      }
-      help.textContent = text;
-    }
-  }
-
-  function executeVisualNotification() {
-    var typeEl    = document.getElementById("visualNotifType");
-    var titleEl   = document.getElementById("visualNotifTitle");
-    var messageEl = document.getElementById("visualNotifMessage");
-    var subtitleEl = document.getElementById("visualNotifSubtitle");
-    var appNameEl = document.getElementById("visualNotifAppName");
-    var durEl     = document.getElementById("visualNotifDuration");
-    var balloonTimeEl = document.getElementById("visualBalloonTime");
-    var balloonNoWaitEl = document.getElementById("visualBalloonNoWait");
-    var promptLeftEl = document.getElementById("visualPromptLeft");
-    var promptMiddleEl = document.getElementById("visualPromptMiddle");
-    var promptRightEl = document.getElementById("visualPromptRight");
-    var promptIconEl = document.getElementById("visualPromptIcon");
-    var promptTimeoutEl = document.getElementById("visualPromptTimeout");
-    var promptNoWaitEl = document.getElementById("visualPromptNoWait");
-    var promptNotTopMostEl = document.getElementById("visualPromptNotTopMost");
-    var promptDefaultValueEl = document.getElementById("visualPromptDefaultValue");
-    var dialogButtonsEl = document.getElementById("visualDialogButtons");
-    var dialogDefaultEl = document.getElementById("visualDialogDefault");
-    var dialogIconEl = document.getElementById("visualDialogIcon");
-    var dialogTimeoutEl = document.getElementById("visualDialogTimeout");
-    var dialogNoWaitEl = document.getElementById("visualDialogNoWait");
-    var dialogExitOnTimeoutEl = document.getElementById("visualDialogExitOnTimeout");
-    var dialogNotTopMostEl = document.getElementById("visualDialogNotTopMost");
-    var dialogForceEl = document.getElementById("visualDialogForce");
-    var restartCountdownEl = document.getElementById("visualRestartCountdown");
-    var restartNoCountdownEl = document.getElementById("visualRestartNoCountdown");
-    var closeProcessesEl = document.getElementById("visualCloseProcesses");
-    var allowDeferEl = document.getElementById("visualAllowDefer");
-    var deferTimesEl = document.getElementById("visualDeferTimes");
-    var deferDeadlineEl = document.getElementById("visualDeferDeadline");
-    var blockExecutionEl = document.getElementById("visualBlockExecution");
-    var closeCountdownEl = document.getElementById("visualCloseCountdown");
-    var brandingIconEl = document.getElementById("visualBrandingIcon");
-    var brandingIconDarkEl = document.getElementById("visualBrandingIconDark");
-    var brandingBannerEl = document.getElementById("visualBrandingBanner");
-    var dialogStyleEl = document.getElementById("visualDialogStyle");
-    var accentColorEl = document.getElementById("visualAccentColor");
-    var statusEl  = document.getElementById("visualNotifStatus");
-    var outputEl  = document.getElementById("visualNotifOutput");
-
-    var req = {
-      notifType:       typeEl    ? typeEl.value                   : "balloon_info",
-      title:           titleEl   ? titleEl.value                  : "Discovery Agent",
-      message:         messageEl ? messageEl.value                : "Teste de notificacao PSADT",
-      subtitle:        subtitleEl ? subtitleEl.value              : "",
-      appName:         appNameEl ? appNameEl.value                : "TestApp",
-      durationSeconds: durEl     ? (parseInt(durEl.value, 10) || 5)  : 5,
-      balloonTimeSeconds: balloonTimeEl ? (parseInt(balloonTimeEl.value, 10) || 10) : 10,
-      balloonNoWait: balloonNoWaitEl ? !!balloonNoWaitEl.checked : false,
-      promptLeftText: promptLeftEl ? promptLeftEl.value : "",
-      promptMiddleText: promptMiddleEl ? promptMiddleEl.value : "",
-      promptRightText: promptRightEl ? promptRightEl.value : "",
-      promptIcon: promptIconEl ? promptIconEl.value : "",
-      promptTimeout: promptTimeoutEl ? (parseInt(promptTimeoutEl.value, 10) || 0) : 0,
-      promptNoWait: promptNoWaitEl ? !!promptNoWaitEl.checked : false,
-      promptNotTopMost: promptNotTopMostEl ? !!promptNotTopMostEl.checked : false,
-      promptDefaultValue: promptDefaultValueEl ? promptDefaultValueEl.value.trim() : "",
-      dialogButtons: dialogButtonsEl ? dialogButtonsEl.value : "OkCancel",
-      dialogDefault: dialogDefaultEl ? dialogDefaultEl.value : "First",
-      dialogIcon: dialogIconEl ? dialogIconEl.value : "Information",
-      dialogTimeout: dialogTimeoutEl ? (parseInt(dialogTimeoutEl.value, 10) || 0) : 0,
-      dialogNoWait: dialogNoWaitEl ? !!dialogNoWaitEl.checked : false,
-      dialogExitOnTimeout: dialogExitOnTimeoutEl ? !!dialogExitOnTimeoutEl.checked : false,
-      dialogNotTopMost: dialogNotTopMostEl ? !!dialogNotTopMostEl.checked : false,
-      dialogForce: dialogForceEl ? !!dialogForceEl.checked : false,
-      restartCountdownSeconds: restartCountdownEl ? (parseInt(restartCountdownEl.value, 10) || 60) : 60,
-      restartNoCountdown: restartNoCountdownEl ? !!restartNoCountdownEl.checked : false,
-      closeProcesses: closeProcessesEl ? closeProcessesEl.value : "",
-      allowDefer: allowDeferEl ? !!allowDeferEl.checked : false,
-      deferTimes: deferTimesEl ? (parseInt(deferTimesEl.value, 10) || 0) : 0,
-      deferDeadline: deferDeadlineEl ? deferDeadlineEl.value.trim() : "",
-      blockExecution: blockExecutionEl ? !!blockExecutionEl.checked : false,
-      closeProcessesCountdown: closeCountdownEl ? (parseInt(closeCountdownEl.value, 10) || 0) : 0,
-      brandingIconPath: brandingIconEl ? brandingIconEl.value.trim() : "",
-      brandingIconDark: brandingIconDarkEl ? brandingIconDarkEl.value.trim() : "",
-      brandingBannerPath: brandingBannerEl ? brandingBannerEl.value.trim() : "",
-      dialogStyle: dialogStyleEl ? dialogStyleEl.value : "",
-      fluentAccentColor: accentColorEl ? accentColorEl.value.trim() : ""
-    };
-
-    setStatus(statusEl, "Executando notificacao PSADT nativa...", "");
-    if (outputEl) outputEl.textContent = "";
-
-    appApi().ExecutePSADTVisualNotification(req).then(function (result) {
-      if (outputEl) {
-        outputEl.textContent = (result && result.output) ? result.output : "(sem saida)";
-      }
-      var ok  = !!(result && result.success);
-      var msg = ok ? "\u2713 Notificacao PSADT executada" : "\u2717 Falha";
-      if (result && result.error) msg += ": " + result.error;
-      if (ok && result.result) msg += " \u2014 Resposta do usuario: " + result.result;
-      var exitCode = result ? result.exitCode : -1;
-      var duration = result ? result.durationMs : 0;
-      setStatus(statusEl, msg + " (ExitCode: " + exitCode + ", " + duration + "ms)", ok ? "ok" : "error");
-    }).catch(function (err) {
-      setStatus(statusEl, "Erro: " + (err && err.message ? err.message : String(err)), "error");
-    });
-  }
-
-  function executeCustomScript() {
-    var scriptEl = document.getElementById("customScript");
-    var scriptContent = scriptEl ? scriptEl.value : "";
-    var customStatus = document.getElementById("customStatus");
-    
-    if (!scriptContent || !scriptContent.trim()) {
-      setStatus(customStatus, "Script vazio!", "error");
-      return;
-    }
-    
-    setStatus(customStatus, "Executando script customizado...", "");
-    
-    appApi().ExecuteCustomPSADTScript(scriptContent).then(function (result) {
-      var msg = result && result.success ? "✓ Sucesso" : "✗ Falha";
-      var outputEl = document.getElementById("customOutput");
-      if (outputEl) {
-        outputEl.textContent = (result && result.output) ? result.output : "(sem saída)";
-      }
-      var exitCode = result ? result.exitCode : -1;
-      setStatus(customStatus, msg + " (ExitCode: " + exitCode + ")", result && result.success ? "ok" : "error");
-    }).catch(function (err) {
-      setStatus(customStatus, "Erro: " + (err && err.message ? err.message : String(err)), "error");
-    });
-  }
-
-
-  if (refreshStateBtn) {
-    refreshStateBtn.addEventListener("click", loadState);
-  }
-  if (closeBtn) {
-    closeBtn.addEventListener("click", function () {
-      window.close();
-    });
-  }
-  if (checkModuleBtn) {
-    checkModuleBtn.addEventListener("click", checkModule);
-  }
-  if (installModuleBtn) {
-    installModuleBtn.addEventListener("click", installModule);
-  }
-  if (applyThemeBtn) {
-    applyThemeBtn.addEventListener("click", function () {
-      applyTheme(currentTheme());
-      setStatus(stateStatus, "Tema aplicado no preview.", "ok");
-    });
-  }
-  if (resetThemeBtn) {
-    resetThemeBtn.addEventListener("click", function () {
-      resetTheme();
-      setStatus(stateStatus, "Tema resetado.", "ok");
-    });
-  }
   if (emitNotifBtn) {
-    emitNotifBtn.addEventListener("click", emitRuntimeNotification);
-  }
-
-  var executeTestBtn = document.getElementById("executeTestBtn");
-  var getTemplateBtn = document.getElementById("getTemplateBtn");
-  var executeCustomBtn = document.getElementById("executeCustomBtn");
-
-  if (executeTestBtn) {
-    executeTestBtn.addEventListener("click", executeTestScript);
-  }
-  if (getTemplateBtn) {
-    getTemplateBtn.addEventListener("click", getScriptTemplate);
-  }
-  if (executeCustomBtn) {
-    executeCustomBtn.addEventListener("click", executeCustomScript);
-  }
-
-  var visualNotifBtn = document.getElementById("visualNotifBtn");
-  if (visualNotifBtn) {
-    visualNotifBtn.addEventListener("click", executeVisualNotification);
-  }
-
-  // Ajudas contextuais: um icone "?" ao lado do label de cada campo abre o
-  // texto daquele campo. Substitui o tooltip no hover do campo inteiro e o
-  // antigo botao "Mostrar ajudas".
-  (function initFieldHelpIcons() {
-    var form = document.getElementById("visualNotifForm");
-    if (!form) return;
-    var helps = form.querySelectorAll(".field-help");
-    Array.prototype.forEach.call(helps, function (help, index) {
-      var field = help.parentElement;
-      if (!field) return;
-      if (!help.id) help.id = "visualFieldHelp" + index;
-      var icon = document.createElement("button");
-      icon.type = "button";
-      icon.className = "field-help-icon";
-      icon.textContent = "?";
-      icon.setAttribute("aria-label", "Ajuda deste campo");
-      icon.setAttribute("aria-describedby", help.id);
-      icon.setAttribute("aria-expanded", "false");
-      var label = field.querySelector("label");
-      if (label) {
-        label.insertAdjacentElement("afterend", icon);
-      } else {
-        field.insertBefore(icon, help);
-      }
-      function showHelp() {
-        help.classList.add("is-help-open");
-        icon.setAttribute("aria-expanded", "true");
-      }
-      function hideHelp() {
-        help.classList.remove("is-help-open");
-        icon.setAttribute("aria-expanded", "false");
-      }
-      icon.addEventListener("mouseenter", showHelp);
-      icon.addEventListener("mouseleave", hideHelp);
-      icon.addEventListener("focus", showHelp);
-      icon.addEventListener("blur", hideHelp);
-      icon.addEventListener("keydown", function (event) {
-        if (event.key === "Escape") {
-          hideHelp();
-          icon.blur();
-        }
+    emitNotifBtn.addEventListener("click", function () {
+      var payload = {
+        title: (document.getElementById("notifTitle") || {}).value || "",
+        message: (document.getElementById("notifMessage") || {}).value || "",
+        severity: (document.getElementById("notifSeverity") || {}).value || "medium",
+        mode: (document.getElementById("notifMode") || {}).value || "notify_only",
+        layout: (document.getElementById("notifLayout") || {}).value || "toast"
+      };
+      setStatus(notifStatus, "emitindo evento...");
+      appApi().EmitNotificationDebugEvent(payload).then(function () {
+        setStatus(notifStatus, "evento emitido", "ok");
+        appendPreviewToList(payload);
+      }).catch(function (err) {
+        setStatus(notifStatus, "falha ao emitir: " + err, "error");
       });
     });
-  })();
-  var visualNotifTypeEl = document.getElementById("visualNotifType");
-  if (visualNotifTypeEl) {
-    visualNotifTypeEl.addEventListener("change", updateVisualFields);
-    try {
-      var savedType = localStorage.getItem("psadt.visualNotifType");
-      if (savedType && visualNotifTypeEl.querySelector('option[value="' + savedType + '"]')) {
-        visualNotifTypeEl.value = savedType;
-      }
-    } catch (e) { /* storage indisponivel */ }
-    updateVisualFields();
   }
 
-  // =====================================================================
-  // Preflight Checks handler
-  // =====================================================================
+  // ── Teste visual nativo ──
+  var visualNotifType = document.getElementById("visualNotifType");
+  var visualNotifBtn = document.getElementById("visualNotifBtn");
+  var visualNotifStatus = document.getElementById("visualNotifStatus");
+  var visualNotifOutput = document.getElementById("visualNotifOutput");
+  var visualNotifHelp = document.getElementById("visualNotifHelp");
 
-  // --- Preflight Checks ---
-  var runPreflightBtn = document.getElementById("runPreflightBtn");
-  function runPreflight() {
-    var statusEl = document.getElementById("preflightStatus");
-    var outputEl = document.getElementById("preflightOutput");
-    setStatus(statusEl, "Executando preflight checks...", "");
-    if (outputEl) outputEl.textContent = "";
+  var visualHelp = {
+    balloon_info: "Toast do Windows (Windows Runtime) com o icone global do agente.",
+    balloon_warning: "Toast do Windows com o icone global do agente.",
+    balloon_error: "Toast do Windows com o icone global do agente.",
+    prompt_ok: "Cartão nativo com um botão OK (tema do Windows).",
+    prompt_yesno: "Cartão nativo com Sim/Nao; o botao da direita é a ação principal.",
+    prompt_continue: "Cartão nativo Continuar/Adiar.",
+    progress: "Janela nativa de progresso com barra indeterminada.",
+    dialog_box: "MessageBox nativa do Windows (o texto do botao clicado volta em result).",
+    restart_prompt: "Cartão com contagem regressiva. O reboot real NAO é executado.",
+    welcome: "Cartão Instalar/Adiar com contador — mesmo prompt da automação.",
+    countdown: "Cartão com contador visível e botões OK/Fechar."
+  };
 
-    appApi().RunPSADTPreflightChecks().then(function (r) {
-      if (!r || !r.success) {
-        setStatus(statusEl, "Erro: " + (r && r.error ? r.error : "desconhecido"), "error");
-        return;
-      }
-      var lines = [];
-      lines.push("OS: " + (r.osName || "?") + " " + (r.osVersion || "?"));
-      lines.push("Arch: " + (r.architecture || "?") + "  PS: " + (r.psVersion || "?"));
-      lines.push("Admin: " + !!r.isAdmin + "  RebootPending: " + !!r.rebootPending);
-      lines.push("Network: " + !!r.networkAvailable + "  FocusMode: " + !!r.userInFocusMode);
-      lines.push("Module: " + (r.moduleVersion || "?") + "  UserSessions: " + (r.activeUserSessions || 0));
-      lines.push("CheckedAt: " + (r.checkedAtUtc || ""));
-      if (outputEl) outputEl.textContent = lines.join("\n");
-      setStatus(statusEl, "Preflight checks concluídos.", "ok");
-    }).catch(function (err) {
-      setStatus(statusEl, "Falha: " + (err && err.message ? err.message : String(err)), "error");
+  function updateVisualGroups() {
+    var t = visualNotifType ? visualNotifType.value : "balloon_info";
+    var groups = {
+      balloon_info: ["title", "message"],
+      balloon_warning: ["title", "message"],
+      balloon_error: ["title", "message"],
+      prompt_ok: ["title", "subtitle", "message", "prompt"],
+      prompt_yesno: ["title", "subtitle", "message", "prompt"],
+      prompt_continue: ["title", "subtitle", "message", "prompt"],
+      progress: ["title", "subtitle", "message", "progress"],
+      dialog_box: ["title", "message", "dialog"],
+      restart_prompt: ["title", "message", "restart"],
+      welcome: ["title", "message", "welcome"],
+      countdown: ["title", "message", "countdown"]
+    };
+    var active = {};
+    (groups[t] || []).forEach(function (g) { active[g] = true; });
+    var form = document.getElementById("visualNotifForm");
+    if (!form) return;
+    var blocks = form.querySelectorAll("[data-visual-group]");
+    for (var i = 0; i < blocks.length; i++) {
+      var g = blocks[i].getAttribute("data-visual-group");
+      blocks[i].style.display = active[g] ? "" : "none";
+    }
+    if (visualNotifHelp) visualNotifHelp.textContent = visualHelp[t] || "";
+    try { localStorage.setItem("psadt.visualNotifType", t); } catch (e) { /* storage indisponivel */ }
+  }
+
+  if (visualNotifType) {
+    visualNotifType.addEventListener("change", updateVisualGroups);
+    var savedType = null;
+    try { savedType = localStorage.getItem("psadt.visualNotifType"); } catch (e) { /* storage indisponivel */ }
+    if (savedType) visualNotifType.value = savedType;
+    updateVisualGroups();
+  }
+
+  function field(id) {
+    var el = document.getElementById(id);
+    return el ? el.value : "";
+  }
+
+  if (visualNotifBtn) {
+    visualNotifBtn.addEventListener("click", function () {
+      var t = visualNotifType ? visualNotifType.value : "balloon_info";
+      var req = {
+        notifType: t,
+        title: field("visualNotifTitle"),
+        message: field("visualNotifMessage"),
+        subtitle: field("visualNotifSubtitle"),
+        appName: "Discovery Agent",
+        durationSeconds: parseInt(field("visualNotifDuration"), 10) || 5,
+        promptLeftText: field("visualPromptLeft"),
+        promptRightText: field("visualPromptRight"),
+        promptTimeout: parseInt(field("visualPromptTimeout"), 10) || 0,
+        buttonText: field("visualButtonText"),
+        buttonCloseText: field("visualButtonCloseText"),
+        countdownLabel: field("visualCountdownLabel"),
+        countdownNoDefer: !!(document.getElementById("visualCountdownNoDefer") || {}).checked,
+        restartCountdownSeconds: parseInt(field("visualRestartCountdown"), 10) || 60,
+        allowDefer: !!(document.getElementById("visualAllowDefer") || {}).checked,
+        closeProcessesCountdown: parseInt(field("visualCloseCountdown"), 10) || 60,
+        dialogButtons: field("visualDialogButtons") || "Ok"
+      };
+      setStatus(visualNotifStatus, "executando notificacao nativa...");
+      if (visualNotifBtn) visualNotifBtn.disabled = true;
+      appApi().ExecuteNativeVisualNotification(req).then(function (result) {
+        if (visualNotifBtn) visualNotifBtn.disabled = false;
+        if (visualNotifOutput) visualNotifOutput.textContent = (result.output || "") + (result.result ? "\nresult=" + result.result : "");
+        if (result.success) {
+          setStatus(visualNotifStatus, "notificação exibida (desfecho: " + (result.result || "ok") + ")", "ok");
+        } else {
+          setStatus(visualNotifStatus, "falha: " + (result.error || "desconhecida"), "error");
+        }
+      }).catch(function (err) {
+        if (visualNotifBtn) visualNotifBtn.disabled = false;
+        setStatus(visualNotifStatus, "falha: " + err, "error");
+      });
     });
   }
-  if (runPreflightBtn) runPreflightBtn.addEventListener("click", runPreflight);
 
-  setTimeout(function () {
-    resetTheme();
-    loadState();
-  }, 0);
+  // ── Script PowerShell genérico ──
+  var getTemplateBtn = document.getElementById("getTemplateBtn");
+  var executeCustomBtn = document.getElementById("executeCustomBtn");
+  var customStatus = document.getElementById("customStatus");
+  var customOutput = document.getElementById("customOutput");
+
+  if (getTemplateBtn) {
+    getTemplateBtn.addEventListener("click", function () {
+      appApi().GetPowerShellScriptTemplate().then(function (template) {
+        var area = document.getElementById("customScript");
+        if (area) area.value = template;
+        setStatus(customStatus, "template carregado", "ok");
+      }).catch(function (err) {
+        setStatus(customStatus, "falha ao carregar template: " + err, "error");
+      });
+    });
+  }
+
+  if (executeCustomBtn) {
+    executeCustomBtn.addEventListener("click", function () {
+      var content = (document.getElementById("customScript") || {}).value || "";
+      setStatus(customStatus, "executando script...");
+      executeCustomBtn.disabled = true;
+      appApi().ExecuteCustomPowerShellScript(content).then(function (result) {
+        executeCustomBtn.disabled = false;
+        if (customOutput) customOutput.textContent = result.output || "";
+        setStatus(customStatus, result.success ? "script executado (exit " + result.exitCode + ")" : "script falhou: " + (result.error || ""), result.success ? "ok" : "error");
+      }).catch(function (err) {
+        executeCustomBtn.disabled = false;
+        setStatus(customStatus, "falha: " + err, "error");
+      });
+    });
+  }
 })();

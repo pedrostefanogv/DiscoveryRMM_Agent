@@ -10,6 +10,7 @@ export {
     AgentNotificationBrandingConfig,
     AgentNotificationPolicy,
     AgentNotificationStyleOverride,
+    AgentNotificationsConfig,
     AgentPSADTConfig,
     AgentRolloutConfig,
     MCPToolPolicyConfig,

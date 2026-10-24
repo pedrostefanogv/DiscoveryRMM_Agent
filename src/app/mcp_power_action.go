@@ -139,13 +139,12 @@ func (a *App) runPowerActionNoticeAndExecute(action string, delay int, body stri
 	a.logPowerAction(action, fmt.Sprintf("agendado com aviso nativo (delay=%ds)", delay))
 }
 
-// showPSADTCancellablePowerCountdown exibe o aviso do PSADT com contador e
-// botao Cancelar para restart E shutdown (o RestartPrompt do PSADT nao tem
-// cancelamento). Retorna:
+// showPSADTCancellablePowerCountdown exibe o aviso NATIVO do agente com
+// contador e botao Cancelar para restart E shutdown. Retorna:
 //
 //	"proceed"  — usuario confirmou ou o contador terminou;
 //	"cancel"   — usuario cancelou (a acao NAO deve ser executada);
-//	"fallback" — PSADT indisponivel/erro (usar o caminho nativo).
+//	"fallback" — cartao nativo indisponivel (usar o aviso do shutdown.exe).
 func (a *App) showPSADTCancellablePowerCountdown(action string, delaySeconds int, message string) string {
 	if runtime.GOOS != "windows" {
 		return "fallback"
@@ -154,49 +153,13 @@ func (a *App) showPSADTCancellablePowerCountdown(action string, delaySeconds int
 		delaySeconds = powerActionMCPDefaultDelaySeconds
 	}
 
-	title := "Reinicializacao Necessaria"
-	okText := "Reiniciar agora"
-	countdownLabel := "O computador sera reiniciado em:"
-	defaultMsg := fmt.Sprintf("O computador sera reiniciado automaticamente em %d segundos.", delaySeconds)
-	if action == "shutdown" {
-		title = "Desligamento Necessario"
-		okText = "Desligar agora"
-		countdownLabel = "O computador sera desligado em:"
-		defaultMsg = fmt.Sprintf("O computador sera desligado automaticamente em %d segundos.", delaySeconds)
+	if outcome, handled := a.nativePowerCountdown(action, delaySeconds, message); handled {
+		return outcome
 	}
-
-	body := strings.TrimSpace(message)
-	if body == "" {
-		body = defaultMsg
-	}
-
-	req := PSADTVisualNotificationRequest{
-		NotifType:        "countdown",
-		Title:            title,
-		Message:          body,
-		Subtitle:         "Discovery Agent",
-		AppName:          "Discovery Agent",
-		ButtonText:       okText,
-		ButtonCloseText:  "Cancelar",
-		CountdownLabel:   countdownLabel,
-		PromptTimeout:    delaySeconds,
-		CountdownNoDefer: false,
-	}
-
-	a.logPowerAction(action, fmt.Sprintf("exibindo aviso PSADT com contador (delay=%ds, cancelavel)", delaySeconds))
-	result := a.ExecutePSADTVisualNotification(req)
-
-	if strings.Contains(result.Output, "COUNTDOWN-PROCEED") {
-		return "proceed"
-	}
-	if psadtWelcomeFailed(result.Output, result.Error, result.ExitCode) {
-		a.logPowerAction(action, fmt.Sprintf("aviso PSADT indisponivel (exit=%d) - usando aviso nativo", result.ExitCode))
-		return "fallback"
-	}
-	// Sem o marcador de conclusao e sem erro de infraestrutura: o PSADT
-	// encerrou porque o usuario cancelou/adiu.
-	return "cancel"
+	a.logPowerAction(action, "cartao nativo indisponivel — usando fallback do shutdown.exe")
+	return "fallback"
 }
+
 
 // lockWorkstationSession bloqueia a sessao (sem aviso: o bloqueio e reversivel
 // e nao perde trabalho). Usa CommandContext para o botao Parar/cancelamento do

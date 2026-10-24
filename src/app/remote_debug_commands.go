@@ -183,14 +183,8 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		if pp.NotifyUser {
 			// ── AVISO FLUENTE: mensagem + contador visivel ──
 			a.Logs.Append(fmt.Sprintf("[agent] %s-action [NOTIFY] delay=%ds force=%t — aviso Fluent com contador", action, pp.DelaySeconds, pp.Force))
-			result := a.showPSADTFluentPowerCountdown(action, pp.DelaySeconds, pp.Message, pp.Force)
+			result := a.showNativePowerCountdown(action, pp.DelaySeconds, pp.Message, pp.Force)
 			switch result {
-			case "handled":
-				// RestartPrompt do PSADT: o proprio dialogo dispara o reboot
-				// (shutdown.exe /r /f /t 0) no fim do contador, sem adiamento e
-				// sem a mensagem nativa do Windows. Nada mais a executar.
-				return true, 0, fmt.Sprintf("%s iniciado via RestartPrompt PSADT (sem adiamento, delay=%ds)", action, pp.DelaySeconds), ""
-
 			case "proceed":
 				// OK ou contador terminou: executa imediatamente (o contador ja deu o prazo).
 				exitCode, output, errText := a.executeSystemPowerAction(parent, action, 0, pp.Force, pp.Message)

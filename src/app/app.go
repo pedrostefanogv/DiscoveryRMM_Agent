@@ -556,19 +556,6 @@ func NewApp(opts AppStartupOptions) *App {
 		Logf: func(line string) {
 			a.Logs.Append(line)
 		},
-		GetAgentConfiguration: func() psadt.AgentConfiguration {
-			cfg := a.GetAgentConfiguration()
-			return psadt.AgentConfiguration{
-				PSADT: psadt.PSADTConfig{
-					Enabled:         cfg.PSADT.Enabled,
-					RequiredVersion: cfg.PSADT.RequiredVersion,
-					InstallSource:   cfg.PSADT.InstallSource,
-				},
-			}
-		},
-		RuntimeDebugMode: func() bool {
-			return a.RuntimeFlags.DebugMode
-		},
 		DispatchNotification: func(req psadt.NotificationRequest) psadt.NotificationResponse {
 			resp := a.DispatchNotification(NotificationDispatchRequest{
 				NotificationID: req.NotificationID,
@@ -2018,10 +2005,8 @@ func (a *App) runStagedStartup(ctx context.Context) {
 			})
 		}
 
-		// Bootstrap automático do módulo PSADT (zero-touch).
-		// Se habilitado na config e o módulo não estiver instalado, instala
-		// em background sem bloquear o startup do agente.
-		a.bootstrapPSADTModuleIfNeeded()
+		// Bootstrap do PSADT removido: o agente usa notificações nativas e
+		// deploys via winget/msiexec — não depende mais do módulo PSADT.
 
 		// Health-check da API HTTP: NATS (nativo/wss) OU API fora ⇒ agent
 		// offline. Roda no core (serviço), que é quem tem o agentConn e o
@@ -2674,11 +2659,9 @@ func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
 	ds.timer = time.AfterFunc(time.Duration(deferMinutes)*time.Minute, func() {
 		a.Logs.Append(fmt.Sprintf("[agent] %s-defer [RETRY] defer=%d/%d — re-exibindo prompt", action, deferCount, maxDefers))
 		if pp.NotifyUser {
-			// Reexibe o aviso Fluent com contador; "defer" reagenda, "handled"
-			// (RestartPrompt) ja executa o reboot, o resto executa direto.
-			switch a.showPSADTFluentPowerCountdown(action, delaySeconds, msg, pp.Force) {
-			case "handled":
-				return
+			// Reexibe o aviso nativo com contador; "defer" reagenda, o resto
+			// (procedido/força) executa direto.
+			switch a.showNativePowerCountdown(action, delaySeconds, msg, pp.Force) {
 			case "defer":
 				a.scheduleDeferredRestart(action, pp)
 				return

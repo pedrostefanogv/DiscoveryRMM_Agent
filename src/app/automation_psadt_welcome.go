@@ -9,18 +9,16 @@ import (
 	"discovery/app/core/automation"
 )
 
-// tryDispatchAutomationPsadtWelcome tenta exibir o prompt Welcome nativo do
-// PSAppDeployToolkit (Show-ADTInstallationWelcome) quando uma automation task
-// marcada como "notificar usuario" (RequiresApproval) vai executar.
+// tryDispatchAutomationPsadtWelcome exibe o prompt de confirmação NATIVO do
+// agente (cartão winui com contador, substituto do Welcome do PSADT) quando
+// uma automation task marcada como "notificar usuario" vai executar.
 //
 // Regras:
 //   - Só intercepta confirmacao de INICIO (install_start + require_confirmation
 //   - layout welcome). Resultados continuam no caminho normal.
-//   - Exige PSADT habilitado e Windows. Caso contrário retorna handled=false e o
-//     chamador segue no toast require_confirmation (fallback).
 //   - Usuário adiou -> Result "deferred" (a automation agenda nova tentativa).
 //   - Contador expirou / usuário continuou -> Result "approved" (executa).
-//   - Falha ao exibir o Welcome -> handled=false (fallback para o toast).
+//   - Prompt indisponível -> handled=false (fallback para o toast).
 func (a *App) tryDispatchAutomationPsadtWelcome(req automation.AutomationNotificationRequest) (automation.AutomationNotificationResponse, bool) {
 	if a == nil {
 		return automation.AutomationNotificationResponse{}, false
@@ -32,10 +30,6 @@ func (a *App) tryDispatchAutomationPsadtWelcome(req automation.AutomationNotific
 		return automation.AutomationNotificationResponse{}, false
 	}
 	if runtime.GOOS != "windows" {
-		return automation.AutomationNotificationResponse{}, false
-	}
-	psadtCfg := a.GetAgentConfiguration().PSADT
-	if psadtCfg.Enabled == nil || !*psadtCfg.Enabled {
 		return automation.AutomationNotificationResponse{}, false
 	}
 
@@ -66,75 +60,20 @@ func (a *App) tryDispatchAutomationPsadtWelcome(req automation.AutomationNotific
 	}
 	message += " Selecione Instalar para prosseguir agora ou Adiar para fazer depois."
 
-	welcomeReq := PSADTVisualNotificationRequest{
-		NotifType:               "welcome",
-		Title:                   "Instalando " + appName,
-		Message:                 message,
-		Subtitle:                "Instalação do Aplicativo",
-		AppName:                 appName,
-		AppVendor:               "",
-		AppVersion:              "",
-		AllowDefer:              automationMetadataBool(req.Metadata, "allowDefer", true),
-		DeferTimes:              automationMetadataInt(req.Metadata, "deferTimes", 0),
-		CloseProcesses:          strings.Join(closeProcs, ","),
-		CloseProcessesCountdown: timeoutSeconds,
+	// Prompt NATIVO do agente (cartão winui com contador). Indisponível →
+	// handled=false e o chamador cai no toast require_confirmation.
+	allowDefer := automationMetadataBool(req.Metadata, "allowDefer", true)
+	if resp, handled := a.nativeAutomationWelcome(req, timeoutSeconds, appName, closeProcs, allowDefer, message); handled {
+		a.Logs.Append(fmt.Sprintf("[automation] confirmacao via prompt nativo (task=%s timeout=%ds resultado=%s)",
+			strings.TrimSpace(req.NotificationID), timeoutSeconds, resp.Result))
+		return resp, true
 	}
 
-	a.Logs.Append(fmt.Sprintf("[automation] exigindo confirmacao do usuario via PSADT Welcome (task=%s timeout=%ds procs=%q defer=%t)",
-		strings.TrimSpace(req.NotificationID), timeoutSeconds, welcomeReq.CloseProcesses, welcomeReq.AllowDefer))
-
-	result := a.ExecutePSADTVisualNotification(welcomeReq)
-
-	// Marcador emitido pelo script quando o Welcome terminou e o usuario
-	// continuou (ou o contador expirou). Chegar até aqui = prosseguir.
-	if strings.Contains(result.Output, "InstallationWelcome concluido") {
-		return automation.AutomationNotificationResponse{
-			Accepted:    true,
-			Result:      "approved",
-			AgentAction: "psadt_welcome_continue",
-			Message:     "usuario confirmou a execucao no Welcome do PSADT",
-		}, true
-	}
-
-	// Without the marker, distinguish a real PSADT failure (fallback to toast)
-	// from the user deferring (which terminates the session before the marker).
-	if psadtWelcomeFailed(result.Output, result.Error, result.ExitCode) {
-		a.Logs.Append("[automation] PSADT Welcome indisponivel - usando notificacao padrao como fallback")
-		return automation.AutomationNotificationResponse{}, false
-	}
-
-	return automation.AutomationNotificationResponse{
-		Accepted:    true,
-		Result:      "deferred",
-		AgentAction: "psadt_welcome_defer",
-		Message:     "usuario adiou a execucao no Welcome do PSADT",
-	}, true
+	a.Logs.Append("[automation] prompt nativo indisponivel - usando notificacao padrao como fallback")
+	return automation.AutomationNotificationResponse{}, false
 }
 
-// psadtWelcomeFailed identifica falhas de infraestrutura do PSADT (modulo
-// ausente, sessao nao abriu, staging invalido) que devem cair no fallback de
-// toast em vez de serem tratadas como adiamento do usuario.
-func psadtWelcomeFailed(output, errText string, exitCode int) bool {
-	combined := strings.ToLower(output + " " + errText)
-	for _, marker := range []string{
-		"falha ao importar psappdeploytoolkit",
-		"falha ao abrir sessao psadt",
-		"falha ao aplicar branding customizado",
-		"psadtwelcome",
-		"is not recognized",
-		"ambiguousparameterset",
-		"parameter set cannot be resolved",
-	} {
-		if strings.Contains(combined, marker) {
-			return true
-		}
-	}
-	// ExitCode 1..3 são os exits explícitos do header (import/sessao/staging).
-	// Em Windows, defer do Welcome encerra o processo pelo PSADT com códigos
-	// reservados (>=60000) ou 0 — nunca 1..3.
-	return exitCode >= 1 && exitCode <= 3
-}
-
+// automationMetadataBool extrai um boolean do metadata (tolerante a JSON).
 func automationMetadataBool(metadata map[string]any, key string, fallback bool) bool {
 	if metadata == nil {
 		return fallback

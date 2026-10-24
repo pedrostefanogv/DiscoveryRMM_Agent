@@ -195,6 +195,13 @@ export class AgentConfiguration {
              */
             this["psadt"] = (new AgentPSADTConfig());
         }
+        if (!("notifications" in $$source)) {
+            /**
+             * @member
+             * @type {AgentNotificationsConfig}
+             */
+            this["notifications"] = (new AgentNotificationsConfig());
+        }
         if (!("notificationBranding" in $$source)) {
             /**
              * @member
@@ -299,11 +306,12 @@ export class AgentConfiguration {
         const $$createField23_0 = $$createType0;
         const $$createField24_0 = $$createType1;
         const $$createField25_0 = $$createType2;
-        const $$createField26_0 = $$createType4;
+        const $$createField26_0 = $$createType3;
         const $$createField27_0 = $$createType5;
         const $$createField28_0 = $$createType6;
-        const $$createField34_0 = $$createType8;
-        const $$createField35_0 = $$createType10;
+        const $$createField29_0 = $$createType7;
+        const $$createField35_0 = $$createType9;
+        const $$createField36_0 = $$createType11;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("agentUpdate" in $$parsedSource) {
             $$parsedSource["agentUpdate"] = $$createField23_0($$parsedSource["agentUpdate"]);
@@ -311,23 +319,26 @@ export class AgentConfiguration {
         if ("psadt" in $$parsedSource) {
             $$parsedSource["psadt"] = $$createField24_0($$parsedSource["psadt"]);
         }
+        if ("notifications" in $$parsedSource) {
+            $$parsedSource["notifications"] = $$createField25_0($$parsedSource["notifications"]);
+        }
         if ("notificationBranding" in $$parsedSource) {
-            $$parsedSource["notificationBranding"] = $$createField25_0($$parsedSource["notificationBranding"]);
+            $$parsedSource["notificationBranding"] = $$createField26_0($$parsedSource["notificationBranding"]);
         }
         if ("notificationPolicies" in $$parsedSource) {
-            $$parsedSource["notificationPolicies"] = $$createField26_0($$parsedSource["notificationPolicies"]);
+            $$parsedSource["notificationPolicies"] = $$createField27_0($$parsedSource["notificationPolicies"]);
         }
         if ("consolidation" in $$parsedSource) {
-            $$parsedSource["consolidation"] = $$createField27_0($$parsedSource["consolidation"]);
+            $$parsedSource["consolidation"] = $$createField28_0($$parsedSource["consolidation"]);
         }
         if ("rollout" in $$parsedSource) {
-            $$parsedSource["rollout"] = $$createField28_0($$parsedSource["rollout"]);
+            $$parsedSource["rollout"] = $$createField29_0($$parsedSource["rollout"]);
         }
         if ("maintenanceWindow" in $$parsedSource) {
-            $$parsedSource["maintenanceWindow"] = $$createField34_0($$parsedSource["maintenanceWindow"]);
+            $$parsedSource["maintenanceWindow"] = $$createField35_0($$parsedSource["maintenanceWindow"]);
         }
         if ("mcpToolPolicy" in $$parsedSource) {
-            $$parsedSource["mcpToolPolicy"] = $$createField35_0($$parsedSource["mcpToolPolicy"]);
+            $$parsedSource["mcpToolPolicy"] = $$createField36_0($$parsedSource["mcpToolPolicy"]);
         }
         return new AgentConfiguration(/** @type {Partial<AgentConfiguration>} */($$parsedSource));
     }
@@ -366,7 +377,7 @@ export class AgentConsolidationConfig {
      * @returns {AgentConsolidationConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType12;
+        const $$createField1_0 = $$createType13;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("policies" in $$parsedSource) {
             $$parsedSource["policies"] = $$createField1_0($$parsedSource["policies"]);
@@ -505,7 +516,7 @@ export class AgentNotificationBrandingConfig {
      * @returns {AgentNotificationBrandingConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType13;
+        const $$createField3_0 = $$createType14;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("theme" in $$parsedSource) {
             $$parsedSource["theme"] = $$createField3_0($$parsedSource["theme"]);
@@ -575,8 +586,8 @@ export class AgentNotificationPolicy {
      * @returns {AgentNotificationPolicy}
      */
     static createFrom($$source = {}) {
-        const $$createField4_0 = $$createType14;
-        const $$createField5_0 = $$createType16;
+        const $$createField4_0 = $$createType15;
+        const $$createField5_0 = $$createType17;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("styleOverride" in $$parsedSource) {
             $$parsedSource["styleOverride"] = $$createField4_0($$parsedSource["styleOverride"]);
@@ -630,6 +641,39 @@ export class AgentNotificationStyleOverride {
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new AgentNotificationStyleOverride(/** @type {Partial<AgentNotificationStyleOverride>} */($$parsedSource));
+    }
+}
+
+/**
+ * AgentNotificationsConfig define o backend das notificações visuais do agente.
+ */
+export class AgentNotificationsConfig {
+    /**
+     * Creates a new AgentNotificationsConfig instance.
+     * @param {Partial<AgentNotificationsConfig>} [$$source = {}] - The source object to create the AgentNotificationsConfig.
+     */
+    constructor($$source = {}) {
+        if (!("backend" in $$source)) {
+            /**
+             * Backend: "native" (default, não exige módulo) | "psadt" (legado).
+             * Na transição, falha do backend nativo cai no PSADT (quando habilitado).
+             * @member
+             * @type {string}
+             */
+            this["backend"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AgentNotificationsConfig instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {AgentNotificationsConfig}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new AgentNotificationsConfig(/** @type {Partial<AgentNotificationsConfig>} */($$parsedSource));
     }
 }
 
@@ -743,9 +787,9 @@ export class AgentPSADTConfig {
      * @returns {AgentPSADTConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType17;
-        const $$createField9_0 = $$createType17;
-        const $$createField10_0 = $$createType17;
+        const $$createField8_0 = $$createType18;
+        const $$createField9_0 = $$createType18;
+        const $$createField10_0 = $$createType18;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("successExitCodes" in $$parsedSource) {
             $$parsedSource["successExitCodes"] = $$createField8_0($$parsedSource["successExitCodes"]);
@@ -835,8 +879,8 @@ export class AgentRolloutConfig {
      * @returns {AgentRolloutConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType18;
-        const $$createField7_0 = $$createType18;
+        const $$createField6_0 = $$createType19;
+        const $$createField7_0 = $$createType19;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("allowedNotificationEventTypes" in $$parsedSource) {
             $$parsedSource["allowedNotificationEventTypes"] = $$createField6_0($$parsedSource["allowedNotificationEventTypes"]);
@@ -883,7 +927,7 @@ export class MCPToolPolicyConfig {
      * @returns {MCPToolPolicyConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType18;
+        const $$createField1_0 = $$createType19;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("allow" in $$parsedSource) {
             $$parsedSource["allow"] = $$createField1_0($$parsedSource["allow"]);
@@ -954,7 +998,7 @@ export class MaintenanceWindowConfig {
      * @returns {MaintenanceWindowConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType17;
+        const $$createField1_0 = $$createType18;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("daysOfWeek" in $$parsedSource) {
             $$parsedSource["daysOfWeek"] = $$createField1_0($$parsedSource["daysOfWeek"]);
@@ -1032,20 +1076,21 @@ export class NotificationThemeConfig {
 // Private type creation functions
 const $$createType0 = selfupdate$0.Policy.createFrom;
 const $$createType1 = AgentPSADTConfig.createFrom;
-const $$createType2 = AgentNotificationBrandingConfig.createFrom;
-const $$createType3 = AgentNotificationPolicy.createFrom;
-const $$createType4 = $Create.Array($$createType3);
-const $$createType5 = AgentConsolidationConfig.createFrom;
-const $$createType6 = AgentRolloutConfig.createFrom;
-const $$createType7 = MaintenanceWindowConfig.createFrom;
-const $$createType8 = $Create.Nullable($$createType7);
-const $$createType9 = MCPToolPolicyConfig.createFrom;
-const $$createType10 = $Create.Nullable($$createType9);
-const $$createType11 = AgentConsolidationPolicy.createFrom;
-const $$createType12 = $Create.Array($$createType11);
-const $$createType13 = NotificationThemeConfig.createFrom;
-const $$createType14 = AgentNotificationStyleOverride.createFrom;
-const $$createType15 = AgentNotificationAction.createFrom;
-const $$createType16 = $Create.Array($$createType15);
-const $$createType17 = $Create.Array($Create.Any);
+const $$createType2 = AgentNotificationsConfig.createFrom;
+const $$createType3 = AgentNotificationBrandingConfig.createFrom;
+const $$createType4 = AgentNotificationPolicy.createFrom;
+const $$createType5 = $Create.Array($$createType4);
+const $$createType6 = AgentConsolidationConfig.createFrom;
+const $$createType7 = AgentRolloutConfig.createFrom;
+const $$createType8 = MaintenanceWindowConfig.createFrom;
+const $$createType9 = $Create.Nullable($$createType8);
+const $$createType10 = MCPToolPolicyConfig.createFrom;
+const $$createType11 = $Create.Nullable($$createType10);
+const $$createType12 = AgentConsolidationPolicy.createFrom;
+const $$createType13 = $Create.Array($$createType12);
+const $$createType14 = NotificationThemeConfig.createFrom;
+const $$createType15 = AgentNotificationStyleOverride.createFrom;
+const $$createType16 = AgentNotificationAction.createFrom;
+const $$createType17 = $Create.Array($$createType16);
 const $$createType18 = $Create.Array($Create.Any);
+const $$createType19 = $Create.Array($Create.Any);

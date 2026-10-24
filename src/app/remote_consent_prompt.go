@@ -7,17 +7,12 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"discovery/app/core/inventory/native"
-	"discovery/app/core/platform"
-	"discovery/app/core/processutil"
 	"discovery/app/core/remotesession"
 	"discovery/app/core/screen"
 	"discovery/app/core/tlsutil"
@@ -48,12 +43,9 @@ func configureRemoteConsentRuntime(apiBase, token, agentID string) {
 //
 //  1. prompt NATIVO desenhado pelo agente (remote_consent_native_windows.go):
 //     cartão com o tema do Windows do usuário, CONTAGEM REGRESSIVA visível e a
-//     AÇÃO PADRÃO explícita ("o acesso será NEGADO automaticamente"). O
-//     Show-ADTInstallationPrompt do PSADT não mostra contador, por isso ele
-//     deixou de ser o backend principal;
-//  2. prompt PSADT (Fluent, com a identidade visual do toolkit) como fallback
-//     quando a janela nativa não pode ser criada (sem desktop interativo);
-//  3. sem prompt: nega (fail closed).
+//     AÇÃO PADRÃO explícita ("o acesso será NEGADO automaticamente").
+//  2. sem prompt (janela não pôde ser criada): nega (fail closed).
+//     O antigo fallback PSADT foi removido junto com a substituição do PSADT.
 func remoteConsentPrompt(ctx context.Context, req remotesession.ConsentRequest) remotesession.ConsentDecision {
 	if decision, expired := clipConsentTimeout(ctx, &req); expired {
 		return decision
@@ -71,14 +63,6 @@ func remoteConsentPrompt(ctx context.Context, req remotesession.ConsentRequest) 
 	}
 
 	if decision, ok := nativeConsentPrompt(ctx, req); ok {
-		return decision
-	}
-	// O prompt nativo pode ter consumido parte do prazo antes de falhar: o
-	// fallback PSADT nunca pode esperar mais do que o deadline do servidor.
-	if decision, expired := clipConsentTimeout(ctx, &req); expired {
-		return decision
-	}
-	if decision, ok := psadtConsentPrompt(ctx, req); ok {
 		return decision
 	}
 
@@ -138,206 +122,6 @@ func consentCountdownClock(remaining time.Duration) string {
 	}
 	seconds := int(math.Ceil(remaining.Seconds()))
 	return fmt.Sprintf("%02d:%02d", seconds/60, seconds%60)
-}
-
-// consentDefaultButton mapeia a ação do timeout para o botão padrão do prompt.
-func consentDefaultButton(timeoutAction string) string {
-	if strings.EqualFold(strings.TrimSpace(timeoutAction), "approve") {
-		return "Left" // Permitir
-	}
-	return "Right" // Negar
-}
-
-func psadtConsentPrompt(ctx context.Context, req remotesession.ConsentRequest) (remotesession.ConsentDecision, bool) {
-	timeoutSeconds := int(req.Timeout.Seconds())
-	if timeoutSeconds < 10 {
-		timeoutSeconds = 10
-	}
-	if timeoutSeconds > 600 {
-		timeoutSeconds = 600
-	}
-
-	title := strings.TrimSpace(req.Title)
-	if title == "" {
-		title = "Autorização de acesso remoto"
-	}
-	message := strings.TrimSpace(req.Message)
-	if message == "" {
-		message = "O suporte solicita acesso remoto ao seu computador. Você autoriza?"
-	}
-	// O Show-ADTInstallationPrompt NÃO desenha contador (só os diálogos de
-	// Welcome/Restart têm timer): como este é o fallback, a mensagem precisa
-	// dizer qual ação padrão será aplicada e o tempo total para responder.
-	message = message + "\n\n" + consentDefaultActionText(req.TimeoutAction) +
-		" Tempo para responder: " + consentCountdownClock(time.Duration(timeoutSeconds)*time.Second) + "."
-
-	visualReq := PSADTVisualNotificationRequest{
-		NotifType:       "prompt_yesno",
-		Title:           title,
-		Message:         message,
-		Subtitle:        "Acesso remoto",
-		AppName:         "Sessão remota",
-		PromptLeftText:  "Permitir",
-		PromptRightText: "Negar",
-		PromptIcon:      "Question",
-		// Enter/clique padrão segue a ação configurada: não "permite por acidente"
-		// quando a política é negar no timeout.
-		PromptDefaultButton: consentDefaultButton(req.TimeoutAction),
-		PromptTimeout:       timeoutSeconds,
-		PromptNoWait:        false,
-		PromptNotTopMost:    false,
-	}
-	script, scriptTimeout := buildPSADTVisualScript(visualReq)
-	if scriptTimeout < req.Timeout+45*time.Second {
-		scriptTimeout = req.Timeout + 45*time.Second
-	}
-
-	runDir, err := platform.EnsureTempDir()
-	if err != nil {
-		return remotesession.ConsentDecision{}, false
-	}
-	dir, err := os.MkdirTemp(runDir, "consent-prompt-")
-	if err != nil {
-		return remotesession.ConsentDecision{}, false
-	}
-	defer os.RemoveAll(dir)
-
-	scriptPath := filepath.Join(dir, "consent.ps1")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
-		return remotesession.ConsentDecision{}, false
-	}
-
-	runCtx, cancel := context.WithTimeout(ctx, scriptTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(runCtx, "powershell", "-NoProfile", "-WindowStyle", "Hidden",
-		"-ExecutionPolicy", "Bypass", "-File", scriptPath)
-	cmd.Env = append(os.Environ(),
-		"PSADT_STAGING_CONFIG=0",
-		"PSADT_TITLE="+title,
-		"PSADT_MESSAGE="+message,
-		"PSADT_SUBTITLE=Acesso remoto",
-		"PSADT_APPNAME=Sessão remota",
-		"PSADT_APPVENDOR=",
-		"PSADT_APPVERSION=",
-		"PSADT_PROMPT_LEFT=Permitir",
-		"PSADT_PROMPT_MIDDLE=",
-		"PSADT_PROMPT_RIGHT=Negar",
-		"PSADT_PROMPT_ICON=Question",
-		fmt.Sprintf("PSADT_PROMPT_TIMEOUT=%d", timeoutSeconds),
-		"PSADT_PROMPT_NOWAIT=0",
-		"PSADT_PROMPT_NOT_TOPMOST=0",
-		"PSADT_DURATION=0",
-		"PSADT_BALLOON_TIME=0",
-		"PSADT_BALLOON_NOWAIT=0",
-		"PSADT_DIALOG_BUTTONS=",
-		"PSADT_DIALOG_DEFAULT=",
-		"PSADT_DIALOG_ICON=",
-		"PSADT_DIALOG_TIMEOUT=0",
-		"PSADT_DIALOG_NOWAIT=0",
-		"PSADT_DIALOG_EXIT_ON_TIMEOUT=0",
-		"PSADT_DIALOG_NOT_TOPMOST=0",
-		"PSADT_DIALOG_FORCE=0",
-		"PSADT_RESTART_COUNTDOWN=0",
-		"PSADT_RESTART_NO_COUNTDOWN=0",
-		"PSADT_WELCOME_PROCESSES=",
-		"PSADT_WELCOME_ALLOW_DEFER=0",
-		"PSADT_COUNTDOWN_NO_DEFER=0",
-		"PSADT_WELCOME_DEFER_TIMES=0",
-		"PSADT_WELCOME_DEFER_DEADLINE=",
-		"PSADT_WELCOME_BLOCK_EXEC=0",
-		"PSADT_WELCOME_CLOSE_COUNTDOWN=0",
-	)
-	processutil.HideWindow(cmd)
-
-	var output bytes.Buffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
-	err = cmd.Run()
-	text := output.String()
-
-	// Contexto vencido/cancelado durante o prompt: aplica a ação de timeout (não
-	// abre outro prompt depois do prazo do servidor).
-	if runCtx.Err() != nil {
-		decision := remotesession.ConsentDecision{
-			Accepted:      strings.EqualFold(req.TimeoutAction, "approve"),
-			Auto:          true,
-			Outcome:       "timeout-denied",
-			Reason:        "timeout",
-			PromptBackend: "psadt",
-			DecidedAt:     time.Now().UTC(),
-		}
-		if decision.Accepted {
-			decision.Outcome = "timeout-granted"
-		}
-		if ctx.Err() == nil {
-			return decision, true
-		}
-		return decision, true
-	}
-
-	// Falha de infraestrutura do PSADT -> fallback nativo (não é decisão).
-	if err != nil && !strings.Contains(text, "PSADT_RESULT=") && !strings.Contains(text, "sem resposta") {
-		return remotesession.ConsentDecision{}, false
-	}
-	for _, marker := range []string{
-		"falha ao importar psappdeploytoolkit",
-		"falha ao abrir sessao psadt",
-		"is not recognized",
-		"ambiguousparameterset",
-	} {
-		if strings.Contains(strings.ToLower(text), marker) {
-			return remotesession.ConsentDecision{}, false
-		}
-	}
-
-	result := parsePSADTConsentResult(text)
-	switch {
-	case strings.EqualFold(result, "Permitir"):
-		return remotesession.ConsentDecision{
-			Accepted:      true,
-			Outcome:       "granted",
-			Reason:        "user_allowed",
-			PromptBackend: "psadt",
-			DecidedAt:     time.Now().UTC(),
-		}, true
-	case strings.EqualFold(result, "Negar"):
-		return remotesession.ConsentDecision{
-			Accepted:      false,
-			Outcome:       "denied",
-			Reason:        "user_denied",
-			PromptBackend: "psadt",
-			DecidedAt:     time.Now().UTC(),
-		}, true
-	default:
-		// Timeout: PSADT retorna sem resposta. A ação configurada decide.
-		decision := remotesession.ConsentDecision{
-			Accepted:      strings.EqualFold(req.TimeoutAction, "approve"),
-			Auto:          true,
-			Outcome:       "timeout-denied",
-			Reason:        "timeout",
-			PromptBackend: "psadt",
-			DecidedAt:     time.Now().UTC(),
-		}
-		if decision.Accepted {
-			decision.Outcome = "timeout-granted"
-		}
-		return decision, true
-	}
-}
-
-func parsePSADTConsentResult(output string) string {
-	marker := "PSADT_RESULT="
-	index := strings.LastIndex(output, marker)
-	if index < 0 {
-		return ""
-	}
-	line := strings.SplitN(output[index+len(marker):], "\n", 2)[0]
-	line = strings.TrimSpace(line)
-	var result string
-	if err := json.Unmarshal([]byte(line), &result); err == nil {
-		return strings.TrimSpace(result)
-	}
-	return strings.Trim(line, "\" \r\n")
 }
 
 // workerAPIBase monta a base HTTP (scheme://host) a partir do config do worker.

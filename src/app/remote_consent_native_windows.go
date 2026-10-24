@@ -26,9 +26,9 @@ import (
 //   - a AÇÃO PADRÃO explícita ("Se você não responder, o acesso será NEGADO
 //     automaticamente"), que segue o timeoutAction da política do servidor.
 //
-// O Show-ADTInstallationPrompt do PSADT (fallback em remote_consent_prompt.go)
-// não tem timer: só os diálogos de Welcome/Restart do toolkit desenham contagem,
-// e nenhum deles devolve Permitir/Negar. Por isso o prompt nativo é o principal.
+// O antigo fallback PSADT (Show-ADTInstallationPrompt) foi removido: o prompt
+// PSADT não tinha timer e não devolvia Permitir/Negar — por isso este prompt
+// nativo é o único backend do consentimento.
 
 const (
 	consentClassName = "DiscoveryRmmConsentPrompt"
