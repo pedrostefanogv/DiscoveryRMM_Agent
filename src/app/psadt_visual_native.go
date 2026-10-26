@@ -91,7 +91,10 @@ func nativeProgressNotification(req NativeVisualNotificationRequest, result *Nat
 }
 
 func nativeDialogNotification(req NativeVisualNotificationRequest, result *NativeToolResult) NativeToolResult {
-	label, err := notifyui.ShowMessageBox(strings.TrimSpace(req.Title), strings.TrimSpace(req.Message), req.DialogButtons)
+	// DialogBox padronizado: cartão custom (logo do agente, tema do Windows) no
+	// lugar da MessageBox nativa do SO. Contrato preservado: retorno = texto do
+	// botão clicado ("OK", "Yes" etc. — mesmos rótulos do MessageBoxButtonText).
+	label, err := notifyui.ShowDialog(strings.TrimSpace(req.Title), strings.TrimSpace(req.Message), req.DialogButtons)
 	if err != nil {
 		result.Success = false
 		result.ExitCode = 1

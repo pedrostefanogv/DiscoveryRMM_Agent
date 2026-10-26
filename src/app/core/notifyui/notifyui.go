@@ -173,3 +173,47 @@ func CountdownClock(remaining time.Duration) string {
 	total := int(remaining / time.Second)
 	return fmt.Sprintf("%02d:%02d", total/60, total%60)
 }
+
+// ── DialogBox (substituto padronizado da MessageBox Win32) ──
+//
+// O console de debug usava a MessageBox nativa do Windows (ícone/título do
+// SO, fora do padrão visual). ShowDialog exibe o MESMO cartão custom das
+// notificações (logo do agente, tema do Windows) e devolve o texto do botão
+// clicado — mesmo contrato do MessageBoxButtonText.
+
+// dialogButtonSets mapeia o conjunto de botões legado para os botões do
+// cartão (ordem esquerda→direita; o ÚLTIMO é a ação principal). Os rótulos
+// preservam o texto exato do MessageBoxButtonText (contrato do resultado).
+var dialogButtonSets = map[string][]Button{
+	"ok":                {{"ok", "OK", "primary"}},
+	"okcancel":          {{"cancel", "Cancel", ""}, {"ok", "OK", "primary"}},
+	"abortretryignore":  {{"ignore", "Ignore", ""}, {"retry", "Retry", ""}, {"abort", "Abort", "primary"}},
+	"yesnocancel":       {{"cancel", "Cancel", ""}, {"no", "No", ""}, {"yes", "Yes", "primary"}},
+	"yesno":             {{"no", "No", ""}, {"yes", "Yes", "primary"}},
+	"retrycancel":       {{"cancel", "Cancel", ""}, {"retry", "Retry", "primary"}},
+	"canceltrycontinue": {{"cancel", "Cancel", ""}, {"tryagain", "Try Again", ""}, {"continue", "Continue", "primary"}},
+}
+
+// NormalizeDialogButtons devolve o conjunto de botões do cartão para o kind
+// legado (""/desconhecido = OK).
+func NormalizeDialogButtons(buttons string) []Button {
+	key := strings.ToLower(strings.TrimSpace(buttons))
+	set, ok := dialogButtonSets[key]
+	if !ok {
+		set = dialogButtonSets["ok"]
+	}
+	out := make([]Button, len(set))
+	copy(out, set)
+	return out
+}
+
+// DialogCloseLabel devolve o rótulo usado quando o usuário fecha o cartão
+// (Esc/X): "Cancel" quando o conjunto tem cancelar; senão o rótulo padrão.
+func DialogCloseLabel(buttons []Button) string {
+	for _, b := range buttons {
+		if strings.EqualFold(b.ID, "cancel") {
+			return b.Label
+		}
+	}
+	return buttons[len(buttons)-1].Label
+}

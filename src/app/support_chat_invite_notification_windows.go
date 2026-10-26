@@ -147,7 +147,8 @@ func supportChatNotifyLayoutFor(scale float64, extraHeight int) (logo, title, su
 	open, dismiss, hint winui.Rect) {
 	logo = winui.Rect{X: supportChatNotifyPad, Y: 20, W: 40, H: 40}
 	headerLeft := logo.Right() + 14
-	headerWidth := supportChatNotifyWidth - headerLeft - supportChatNotifyPad
+	// Reserva 36px (glifo do motivo 26px + folga) à direita do cabeçalho.
+	headerWidth := supportChatNotifyWidth - headerLeft - supportChatNotifyPad - 36
 	title = winui.Rect{X: headerLeft, Y: 20, W: headerWidth, H: 28}
 	subtitle = winui.Rect{X: headerLeft, Y: 52, W: headerWidth, H: 18}
 	divider = winui.Rect{X: supportChatNotifyPad, Y: 86, W: supportChatNotifyWidth - 2*supportChatNotifyPad, H: 1}
@@ -487,8 +488,8 @@ func drawSupportChatBadge(hdc uintptr, rect winui.Rect, theme winui.Theme, scale
 	winui.FillRoundRectBorderAA(hdc, rect, sw(12),
 		theme.Card.Blend(theme.Accent, 16),
 		theme.Card.Blend(theme.Accent, 40))
-	// O glifo preenche o retângulo interno (ele já tem folga no próprio path).
-	notifyui.DrawGlyph(hdc, rect, notifyui.GlyphChat, theme.Accent)
+	// Mesmo padrão do cartão de notificação: o logo do agente (o "D") no selo.
+	notifyui.DrawAgentLogo(hdc, rect)
 }
 
 // paint desenha o cartão inteiro (sem contador/progresso/ação padrão).
@@ -520,6 +521,16 @@ func (s *supportChatNotifyState) paint(screenDC uintptr) {
 	winui.StrokeRoundRectAA(hdc, card, cardRadius, sw(1), theme.Border)
 
 	drawSupportChatBadge(hdc, logo, theme, scale)
+
+	// Glifo do MOTIVO (chat) à direita do cabeçalho — mesmo padrão do cartão
+	// de notificação (logo do agente à esquerda, motivo à direita).
+	kindSize := sw(26)
+	kindIcon := winui.Rect{
+		X: sw(supportChatNotifyWidth) - sw(supportChatNotifyPad) - kindSize,
+		Y: sw(20) + (sw(40)-kindSize)/2,
+		W: kindSize, H: kindSize,
+	}
+	notifyui.DrawGlyph(hdc, kindIcon, notifyui.GlyphChat, theme.Accent)
 
 	winui.DrawTextSingle(hdc, supportChatInviteNotificationTitle(), title, s.fonts.title, theme.Text, winui.AlignLeft)
 	winui.DrawTextSingle(hdc, supportChatInviteNotificationSubtitle(), subtitle, s.fonts.subtitle, theme.TextMuted, winui.AlignLeft)

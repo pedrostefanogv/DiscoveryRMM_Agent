@@ -180,7 +180,7 @@ func (s *progressState) paint(screenDC uintptr) {
 		winui.ScalePx(2, scale), theme.Accent)
 	winui.StrokeRoundRectAA(hdc, card, cardRadius, 1, theme.Border)
 
-	drawNotifyBadge(hdc, badge, theme, scale)
+	drawCardBadge(hdc, badge, theme, scale)
 	winui.DrawTextSingle(hdc, s.req.Title, title, s.fonts.title, theme.Text, winui.AlignLeft)
 	winui.DrawTextSingle(hdc, s.req.Subtitle, subtitle, s.fonts.subtitle, theme.TextMuted, winui.AlignLeft)
 	winui.FillRect(hdc, divider, theme.Border)

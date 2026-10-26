@@ -143,7 +143,8 @@ func consentLayoutBase() (logo, title, subtitle, divider, messageBox, messageTex
 	countLabel, countValue, defaultAction, progressTrack, allow, deny, hint winui.Rect) {
 	logo = winui.Rect{X: consentPad, Y: 20, W: 40, H: 40}
 	headerLeft := logo.Right() + 14
-	headerWidth := consentWidth - headerLeft - consentPad
+	// Reserva 36px (glifo do motivo 26px + folga) à direita do cabeçalho.
+	headerWidth := consentWidth - headerLeft - consentPad - 36
 	title = winui.Rect{X: headerLeft, Y: 20, W: headerWidth, H: 28}
 	subtitle = winui.Rect{X: headerLeft, Y: 52, W: headerWidth, H: 18}
 	divider = winui.Rect{X: consentPad, Y: 86, W: consentWidth - 2*consentPad, H: 1}
@@ -545,7 +546,8 @@ func drawConsentBadge(hdc uintptr, rect winui.Rect, theme winui.Theme, scale flo
 	winui.FillRoundRectBorderAA(hdc, rect, sw(12),
 		theme.Card.Blend(theme.Accent, 16),
 		theme.Card.Blend(theme.Accent, 40))
-	notifyui.DrawGlyph(hdc, rect, notifyui.GlyphDesktop, theme.Accent)
+	// Mesmo padrão do cartão de notificação: o logo do agente (o "D") no selo.
+	notifyui.DrawAgentLogo(hdc, rect)
 }
 
 // paint desenha o cartão inteiro.
@@ -591,6 +593,15 @@ func (s *consentNativeState) paint(screenDC uintptr) {
 
 	// Selo do acesso remoto (desenhado no tema; independe de asset externo).
 	drawConsentBadge(hdc, logo, theme, scale)
+
+	// Glifo do MOTIVO (acesso remoto) à direita do cabeçalho.
+	kindSize := sw(26)
+	kindIcon := winui.Rect{
+		X: sw(consentWidth) - sw(consentPad) - kindSize,
+		Y: sw(20) + (sw(40)-kindSize)/2,
+		W: kindSize, H: kindSize,
+	}
+	notifyui.DrawGlyph(hdc, kindIcon, notifyui.GlyphDesktop, theme.Accent)
 
 	winui.DrawTextSingle(hdc, s.titleText(), title, s.fonts.title, theme.Text, winui.AlignLeft)
 	winui.DrawTextSingle(hdc, "Acesso remoto", subtitle, s.fonts.subtitle, theme.TextMuted, winui.AlignLeft)
