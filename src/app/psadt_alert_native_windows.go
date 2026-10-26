@@ -135,6 +135,9 @@ func (a *App) nativeModalAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		Title:    strings.TrimSpace(p.Title),
 		Subtitle: defaultPSADTSubtitleForNative(strings.TrimSpace(p.Subtitle)),
 		Message:  strings.TrimSpace(p.Message),
+		// Motivo da notificação (informação/aviso/erro/pergunta) — o glifo
+		// aparece à direita do cabeçalho do cartão.
+		Icon:    strings.ToLower(strings.TrimSpace(p.Icon)),
 		Buttons:  buttons,
 		// Enter confirma a ação principal (último botão), como no PSADT.
 		DefaultButtonID: defaultID,

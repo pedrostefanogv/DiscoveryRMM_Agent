@@ -64,6 +64,9 @@ type CardRequest struct {
 	// Hint é a dica de teclado exibida sob os botões. Vazio usa o padrão
 	// "Enter confirma · Esc fecha".
 	Hint string
+	// Icon é o motivo da notificação exibido à direita do cabeçalho:
+	// "info" | "warning" | "error" | "question". Vazio vira "info".
+	Icon string
 }
 
 // CardResult é o desfecho do cartão.
@@ -110,6 +113,7 @@ func NormalizeCardRequest(req CardRequest) CardRequest {
 	if req.Hint == "" {
 		req.Hint = "Enter confirma · Esc fecha"
 	}
+	req.Icon = normalizeIconKind(req.Icon)
 
 	// Botões: mantém no máximo 3 e garante que haja pelo menos um OK.
 	buttons := make([]Button, 0, 3)

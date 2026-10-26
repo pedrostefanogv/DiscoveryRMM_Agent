@@ -41,7 +41,7 @@ const (
 
 // cardLayout devolve os retângulos do cartão em pixels físicos.
 type cardLayout struct {
-	badge, title, subtitle, divider, messageBox, messageText winui.Rect
+	badge, kindIcon, title, subtitle, divider, messageBox, messageText winui.Rect
 	countLabel, countValue, progressTrack                    winui.Rect
 	buttons                                                  []winui.Rect
 	hint                                                     winui.Rect
@@ -63,8 +63,16 @@ func cardLayoutFor(scale float64, extraHeight int, hasCountdown bool, nButtons i
 
 	l := cardLayout{}
 	l.badge = winui.Rect{X: sw(cardPad), Y: sw(20), W: sw(40), H: sw(40)}
+	// Ícone do MOTIVO (informação/aviso/erro/pergunta) alinhado à direita do
+	// cabeçalho, na mesma linha do selo.
+	kindSize := sw(26)
+	l.kindIcon = winui.Rect{
+		X: sw(cardWidth) - sw(cardPad) - kindSize,
+		Y: sw(20) + (sw(40)-kindSize)/2,
+		W: kindSize, H: kindSize,
+	}
 	headerLeft := l.badge.Right() + sw(14)
-	headerWidth := sw(cardWidth) - headerLeft - sw(cardPad)
+	headerWidth := l.kindIcon.X - sw(10) - headerLeft
 	l.title = winui.Rect{X: headerLeft, Y: sw(20), W: headerWidth, H: sw(28)}
 	l.subtitle = winui.Rect{X: headerLeft, Y: sw(52), W: headerWidth, H: sw(18)}
 	l.divider = winui.Rect{X: sw(cardPad), Y: sw(86), W: sw(cardWidth) - 2*sw(cardPad), H: 1}
@@ -391,7 +399,12 @@ func (s *cardState) paint(screenDC uintptr) {
 		winui.ScalePx(2, s.scale), theme.Accent)
 	winui.StrokeRoundRectAA(hdc, card, cardRadius, 1, theme.Border)
 
-	drawNotifyBadge(hdc, l.badge, theme, s.scale)
+	// Selo: logo do agente (o "D") onde antes ficava o sino genérico.
+	if !drawCardBadge(hdc, l.badge, theme, s.scale) {
+		drawNotifyBadge(hdc, l.badge, theme, s.scale)
+	}
+	// Ícone do motivo da notificação (informação/aviso/erro/pergunta).
+	drawCardKindIcon(hdc, l.kindIcon, s.req.Icon, theme, s.scale)
 
 	winui.DrawTextSingle(hdc, s.req.Title, l.title, s.fonts.title, theme.Text, winui.AlignLeft)
 	winui.DrawTextSingle(hdc, s.req.Subtitle, l.subtitle, s.fonts.subtitle, theme.TextMuted, winui.AlignLeft)
@@ -426,9 +439,10 @@ func (s *cardState) paint(screenDC uintptr) {
 		} else {
 			style = winui.OutlineButton(theme, buttonRadius)
 		}
-		style.FocusGap, style.FocusWidth = winui.ScalePx(4, s.scale), winui.ScalePx(2, s.scale)
+		// Sem anel de foco: o contorno em volta dos botões foi removido por
+		// design (o foco continua navegável e o Enter ainda confirma).
 		winui.PaintButton(hdc, rect, button.Label, s.fonts.button, style,
-			s.hover == i, s.pressed == i, s.focus == i, theme.Accent)
+			s.hover == i, s.pressed == i, false, theme.Accent)
 	}
 }
 
@@ -444,6 +458,34 @@ func drawNotifyBadge(hdc uintptr, rect winui.Rect, theme winui.Theme, scale floa
 	winui.StrokeRoundRectAA(hdc, body, winui.ScalePx(6, scale), winui.ScalePx(2, scale), theme.Accent)
 	winui.FillRect(hdc, winui.Rect{X: cx - winui.ScalePx(2, scale), Y: body.Bottom() + winui.ScalePx(1, scale), W: winui.ScalePx(4, scale), H: winui.ScalePx(3, scale)}, theme.Accent)
 	winui.FillRect(hdc, winui.Rect{X: cx - winui.ScalePx(1, scale), Y: rect.Bottom() - winui.ScalePx(6, scale), W: winui.ScalePx(2, scale), H: winui.ScalePx(3, scale)}, theme.Accent)
+}
+
+// drawCardBadge desenha o selo do cabeçalho: fundo tingido pelo accent com o
+// logo do agente (o "D") por cima. Devolve false quando o PNG não pôde ser
+// desenhado (o chamador cai no sino vetorial antigo).
+func drawCardBadge(hdc uintptr, rect winui.Rect, theme winui.Theme, scale float64) bool {
+	sw := func(v int) int { return winui.ScalePx(v, scale) }
+	winui.FillRoundRectBorderAA(hdc, rect, sw(12),
+		theme.Card.Blend(theme.Accent, 16),
+		theme.Card.Blend(theme.Accent, 40))
+	// O logo já traz folga transparente em volta do "D".
+	return DrawAgentLogo(hdc, rect)
+}
+
+// drawCardKindIcon desenha o glifo do motivo da notificação à direita do
+// cabeçalho, no tema do Windows.
+func drawCardKindIcon(hdc uintptr, rect winui.Rect, kind string, theme winui.Theme, scale float64) {
+	if rect.Empty() {
+		return
+	}
+	color := theme.Accent
+	switch normalizeIconKind(kind) {
+	case IconWarning:
+		color = theme.Accent
+	case IconError:
+		color = theme.Danger
+	}
+	DrawKindIcon(hdc, rect, kind, color)
 }
 
 // ShowCard abre o cartão nativo e devolve o resultado. O contexto cancelado
