@@ -74,9 +74,6 @@ import * as supportmeta$0 from "./supportmeta/models.js";
 import * as json$0 from "../../encoding/json/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as jsontext$0 from "../../encoding/json/jsontext/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
 import * as time$0 from "../../time/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
