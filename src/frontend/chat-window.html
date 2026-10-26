@@ -46,9 +46,8 @@
     <section id="scComments" class="sc-comments" hidden>
       <button id="scCommentsToggle" type="button" class="sc-comments-toggle" aria-expanded="false"
         aria-controls="scCommentsList">
-        <svg class="sc-comments-chevron" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"
-          stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polyline points="9 6 15 12 9 18" />
+        <svg class="sc-comments-chevron" viewBox="0 -960 960 960" width="12" height="12" fill="none" aria-hidden="true" focusable="false">
+          <path d="M504-480 348-636q-11-11-11-28t11-28q11-11 28-11t28 11l184 184q6 6 8.5 13t2.5 15q0 8-2.5 15t-8.5 13L404-268q-11 11-28 11t-28-11q-11-11-11-28t11-28l156-156Z" fill="currentColor" />
         </svg>
         <span class="sc-comments-title">Comentários do chamado</span>
         <span id="scCommentsCount" class="sc-comments-count"></span>
@@ -67,29 +66,21 @@
         <input id="scFileInput" type="file" multiple hidden />
         <button id="scAttachBtn" type="button" class="chat-icon-btn" title="Anexar arquivo (ou cole um print com Ctrl+V)"
           aria-label="Anexar arquivo">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-          </svg>
+          <svg viewBox="0 -960 960 960" width="15" height="15" fill="none" aria-hidden="true" focusable="false">
+          <path d="M720-330q0 104-73 177T470-80q-104 0-177-73t-73-177v-370q0-75 52.5-127.5T400-880q75 0 127.5 52.5T580-700v350q0 46-32 78t-78 32q-46 0-78-32t-32-78v-330q0-17 11.5-28.5T400-720q17 0 28.5 11.5T440-680v330q0 13 8.5 21.5T470-320q13 0 21.5-8.5T500-350v-350q-1-42-29.5-71T400-800q-42 0-71 29t-29 71v370q-1 71 49 120.5T470-160q70 0 119-49.5T640-330v-350q0-17 11.5-28.5T680-720q17 0 28.5 11.5T720-680v350Z" fill="currentColor" />
+        </svg>
         </button>
         <button id="scShotBtn" type="button" class="chat-icon-btn chat-screenshot-btn"
           title="Capturar tela (escolher janela/região e anotar)" aria-label="Capturar tela">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M4 8V6a2 2 0 0 1 2-2h2" />
-            <path d="M16 4h2a2 2 0 0 1 2 2v2" />
-            <path d="M20 16v2a2 2 0 0 1-2 2h-2" />
-            <path d="M8 20H6a2 2 0 0 1-2-2v-2" />
-            <circle cx="12" cy="12" r="3.5" />
-          </svg>
+          <svg viewBox="0 -960 960 960" width="15" height="15" fill="none" aria-hidden="true" focusable="false">
+          <path d="M700-380h-70q-13 0-21.5 8.5T600-350q0 13 8.5 21.5T630-320h90q17 0 28.5-11.5T760-360v-90q0-13-8.5-21.5T730-480q-13 0-21.5 8.5T700-450v70ZM260-660h70q13 0 21.5-8.5T360-690q0-13-8.5-21.5T330-720h-90q-17 0-28.5 11.5T200-680v90q0 13 8.5 21.5T230-560q13 0 21.5-8.5T260-590v-70ZM160-200q-33 0-56.5-23.5T80-280v-480q0-33 23.5-56.5T160-840h640q33 0 56.5 23.5T880-760v480q0 33-23.5 56.5T800-200H640v40q0 17-11.5 28.5T600-120H360q-17 0-28.5-11.5T320-160v-40H160Zm0-80h640v-480H160v480Zm0 0v-480 480Z" fill="currentColor" />
+        </svg>
         </button>
         <button id="scSendBtn" type="button" class="chat-icon-btn chat-send-btn" title="Enviar (Enter)"
           aria-label="Enviar">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"
-            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="m22 2-7 20-4-9-9-4Z" />
-            <path d="M22 2 11 13" />
-          </svg>
+          <svg viewBox="0 -960 960 960" width="14" height="14" fill="none" aria-hidden="true" focusable="false">
+          <path d="M792-443 176-183q-20 8-38-3.5T120-220v-520q0-22 18-33.5t38-3.5l616 260q25 11 25 37t-25 37ZM200-280l474-200-474-200v140l240 60-240 60v140Zm0 0v-400 400Z" fill="currentColor" />
+        </svg>
         </button>
         </div>
       </div>
@@ -135,12 +126,8 @@
          ações abrir com o app padrão e abrir a pasta (selecionando o arquivo). -->
     <div id="scViewerDoc" class="sc-viewer-doc" hidden>
       <div class="sc-viewer-doc-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.8"
-          stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-          <polyline points="14 2 14 8 20 8" />
-          <line x1="12" y1="18" x2="12" y2="12" />
-          <polyline points="9 15 12 18 15 15" />
+        <svg viewBox="0 -960 960 960" width="34" height="34" fill="none" aria-hidden="true" focusable="false">
+          <path d="M480-337q-8 0-15-2.5t-13-8.5L308-492q-12-12-11.5-28t11.5-28q12-12 28.5-12.5T365-549l75 75v-286q0-17 11.5-28.5T480-800q17 0 28.5 11.5T520-760v286l75-75q12-12 28.5-11.5T652-548q11 12 11.5 28T652-492L508-348q-6 6-13 8.5t-15 2.5ZM240-160q-33 0-56.5-23.5T160-240v-80q0-17 11.5-28.5T200-360q17 0 28.5 11.5T240-320v80h480v-80q0-17 11.5-28.5T760-360q17 0 28.5 11.5T800-320v80q0 33-23.5 56.5T720-160H240Z" fill="currentColor" />
         </svg>
       </div>
       <div id="scViewerDocName" class="sc-viewer-doc-name"></div>

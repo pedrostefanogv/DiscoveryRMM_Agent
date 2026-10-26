@@ -580,7 +580,7 @@ function screenshotEnsureOverlayEls() {
     '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomIn" data-i18n-title="screenshot.zoomIn">+</button>',
     // Ampliar a área selecionada: ação explícita (aparece só com a seleção
     // travada). Sem ela, travar uma região pequena a exibia ampliada na tela toda.
-    '  <button type="button" class="screenshot-zoom-btn hidden" id="screenshotZoomArea" data-i18n-title="screenshot.zoomArea"><svg viewBox="0 0 16 16" class="screenshot-annot-icon" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2.6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>',
+    '  <button type="button" class="screenshot-zoom-btn hidden" id="screenshotZoomArea" data-i18n-title="screenshot.zoomArea"><svg viewBox="0 -960 960 960" width="15" height="15" fill="none" aria-hidden="true" focusable="false"><path d="M200-120q-33 0-56.5-23.5T120-200v-120q0-17 11.5-28.5T160-360q17 0 28.5 11.5T200-320v120h120q17 0 28.5 11.5T360-160q0 17-11.5 28.5T320-120H200Zm560 0H640q-17 0-28.5-11.5T600-160q0-17 11.5-28.5T640-200h120v-120q0-17 11.5-28.5T800-360q17 0 28.5 11.5T840-320v120q0 33-23.5 56.5T760-120ZM120-640v-120q0-33 23.5-56.5T200-840h120q17 0 28.5 11.5T360-800q0 17-11.5 28.5T320-760H200v120q0 17-11.5 28.5T160-600q-17 0-28.5-11.5T120-640Zm640 0v-120H640q-17 0-28.5-11.5T600-800q0-17 11.5-28.5T640-840h120q33 0 56.5 23.5T840-760v120q0 17-11.5 28.5T800-600q-17 0-28.5-11.5T760-640ZM480-320q-66 0-113-47t-47-113q0-66 47-113t113-47q66 0 113 47t47 113q0 66-47 113t-113 47Zm0-80q33 0 56.5-23.5T560-480q0-33-23.5-56.5T480-560q-33 0-56.5 23.5T400-480q0 33 23.5 56.5T480-400Zm0-80Z" fill="currentColor" /></svg></button>',
     '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomFit" data-i18n-title="screenshot.zoomFit">⤢</button>',
     '</div>',
     // Mensagem exibida enquanto o backend congela a tela: a janela já cobre o
@@ -592,19 +592,19 @@ function screenshotEnsureOverlayEls() {
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="rect" data-i18n-title="screenshot.annotRect">▭</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="circle" data-i18n-title="screenshot.annotCircle">◯</button>',
     // Realce/spotlight: escurece o entorno e deixa a região arrastada em destaque.
-    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="spotlight" data-i18n-title="screenshot.annotSpotlight"><svg viewBox="0 0 16 16" class="screenshot-annot-icon" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" rx="2" fill="currentColor" opacity="0.25"/><rect x="5" y="5" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="spotlight" data-i18n-title="screenshot.annotSpotlight"><svg viewBox="0 -960 960 960" width="15" height="15" fill="none" aria-hidden="true" focusable="false"><path d="m198-667-30-29q-12-11-11.5-27.5T168-752q12-12 28.5-12.5T225-753l29 29q11 11 11.5 27.5T254-668q-11 11-27.5 11.5T198-667Zm242-133v-40q0-17 11.5-28.5T480-880q17 0 28.5 11.5T520-840v40q0 17-11.5 28.5T480-760q-17 0-28.5-11.5T440-800Zm268 75 28-28q11-11 27.5-11t28.5 12q11 11 11 28t-11 28l-28 28q-11 11-27.5 11.5T708-667q-12-12-12-29t12-29ZM360-160v-120l-97-97q-11-11-17-25.5t-6-30.5v-87q0-33 23.5-56.5T320-600h320q33 0 56.5 23.5T720-520v87q0 16-6 30.5T697-377l-97 97v120q0 33-23.5 56.5T520-80h-80q-33 0-56.5-23.5T360-160Zm80 0h80v-153l120-120v-87H320v87l120 120v153Zm40-180Z" fill="currentColor" /></svg></button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="arrow" data-i18n-title="screenshot.annotArrow">↗</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="line" data-i18n-title="screenshot.annotLine">╱</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="pen" data-i18n-title="screenshot.annotPen">✎</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="marker" data-i18n-title="screenshot.annotMarker">🖍</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="blur" data-i18n-title="screenshot.annotBlur">▦</button>',
     // Lupa: arraste sobre a área pequena e o recorte aparece ampliado ao lado.
-    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="magnify" data-i18n-title="screenshot.annotMagnify"><svg viewBox="0 0 16 16" class="screenshot-annot-icon" aria-hidden="true"><circle cx="6.8" cy="6.8" r="4.3" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="10.1" y1="10.1" x2="13.6" y2="13.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="magnify" data-i18n-title="screenshot.annotMagnify"><svg viewBox="0 -960 960 960" width="15" height="15" fill="none" aria-hidden="true" focusable="false"><path d="M340-540h-40q-17 0-28.5-11.5T260-580q0-17 11.5-28.5T300-620h40v-40q0-17 11.5-28.5T380-700q17 0 28.5 11.5T420-660v40h40q17 0 28.5 11.5T500-580q0 17-11.5 28.5T460-540h-40v40q0 17-11.5 28.5T380-460q-17 0-28.5-11.5T340-500v-40Zm40 220q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l224 224q11 11 11 28t-11 28q-11 11-28 11t-28-11L532-372q-30 24-69 38t-83 14Zm0-80q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z" fill="currentColor" /></svg></button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="step" data-i18n-title="screenshot.annotStep">①</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="text" data-i18n-title="screenshot.annotText">T</button>',
     // Ícone em SVG (não emoji): o 🧽 renderizava como um borrão laranja em alguns
     // WebViews e destoava dos demais glifos.
-    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="eraser" data-i18n-title="screenshot.annotEraser"><svg viewBox="0 0 16 16" class="screenshot-annot-icon" aria-hidden="true"><rect x="3" y="5.8" width="10" height="4.8" rx="1.4" transform="rotate(-38 8 8.2)" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="6.1" y1="11" x2="9.9" y2="7.2" stroke="currentColor" stroke-width="1.3"/></svg></button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="eraser" data-i18n-title="screenshot.annotEraser"><svg viewBox="0 -960 960 960" width="15" height="15" fill="none" aria-hidden="true" focusable="false"><path d="M690-240h150q17 0 28.5 11.5T880-200q0 17-11.5 28.5T840-160H610l80-80Zm-483 80q-8 0-15.5-3t-13.5-9l-73-73q-23-23-23.5-57t22.5-58l440-456q23-24 56.5-24t56.5 23l199 199q23 23 23 57t-23 57L532-172q-6 6-13.5 9t-15.5 3H207Zm279-80 314-322-198-198-442 456 64 64h262Zm-6-240Z" fill="currentColor" /></svg></button>',
     '  <span class="screenshot-annot-sep"></span>',
     '  <button type="button" class="screenshot-annot-color" data-annot-color="#ff3b30" style="background:#ff3b30"></button>',
     '  <button type="button" class="screenshot-annot-color" data-annot-color="#ffcc00" style="background:#ffcc00"></button>',
@@ -3526,9 +3526,7 @@ function screenshotEnsureComposerControls() {
     menuBtn.className = "chat-icon-btn chat-screenshot-menu-btn";
     // Ícone de chevron em SVG (nítido em qualquer DPI, herda a cor do tema).
     menuBtn.innerHTML =
-      '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
-      '<path d="M6 9.5 12 15.5 18 9.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>' +
-      "</svg>";
+      '<svg viewBox="0 -960 960 960" width="14" height="14" fill="none" aria-hidden="true" focusable="false"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z" fill="currentColor" /></svg>';
     menuBtn.setAttribute("aria-haspopup", "menu");
     menuBtn.setAttribute("aria-expanded", "false");
     menuBtn.setAttribute("aria-label", screenshotT("screenshot.menuLabel"));

@@ -1396,6 +1396,14 @@
   fill: #f4a239;
 }
 
+/* Par de glifos Material Symbols da avaliação por estrelas: contorno (fill@0)
+   no estado neutro e sólida (fill@1) na avaliação escolhida. O CSS troca qual
+   dos dois SVGs aparece — o path não pode herdar fill porque cada variante é
+   um desenho diferente. */
+.star-icon--fill { display: none; }
+.star-btn.active .star-icon--outline { display: none; }
+.star-btn.active .star-icon--fill { display: block; }
+
 .btn-icon {
   width: 32px;
   height: 32px;
