@@ -2,8 +2,11 @@
 
 package app
 
-import "discovery/app/core/automation"
+import (
+	"discovery/app/core/automation"
+	"discovery/app/core/notifyui"
+)
 
-func (a *App) nativeAutomationWelcome(req automation.AutomationNotificationRequest, timeoutSeconds int, appName string, closeProcs []string, allowDefer bool, message string) (automation.AutomationNotificationResponse, bool) {
+func (a *App) nativeAutomationWelcome(req automation.AutomationNotificationRequest, timeoutSeconds int, appName string, closeProcs []string, runningProcs []notifyui.ProcessItem, allowDefer bool, message string) (automation.AutomationNotificationResponse, bool) {
 	return automation.AutomationNotificationResponse{}, false
 }

@@ -101,7 +101,7 @@ func TestCountdownClock(t *testing.T) {
 
 // Layout: botões alinhados à direita, contador empurra os botões para baixo.
 func TestCardLayoutFor(t *testing.T) {
-	plain := cardLayoutFor(1, 0, false, 2)
+	plain := cardLayoutFor(1, 0, false, 2, 0)
 	if len(plain.buttons) != 2 {
 		t.Fatalf("buttons = %d, want 2", len(plain.buttons))
 	}
@@ -115,7 +115,7 @@ func TestCardLayoutFor(t *testing.T) {
 		t.Fatalf("gap entre botões inesperado: first.Right=%d last.X=%d", first.Right(), last.X)
 	}
 
-	withCount := cardLayoutFor(1, 0, true, 2)
+	withCount := cardLayoutFor(1, 0, true, 2, 0)
 	if withCount.buttons[0].Y <= plain.buttons[0].Y {
 		t.Fatalf("contador deveria empurrar os botões para baixo: %d <= %d", withCount.buttons[0].Y, plain.buttons[0].Y)
 	}
@@ -124,13 +124,13 @@ func TestCardLayoutFor(t *testing.T) {
 	}
 
 	// Mensagem longa cresce o cartão.
-	grown := cardLayoutFor(1, 40, false, 1)
+	grown := cardLayoutFor(1, 40, false, 1, 0)
 	if grown.messageBox.H != 84+40 {
 		t.Fatalf("caixa de mensagem = %d, want %d", grown.messageBox.H, 84+40)
 	}
 
 	// Escala DPI cresce tudo proporcionalmente.
-	scaled := cardLayoutFor(2, 0, false, 1)
+	scaled := cardLayoutFor(2, 0, false, 1, 0)
 	if scaled.buttons[0].W != cardButtonW*2 {
 		t.Fatalf("botão escalado = %d, want %d", scaled.buttons[0].W, cardButtonW*2)
 	}
@@ -150,5 +150,54 @@ func TestNormalizeCardRequestMaxButtons(t *testing.T) {
 		if got.Buttons[i].ID != want {
 			t.Fatalf("botão %d = %q, want %q", i, got.Buttons[i].ID, want)
 		}
+	}
+}
+
+// A lista de processos empurra botões/contador para baixo e as linhas ficam
+// dentro da caixa (mesmo padrão do Welcome do PSADT).
+func TestCardLayoutForProcessRows(t *testing.T) {
+	plain := cardLayoutFor(1, 0, true, 2, 0)
+	withList := cardLayoutFor(1, 0, true, 2, 3)
+	if withList.buttons[0].Y <= plain.buttons[0].Y {
+		t.Fatalf("lista deveria empurrar os botões: %d <= %d", withList.buttons[0].Y, plain.buttons[0].Y)
+	}
+	if len(withList.processRows) != 3 {
+		t.Fatalf("linhas = %d, want 3", len(withList.processRows))
+	}
+	box := withList.processBox
+	for i, row := range withList.processRows {
+		if row.Y < box.Y || row.Bottom() > box.Bottom() {
+			t.Fatalf("linha %d fora da caixa: row=%+v box=%+v", i, row, box)
+		}
+		if row.X <= box.X || row.Right() > box.Right() {
+			t.Fatalf("linha %d fora da margem da caixa", i)
+		}
+	}
+
+	// Sem lista, nada muda em relação ao layout antigo.
+	if plain.processBox.W != 0 || len(plain.processRows) != 0 {
+		t.Fatalf("sem lista não deveria haver caixa de processos")
+	}
+}
+
+// NormalizeCardRequest limpa a lista e limita a cardMaxProcessRows linhas.
+func TestNormalizeCardRequestProcessList(t *testing.T) {
+	got := NormalizeCardRequest(CardRequest{
+		ProcessList: []ProcessItem{
+			{DisplayName: " firefox.exe ", ImagePath: " C:\\x\\firefox.exe "},
+			{},
+			{DisplayName: "code.exe"},
+			{DisplayName: "a"}, {DisplayName: "b"}, {DisplayName: "c"},
+			{DisplayName: "d"},
+		},
+	})
+	if len(got.ProcessList) != cardMaxProcessRows {
+		t.Fatalf("lista = %d, want %d", len(got.ProcessList), cardMaxProcessRows)
+	}
+	if got.ProcessList[0].DisplayName != "firefox.exe" || got.ProcessList[0].ImagePath != "C:\\x\\firefox.exe" {
+		t.Fatalf("item 0 não foi limpo: %+v", got.ProcessList[0])
+	}
+	if got.ProcessList[1].DisplayName != "code.exe" {
+		t.Fatalf("item vazio deveria ser removido: %+v", got.ProcessList[1])
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"golang.org/x/sys/windows"
 
@@ -33,6 +34,10 @@ const (
 	cardButtonH     = 38
 	cardButtonGap   = 10
 	cardMaxButtons  = 3
+	// cardProcessRowH/cardProcessIcon dimensionam as linhas da lista de
+	// processos do Welcome (ícone 28px + nome/executável).
+	cardProcessRowH  = 40
+	cardProcessIcon  = 28
 	// cardMessageMaxExtraPx limita o crescimento da caixa de mensagem (96 DPI).
 	cardMessageMaxExtraPx = 160
 	// cardWMAppCancel fecha o cartão de outra goroutine (cancelamento).
@@ -43,13 +48,15 @@ const (
 type cardLayout struct {
 	badge, kindIcon, title, subtitle, divider, messageBox, messageText winui.Rect
 	countLabel, countValue, progressTrack                    winui.Rect
+	processBox                                               winui.Rect
+	processRows                                              []winui.Rect
 	buttons                                                  []winui.Rect
 	hint                                                     winui.Rect
 }
 
 // cardLayoutFor monta o layout para a escala/extra informados. Puro
 // (usado também pelos testes de pré-visualização).
-func cardLayoutFor(scale float64, extraHeight int, hasCountdown bool, nButtons int) cardLayout {
+func cardLayoutFor(scale float64, extraHeight int, hasCountdown bool, nButtons int, processRows int) cardLayout {
 	if scale <= 0 {
 		scale = 1
 	}
@@ -80,6 +87,21 @@ func cardLayoutFor(scale float64, extraHeight int, hasCountdown bool, nButtons i
 	l.messageText = l.messageBox.Inset(sw(14), sw(10))
 
 	contentY := l.messageBox.Bottom() + sw(10)
+	if processRows > 0 {
+		l.processBox = winui.Rect{
+			X: sw(cardPad), Y: contentY,
+			W: sw(cardWidth) - 2*sw(cardPad),
+			H: sw(8) + processRows*sw(cardProcessRowH) + sw(6),
+		}
+		for i := 0; i < processRows; i++ {
+			y := l.processBox.Y + sw(4) + i*sw(cardProcessRowH)
+			l.processRows = append(l.processRows, winui.Rect{
+				X: l.processBox.X + sw(12), Y: y,
+				W: l.processBox.W - sw(24), H: sw(cardProcessRowH),
+			})
+		}
+		contentY = l.processBox.Bottom() + sw(10)
+	}
 	if hasCountdown {
 		l.countLabel = winui.Rect{X: sw(cardPad), Y: contentY, W: sw(280), H: sw(16)}
 		l.countValue = winui.Rect{X: sw(cardPad), Y: l.countLabel.Bottom() + sw(4), W: sw(120), H: sw(30)}
@@ -110,10 +132,12 @@ func cardHeightFor(l cardLayout, scale float64) int {
 // cardFonts agrupa as fontes do cartão (liberadas no WM_DESTROY).
 type cardFonts struct {
 	title, subtitle, body, countLabel, countValue, button, hint uintptr
+	// processFallback é a fonte da letra do ícone fallback da lista.
+	processFallback uintptr
 }
 
 func (f *cardFonts) release() {
-	for _, h := range []uintptr{f.title, f.subtitle, f.body, f.countLabel, f.countValue, f.button, f.hint} {
+	for _, h := range []uintptr{f.title, f.subtitle, f.body, f.countLabel, f.countValue, f.button, f.hint, f.processFallback} {
 		if h != 0 {
 			winui.DeleteGDIObject(h)
 		}
@@ -133,6 +157,8 @@ type cardState struct {
 
 	theme   winui.Theme
 	fonts   cardFonts
+	// processIcons guarda os HICONs da lista de processos (liberados no WM_DESTROY).
+	processIcons []uintptr
 	layout  cardLayout
 	scale   float64
 	hover   int // -1 = nenhum
@@ -363,6 +389,7 @@ func cardWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		state.finish(hwnd, state.closeResult())
 		return 0
 	case winui.MsgDestroy:
+		state.releaseProcessIcons()
 		state.fonts.release()
 		cardStates.Delete(hwnd)
 		winui.PostQuitMessage(0)
@@ -412,6 +439,33 @@ func (s *cardState) paint(screenDC uintptr) {
 
 	winui.FillRoundRectBorderAA(hdc, l.messageBox, winui.ScalePx(8, s.scale), theme.Surface, theme.Border)
 	winui.DrawTextWrappedEllipsis(hdc, s.req.Message, l.messageText, s.fonts.body, theme.Text, winui.AlignLeft)
+
+	if len(l.processRows) > 0 {
+		winui.FillRoundRectBorderAA(hdc, l.processBox, winui.ScalePx(8, s.scale), theme.Surface, theme.Border)
+		for i, row := range l.processRows {
+			if i >= len(s.req.ProcessList) {
+				break
+			}
+			item := s.req.ProcessList[i]
+			iconRect := winui.Rect{
+				X: row.X, Y: row.Y + (row.H-winui.ScalePx(cardProcessIcon, s.scale))/2,
+				W: winui.ScalePx(cardProcessIcon, s.scale), H: winui.ScalePx(cardProcessIcon, s.scale),
+			}
+			var hIcon uintptr
+			if i < len(s.processIcons) {
+				hIcon = s.processIcons[i]
+			}
+			if hIcon != 0 {
+				winui.DrawIconAt(hdc, hIcon, iconRect)
+			} else {
+				drawProcessIconFallback(hdc, iconRect, theme, s.scale, item.DisplayName, s.fonts.processFallback)
+			}
+			nameRect := winui.Rect{X: iconRect.Right() + winui.ScalePx(10, s.scale), Y: row.Y + winui.ScalePx(3, s.scale), W: row.Right() - iconRect.Right() - winui.ScalePx(10, s.scale), H: winui.ScalePx(18, s.scale)}
+			pathRect := winui.Rect{X: nameRect.X, Y: nameRect.Bottom() + winui.ScalePx(1, s.scale), W: nameRect.W, H: winui.ScalePx(14, s.scale)}
+			winui.DrawTextSingle(hdc, item.DisplayName, nameRect, s.fonts.body, theme.Text, winui.AlignLeft)
+			winui.DrawTextSingle(hdc, processPathLabel(item.ImagePath), pathRect, s.fonts.hint, theme.TextMuted, winui.AlignLeft)
+		}
+	}
 
 	if s.req.CountdownSeconds > 0 {
 		winui.DrawTextSingle(hdc, s.req.CountdownLabel, l.countLabel, s.fonts.countLabel, theme.TextMuted, winui.AlignLeft)
@@ -488,6 +542,40 @@ func drawCardKindIcon(hdc uintptr, rect winui.Rect, kind string, theme winui.The
 	DrawKindIcon(hdc, rect, kind, color)
 }
 
+// drawProcessIconFallback desenha um quadrado arredondado com a inicial do
+// programa quando o ícone do executável não pôde ser extraído.
+func drawProcessIconFallback(hdc uintptr, rect winui.Rect, theme winui.Theme, scale float64, name string, fallbackFont uintptr) {
+	winui.FillRoundRectBorderAA(hdc, rect, winui.ScalePx(6, scale), theme.Card.Blend(theme.Accent, 12), theme.Border)
+	letter := ""
+	for _, r := range strings.TrimSpace(name) {
+		letter = string(unicode.ToUpper(r))
+		break
+	}
+	if letter == "" {
+		return
+	}
+	winui.DrawTextSingle(hdc, letter, rect, fallbackFont, theme.Accent, winui.AlignCenter)
+}
+
+// processPathLabel encurta o caminho do executável (mostra o nome do arquivo).
+func processPathLabel(imagePath string) string {
+	if imagePath == "" {
+		return ""
+	}
+	if idx := strings.LastIndexAny(imagePath, "\\"); idx >= 0 && idx+1 < len(imagePath) {
+		return imagePath[idx+1:]
+	}
+	return imagePath
+}
+
+// releaseProcessIcons libera os HICONs da lista de processos.
+func (s *cardState) releaseProcessIcons() {
+	for _, hIcon := range s.processIcons {
+		winui.DestroyIconHandle(hIcon)
+	}
+	s.processIcons = nil
+}
+
 // ShowCard abre o cartão nativo e devolve o resultado. O contexto cancelado
 // fecha o cartão com Outcome "canceled".
 func ShowCard(ctx context.Context, req CardRequest) (CardResult, bool) {
@@ -516,7 +604,7 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 	// Posição/geometry inicial com o tamanho de projeto; após o DPI o cartão é
 	// redimensionado e re-ancorado.
 	scale0 := 1.0
-	layout0 := cardLayoutFor(scale0, 0, hasCountdown, len(req.Buttons))
+	layout0 := cardLayoutFor(scale0, 0, hasCountdown, len(req.Buttons), len(req.ProcessList))
 	height0 := cardHeightFor(layout0, scale0)
 
 	x, y := winui.BottomRightOnActiveWorkArea(cardWidth, height0, cardPad)
@@ -535,7 +623,7 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 
 	// Crescimento dinâmico da caixa de mensagem (textos longos).
 	bodyFont := winui.CreateFont(winui.ScalePx(15, scale), 400)
-	messageTextRect := cardLayoutFor(scale, 0, hasCountdown, len(req.Buttons)).messageText.Inset(winui.ScalePx(14, scale), winui.ScalePx(10, scale))
+	messageTextRect := cardLayoutFor(scale, 0, hasCountdown, len(req.Buttons), len(req.ProcessList)).messageText.Inset(winui.ScalePx(14, scale), winui.ScalePx(10, scale))
 	extraHeight := 0
 	if needed := winui.MeasureWrappedText(bodyFont, req.Message, messageTextRect.W); needed > messageTextRect.H {
 		extraHeight = needed - messageTextRect.H
@@ -543,8 +631,17 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 			extraHeight = maxExtra
 		}
 	}
-	layout := cardLayoutFor(scale, extraHeight, hasCountdown, len(req.Buttons))
+	layout := cardLayoutFor(scale, extraHeight, hasCountdown, len(req.Buttons), len(req.ProcessList))
 	height := cardHeightFor(layout, scale)
+
+	// Ícones dos processos (extração shell na thread da janela, liberada no
+	// WM_DESTROY). Falha em um ícone cai no fallback vetorial.
+	processIcons := make([]uintptr, len(req.ProcessList))
+	for i, item := range req.ProcessList {
+		if hIcon, ok := winui.ExtractFileIcon(item.ImagePath); ok {
+			processIcons[i] = hIcon
+		}
+	}
 
 	state := &cardState{
 		req:      req,
@@ -555,6 +652,8 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 		pressed:  -1,
 		layout:   layout,
 		scale:    scale,
+
+		processIcons: processIcons,
 	}
 	state.focus = state.defaultIndex()
 	state.dwmCornerRadius = winui.ScalePx(8, scale)
@@ -575,6 +674,8 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 		countValue:  winui.CreateFont(winui.ScalePx(26, scale), 600),
 		button:      winui.CreateFont(winui.ScalePx(14, scale), 600),
 		hint:        winui.CreateFont(winui.ScalePx(11, scale), 400),
+
+		processFallback: winui.CreateFont(winui.ScalePx(14, scale), 600),
 	}
 
 	// Só publica o estado depois da geometria/fontes prontas.

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"discovery/app/core/automation"
+	"discovery/app/core/notifyui"
 )
 
 // tryDispatchAutomationPsadtWelcome exibe o prompt de confirmação NATIVO do
@@ -52,18 +53,15 @@ func (a *App) tryDispatchAutomationPsadtWelcome(req automation.AutomationNotific
 		appName = "aplicativo"
 	}
 	closeProcs := automationMetadataStrings(req.Metadata, "closeProcesses")
-	message := fmt.Sprintf("Instalando %s no seu computador.", appName)
-	if len(closeProcs) > 0 {
+	// Um ÚNICO snapshot de processos alimenta a mensagem e a lista do cartão
+	// (dois snapshots podiam divergir: mensagem citava processo já fechado).
+	runningProcs := detectRunningCloseProcesses(closeProcs)
+	message := welcomeMessage(appName, timeoutSeconds, closeProcs, runningProcs)
 		message += fmt.Sprintf(" Os programas abertos (%s) serao fechados automaticamente em %d segundos.", strings.Join(closeProcs, ", "), timeoutSeconds)
-	} else {
-		message += fmt.Sprintf(" A instalacao continuara automaticamente em %d segundos.", timeoutSeconds)
-	}
-	message += " Selecione Instalar para prosseguir agora ou Adiar para fazer depois."
-
 	// Prompt NATIVO do agente (cartão winui com contador). Indisponível →
 	// handled=false e o chamador cai no toast require_confirmation.
 	allowDefer := automationMetadataBool(req.Metadata, "allowDefer", true)
-	if resp, handled := a.nativeAutomationWelcome(req, timeoutSeconds, appName, closeProcs, allowDefer, message); handled {
+	if resp, handled := a.nativeAutomationWelcome(req, timeoutSeconds, appName, closeProcs, runningProcs, allowDefer, message); handled {
 		a.Logs.Append(fmt.Sprintf("[automation] confirmacao via prompt nativo (task=%s timeout=%ds resultado=%s)",
 			strings.TrimSpace(req.NotificationID), timeoutSeconds, resp.Result))
 		return resp, true
@@ -183,4 +181,20 @@ func automationMetadataStrings(metadata map[string]any, key string) []string {
 		return nil
 	}
 	return out
+}
+// welcomeMessage monta o corpo do Welcome nativo: lista em execução vira
+// "programas abaixo" (caixa no cartão); sem processos rodando, mantém o
+// texto inline com os nomes configurados.
+func welcomeMessage(appName string, timeoutSeconds int, closeProcs []string, runningProcs []notifyui.ProcessItem) string {
+	message := fmt.Sprintf("Instalando %s no seu computador.", appName)
+	switch {
+	case len(runningProcs) > 0:
+		// Lista renderizada como caixa de processos no cartão (estilo PSADT).
+		message += fmt.Sprintf(" Os programas abaixo serao fechados automaticamente em %d segundos.", timeoutSeconds)
+	case len(closeProcs) > 0:
+		message += fmt.Sprintf(" Os programas abertos (%s) serao fechados automaticamente em %d segundos.", strings.Join(closeProcs, ", "), timeoutSeconds)
+	default:
+		message += fmt.Sprintf(" A instalacao continuara automaticamente em %d segundos.", timeoutSeconds)
+	}
+	return message + " Selecione Instalar para prosseguir agora ou Adiar para fazer depois."
 }

@@ -20,7 +20,8 @@ var (
 	procProcess32FirstW          = modkernel32.NewProc("Process32FirstW")
 	procProcess32NextW           = modkernel32.NewProc("Process32NextW")
 	procOpenProcess              = modkernel32.NewProc("OpenProcess")
-	procTerminateProcess         = modkernel32.NewProc("TerminateProcess")
+	procTerminateProcess          = modkernel32.NewProc("TerminateProcess")
+	procQueryFullProcessImageNameW = modkernel32.NewProc("QueryFullProcessImageNameW")
 )
 
 const (
@@ -111,4 +112,33 @@ func KillProcess(pid uint32) error {
 		return fmt.Errorf("TerminateProcess(%d): %w", pid, e)
 	}
 	return nil
+}
+
+// ProcessImagePath devolve o caminho completo do executável do processo
+// (QueryFullProcessImageNameW). Falha para processos protegidos/sistema — o
+// chamador trata como "sem ícone".
+func ProcessImagePath(pid uint32) (string, error) {
+	if pid == 0 {
+		return "", fmt.Errorf("pid inválido")
+	}
+	h, _, e := procOpenProcess.Call(uintptr(processQueryLimited), 0, uintptr(pid))
+	if h == 0 {
+		return "", fmt.Errorf("OpenProcess(%d): %w", pid, e)
+	}
+	defer windows.CloseHandle(windows.Handle(h))
+
+	// Buffer folgado: caminhos longos (>260 chars) fazem o
+	// QueryFullProcessImageNameW falhar com ERROR_INSUFFICIENT_BUFFER.
+	buf := make([]uint16, 1024)
+	size := uint32(len(buf))
+	r, _, e := procQueryFullProcessImageNameW.Call(
+		h,
+		0,
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&size)),
+	)
+	if r == 0 {
+		return "", fmt.Errorf("QueryFullProcessImageNameW(%d): %w", pid, e)
+	}
+	return syscall.UTF16ToString(buf[:size]), nil
 }

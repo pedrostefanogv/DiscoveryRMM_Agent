@@ -34,6 +34,18 @@ func (b Button) IsPrimary() bool {
 	return strings.EqualFold(strings.TrimSpace(b.Kind), "primary")
 }
 
+// ProcessItem descreve um programa em execução que será fechado pela tarefa
+// (lista do Welcome nativo, mesmo padrão do PSADT: ícone + nome + executável).
+type ProcessItem struct {
+	// DisplayName é o nome do programa exibido (nome do processo, ex. "firefox.exe").
+	DisplayName string
+	// ImagePath é o caminho do executável, usado para extrair o ícone real.
+	ImagePath string
+}
+
+// cardMaxProcessRows limita as linhas da lista (o cartão não cresce para
+// sempre; listas maiores do PSADT são raras e podem ser consolidadas).
+const cardMaxProcessRows = 5
 // CardRequest descreve um cartão de notificação nativo.
 type CardRequest struct {
 	// Title é o título do cartão (obrigatório; default "Discovery Agent").
@@ -64,6 +76,9 @@ type CardRequest struct {
 	// Hint é a dica de teclado exibida sob os botões. Vazio usa o padrão
 	// "Enter confirma · Esc fecha".
 	Hint string
+	// ProcessList lista os programas em execução que serão fechados
+	// (máx. cardMaxProcessRows linhas; itens extras são descartados).
+	ProcessList []ProcessItem
 	// Icon é o motivo da notificação exibido à direita do cabeçalho:
 	// "info" | "warning" | "error" | "question". Vazio vira "info".
 	Icon string
@@ -114,6 +129,22 @@ func NormalizeCardRequest(req CardRequest) CardRequest {
 		req.Hint = "Enter confirma · Esc fecha"
 	}
 	req.Icon = normalizeIconKind(req.Icon)
+
+	// Lista de processos: limpa e limita (a caixa do cartão não cresce além
+	// de cardMaxProcessRows linhas).
+	processes := make([]ProcessItem, 0, len(req.ProcessList))
+	for _, item := range req.ProcessList {
+		item.DisplayName = strings.TrimSpace(item.DisplayName)
+		item.ImagePath = strings.TrimSpace(item.ImagePath)
+		if item.DisplayName == "" && item.ImagePath == "" {
+			continue
+		}
+		processes = append(processes, item)
+		if len(processes) == cardMaxProcessRows {
+			break
+		}
+	}
+	req.ProcessList = processes
 
 	// Botões: mantém no máximo 3 e garante que haja pelo menos um OK.
 	buttons := make([]Button, 0, 3)
