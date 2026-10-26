@@ -16,6 +16,13 @@ func NewShellInteractive(shell ShellKind, cols, rows int, onOutput func(string))
 	return s, nil
 }
 
+// NewShellInteractiveRunAs é a variante run-as (fora do Windows o run-as é
+// sempre herdado — não existe token de sessão de console).
+func NewShellInteractiveRunAs(shell ShellKind, cols, rows int, onOutput func(string), runAs RunAs) (IShell, string, error) {
+	s, err := NewShellInteractive(shell, cols, rows, onOutput)
+	return s, "inherit", err
+}
+
 // Compila: garante que o Shell implementa IShell.
 var _ IShell = (*Shell)(nil)
 

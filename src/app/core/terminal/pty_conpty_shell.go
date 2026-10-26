@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // conptyCloseWaitTimeout limita a espera pelo reap do processo em Close
@@ -25,6 +27,14 @@ const conptyCloseWaitTimeout = 5 * time.Second
 type ConPTYShell struct {
 	hpc HPCON
 	cmd *exec.Cmd
+
+	// Run-as: token primário do usuário (0 = identidade herdada) e o Job
+	// Object com KILL_ON_JOB_CLOSE que garante a limpeza dos filhos do shell.
+	// tok é propriedade do CACHE de tokens (ver runas_windows.go) — o shell
+	// NÃO o fecha; o job é fechado em Close().
+	tok   windows.Token
+	job   *jobObject
+	runAs RunAs
 
 	stdinPipe  *os.File // escrita: dados enviados ao processo filho
 	stdoutPipe *os.File // leitura: saida do processo filho
@@ -45,8 +55,17 @@ type ConPTYShell struct {
 	waitOnce sync.Once
 }
 
-// NewConPTYShell cria um novo shell interativo usando ConPTY.
+// NewConPTYShell cria um novo shell interativo usando ConPTY, herdando a
+// identidade do processo do agente (comportamento original).
 func NewConPTYShell(shell ShellKind, cols, rows int, onOutput func(string)) (*ConPTYShell, error) {
+	return NewConPTYShellRunAs(shell, cols, rows, onOutput, RunAsInherit)
+}
+
+// NewConPTYShellRunAs cria um shell ConPTY que, quando runAs == RunAsUser e
+// existe sessão de console ativa, roda o shell na identidade do USUÁRIO
+// (CreateProcessW com o token primário + CreateEnvironmentBlock). Sem usuário
+// logado, degrada para a identidade herdada com log de aviso (nunca falha).
+func NewConPTYShellRunAs(shell ShellKind, cols, rows int, onOutput func(string), runAs RunAs) (*ConPTYShell, error) {
 	if cols <= 0 {
 		cols = 120
 	}
@@ -95,9 +114,32 @@ func NewConPTYShell(shell ShellKind, cols, rows int, onOutput func(string)) (*Co
 
 	cmdLine := buildCommandLine(fullPath, exeArgs)
 
+	// Run-as: resolve a identidade ANTES do CreateProcessW. O resolveRunAs
+	// nunca falha a sessão (fallback herdado com log de aviso).
+	ra := resolveRunAs(runAs)
+	var envBlock unsafe.Pointer
+	if ra.tok != 0 {
+		if b, eerr := userEnvironmentBlock(ra.tok); eerr == nil {
+			envBlock = b
+		} else {
+			// Sem ambiente do usuário, o shell herdaria %USERPROFILE% do
+			// serviço — herdamos o env do serviço em vez de falhar, mas o
+			// aviso registra o sintoma (cd ~ vai para systemprofile).
+			stdLog("[terminal] CreateEnvironmentBlock falhou (env do usuário indisponível): %v", eerr)
+		}
+	}
+
+	// Job Object: filhos do shell morrem junto com o Close (KILL_ON_JOB_CLOSE).
+	job := newKillOnCloseJob()
+
 	var pi procInfo
-	err = createProcessConPTY(cmdLine, hpc, &pi)
+	err = createProcessConPTY(cmdLine, hpc, &pi, ra.tok, envBlock)
+	if envBlock != nil {
+		// O bloco não é mais necessário após a chamada.
+		destroyEnvironmentBlock(envBlock)
+	}
 	if err != nil {
+		job.close()
 		ClosePseudoConsole(hpc)
 		stdinRead.Close()
 		stdinWrite.Close()
@@ -108,6 +150,11 @@ func NewConPTYShell(shell ShellKind, cols, rows int, onOutput func(string)) (*Co
 
 	stdinRead.Close()
 	stdoutWrite.Close()
+
+	// Associa o shell ao job ANTES de fechar o handle original do
+	// CreateProcessW (AssignProcessToJobObject precisa de um handle — o
+	// FindProcess abaixo reabre por PID e pode falhar por acesso).
+	job.assign(syscall.Handle(pi.Process))
 
 	syscall.CloseHandle(syscall.Handle(pi.Thread))
 
@@ -120,6 +167,7 @@ func NewConPTYShell(shell ShellKind, cols, rows int, onOutput func(string)) (*Co
 		// falhar por acesso, mas o processo está vivo e sem dono).
 		_ = syscall.TerminateProcess(syscall.Handle(pi.Process), 1)
 		syscall.CloseHandle(syscall.Handle(pi.Process))
+		job.close()
 		ClosePseudoConsole(hpc)
 		stdinWrite.Close()
 		stdoutRead.Close()
@@ -140,7 +188,14 @@ func NewConPTYShell(shell ShellKind, cols, rows int, onOutput func(string)) (*Co
 		cols:       cols,
 		rows:       rows,
 		onOutput:   onOutput,
+		tok:        ra.tok,
+		job:        job,
+		runAs:      runAs,
 	}
+	if ra.effectiveRunAs != "" {
+		s.runAs = RunAs(ra.effectiveRunAs)
+	}
+	stdLog("[terminal] ConPTY shell spawnado como %s (requested=%s)", ra.identity, string(runAs))
 
 	go s.readLoop(stdoutRead)
 	go s.stdinWriterLoop()
@@ -250,7 +305,7 @@ type procInfo struct {
 	ProcessId uint32
 }
 
-func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo) error {
+func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo, tok windows.Token, env unsafe.Pointer) error {
 	si := &startupInfoEx{}
 
 	// cb deve ser o tamanho de STARTUPINFOEXW (STARTUPINFOW + lpAttributeList),
@@ -296,12 +351,23 @@ func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo) error {
 	si.lpAttributeList = unsafe.Pointer(&attrBuf[0])
 
 	var piNative procInfoNative
+	// hToken != 0 → CreateProcessAsUserW (o shell roda como o usuário). Com
+	// token, lpEnvironment é o bloco do usuário (CreateEnvironmentBlock) — sem
+	// ele o filho herdaria o ambiente do serviço. env nil → herda o atual.
+	var hToken uintptr
+	if tok != 0 {
+		hToken = uintptr(tok)
+	}
+	var envPtr *uint16
+	if env != nil {
+		envPtr = (*uint16)(env)
+	}
 	err := createProcessW(
-		nil, cmdLine,
+		hToken, nil, cmdLine,
 		nil, nil,
 		false,
 		extendedStartupinfoPresent|syscall.CREATE_UNICODE_ENVIRONMENT,
-		nil, nil,
+		envPtr, nil,
 		si,
 		&piNative,
 	)
@@ -372,6 +438,7 @@ type procInfoNative struct {
 }
 
 func createProcessW(
+	hToken uintptr,
 	appName, cmdLine *uint16,
 	procAttr, threadAttr *syscall.SecurityAttributes,
 	inheritHandles bool,
@@ -383,6 +450,28 @@ func createProcessW(
 	var inherit uint32
 	if inheritHandles {
 		inherit = 1
+	}
+	// Com token: CreateProcessAsUserW (advapi32) — assinatura idêntica ao
+	// CreateProcessW com hToken no 1º parâmetro. Sem token: CreateProcessW
+	// (comportamento original, herda o processo atual).
+	if hToken != 0 {
+		r1, _, e1 := procCreateProcessAsUserW.Call(
+			hToken,
+			uintptr(unsafe.Pointer(appName)),
+			uintptr(unsafe.Pointer(cmdLine)),
+			uintptr(unsafe.Pointer(procAttr)),
+			uintptr(unsafe.Pointer(threadAttr)),
+			uintptr(inherit),
+			uintptr(creationFlags),
+			uintptr(unsafe.Pointer(env)),
+			uintptr(unsafe.Pointer(currentDir)),
+			uintptr(unsafe.Pointer(startupInfo)),
+			uintptr(unsafe.Pointer(procInfo)),
+		)
+		if r1 == 0 {
+			return fmt.Errorf("CreateProcessAsUserW: %w", e1)
+		}
+		return nil
 	}
 	r1, _, e1 := procCreateProcessW.Call(
 		uintptr(unsafe.Pointer(appName)),
@@ -403,6 +492,11 @@ func createProcessW(
 }
 
 var procCreateProcessW = kernel32.NewProc("CreateProcessW")
+
+// procCreateProcessAsUserW (advapi32): CreateProcessW com token — usado pelo
+// run-as=user do terminal. Também aceita STARTUPINFOEX com o atributo
+// PSEUDOCONSOLE (o atributo é aplicado ao novo processo pelo kernel).
+var procCreateProcessAsUserW = advapi32.NewProc("CreateProcessAsUserW")
 
 // ── Metodos publicos ──
 
@@ -478,6 +572,9 @@ func (s *ConPTYShell) Close() error {
 	close(s.stdinQueue)
 	s.stdinPipe.Close()
 	ClosePseudoConsole(s.hpc)
+	// Fecha o Job Object (KILL_ON_JOB_CLOSE): TERMINA os filhos do shell que
+	// sobreviveram ao Kill do processo direto.
+	s.job.close()
 	cmd := s.cmd
 	s.mu.Unlock()
 

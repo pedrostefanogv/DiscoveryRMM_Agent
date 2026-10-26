@@ -98,17 +98,28 @@ const (
 //     que o viewer mostra ao operador (em vez de um shell de pipe que "abre"
 //     mas não executa nada).
 func NewShellInteractive(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, error) {
+	s, _, err := NewShellInteractiveRunAs(shell, cols, rows, onOutput, RunAsInherit)
+	return s, err
+}
+
+// NewShellInteractiveRunAs cria o shell com a identidade pedida e devolve
+// (shell, runAs efetivo, erro). O efetivo vai no term.ready ("user"/"system"/
+// "inherit"): quando runAs=user não há usuário logado, o shell degrada para a
+// identidade herdada com aviso no log (o terminal nunca deixa de abrir).
+func NewShellInteractiveRunAs(shell ShellKind, cols, rows int, onOutput func(string), runAs RunAs) (IShell, string, error) {
 	policy := ResolveBackendPolicy()
 	if policy == BackendLegacy {
 		log.Printf("[terminal] backend=legacy forçado por DISCOVERY_TERM_BACKEND")
-		return NewLegacyShell(shell, cols, rows, onOutput)
+		s, err := NewLegacyShellRunAs(shell, cols, rows, onOutput, runAs)
+		return s, EffectiveRunAs(runAs), err
 	}
 
 	if !IsConPTYAvailable() {
 		// Sem as APIs de pseudoconsole não existe alternativa: o console real
 		// (pipes) é o único shell possível nesta máquina.
 		log.Printf("[terminal] ConPTY indisponível neste sistema (requer Windows 10 1809+); usando console real (legacy)")
-		return NewLegacyShell(shell, cols, rows, onOutput)
+		s, err := NewLegacyShellRunAs(shell, cols, rows, onOutput, runAs)
+		return s, EffectiveRunAs(runAs), err
 	}
 
 	// Acumula TODAS as causas: se a escada inteira falhar, o operador precisa
@@ -116,18 +127,18 @@ func NewShellInteractive(shell ShellKind, cols, rows int, onOutput func(string))
 	var failures []string
 
 	// 1) ConPTY in-process: caminho preferido.
-	if s, err := tryConPTY(shell, cols, rows, onOutput); err != nil {
+	if s, err := tryConPTY(shell, cols, rows, onOutput, runAs); err != nil {
 		failures = append(failures, "conpty: "+err.Error())
 	} else {
-		return s, nil
+		return s, EffectiveRunAs(runAs), nil
 	}
 
 	// 2) ConPTY isolado em processo filho (dispatcher).
 	if DispatchersAvailable() {
-		if ds, err := tryDispatcher(shell, cols, rows, onOutput); err != nil {
+		if ds, err := tryDispatcher(shell, cols, rows, onOutput, runAs); err != nil {
 			failures = append(failures, "dispatcher: "+err.Error())
 		} else {
-			return ds, nil
+			return ds, EffectiveRunAs(runAs), nil
 		}
 	} else {
 		log.Printf("[terminal] dispatcher desabilitado (DISCOVERY_TERM_DISPATCHER=0)")
@@ -142,25 +153,34 @@ func NewShellInteractive(shell ShellKind, cols, rows int, onOutput func(string))
 	}
 	if legacyAllowExplicit() {
 		log.Printf("[terminal] fallback para console real liberado por DISCOVERY_TERM_ALLOW_LEGACY=1: %s", detail)
-		return NewLegacyShell(shell, cols, rows, onOutput)
+		s, err := NewLegacyShellRunAs(shell, cols, rows, onOutput, runAs)
+		return s, EffectiveRunAs(runAs), err
 	}
 	// A dica da variável de ambiente fica no LOG (diagnóstico), não na mensagem
 	// que chega ao operador no banner do terminal.
 	log.Printf("[terminal] ConPTY indisponivel na pratica (%s); para forcar o console real (pipes, sem VT) use DISCOVERY_TERM_ALLOW_LEGACY=1", detail)
-	return nil, fmt.Errorf("nao foi possivel iniciar o terminal ConPTY neste computador (%s)", detail)
+	return nil, EffectiveRunAs(runAs), fmt.Errorf("nao foi possivel iniciar o terminal ConPTY neste computador (%s)", detail)
 }
 
-// tryConPTY tenta o ConPTY in-process com retry/backoff.
-func tryConPTY(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, error) {
+// tryConPTY tenta o ConPTY in-process com retry/backoff. Com runAs=user, o
+// token é resolvido UMA vez (cache) e reusado por todas as tentativas; falha
+// recorrente do CreateProcessAsUserW (token rejeitado pelo host, ex.: política
+// corporativa) degrada para a identidade herdada nas tentativas seguintes.
+func tryConPTY(shell ShellKind, cols, rows int, onOutput func(string), runAs RunAs) (IShell, error) {
 	var lastErr error
+	effRunAs := runAs
 	for attempt := 0; attempt <= conptyMaxRetries; attempt++ {
 		firstOutput := &atomic.Bool{}
-		s, err := NewConPTYShell(shell, cols, rows, func(out string) {
+		s, err := NewConPTYShellRunAs(shell, cols, rows, func(out string) {
 			firstOutput.Store(true)
 			onOutput(out)
-		})
+		}, effRunAs)
 		if err != nil {
 			lastErr = err
+			if effRunAs == RunAsUser && strings.Contains(err.Error(), "CreateProcessAsUserW") {
+				log.Printf("[terminal] spawn run-as=user rejeitado (%v); tentando novamente com identidade herdada", err)
+				effRunAs = RunAsInherit
+			}
 			log.Printf("[terminal] ConPTY falhou no spawn (tentativa %d/%d): %v", attempt+1, conptyMaxRetries+1, err)
 		} else if probeForEarlyDeath(s, conptyProbeTimeout, firstOutput) {
 			lastErr = fmt.Errorf("ConPTY morreu prematuramente no startup")
@@ -177,13 +197,15 @@ func tryConPTY(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, 
 	return nil, lastErr
 }
 
-// tryDispatcher tenta o ConPTY isolado no processo filho (dispatcher).
-func tryDispatcher(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, error) {
+// tryDispatcher tenta o ConPTY isolado no processo filho (dispatcher). O
+// run-as é propagado por flag (--terminal-runas) — o dispatcher (filho do
+// agente, ainda SYSTEM quando o serviço é) resolve o token localmente.
+func tryDispatcher(shell ShellKind, cols, rows int, onOutput func(string), runAs RunAs) (IShell, error) {
 	firstOutput := &atomic.Bool{}
 	ds, err := NewDispatcherShell(shell, cols, rows, func(out string) {
 		firstOutput.Store(true)
 		onOutput(out)
-	})
+	}, runAs)
 	if err != nil {
 		log.Printf("[terminal] dispatcher indisponivel (%v)", err)
 		return nil, err
@@ -252,11 +274,21 @@ func ShellBackendName(s IShell) string {
 // funcionam e o prompt apenas se repete. Só é usado quando o ConPTY não existe
 // na máquina ou com DISCOVERY_TERM_ALLOW_LEGACY=1.
 func NewLegacyShell(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, error) {
+	return NewLegacyShellRunAs(shell, cols, rows, onOutput, RunAsInherit)
+}
+
+// NewLegacyShellRunAs é a variante run-as do legacy: com token do usuário, o
+// processo é criado via CreateProcessAsUser (SysProcAttr.Token do Go).
+func NewLegacyShellRunAs(shell ShellKind, cols, rows int, onOutput func(string), runAs RunAs) (IShell, error) {
 	key := string(shell)
 	if strings.HasPrefix(key, "wsl") {
 		key = "wsl"
 	}
-	s, err := NewShell(key, onOutput)
+	ra := resolveRunAs(runAs)
+	if ra.tok != 0 {
+		stdLog("[terminal] legacy shell spawnado como %s (requested=%s)", ra.identity, string(runAs))
+	}
+	s, err := NewShellWithToken(key, onOutput, ra.tok)
 	if err != nil {
 		return nil, err
 	}

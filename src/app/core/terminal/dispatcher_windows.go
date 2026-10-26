@@ -294,7 +294,7 @@ func pipeClientPID(conn net.Conn) uint32 {
 // É chamado do main.go quando "--terminal-dispatcher" está presente nos args.
 func RunDispatcher() {
 	args := os.Args
-	var session, shellKind string
+	var session, shellKind, runAsFlag string
 	cols, rows := 120, 40
 	for i := 1; i < len(args); i++ {
 		a := strings.TrimSpace(args[i])
@@ -311,12 +311,20 @@ func RunDispatcher() {
 			if v, err := strconv.Atoi(strings.TrimPrefix(a, "--terminal-rows=")); err == nil {
 				rows = v
 			}
+		case strings.HasPrefix(a, "--terminal-runas="):
+			runAsFlag = strings.TrimPrefix(a, "--terminal-runas=")
 		}
 	}
 	if session == "" || shellKind == "" {
 		log.Printf("[term-dispatcher] args invalidos: session vazio ou shell vazio (%v)", args[1:])
 		os.Exit(1)
 	}
+	// Run-as: valor invalido NUNCA derruba o dispatcher — usa identidade herdada.
+	if runAsFlag != "" && !ValidRunAs(runAsFlag) {
+		log.Printf("[term-dispatcher] runas invalido %q — usando identidade herdada", runAsFlag)
+		runAsFlag = ""
+	}
+	runAs := ParseRunAs(runAsFlag)
 	// Segurança: o token da sessão vira parte do NOME do pipe — só o charset
 	// UUID (hex/hífen) é aceito; qualquer outro caractere permitiria injetar
 	// namespace/caminho no nome do pipe (ver validSessionToken).
@@ -394,10 +402,10 @@ func RunDispatcher() {
 
 	var firstOutput atomic.Bool
 	newShell := func() (IShell, error) {
-		return NewConPTYShell(ShellKind(shellKind), cols, rows, func(output string) {
+		return NewConPTYShellRunAs(ShellKind(shellKind), cols, rows, func(output string) {
 			firstOutput.Store(true)
 			outWriter.Write([]byte(output))
-		})
+		}, runAs)
 	}
 	var ish IShell
 	var lastErr error

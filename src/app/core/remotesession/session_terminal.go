@@ -872,6 +872,11 @@ type SessionTerminal struct {
 	// o manager o guardar — senão o viewer ficaria sem shells/dimensões.
 	readyRequested bool
 
+	// runAsEffective é a identidade EFETIVA do console corrente
+	// ("user"/"system"/"inherit"), devolvida por NewShellInteractiveRunAs no
+	// Start. Vai no term.ready (campo aditivo "runAs") para o viewer exibir.
+	runAsEffective string
+
 	// cwd guarda o diretório reportado pelo shell (OSC 633) e o fallback
 	// heurístico de cd/Set-Location — ver terminal_cwd.go.
 	cwd termCwdState
@@ -1024,7 +1029,7 @@ func (st *SessionTerminal) publishStats(stats *termStats) {
 // (contrato A, aditivo). No legacy nao ha VT nem resize real. cwd é o
 // diretório corrente efetivo da sessão (reportado pelo shell ou fallback) —
 // campo aditivo para o viewer saber onde a completação vai resolver.
-func buildTermReadyPayload(availableShells []string, consoleID string, cols, rows int, shellKind, shellPath, backend, cwd string) map[string]any {
+func buildTermReadyPayload(availableShells []string, consoleID string, cols, rows int, shellKind, shellPath, backend, cwd, runAs string) map[string]any {
 	supportsVt := backend == "conpty"
 	// O backend legacy redimensiona o console real (AttachConsole +
 	// SetConsoleScreenBufferSize), então também anuncia suporte a resize (R6).
@@ -1043,6 +1048,9 @@ func buildTermReadyPayload(availableShells []string, consoleID string, cols, row
 		"supportsCompletionQuery": completionSupported(terminal.ShellKind(shellKind), backend),
 		"encoding":                "utf-8",
 		"cwd":                     cwd,
+		// Identidade EFETIVA do console ("user"/"system"/"inherit") — aditivo:
+		// consumidores antigos ignoram; o viewer pode exibir o badge.
+		"runAs":                   runAs,
 	}
 }
 
@@ -1299,8 +1307,16 @@ func (st *SessionTerminal) DisableRecording() {
 }
 
 // Start inicia o console unico com output coalescing, rate limiting e subjects fixos
-// (term.out para saida, term.in para entrada).
+// (term.out para saida, term.in para entrada), herdando a identidade do agente.
 func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKind, cols, rows int) (*TerminalSession, error) {
+	return st.StartRunAs(ctx, shellKind, cols, rows, terminal.RunAsInherit)
+}
+
+// StartRunAs é a variante run-as do Start: runAs=user faz o shell rodar na
+// identidade do usuário da sessão de console ativa (fallback herdado quando
+// não há usuário logado). O runAs EFETIVO fica em st.runAsEffective para o
+// term.ready.
+func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.ShellKind, cols, rows int, runAs terminal.RunAs) (*TerminalSession, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
@@ -1432,7 +1448,7 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 	// REMOVE a sequência do fluxo (o viewer não pode renderizar ESC ] 633 como
 	// lixo) e atualiza o estado da sessão, mesmo fragmentada entre chunks.
 	scanner := &osc633Scanner{}
-	shell, err := terminal.NewShellInteractive(shellKind, cols, rows, func(output string) {
+	shell, shRunAs, err := terminal.NewShellInteractiveRunAs(shellKind, cols, rows, func(output string) {
 		clean, cwds := scanner.Scan(output)
 		for _, c := range cwds {
 			st.applyReportedCwd(c)
@@ -1440,10 +1456,11 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		if clean != "" {
 			coalescer.Write(clean)
 		}
-	})
+	}, runAs)
 	if err != nil {
 		return nil, fmt.Errorf("criar shell %s: %w", shellKind, err)
 	}
+	st.runAsEffective = shRunAs
 
 	term.Shell = shell
 	st.terminal = term

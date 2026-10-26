@@ -56,8 +56,11 @@ type dispatcherShell struct {
 }
 
 // NewDispatcherShell cria um shell via ConPTY num processo filho (dispatcher).
+// O run-as é propagado por flag: o dispatcher (filho do agente, ainda SYSTEM
+// quando o serviço é) resolve o token do usuário localmente — o processo
+// dispatcher NUNCA recebe token.
 // Só é chamado por NewShellInteractive quando DispatchersAvailable() é true.
-func NewDispatcherShell(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, error) {
+func NewDispatcherShell(shell ShellKind, cols, rows int, onOutput func(string), runAs RunAs) (IShell, error) {
 	if cols <= 0 {
 		cols = 120
 	}
@@ -78,13 +81,19 @@ func NewDispatcherShell(shell ShellKind, cols, rows int, onOutput func(string)) 
 		return nil, fmt.Errorf("os.Executable: %w", err)
 	}
 
-	cmd := exec.Command(exe,
+	args := []string{
 		"--terminal-dispatcher",
-		"--terminal-session="+session,
-		"--terminal-shell="+string(shell),
-		"--terminal-cols="+fmt.Sprint(cols),
-		"--terminal-rows="+fmt.Sprint(rows),
-	)
+		"--terminal-session=" + session,
+		"--terminal-shell=" + string(shell),
+		"--terminal-cols=" + fmt.Sprint(cols),
+		"--terminal-rows=" + fmt.Sprint(rows),
+	}
+	// A flag só é enviada quando há pedido explícito (aditivo — dispatchers
+	// antigos/flag ausente = identidade herdada).
+	if runAs != RunAsInherit {
+		args = append(args, "--terminal-runas="+string(runAs))
+	}
+	cmd := exec.Command(exe, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 
 	// Telemetria do dispatcher: sem isso os log.Printf do filho (falha do

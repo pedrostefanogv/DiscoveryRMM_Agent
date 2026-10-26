@@ -33,6 +33,10 @@ type Shell struct {
 	closed   bool
 	onOutput func(string) // callback para saida
 
+	// job: Job Object (KILL_ON_JOB_CLOSE) do processo do shell — fechado no
+	// Close() para terminar eventuais filhos sobreviventes.
+	job *jobObject
+
 	// waitOnce/waitErr compartilham o cmd.Wait() entre o monitor de exit da
 	// sessão e o Close(). Chamar cmd.Wait() duas vezes em paralelo NÃO é seguro
 	// (documentado no os/exec) — o Close antigo podia racear com a goroutine de
@@ -48,6 +52,13 @@ type Shell struct {
 // injetores/AV do que ConPTY.
 // shell: "powershell" ou "cmd".
 func NewShell(shell string, onOutput func(string)) (*Shell, error) {
+	return NewShellWithToken(shell, onOutput, 0)
+}
+
+// NewShellWithToken cria o shell legado; com tok != 0 o processo é criado via
+// CreateProcessAsUser (SysProcAttr.Token do Go) — run-as=user do terminal.
+// O CALLER é dono do token (não é fechado aqui).
+func NewShellWithToken(shell string, onOutput func(string), tok windows.Token) (*Shell, error) {
 	resolvedKind, resolvedPath := ResolveShell(ShellKind(shell))
 	shell = string(resolvedKind)
 
@@ -76,6 +87,10 @@ func NewShell(shell string, onOutput func(string)) (*Shell, error) {
 		HideWindow:    true,
 		CreationFlags: windows.CREATE_NEW_CONSOLE, // pseudo-terminal behavior
 	}
+	if tok != 0 {
+		// Go usa CreateProcessAsUser quando SysProcAttr.Token está preenchido.
+		cmd.SysProcAttr.Token = syscall.Token(tok)
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -102,6 +117,13 @@ func NewShell(shell string, onOutput func(string)) (*Shell, error) {
 		return nil, fmt.Errorf("start shell: %w", err)
 	}
 
+	// Job Object do shell (KILL_ON_JOB_CLOSE): filhos do legado também morrem
+	// no Close — mesmo padrão do ConPTY.
+	job := newKillOnCloseJob()
+	if cmd.Process != nil {
+		job.assignPid(cmd.Process.Pid)
+	}
+
 	s := &Shell{
 		cmd:      cmd,
 		shell:    shell,
@@ -109,6 +131,7 @@ func NewShell(shell string, onOutput func(string)) (*Shell, error) {
 		stdout:   stdoutPipe,
 		stderr:   stderrPipe,
 		onOutput: onOutput,
+		job:      job,
 	}
 	if cmd.Process != nil {
 		s.childPid = uint32(cmd.Process.Pid)
@@ -346,6 +369,7 @@ func (s *Shell) Close() error {
 	if s.cmd != nil && s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 	}
+	s.job.close()
 	_ = s.Wait()
 	return nil
 }

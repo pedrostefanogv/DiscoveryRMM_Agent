@@ -77,7 +77,7 @@ func TestConPTYEndToEnd(t *testing.T) {
 	var lastErr error
 	start := time.Now()
 	for round := 0; round < 3 && s == nil; round++ {
-		s, lastErr = tryConPTY(ShellCmd, 80, 25, cb)
+		s, lastErr = tryConPTY(ShellCmd, 80, 25, cb, RunAsInherit)
 		if lastErr != nil {
 			t.Logf("rodada %d nao subiu: %v", round+1, lastErr)
 		}

@@ -90,7 +90,7 @@ func TestPublishCwd_SubjectPayload(t *testing.T) {
 }
 
 func TestTermReadyPayload_IncluiCwd(t *testing.T) {
-	ready := buildTermReadyPayload([]string{"cmd"}, "main", 120, 40, "cmd", "cmd.exe", "conpty", "C:\\Users\\op")
+	ready := buildTermReadyPayload([]string{"cmd"}, "main", 120, 40, "cmd", "cmd.exe", "conpty", "C:\\Users\\op", "system")
 	if ready["cwd"] != "C:\\Users\\op" {
 		t.Fatalf("ready cwd = %v, want C:\\Users\\op", ready["cwd"])
 	}

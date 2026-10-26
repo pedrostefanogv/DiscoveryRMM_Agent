@@ -1122,8 +1122,21 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 	cols := sessionMetaInt(session, "termCols", 120)
 	rows := sessionMetaInt(session, "termRows", 40)
 
-	log.Printf("[remote-session-term] iniciando console para sessao %s (shell=%s cols=%d rows=%d)\n",
-		session.ID, defaultShell, cols, rows)
+	// Run-as do terminal (Meta "runAs": "system"|"user"). Default: user —
+	// o console roda na identidade do usuário logado quando há sessão de
+	// console ativa; sem usuário, degrada para a identidade herdada (SYSTEM
+	// no serviço) com aviso no log. Valor inválido do servidor → aviso + default.
+	runAs := terminal.RunAsUser
+	if raw, ok := sessionMetaString(session, "runAs"); ok {
+		if !terminal.ValidRunAs(raw) {
+			log.Printf("[remote-session-term] runAs invalido %q do servidor — usando default (user)", raw)
+		} else {
+			runAs = terminal.ParseRunAs(raw)
+		}
+	}
+
+	log.Printf("[remote-session-term] iniciando console para sessao %s (shell=%s cols=%d rows=%d runas=%s)\n",
+		session.ID, defaultShell, cols, rows, string(runAs))
 
 	sessTerm := NewSessionTerminal(session.ID, m.natsStream, session.Recording)
 
@@ -1137,7 +1150,7 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 	})
 
 	// Console único — cria o terminal (subjects fixos term.out / term.in)
-	console, err := sessTerm.Start(ctx, defaultShell, cols, rows)
+	console, err := sessTerm.StartRunAs(ctx, defaultShell, cols, rows, runAs)
 	if err != nil {
 		log.Printf("[remote-session-term] ERRO ao iniciar console (conptyDisponivel=%v): %v",
 			terminal.IsConPTYAvailable(), err)
@@ -1174,7 +1187,12 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 	// já chegou; senão heurístico/processo. A integração é injetada no Start e
 	// pode reportar depois — o subject .term.cwd cobre as mudanças seguintes.
 	cwd := sessTerm.CurrentCwd()
-	ready := buildTermReadyPayload(availableShells, console.ID, console.Cols, console.Rows, shellKind, shellPath, backend, cwd)
+	// Identidade EFETIVA do console (fallback do runAs resolvido no Start).
+	effRunAs := sessTerm.runAsEffective
+	if effRunAs == "" {
+		effRunAs = terminal.EffectiveRunAs(runAs)
+	}
+	ready := buildTermReadyPayload(availableShells, console.ID, console.Cols, console.Rows, shellKind, shellPath, backend, cwd, effRunAs)
 	if err := m.natsStream.PublishTermReady(session.ID, ready); err != nil {
 		sessTerm.notePublishError()
 	}
