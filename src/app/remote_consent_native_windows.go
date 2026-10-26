@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"discovery/app/core/notifyui"
 	"discovery/app/core/remotesession"
 	"discovery/app/core/winui"
 )
@@ -535,22 +536,16 @@ func consentInsideRoundedCardAt(x, y, width, height, cornerRadius int) bool {
 	return dx*dx+dy*dy <= r*r
 }
 
-// drawConsentBadge desenha o selo do cabeçalho: um "monitor" no cartão, com
-// fundo levemente tingido pelo accent do Windows (funciona em claro e escuro).
+// drawConsentBadge desenha o selo do cabeçalho: fundo levemente tingido pelo
+// accent do Windows com o glifo de monitor do MESMO conjunto de ícones do
+// cartão de notificação (Material Symbols, fonts.google.com/icons) —
+// substitui o "monitor" desenhado à mão com retângulos.
 func drawConsentBadge(hdc uintptr, rect winui.Rect, theme winui.Theme, scale float64) {
 	sw := func(v int) int { return winui.ScalePx(v, scale) }
 	winui.FillRoundRectBorderAA(hdc, rect, sw(12),
 		theme.Card.Blend(theme.Accent, 16),
 		theme.Card.Blend(theme.Accent, 40))
-	padX, padY := sw(10), sw(10)
-	screen := winui.Rect{X: rect.X + padX, Y: rect.Y + padY, W: rect.W - 2*padX, H: sw(15)}
-	winui.StrokeRoundRectAA(hdc, screen, sw(4), sw(2), theme.Accent)
-	winui.FillRect(hdc, winui.Rect{
-		X: rect.X + rect.W/2 - sw(4), Y: screen.Bottom() + sw(3), W: sw(8), H: sw(2),
-	}, theme.Accent)
-	winui.FillRoundRectAA(hdc, winui.Rect{
-		X: rect.X + rect.W/2 - sw(8), Y: screen.Bottom() + sw(7), W: sw(16), H: sw(3),
-	}, sw(1), theme.Accent)
+	notifyui.DrawGlyph(hdc, rect, notifyui.GlyphDesktop, theme.Accent)
 }
 
 // paint desenha o cartão inteiro.

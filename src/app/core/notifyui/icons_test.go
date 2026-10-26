@@ -33,8 +33,8 @@ func TestParseIconSubpaths(t *testing.T) {
 				t.Fatalf("kind %q subpath %d com %d pontos", kind, i, len(sp))
 			}
 			for _, p := range sp {
-				// viewBox 24x24: nada pode escapar muito disso.
-				if p.X < -1 || p.X > 25 || p.Y < -1 || p.Y > 25 {
+				// viewBox do Material Symbols (0 -960 960 960).
+				if p.X < -5 || p.X > iconViewBoxSize+5 || p.Y < iconViewBoxMinY-5 || p.Y > 5 {
 					t.Fatalf("kind %q ponto fora do viewBox: %+v", kind, p)
 				}
 			}
@@ -42,10 +42,19 @@ func TestParseIconSubpaths(t *testing.T) {
 	}
 }
 
-// Kind desconhecido não desenha nada (nil).
-func TestParseIconSubpathsUnknown(t *testing.T) {
-	if sps := parseIconSubpaths("desconhecido"); sps != nil {
+// Glifo desconhecido não desenha nada (nil).
+func TestParseGlyphUnknown(t *testing.T) {
+	if sps := parseGlyph("desconhecido"); sps != nil {
 		t.Fatalf("esperava nil, got %d subpaths", len(sps))
+	}
+}
+
+// Os glifos extras (chat, desktop) e os kinds flatten no mesmo conjunto.
+func TestParseGlyphExtras(t *testing.T) {
+	for _, name := range []string{GlyphChat, GlyphDesktop} {
+		if sps := parseGlyph(name); len(sps) == 0 {
+			t.Fatalf("glifo %q não flattenou", name)
+		}
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"discovery/app/core/notifyui"
 	"discovery/app/core/winui"
 	"discovery/app/supportchat"
 )
@@ -478,27 +479,16 @@ func supportChatNotifyWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	return winui.DefWindowProc(hwnd, msg, wparam, lparam)
 }
 
-// drawSupportChatBadge desenha o selo: balão de conversa no accent do Windows.
+// drawSupportChatBadge desenha o selo: fundo tingido pelo accent com o glifo
+// de conversa do MESMO conjunto de ícones do cartão de notificação (Material
+// Symbols, fonts.google.com/icons) — substitui o balão desenhado à mão.
 func drawSupportChatBadge(hdc uintptr, rect winui.Rect, theme winui.Theme, scale float64) {
 	sw := func(v int) int { return winui.ScalePx(v, scale) }
 	winui.FillRoundRectBorderAA(hdc, rect, sw(12),
 		theme.Card.Blend(theme.Accent, 16),
 		theme.Card.Blend(theme.Accent, 40))
-
-	bubble := winui.Rect{X: rect.X + sw(9), Y: rect.Y + sw(9), W: rect.W - sw(18), H: sw(17)}
-	winui.FillRoundRectAA(hdc, bubble, sw(6), theme.Accent)
-	// Rabinho do balão (sem polígono no winui): pequeno retângulo no canto.
-	winui.FillRoundRectAA(hdc, winui.Rect{
-		X: bubble.X + sw(7), Y: bubble.Bottom() - sw(3), W: sw(7), H: sw(6),
-	}, sw(2), theme.Accent)
-	// Três pontinhos com a cor do cartão.
-	dotY := bubble.Y + bubble.H/2 - sw(1)
-	dotX := bubble.X + bubble.W/2 - sw(9)
-	for i := 0; i < 3; i++ {
-		winui.FillRoundRectAA(hdc, winui.Rect{
-			X: dotX + i*sw(7), Y: dotY, W: sw(3), H: sw(3),
-		}, sw(1), theme.Card.Blend(theme.Accent, 16))
-	}
+	// O glifo preenche o retângulo interno (ele já tem folga no próprio path).
+	notifyui.DrawGlyph(hdc, rect, notifyui.GlyphChat, theme.Accent)
 }
 
 // paint desenha o cartão inteiro (sem contador/progresso/ação padrão).

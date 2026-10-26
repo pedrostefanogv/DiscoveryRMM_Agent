@@ -34,16 +34,38 @@ func normalizeIconKind(raw string) string {
 	}
 }
 
-// materialIconPaths são os paths (viewBox 24x24) do Material Symbols preenchido.
-var materialIconPaths = map[string]string{
-	IconInfo: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z",
-	IconWarning: "M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z",
-	IconError: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z",
-	IconQuestion: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z",
+// viewBox do Material Symbols: as fontes variáveis do Google exportam em
+// unidades de 24px escaladas por 40 (coordenadas -960..960).
+const (
+	iconViewBoxMinX = 0
+	iconViewBoxMinY = -960
+	iconViewBoxSize = 960
+)
+
+// glyphChat / glyphDesktop: glifos extras usados pelos demais cartões nativos
+// (convite do chat de suporte, consentimento de acesso remoto), padronizados
+// no MESMO conjunto Material Symbols.
+const (
+	GlyphChat    = "chat"
+	GlyphDesktop = "desktop_windows"
+)
+
+// materialGlyphs são os paths OFICIAIS do Google Material Symbols
+// (https://fonts.google.com/icons — estilo Rounded, FILL@1, 24px, Apache 2.0),
+// baixados de material-design-icons/symbols/web. O parser não cobre arcos
+// porque os glifos oficiais usam apenas M/L/H/V/C/S/Q/T/Z.
+var materialGlyphs = map[string]string{
+	GlyphChat:    "m240-240-92 92q-19 19-43.5 8.5T80-177v-623q0-33 23.5-56.5T160-880h640q33 0 56.5 23.5T880-800v480q0 33-23.5 56.5T800-240H240Zm40-160h240q17 0 28.5-11.5T560-440q0-17-11.5-28.5T520-480H280q-17 0-28.5 11.5T240-440q0 17 11.5 28.5T280-400Zm0-120h400q17 0 28.5-11.5T720-560q0-17-11.5-28.5T680-600H280q-17 0-28.5 11.5T240-560q0 17 11.5 28.5T280-520Zm0-120h400q17 0 28.5-11.5T720-680q0-17-11.5-28.5T680-720H280q-17 0-28.5 11.5T240-680q0 17 11.5 28.5T280-640Z",
+	GlyphDesktop: "M400-200v-80H160q-33 0-56.5-23.5T80-360v-400q0-33 23.5-56.5T160-840h640q33 0 56.5 23.5T880-760v400q0 33-23.5 56.5T800-280H560v80h40q17 0 28.5 11.5T640-160q0 17-11.5 28.5T600-120H360q-17 0-28.5-11.5T320-160q0-17 11.5-28.5T360-200h40Z",
+	IconInfo: "M480-280q17 0 28.5-11.5T520-320v-160q0-17-11.5-28.5T480-520q-17 0-28.5 11.5T440-480v160q0 17 11.5 28.5T480-280Zm0-320q17 0 28.5-11.5T520-640q0-17-11.5-28.5T480-680q-17 0-28.5 11.5T440-640q0 17 11.5 28.5T480-600Zm0 520q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Z",
+	IconWarning: "M109-120q-11 0-20-5.5T75-140q-5-9-5.5-19.5T75-180l370-640q6-10 15.5-15t19.5-5q10 0 19.5 5t15.5 15l370 640q6 10 5.5 20.5T885-140q-5 9-14 14.5t-20 5.5H109Zm371-120q17 0 28.5-11.5T520-280q0-17-11.5-28.5T480-320q-17 0-28.5 11.5T440-280q0 17 11.5 28.5T480-240Zm0-120q17 0 28.5-11.5T520-400v-120q0-17-11.5-28.5T480-560q-17 0-28.5 11.5T440-520v120q0 17 11.5 28.5T480-360Z",
+	IconError: "M480-280q17 0 28.5-11.5T520-320q0-17-11.5-28.5T480-360q-17 0-28.5 11.5T440-320q0 17 11.5 28.5T480-280Zm0-160q17 0 28.5-11.5T520-480v-160q0-17-11.5-28.5T480-680q-17 0-28.5 11.5T440-640v160q0 17 11.5 28.5T480-440Zm0 360q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Z",
+	IconQuestion: "M478-240q21 0 35.5-14.5T528-290q0-21-14.5-35.5T478-340q-21 0-35.5 14.5T428-290q0 21 14.5 35.5T478-240Zm2 160q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm4-572q25 0 43.5 16t18.5 40q0 22-13.5 39T502-525q-23 20-40.5 44T444-427q0 14 10.5 23.5T479-394q15 0 25.5-10t13.5-25q4-21 18-37.5t30-31.5q23-22 39.5-48t16.5-58q0-51-41.5-83.5T484-720q-38 0-72.5 16T359-655q-7 12-4.5 25.5T368-609q14 8 29 5t25-17q11-15 27.5-23t34.5-8Z",
 }
 
-// iconSubpath é uma polilinha (em coordenadas do viewBox 24x24) fechada na
-// pintura; subpaths dentro de subpaths viram furos (fill alternate).
+// iconSubpath é uma polilinha (em coordenadas do viewBox, 0..960 com Y
+// negativo) fechada na pintura; subpaths dentro de subpaths viram furos
+// (fill alternate).
 type iconSubpath = []iconPoint
 
 type iconPoint struct {
@@ -54,14 +76,19 @@ type iconPoint struct {
 // curva — 16 dividem suficientemente glifos de 24px para qualquer DPI).
 const iconCurveSegments = 16
 
-// parseIconSubpaths flatten o path de um kind em polilinhas. Pure function
-// (testável sem Windows). Kind desconhecido devolve nil.
-func parseIconSubpaths(kind string) []iconSubpath {
-	d, ok := materialIconPaths[kind]
+// parseGlyph flatten o path de um glifo/kind em polilinhas. Pure function
+// (testável sem Windows). Nome desconhecido devolve nil.
+func parseGlyph(name string) []iconSubpath {
+	d, ok := materialGlyphs[name]
 	if !ok {
 		return nil
 	}
 	return flattenSVGPath(d)
+}
+
+// parseIconSubpaths mantém o nome antigo (kinds do CardRequest.Icon).
+func parseIconSubpaths(kind string) []iconSubpath {
+	return parseGlyph(normalizeIconKind(kind))
 }
 
 // flattenSVGPath converte um path SVG (subset M/L/H/V/C/S/Q/T/Z) em subpaths

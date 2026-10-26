@@ -17,15 +17,24 @@ var agentLogoPNG []byte
 
 // ── Desenho dos ícones do cartão (Windows/GDI+) ──
 
-// DrawKindIcon desenha o glifo do motivo da notificação (Material Symbols,
-// viewBox 24x24) escalado para o retângulo, com antialiasing. Kind vazio ou
-// desconhecido desenha o de informação (default do cartão).
+// DrawKindIcon desenha o glifo do motivo da notificação (Material Symbols)
+// escalado para o retângulo, com antialiasing. Kind vazio ou desconhecido
+// desenha o de informação (default do cartão).
 func DrawKindIcon(hdc uintptr, rect winui.Rect, kind string, color winui.Color) {
-	subpaths := parseIconSubpaths(normalizeIconKind(kind))
+	DrawGlyph(hdc, rect, normalizeIconKind(kind), color)
+}
+
+// DrawGlyph desenha qualquer glifo do Material Symbols pelo nome
+// (GlyphChat, GlyphDesktop, IconInfo, ...), escalado para o retângulo.
+// Exportado para os demais cartões nativos (chat de suporte, consentimento
+// remoto) usarem o MESMO conjunto de ícones do cartão de notificação.
+func DrawGlyph(hdc uintptr, rect winui.Rect, name string, color winui.Color) {
+	subpaths := parseGlyph(name)
 	if len(subpaths) == 0 || rect.Empty() {
 		return
 	}
-	scale := float64(rect.W) / 24.0
+	// Material Symbols exporta em unidades de 24px × 40 (viewBox 0 -960 960).
+	scale := float64(rect.W) / iconViewBoxSize
 	round := func(v float64) int { return int(math.Round(v)) }
 	polys := make([][]winui.Point, 0, len(subpaths))
 	for _, sp := range subpaths {
@@ -35,8 +44,8 @@ func DrawKindIcon(hdc uintptr, rect winui.Rect, kind string, color winui.Color) 
 		pts := make([]winui.Point, 0, len(sp))
 		for _, pt := range sp {
 			pts = append(pts, winui.Point{
-				X: rect.X + round(pt.X*scale),
-				Y: rect.Y + round(pt.Y*scale),
+				X: rect.X + round((pt.X-iconViewBoxMinX)*scale),
+				Y: rect.Y + round((pt.Y-iconViewBoxMinY)*scale),
 			})
 		}
 		polys = append(polys, pts)
