@@ -130,7 +130,10 @@ func NewShellInteractiveRunAs(shell ShellKind, cols, rows int, onOutput func(str
 	if s, err := tryConPTY(shell, cols, rows, onOutput, runAs); err != nil {
 		failures = append(failures, "conpty: "+err.Error())
 	} else {
-		return s, EffectiveRunAs(runAs), nil
+		// O efetivo REAL vem do shell (tryConPTY pode ter degradado
+		// run-as=user → herdado quando o host rejeitou o token) — reportar
+		// "user" quando o shell roda como SYSTEM enganaria o operador.
+		return s, shellEffectiveRunAs(s, runAs), nil
 	}
 
 	// 2) ConPTY isolado em processo filho (dispatcher).
@@ -138,6 +141,9 @@ func NewShellInteractiveRunAs(shell ShellKind, cols, rows int, onOutput func(str
 		if ds, err := tryDispatcher(shell, cols, rows, onOutput, runAs); err != nil {
 			failures = append(failures, "dispatcher: "+err.Error())
 		} else {
+			// O dispatcher resolve o run-as no processo filho; o pai não vê o
+			// degradé interno — efetivo estimado pelo pedido (o dispatcher
+			// loga o fallback real com [term-dispatcher]).
 			return ds, EffectiveRunAs(runAs), nil
 		}
 	} else {
@@ -247,6 +253,16 @@ func retryLabel(attempt int) string {
 		return "tentando novamente"
 	}
 	return "esgotadas as tentativas"
+}
+
+// shellEffectiveRunAs devolve a identidade EFETIVA do shell criado: quando o
+// shell é um ConPTYShell ele carrega o run-as real usado no spawn (o tryConPTY
+// pode ter degradado o pedido); senão, a estimativa pelo pedido.
+func shellEffectiveRunAs(s IShell, requested RunAs) string {
+	if c, ok := s.(*ConPTYShell); ok && c.runAs != "" {
+		return string(c.runAs)
+	}
+	return EffectiveRunAs(requested)
 }
 
 // ShellBackendName retorna o nome legível do backend de shell em uso, para

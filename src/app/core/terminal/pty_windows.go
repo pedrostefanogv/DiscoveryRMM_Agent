@@ -90,6 +90,13 @@ func NewShellWithToken(shell string, onOutput func(string), tok windows.Token) (
 	if tok != 0 {
 		// Go usa CreateProcessAsUser quando SysProcAttr.Token está preenchido.
 		cmd.SysProcAttr.Token = syscall.Token(tok)
+		// Ambiente do usuário: sem isso o shell herdaria o env do serviço
+		// (SYSTEM/systemprofile) — %USERPROFILE% etc quebrados no run-as=user.
+		if env, eerr := userEnvironmentSlice(tok); eerr == nil && len(env) > 0 {
+			cmd.Env = env
+		} else {
+			stdLog("[terminal] env do usuário indisponível no legacy (herdando env do serviço): %v", eerr)
+		}
 	}
 
 	stdin, err := cmd.StdinPipe()

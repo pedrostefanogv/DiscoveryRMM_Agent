@@ -149,10 +149,12 @@ func cachedUserToken() (windows.Token, uint32, string, error) {
 		userTokenCache = nil
 		return 0, session, "", err
 	}
-	// O handle anterior (expirado) é fechado aqui — o cache é o único dono.
-	if userTokenCache != nil && userTokenCache.tok != 0 {
-		_ = userTokenCache.tok.Close()
-	}
+	// NÃO fechamos o handle da entrada anterior aqui: outro console pode
+	// estar no meio de um CreateProcessAsUserW com esse handle (fechá-lo
+	// causaria falha intermitente e degradação silenciosa para SYSTEM com o
+	// term.ready mentindo "user"). O handle antigo fica retido até a próxima
+	// resolução — vazamento bounded (1 handle por janela de 30s de uso ativo
+	// de terminal), troca consciente por segurança.
 	userTokenCache = &userTokenCacheEntry{tok: tok, session: session, ident: ident, expires: time.Now().Add(userTokenCacheTTL)}
 	return tok, session, ident, nil
 }
@@ -285,4 +287,33 @@ func destroyEnvironmentBlock(block unsafe.Pointer) {
 	if block != nil {
 		_, _, _ = procDestroyEnvironmentBlock.Call(uintptr(block))
 	}
+}
+
+// userEnvironmentSlice devolve o ambiente do usuário como []string
+// ("KEY=VALUE"), para cmd.Env do backend legacy (exec). Falha → nil/erro e o
+// caller herda o ambiente do serviço (fallback não-fatal, com aviso).
+func userEnvironmentSlice(tok windows.Token) ([]string, error) {
+	block, err := userEnvironmentBlock(tok)
+	if err != nil {
+		return nil, err
+	}
+	defer destroyEnvironmentBlock(block)
+	// Percorre o bloco multi-string UTF-16 (duplo-nulo termina).
+	all := (*[1 << 20]uint16)(block)[:]
+	var entries []string
+	for i := 0; i < len(all); {
+		j := i
+		for j < len(all) && all[j] != 0 {
+			j++
+		}
+		if j == i {
+			break // terminador duplo = fim do bloco
+		}
+		// utf16.Decode de uma runa por vez evita import extra de slice helper.
+		u := make([]uint16, j-i)
+		copy(u, all[i:j])
+		entries = append(entries, windows.UTF16ToString(u))
+		i = j + 1
+	}
+	return entries, nil
 }
