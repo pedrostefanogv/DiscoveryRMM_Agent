@@ -57,7 +57,9 @@ type jobBasicLimitInformation struct {
 	Affinity                uintptr
 	PriorityClass           uint32
 	SchedulingClass         uint32
-	// NÃO há padding final: sizeof = 56 (o struct C termina em DWORD).
+	// ATENÇÃO: o Go ALINHA o struct a 8 no fim (sizeof = 64, não 56) — por
+	// isso o cbSize passado ao SetInformationJobObject é a constante
+	// jobExtendedLimitInfoCBSize (144), NUNCA unsafe.Sizeof(info).
 }
 
 // ioCounters espelha IO_COUNTERS.
@@ -108,17 +110,23 @@ func newKillOnCloseJob() *jobObject {
 	j := &jobObject{h: syscall.Handle(h)}
 	info := jobExtendedLimitInformation{}
 	info.BasicLimitInformation.LimitFlags = jobObjectLimitKillOnJobClose
-	// cbSize = 144 (x64): tamanho REAL aceito pelo kernel para
+	// cbSize = 144 (amd64): tamanho REAL aceito pelo kernel para
 	// JobObjectExtendedLimitInformation nesta plataforma. unsafe.Sizeof(info)
 	// devolve 152 (Go alinha o struct BASIC a 8 no fim) e o kernel REJEITA com
 	// ERROR_BAD_LENGTH — medido no probe (cmd/conptyprobe): 152 → falha, 144 →
 	// sucesso. Os campos além de 144 não são lidos pelo kernel (todos zero).
-	const jobExtendedLimitInfoCBSize = 144
+	// Em plataformas 32-bit o layout difere: usa o sizeof do struct (o job
+	// pode falhar e ser descartado — degradação graceful, sem job).
+	const jobExtendedLimitInfoCBSizeAMD64 = 144
+	cbSize := unsafe.Sizeof(info)
+	if unsafe.Sizeof(uintptr(0)) == 8 {
+		cbSize = jobExtendedLimitInfoCBSizeAMD64
+	}
 	r1, _, err2 := procSetInformationJobObject.Call(
 		uintptr(j.h),
 		jobObjectExtendedLimitInformation,
 		uintptr(unsafe.Pointer(&info)),
-		jobExtendedLimitInfoCBSize,
+		cbSize,
 	)
 	if r1 == 0 {
 		stdLog("[terminal] SetInformationJobObject falhou: %v", err2)

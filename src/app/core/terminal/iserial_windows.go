@@ -247,12 +247,9 @@ func tryDispatcher(shell ShellKind, cols, rows int, onOutput func(string), runAs
 // (OpenProcess + GetExitCodeProcess), sem consumir o Wait(). ok=false quando
 // o processo já foi reaped ou o handle não está disponível.
 func processExitCode(s IShell) (int, bool) {
-	// ConPTYShell e dispatcherShell expõem o PID via Alive/Wait; para pegar o
-	// código precisamos do PID — usar a interface processAlive já existente
-	// não basta. Type assertion nos dois backends conhecidos.
-	type pidProvider interface{ Pid() int }
-	// IShell não expõe PID diretamente; ConPTYShell/dispatcherShell têm
-	// cmd.Process. Fazer via interface opcional.
+	// ConPTYShell/dispatcherShell implementam ExitCodeNow (OpenProcess +
+	// GetExitCodeProcess). O legacy não — devolve ok=false (log cai no
+	// formato sem exit code).
 	if pp, ok := s.(interface{ ExitCodeNow() (int, bool) }); ok {
 		return pp.ExitCodeNow()
 	}
