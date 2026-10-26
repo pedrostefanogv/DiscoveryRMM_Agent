@@ -632,6 +632,21 @@ func (s *ConPTYShell) readLoop(r io.Reader) {
 	}
 }
 
+// ExitCodeNow devolve o exit code corrente do processo do shell (sem consumir
+// o Wait()) — diagnóstico de morte prematura no startup (0xC0000142 etc).
+func (s *ConPTYShell) ExitCodeNow() (int, bool) {
+	s.mu.Lock()
+	pid := 0
+	if s.cmd != nil && s.cmd.Process != nil {
+		pid = s.cmd.Process.Pid
+	}
+	s.mu.Unlock()
+	if pid <= 0 {
+		return 0, false
+	}
+	return processExitCodeNow(pid)
+}
+
 // Wait aguarda o processo shell terminar e retorna o erro de saida.
 // Retorna nil se o shell saiu normalmente (exit code 0).
 // Thread-safe e seguro para chamadas multiplas (sync.Once).

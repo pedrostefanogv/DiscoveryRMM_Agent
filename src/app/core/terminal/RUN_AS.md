@@ -28,3 +28,41 @@
 - `core/terminal/pty_windows.go` — `NewShellWithToken` (legacy)
 - `core/terminal/pty_windows_dispatcher_client.go` / `dispatcher_windows.go` — flag `--terminal-runas`
 - `core/remotesession/session_terminal.go` / `manager.go` — Meta `runAs`, `StartRunAs`, `term.ready.runAs`
+
+## Comportamento no remote-session-worker (não-SYSTEM)
+
+O worker da sessão remota roda **como o próprio usuário** (spawnado via
+CreateProcessAsUser na sessão interativa). Nesse contexto:
+
+- `runAs=user` ≡ identidade herdada — o shell JÁ nasce como o usuário. O
+  código detecta processo não-SYSTEM e resolve **sem** tentar
+  `WTSQueryUserToken` (que sempre falharia sem SeTcbPrivilege e poluiria o
+  log a cada retry).
+- `runAs=system` no worker **não** eleva (não há SeTcbPrivilege) — também
+  herda; o log registra a identidade real.
+
+## Diagnóstico 2026-10-26 — terminal morto após deploy
+
+Sintoma: toda sessão de terminal morria no startup (ConPTY "morreu
+prematuramente" em 100% das tentativas, in-process e no dispatcher) → o
+console fechava → o viewer recriava a sessão em loop (start/stop no console
+do browser).
+
+Causa raiz: **kill de injeção de DLL (0xC0000142) no boot dos filhos do
+ConPTY** pelo AV/EDR da estação — reproduzido fora do agente com
+`cmd/conptyprobe` (sobrevivência ~40% sob rajada; pior com spawns rápidos).
+NÃO é causado pelo código run-as/Job Object (o Job Object, aliás, NUNCA
+chegou a funcionar: cbSize 152 rejeitado pelo kernel com ERROR_BAD_LENGTH).
+
+Correções aplicadas:
+1. `runAs=user` no worker não-SYSTEM resolve sem tentar WTSQueryUserToken
+   (fim do spam de log por retry).
+2. Job Object com cbSize correto (144) — agora o KILL_ON_JOB_CLOSE funciona;
+   opt-out de diagnóstico: `DISCOVERY_TERM_NO_JOB=1`.
+3. Backoff progressivo nos retries (150ms → 1s) — evita a rajada de spawns
+   que aciona o bloqueio comportamental do AV.
+4. Exit code do filho logado na morte prematura (`exitCode=0x........`) —
+   0xC0000142 = injeção de DLL; outros códigos apontam para outra causa.
+
+Uso do probe: `cd src && go run ./cmd/conptyprobe <job|nojob>` — mede a
+sobrevivência do ConPTY na máquina fora do agente.

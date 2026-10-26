@@ -416,17 +416,31 @@ func RunDispatcher() {
 			log.Printf("[dispatcher] NewConPTYShell falhou (tentativa %d/%d): %v", attempt+1, dispatcherInnerRetries+1, cerr)
 		} else if probeForEarlyDeath(cand, conptyProbeTimeout, &firstOutput) {
 			lastErr = fmt.Errorf("ConPTY morreu prematuramente no startup")
-			log.Printf("[dispatcher] ConPTY morreu prematuramente (tentativa %d/%d); tentando novamente",
-				attempt+1, dispatcherInnerRetries+1)
+			if code, ok := cand.(interface{ ExitCodeNow() (int, bool) }); ok {
+				if c, ok2 := code.ExitCodeNow(); ok2 {
+					log.Printf("[dispatcher] ConPTY morreu prematuramente (tentativa %d/%d) exitCode=0x%08X; tentando novamente",
+						attempt+1, dispatcherInnerRetries+1, uint32(c))
+				} else {
+					log.Printf("[dispatcher] ConPTY morreu prematuramente (tentativa %d/%d); tentando novamente",
+						attempt+1, dispatcherInnerRetries+1)
+				}
+			} else {
+				log.Printf("[dispatcher] ConPTY morreu prematuramente (tentativa %d/%d); tentando novamente",
+					attempt+1, dispatcherInnerRetries+1)
+			}
 			_ = cand.Close()
 		} else {
 			ish = cand
 			break
 		}
-		// Backoff: a morte prematura é uma corrida no boot do processo —
-		// respawn imediato tende a repetir a falha.
+		// Backoff progressivo (150ms → 1s): rajada de spawns aciona regras
+		// comportamentais de AV/EDR (diagnóstico 2026-10-26).
 		if attempt < dispatcherInnerRetries {
-			time.Sleep(conptyRetryBackoff)
+			backoff := conptyRetryBackoff * time.Duration(attempt+1)
+			if backoff > time.Second {
+				backoff = time.Second
+			}
+			time.Sleep(backoff)
 		}
 	}
 	if ish == nil {

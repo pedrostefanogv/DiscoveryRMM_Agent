@@ -190,14 +190,32 @@ func tryConPTY(shell ShellKind, cols, rows int, onOutput func(string), runAs Run
 			log.Printf("[terminal] ConPTY falhou no spawn (tentativa %d/%d): %v", attempt+1, conptyMaxRetries+1, err)
 		} else if probeForEarlyDeath(s, conptyProbeTimeout, firstOutput) {
 			lastErr = fmt.Errorf("ConPTY morreu prematuramente no startup")
-			log.Printf("[terminal] ConPTY morreu prematuramente (tentativa %d/%d); %s",
-				attempt+1, conptyMaxRetries+1, retryLabel(attempt))
+			// Exit code do filho: 0xC0000142 (DLL injection de AV) vs outros
+			// códigos — sem isso o diagnóstico fica cego (o código de saída do
+			// Wait() só chega depois, se chegar).
+			if code, ok := processExitCode(s); ok {
+				log.Printf("[terminal] ConPTY morreu prematuramente (tentativa %d/%d) exitCode=0x%08X; %s",
+					attempt+1, conptyMaxRetries+1, uint32(code), retryLabel(attempt))
+			} else {
+				log.Printf("[terminal] ConPTY morreu prematuramente (tentativa %d/%d); %s",
+					attempt+1, conptyMaxRetries+1, retryLabel(attempt))
+			}
 			_ = s.Close()
 		} else {
 			return s, nil
 		}
 		if attempt < conptyMaxRetries {
-			time.Sleep(conptyRetryBackoff)
+			// Backoff progressivo (150ms → até 1s): martelar spawns com 150ms
+			// fixos aciona regras comportamentais de AV/EDR (diagnóstico
+			// 2026-10-26: 13 spawns em ~3s → 0xC0000142 em 100% das tentativas;
+			// medido fora do agente: taxa de sobrevivência cai a ~40% sob
+			// rajada). Espaçar as tentativas dá tempo ao injetor de DLL
+			// terminar e reduz a taxa de bloqueio.
+			backoff := conptyRetryBackoff * time.Duration(attempt+1)
+			if backoff > time.Second {
+				backoff = time.Second
+			}
+			time.Sleep(backoff)
 		}
 	}
 	return nil, lastErr
@@ -223,6 +241,22 @@ func tryDispatcher(shell ShellKind, cols, rows int, onOutput func(string), runAs
 	}
 	log.Printf("[terminal] usando dispatcher (ConPTY remoto isolado)")
 	return ds, nil
+}
+
+// processExitCode devolve o exit code corrente do processo do shell
+// (OpenProcess + GetExitCodeProcess), sem consumir o Wait(). ok=false quando
+// o processo já foi reaped ou o handle não está disponível.
+func processExitCode(s IShell) (int, bool) {
+	// ConPTYShell e dispatcherShell expõem o PID via Alive/Wait; para pegar o
+	// código precisamos do PID — usar a interface processAlive já existente
+	// não basta. Type assertion nos dois backends conhecidos.
+	type pidProvider interface{ Pid() int }
+	// IShell não expõe PID diretamente; ConPTYShell/dispatcherShell têm
+	// cmd.Process. Fazer via interface opcional.
+	if pp, ok := s.(interface{ ExitCodeNow() (int, bool) }); ok {
+		return pp.ExitCodeNow()
+	}
+	return 0, false
 }
 
 // probeForEarlyDeath observa o shell no startup e devolve true se ele morreu.

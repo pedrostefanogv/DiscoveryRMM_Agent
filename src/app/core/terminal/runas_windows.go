@@ -120,6 +120,14 @@ func resolveRunAs(ra RunAs) runAsResolution {
 	if ra != RunAsUser {
 		return runAsResolution{identity: "inherit", effectiveRunAs: EffectiveRunAs(ra)}
 	}
+	// Processo não-SYSTEM (ex.: remote-session-worker rodando COMO o usuário
+	// logado): runAs=user ≡ identidade herdada — o shell já nasce na
+	// identidade do usuário. Resolver via WTSQueryUserToken falharia sempre
+	// ("A required privilege is not held by the client") e poluiria o log a
+	// cada retry do ConPTY — resolve sem tentar.
+	if !isProcessSystem() {
+		return runAsResolution{identity: "user (processo do agente — já é o usuário)", effectiveRunAs: "user"}
+	}
 	tok, session, ident, err := cachedUserToken()
 	if err != nil || tok == 0 {
 		log.Printf("[terminal] runAs=user sem usuário logado (console session=%d): %v — usando identidade herdada", session, err)

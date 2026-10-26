@@ -322,6 +322,21 @@ func (d *dispatcherShell) Close() error {
 	return nil
 }
 
+// ExitCodeNow devolve o exit code corrente do processo dispatcher (sem
+// consumir o Wait()) — diagnóstico de morte prematura.
+func (d *dispatcherShell) ExitCodeNow() (int, bool) {
+	d.mu.Lock()
+	pid := 0
+	if d.cmd != nil && d.cmd.Process != nil {
+		pid = d.cmd.Process.Pid
+	}
+	d.mu.Unlock()
+	if pid <= 0 {
+		return 0, false
+	}
+	return processExitCodeNow(pid)
+}
+
 // Wait aguarda o processo dispatcher terminar e retorna o erro de saída.
 // Guardado por waitOnce (exclusivo do monitor de exit da sessão).
 func (d *dispatcherShell) Wait() error {

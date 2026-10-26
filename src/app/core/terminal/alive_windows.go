@@ -33,3 +33,26 @@ func processAlive(pid int) bool {
 	// 259 = STILL_ACTIVE (processo ainda em execução).
 	return exitCode == 259
 }
+
+// processExitCodeNow devolve o exit code corrente do processo com o PID
+// informado (OpenProcess + GetExitCodeProcess). ok=false quando o processo
+// não existe mais ou o handle está indisponível. Usado para diagnosticar a
+// morte prematura do ConPTY no startup (0xC0000142 vs outros códigos).
+func processExitCodeNow(pid int) (int, bool) {
+	if pid <= 0 {
+		return 0, false
+	}
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return 0, false
+	}
+	defer windows.CloseHandle(handle)
+	var exitCode uint32
+	if err := windows.GetExitCodeProcess(handle, &exitCode); err != nil {
+		return 0, false
+	}
+	if exitCode == 259 { // STILL_ACTIVE — não morreu de fato
+		return 0, false
+	}
+	return int(int32(exitCode)), true
+}

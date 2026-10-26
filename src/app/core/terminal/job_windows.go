@@ -4,6 +4,7 @@ package terminal
 
 import (
 	"log"
+	"os"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -39,16 +40,24 @@ var (
 )
 
 // jobBasicLimitInformation espelha JOBOBJECT_BASIC_LIMIT_INFORMATION (x64).
+// Padding EXPLÍCITO: o tamanho importa (SetInformationJobObject valida cbSize
+// com ERROR_BAD_LENGTH) — o layout natural do Go dava 64 bytes onde o Windows
+// usa 56 (o struct C termina em dois DWORDs, sem pad final), e o
+// JOBOBJECT_EXTENDED_LIMIT_INFORMATION resultante (152 ≠ 144) era REJEITADO —
+// o job nunca chegava a existir (descoberto no diagnóstico 2026-10-26).
 type jobBasicLimitInformation struct {
 	PerProcessUserTimeLimit int64
 	PerJobUserTimeLimit     int64
 	LimitFlags              uint32
+	_                       uint32 // alinhamento p/ os SIZE_T
 	MinimumWorkingSetSize   uintptr
 	MaximumWorkingSetSize   uintptr
 	ActiveProcessLimit      uint32
-	Affinity                uintptr // ULONG_PTR
+	_                       uint32 // alinhamento p/ o ULONG_PTR
+	Affinity                uintptr
 	PriorityClass           uint32
 	SchedulingClass         uint32
+	// NÃO há padding final: sizeof = 56 (o struct C termina em DWORD).
 }
 
 // ioCounters espelha IO_COUNTERS.
@@ -83,6 +92,14 @@ type jobObject struct {
 // Devolve nil (com log) quando a API não está disponível — nunca bloqueia o
 // startup do terminal por isso.
 func newKillOnCloseJob() *jobObject {
+	// Opt-out de diagnóstico: DISCOVERY_TERM_NO_JOB=1 desliga o Job Object
+	// (A/B em campo para isolar qualquer interação com AV/EDR — o probe
+	// cmd/conptyprobe mostra sobrevivência similar com e sem job, mas o
+	// ambiente desta estação está instável hoje: 0xC0000142 em 60-75%).
+	switch os.Getenv("DISCOVERY_TERM_NO_JOB") {
+	case "1", "true", "yes", "on":
+		return nil
+	}
 	h, _, err := procCreateJobObjectW.Call(0, 0)
 	if h == 0 {
 		stdLog("[terminal] CreateJobObjectW falhou: %v", err)
@@ -91,11 +108,17 @@ func newKillOnCloseJob() *jobObject {
 	j := &jobObject{h: syscall.Handle(h)}
 	info := jobExtendedLimitInformation{}
 	info.BasicLimitInformation.LimitFlags = jobObjectLimitKillOnJobClose
+	// cbSize = 144 (x64): tamanho REAL aceito pelo kernel para
+	// JobObjectExtendedLimitInformation nesta plataforma. unsafe.Sizeof(info)
+	// devolve 152 (Go alinha o struct BASIC a 8 no fim) e o kernel REJEITA com
+	// ERROR_BAD_LENGTH — medido no probe (cmd/conptyprobe): 152 → falha, 144 →
+	// sucesso. Os campos além de 144 não são lidos pelo kernel (todos zero).
+	const jobExtendedLimitInfoCBSize = 144
 	r1, _, err2 := procSetInformationJobObject.Call(
 		uintptr(j.h),
 		jobObjectExtendedLimitInformation,
 		uintptr(unsafe.Pointer(&info)),
-		unsafe.Sizeof(info),
+		jobExtendedLimitInfoCBSize,
 	)
 	if r1 == 0 {
 		stdLog("[terminal] SetInformationJobObject falhou: %v", err2)
