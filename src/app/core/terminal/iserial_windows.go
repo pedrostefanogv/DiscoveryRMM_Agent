@@ -240,6 +240,13 @@ func tryConPTY(shell ShellKind, cols, rows int, onOutput func(string), runAs Run
 // tryDispatcher tenta o ConPTY isolado no processo filho (dispatcher). O
 // run-as é propagado por flag (--terminal-runas) — o dispatcher (filho do
 // agente, ainda SYSTEM quando o serviço é) resolve o token localmente.
+//
+// INCIDENTE 2026-10-27: o pai aceitava o dispatcher apenas pelo PROCESSO
+// dispatcher estar vivo (janela estável de 500ms) — mas o ConPTY INTERNO do
+// dispatcher podia ainda estar morrendo (0xC0000142). Resultado: "console
+// pronto" publicado com shell morto, viewer em tela branca e "shell saiu"
+// ~1s depois. O acceptance agora exige SAÍDA REAL do shell (o dispatcher só
+// escreve no pipe quando um ConPTY vivo começa a emitir).
 func tryDispatcher(shell ShellKind, cols, rows int, onOutput func(string), runAs RunAs) (IShell, error) {
 	firstOutput := &atomic.Bool{}
 	ds, err := NewDispatcherShell(shell, cols, rows, func(out string) {
@@ -250,10 +257,22 @@ func tryDispatcher(shell ShellKind, cols, rows int, onOutput func(string), runAs
 		log.Printf("[terminal] dispatcher indisponivel (%v)", err)
 		return nil, err
 	}
-	if probeForEarlyDeath(ds, dispatcherProbeTimeout, firstOutput) {
-		log.Printf("[terminal] dispatcher morreu prematuramente (ConPTY isolado nao subiu)")
+	deadline := time.Now().Add(dispatcherProbeTimeout)
+	for time.Now().Before(deadline) {
+		if !ds.Alive() {
+			log.Printf("[terminal] dispatcher morreu prematuramente (ConPTY isolado nao subiu)")
+			_ = ds.Close()
+			return nil, fmt.Errorf("dispatcher morreu prematuramente")
+		}
+		if firstOutput.Load() {
+			break // shell vivo e produzindo saída — acceptance seguro
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !firstOutput.Load() {
+		log.Printf("[terminal] dispatcher não reportou shell vivo (sem saída em %v)", dispatcherProbeTimeout)
 		_ = ds.Close()
-		return nil, fmt.Errorf("dispatcher morreu prematuramente")
+		return nil, fmt.Errorf("dispatcher não reportou shell vivo")
 	}
 	log.Printf("[terminal] usando dispatcher (ConPTY remoto isolado)")
 	return ds, nil
