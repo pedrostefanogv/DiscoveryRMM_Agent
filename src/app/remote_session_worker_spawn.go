@@ -905,14 +905,16 @@ func systemTokenForSession(sessionID uint32) (windows.Token, error) {
 	// Ajusta a sessão do token duplicado para a sessão do console. Requer
 	// TOKEN_ADJUST_SESSIONID (incluído em MAXIMUM_ALLOWED) — disponível para
 	// SYSTEM. Sem isso o filho rodaria na sessão 0 (sem desktop).
-	sid := sessionID
-	var sidBytes [4]byte
-	sidBytes[0] = byte(sid)
-	sidBytes[1] = byte(sid >> 8)
-	sidBytes[2] = byte(sid >> 16)
-	sidBytes[3] = byte(sid >> 24)
+	//
+	// O buffer DEVE ser um uint32 alinhado: a API lê TokenSessionId como DWORD.
+	// Passar o endereço de um [4]byte (alinhamento 1) causava ERROR_NOACCESS
+	// ("Acesso inválido ao local de memória", errno=998) em toda chamada —
+	// o caminho SYSTEM nunca era usado e o worker caía para o token do
+	// usuário (High), onde o SendSAS (Ctrl+Alt+Del) e a injeção UIPI não
+	// funcionam de forma confiável.
+	sidValue := sessionID
 	if err := windows.SetTokenInformation(dup, windows.TokenSessionId,
-		(*byte)(unsafe.Pointer(&sidBytes[0])), uint32(len(sidBytes))); err != nil {
+		(*byte)(unsafe.Pointer(&sidValue)), uint32(unsafe.Sizeof(sidValue))); err != nil {
 		dup.Close()
 		return 0, fmt.Errorf("SetTokenInformation(TokenSessionId=%d): %w", sessionID, err)
 	}
