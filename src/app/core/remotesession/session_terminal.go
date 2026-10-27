@@ -1318,20 +1318,18 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 // term.ready.
 func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.ShellKind, cols, rows int, runAs terminal.RunAs) (*TerminalSession, error) {
 	st.mu.Lock()
-	defer st.mu.Unlock()
-
-	// Se já existe um console ativo, desanexa antes de recriar (substituição
-	// limpa). O Shell.Close fica FORA do lock: ele pode BLOQUEAR em
-	// cmd.Process.Wait() e travaria todo o terminal (input/resize/start).
+	// Detach ATÔMICO do console antigo: ele é desanexado (st.terminal = nil)
+	// mas permanece VIVO até a criação do novo concluir — falha de criação
+	// restaura o console antigo em vez de matar a sessão (o upgrade em
+	// background legacy→ConPTY depende disto: tentativa falhada não pode
+	// derrubar o shell que funciona).
 	var staleShell terminal.IShell
+	var staleTerm *TerminalSession
 	if st.terminal != nil {
+		staleTerm = st.terminal
 		staleShell = st.releaseTerminalLocked()
 	}
-	if staleShell != nil {
-		st.mu.Unlock()
-		closeShellBounded(staleShell)
-		st.mu.Lock()
-	}
+	st.mu.Unlock()
 
 	if cols <= 0 {
 		cols = 120
@@ -1342,10 +1340,6 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 	// O servidor manda termCols/termRows sem validação; dimensão absurda não
 	// pode chegar ao CreatePseudoConsole/console real.
 	cols, rows = clampTermDims(cols, rows)
-
-	// Nova geração de console: goroutines do console anterior (monitor de exit)
-	// passam a ser obsoletas (checam consoleGen antes de agir).
-	st.consoleGen++
 
 	term := &TerminalSession{
 		ID:        "main",
@@ -1370,19 +1364,14 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 		return s
 	}
 	// R4: frames de gravação de ciclo de vida compartilham a sequência.
-	st.seqAlloc = nextSeq
-
+	// (st.seqAlloc só é atribuído APÓS a criação bem-sucedida do shell —
+	//  uma tentativa falhada não pode trocar o contador do console vivo.)
 	// Anel de replay: alimentado por publishFrame, lido no handshake (hello).
 	replay := newTermReplayRing(termReplayMaxBytes)
 
 	// Telemetria da sessão (subject .stats, contrato B).
 	stats := &termStats{startedAt: time.Now()}
 
-	// Cache do ciclo de completion: zera a cada novo console — resultados de
-	// uma sessão anterior (mesmo input/cursor) não valem para a nova.
-	st.completionMu.Lock()
-	st.completionCache = nil
-	st.completionMu.Unlock()
 
 	// publishFrame publica um frame em term.out mantendo a ordem (outMu) e
 	// registrando-o no anel de replay. Falha de publish NÃO impede o registro:
@@ -1419,7 +1408,23 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 	// flush pode rodar enquanto Start ainda segura st.mu, então o callback NÃO
 	// pode adquirir RLock aqui (RWMutex não é reentrante → deadlock).
 	recTap := st.recordingTap
+	// Injeção da integração (OSC 633) postergada: dispara no PRIMEIRO output
+	// do shell (o prompt) ou após 3s de silêncio — injetar no spawn ecoa o
+	// script com highlighting do PSReadLine no viewer (o PowerShell carrega o
+	// profile por ~2s e o init chega antes de o PSReadLine inicializar).
+	var shell terminal.IShell
+	var shRunAs string
+	var err error
+	var pendingIntegrationInit string
+	var injectIntegrationOnce sync.Once
 	coalescer := newOutputCoalescer(func(output string) {
+		if pendingIntegrationInit != "" {
+			injectIntegrationOnce.Do(func() {
+				if werr := shell.WriteStdin(pendingIntegrationInit + "\r"); werr != nil {
+					log.Printf("[session-terminal] init de integracao de shell falhou: %v", werr)
+				}
+			})
+		}
 		currentSeq := nextSeq()
 
 		encoded := base64.StdEncoding.EncodeToString([]byte(output))
@@ -1440,15 +1445,12 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 	}, termOutputCoalesceMs*time.Millisecond)
 	coalescer.stats = stats
 
-	// Novo console = novo cwd: nada do console anterior vale (inclusive o path
-	// reportado, que era de outro processo de shell).
-	st.resetCwdState()
 
 	// Integração de shell: o prompt reporta o cwd por OSC 633. O scanner
 	// REMOVE a sequência do fluxo (o viewer não pode renderizar ESC ] 633 como
 	// lixo) e atualiza o estado da sessão, mesmo fragmentada entre chunks.
 	scanner := &osc633Scanner{}
-	shell, shRunAs, err := terminal.NewShellInteractiveRunAs(shellKind, cols, rows, func(output string) {
+	shell, shRunAs, err = terminal.NewShellInteractiveRunAs(shellKind, cols, rows, func(output string) {
 		clean, cwds := scanner.Scan(output)
 		for _, c := range cwds {
 			st.applyReportedCwd(c)
@@ -1458,8 +1460,38 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 		}
 	}, runAs)
 	if err != nil {
+		// ATÔMICO: restaura o console antigo (nunca foi fechado) — o shell
+		// que funciona continua no ar e o upgrade pode tentar de novo.
+		st.mu.Lock()
+		if staleTerm != nil {
+			st.terminal = staleTerm
+		}
+		st.mu.Unlock()
 		return nil, fmt.Errorf("criar shell %s: %w", shellKind, err)
 	}
+
+	// Sucesso: AGORA desativa o console antigo (gen bump obsoleta suas
+	// goroutines) e o fecha fora do lock.
+	st.mu.Lock()
+	st.consoleGen++
+	if staleShell != nil {
+		st.mu.Unlock()
+		closeShellBounded(staleShell)
+		st.mu.Lock()
+	}
+	defer st.mu.Unlock()
+	st.seqAlloc = nextSeq
+
+	// Cache do ciclo de completion: zera a cada novo console — resultados de
+	// uma sessão anterior (mesmo input/cursor) não valem para a nova.
+	st.completionMu.Lock()
+	st.completionCache = nil
+	st.completionMu.Unlock()
+
+	// Novo console = novo cwd: nada do console anterior vale (inclusive o path
+	// reportado, que era de outro processo de shell).
+	st.resetCwdState()
+
 	st.runAsEffective = shRunAs
 
 	term.Shell = shell
@@ -1468,14 +1500,32 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 	st.termBackend = terminal.ShellBackendName(shell)
 	st.stats = stats
 
-	// Injeção da integração: UMA vez por sessão, depois do spawn do ConPTY. O
-	// init limpa a tela para o comando ecoado não ficar no scrollback. Para o
-	// cmd (sem hook de prompt) o builder devolve "" — o fallback heurístico de
-	// terminal_cwd.go assume.
-	if init := buildShellIntegrationInit(shell.ShellKind(), st.termBackend); init != "" {
-		if werr := shell.WriteStdin(init + "\r"); werr != nil {
-			log.Printf("[session-terminal] init de integracao de shell falhou: %v", werr)
-		}
+	// Injeção da integração via stdin: POSTERGADA até o PRIMEIRO output do
+	// shell (o prompt) — injetar no spawn ecoa o script com highlighting do
+	// PSReadLine ANTES do Clear-Host limpar (o PowerShell carrega o profile
+	// por ~2s e o init chega antes de o PSReadLine inicializar). Fallback de
+	// 3s cobre shells que não produzem output imediato.
+	pendingIntegrationInit = buildShellIntegrationInit(shell.ShellKind(), st.termBackend)
+	if pendingIntegrationInit != "" {
+		injectGen := st.consoleGen
+		go func() {
+			select {
+			case <-term.stopCh:
+				return
+			case <-time.After(3 * time.Second):
+			}
+			st.mu.RLock()
+			sameGen := st.consoleGen == injectGen
+			st.mu.RUnlock()
+			if !sameGen {
+				return
+			}
+			injectIntegrationOnce.Do(func() {
+				if werr := shell.WriteStdin(pendingIntegrationInit + "\r"); werr != nil {
+					log.Printf("[session-terminal] init de integracao de shell falhou: %v", werr)
+				}
+			})
+		}()
 	}
 
 	// Watchdog de "shell mudo": console pronto + processo vivo, mas NENHUMA

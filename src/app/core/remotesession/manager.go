@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -1204,6 +1205,38 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 	log.Printf("[remote-session-term] console pronto para sessao %s (consoleId=%s, shells=%v)\n",
 		session.ID, console.ID, availableShells)
 
+	// ── Upgrade automático legacy → ConPTY ──
+	// Quando a abertura caiu no fallback legacy (bloqueio de AV mata os filhos
+	// do ConPTY na rajada inicial), tenta ConPTY em background periodicamente:
+	// spawns ÚNICOS (sem rajada) a cada 60s não reativam o bloqueio; se um
+	// sobreviver, o console é substituído na MESMA sessão (hot-swap atômico
+	// do StartRunAs) e o operador recupera VT completo sem reabrir.
+	if backend == "legacy" {
+		go func() {
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			const maxUpgradeAttempts = 10
+			for attempt := 1; attempt <= maxUpgradeAttempts; attempt++ {
+				select {
+				case <-session.stopCh:
+					return
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+				// Força backend ConPTY (sem fallback para legacy na escada):
+				// o worker é um processo dedicado a esta sessão.
+				os.Setenv("DISCOVERY_TERM_BACKEND", "conpty")
+				_, uerr := sessTerm.StartRunAs(ctx, defaultShell, console.Cols, console.Rows, runAs)
+				os.Unsetenv("DISCOVERY_TERM_BACKEND")
+				if uerr == nil {
+					log.Printf("[remote-session-term] upgrade legacy→ConPTY concluído (tentativa %d) — VT completo restaurado", attempt)
+					return
+				}
+				log.Printf("[remote-session-term] upgrade legacy→ConPTY falhou (tentativa %d/%d): %v", attempt, maxUpgradeAttempts, uerr)
+			}
+		}()
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
