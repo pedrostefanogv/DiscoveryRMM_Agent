@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"time"
 	"unsafe"
 
@@ -13,6 +14,21 @@ import (
 
 func main() {
 	mode := "job"
+	if len(os.Args) > 1 && os.Args[1] == "plain" {
+		// spawn simples (os/exec), sem ConPTY, sem job — 5 tentativas
+		okCount := 0
+		for i := 0; i < 5; i++ {
+			cmd2 := exec.Command("powershell.exe", "-NoProfile", "-Command", "Write-Output PLAIN_OK")
+			out, err := cmd2.CombinedOutput()
+			if err == nil && len(out) > 0 {
+				okCount++
+			} else {
+				fmt.Println("plain falhou:", err, string(out))
+			}
+		}
+		fmt.Println("plain ok:", okCount, "/5")
+		return
+	}
 	if len(os.Args) > 1 {
 		mode = os.Args[1]
 	}
@@ -106,8 +122,8 @@ func main() {
 	}
 	windows.CloseHandle(pi.hThread)
 
-	for i := 0; i < 2; i++ {
-		time.Sleep(300 * time.Millisecond)
+	for i := 0; i < 40; i++ {
+		time.Sleep(500 * time.Millisecond)
 		var code uint32
 		r, _, _ := gec.Call(uintptr(pi.hProcess), uintptr(unsafe.Pointer(&code)))
 		alive := r != 0 && code == 0x00000103 // STILL_ACTIVE

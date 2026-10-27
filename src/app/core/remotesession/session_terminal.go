@@ -1478,6 +1478,36 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 		}
 	}
 
+	// Watchdog de "shell mudo": console pronto + processo vivo, mas NENHUMA
+	// saída publicada após 10s. Sintoma medido em campo (2026-10-26): AV/EDR
+	// suspende/bloqueia o filho do ConPTY — o console fica vivo e em silêncio
+	// e o operador vê tela branca sem explicação. Publica um aviso VISÍVEL no
+	// term.out (não encerra a sessão: a saída pode chegar depois).
+	watchGen := st.consoleGen // geração deste console (antes do monitor de exit)
+	go func() {
+		select {
+		case <-term.stopCh:
+			return
+		case <-time.After(10 * time.Second):
+		}
+		st.mu.RLock()
+		sameGen := st.consoleGen == watchGen
+		currentSeq := seq
+		st.mu.RUnlock()
+		if !sameGen || currentSeq > 0 {
+			return // console substituído ou já houve saída — nada a fazer
+		}
+		warnSeq := nextSeq()
+		warnMsg := "Aviso: o console abriu, mas nenhuma saída chegou em 10s. " +
+			"Isso normalmente indica que um antivírus/EDR (ex.: Kaspersky) está " +
+			"bloqueando/suspensando o processo do shell. Adicione o agente às " +
+			"exclusões do antivírus ou tente novamente.\r\n"
+		encoded := base64.StdEncoding.EncodeToString([]byte("\x1b[33m" + warnMsg + "\x1b[0m"))
+		payload, _ := json.Marshal(map[string]any{"data": encoded, "seq": warnSeq})
+		publishFrame(warnSeq, string(payload))
+		st.recordFrameSeq("output", warnMsg, warnSeq, nil, nil, nil)
+	}()
+
 	// Monitor de exit do shell — notifica viewer e encerra a sessão.
 	// Captura a geração deste console: se um novo console substituir este,
 	// a goroutine fica obsoleta e NÃO pode publicar frames de exit (no fluxo

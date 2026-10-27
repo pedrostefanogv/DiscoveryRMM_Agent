@@ -1166,6 +1166,15 @@ func NewApp(opts AppStartupOptions) *App {
 		// No modo serviço não há janela — sempre pode instalar (Fase A:
 		// core não consulta a UI para decidir update).
 		CanInstallNow: func() bool {
+			// Sessão remota ativa (terminal/tela/arquivos): ADIA o update — o
+			// instalador reinicia o serviço e mata qualquer console aberto
+			// (incidente 2026-10-26: self-update derrubou a sessão de terminal
+			// 32s após o console subir → viewer preso em "Console Desconectado").
+			// O Retry do Run loop (windowBusyRetryDelay) re-checa até a sessão
+			// encerrar.
+			if a.RemoteSessionMgr != nil && a.RemoteSessionMgr.CountActive() > 0 {
+				return false
+			}
 			if a.RuntimeFlags.ServiceMode {
 				return true
 			}
