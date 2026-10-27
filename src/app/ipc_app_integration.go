@@ -134,9 +134,7 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 				// correção do caminho NATS — remote_debug_commands): o token do
 				// debug_config.json fica velho após a rotação P2P e o NATS
 				// rejeitava o worker com "Authorization Violation".
-				if live := strings.TrimSpace(a.DebugSvc.GetConfig().AuthToken); live != "" {
-					parsed["authToken"] = live
-				}
+				injectWorkerRuntimeHints(a, parsed)
 				go func() {
 					if err := spawnRemoteSessionWorker(context.Background(), parsed); err != nil {
 						a.Logs.Append("[ipc] erro ao spawnar remote session worker: " + err.Error())

@@ -1030,10 +1030,11 @@ func (st *SessionTerminal) publishStats(stats *termStats) {
 // diretório corrente efetivo da sessão (reportado pelo shell ou fallback) —
 // campo aditivo para o viewer saber onde a completação vai resolver.
 func buildTermReadyPayload(availableShells []string, consoleID string, cols, rows int, shellKind, shellPath, backend, cwd, runAs string) map[string]any {
-	supportsVt := backend == "conpty"
+	supportsVt := backend == "conpty" || backend == "consolebuffer"
 	// O backend legacy redimensiona o console real (AttachConsole +
 	// SetConsoleScreenBufferSize), então também anuncia suporte a resize (R6).
-	supportsResize := backend == "conpty" || backend == "legacy"
+	// console-buffer (Fase 5) implementa resize real via SetConsoleWindowInfo.
+	supportsResize := backend == "conpty" || backend == "legacy" || backend == "consolebuffer"
 	return map[string]any{
 		"shells":                  availableShells,
 		"consoleId":               consoleID,

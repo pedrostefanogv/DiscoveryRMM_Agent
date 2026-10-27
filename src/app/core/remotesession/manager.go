@@ -1139,6 +1139,22 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 	log.Printf("[remote-session-term] iniciando console para sessao %s (shell=%s cols=%d rows=%d runas=%s)\n",
 		session.ID, defaultShell, cols, rows, string(runAs))
 
+	// Fase visível para o viewer ANTES de criar o shell: a escada de backend
+	// pode levar ~1,5 s em máquinas com AV. Sem este evento a UI mostra apenas
+	// "Conectando…" sem explicar o que está acontecendo.
+	m.publishEvent(session.ID, "terminal_preparing", map[string]any{
+		"shell": string(defaultShell),
+		"cols":  cols,
+		"rows":  rows,
+		"runAs": string(runAs),
+	})
+
+	// Tempo até o ready, publicado no term.ready e logado para diagnóstico.
+	startedAt := session.StartedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now()
+	}
+
 	sessTerm := NewSessionTerminal(session.ID, m.natsStream, session.Recording)
 
 	// Quando o console (shell) encerra, fecha a sessão para liberar recursos
@@ -1149,6 +1165,12 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 		m.closeSessionLocked(session.ID, "terminal-exit")
 		m.mu.Unlock()
 	})
+
+	// Lista de shells em PARALELO com a criação do console: AvailableShellKinds
+	// consulta o wsl.exe (com timeout de 1,5 s). A lista é só UX — o ready não
+	// pode esperar por ela.
+	shellsCh := make(chan []string, 1)
+	go func() { shellsCh <- terminal.AvailableShellKinds() }()
 
 	// Console único — cria o terminal (subjects fixos term.out / term.in)
 	console, err := sessTerm.StartRunAs(ctx, defaultShell, cols, rows, runAs)
@@ -1171,7 +1193,17 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 	// Notificar viewer com shells disponiveis e console pronto.
 	// A lista vem do pacote terminal (powershell/cmd + zsh quando instalado +
 	// wsl:<distro>): antes era hardcoded e o zsh nunca aparecia no term.ready.
-	availableShells := terminal.AvailableShellKinds()
+	// Espera no máximo 300 ms; se o wsl.exe estiver lento, publica o fallback e
+	// o seletor continua funcional (a lista é apenas UX).
+	availableShells := []string{string(terminal.ShellPowerShell), string(terminal.ShellCmd)}
+	select {
+	case reported := <-shellsCh:
+		if len(reported) > 0 {
+			availableShells = reported
+		}
+	case <-time.After(300 * time.Millisecond):
+		log.Printf("[remote-session-term] lista de shells não chegou em 300ms — publicando fallback %v", availableShells)
+	}
 
 	// Dimensoes EFETIVAS do console: Start aplica clamp, entao o valor pedido
 	// pelo servidor pode nao ser o que o ConPTY/console recebeu.
@@ -1194,6 +1226,8 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 		effRunAs = terminal.EffectiveRunAs(runAs)
 	}
 	ready := buildTermReadyPayload(availableShells, console.ID, console.Cols, console.Rows, shellKind, shellPath, backend, cwd, effRunAs)
+	startupMs := time.Since(startedAt).Milliseconds()
+	ready["startupMs"] = startupMs
 	if err := m.natsStream.PublishTermReady(session.ID, ready); err != nil {
 		sessTerm.notePublishError()
 	}
@@ -1202,8 +1236,10 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 	sessTerm.SetReadyPayload(readyPayload)
 	// T3: frame de gravacao kind=ready.
 	sessTerm.RecordReady(backend, shellKind, console.Cols, console.Rows)
-	log.Printf("[remote-session-term] console pronto para sessao %s (consoleId=%s, shells=%v)\n",
-		session.ID, console.ID, availableShells)
+	log.Printf("[remote-session-term] console pronto para sessao %s (consoleId=%s, shells=%v backend=%s startup_ms=%d)\n",
+		session.ID, console.ID, availableShells, backend, startupMs)
+	log.Printf("[remote-session-timing] session=%s shell=%s backend=%s startup_ms=%d",
+		session.ID, shellKind, backend, startupMs)
 
 	// ── Upgrade automático legacy → ConPTY ──
 	// Quando a abertura caiu no fallback legacy (bloqueio de AV mata os filhos
@@ -1213,16 +1249,27 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 	// do StartRunAs) e o operador recupera VT completo sem reabrir.
 	if backend == "legacy" {
 		go func() {
-			ticker := time.NewTicker(60 * time.Second)
-			defer ticker.Stop()
-			const maxUpgradeAttempts = 10
+			// 2026-10-27: primeira tentativa em 15s (não 60s) — se o bloqueio do
+			// AV/EDR levantar rápido, o operador recupera VT cedo; depois mantém
+			// 60s. Máximo de 5 tentativas (era 10): rajada longa de spawns
+			// reativa o bloqueio comportamental do AV sem ganho.
+			const (
+				firstUpgradeDelay  = 15 * time.Second
+				upgradeInterval    = 60 * time.Second
+				maxUpgradeAttempts = 5
+			)
+			timer := time.NewTimer(firstUpgradeDelay)
+			defer timer.Stop()
 			for attempt := 1; attempt <= maxUpgradeAttempts; attempt++ {
 				select {
 				case <-session.stopCh:
 					return
 				case <-ctx.Done():
 					return
-				case <-ticker.C:
+				case <-timer.C:
+				}
+				if attempt < maxUpgradeAttempts {
+					timer.Reset(upgradeInterval)
 				}
 				// Força backend ConPTY (sem fallback para legacy na escada):
 				// o worker é um processo dedicado a esta sessão.

@@ -2,11 +2,14 @@
 
 package app
 
-// Leitura de config para o worker de remote session (sem App inicializada).
-// O worker roda como processo independente spawnado pelo serviço — não tem
-// acesso à memória da App, então lê os mesmos arquivos persistidos:
-//   - debug_config.json (C:\ProgramData\Discovery) — endpoints NATS + token
-//   - config.json do instalador — clientId/siteId/agentId
+// Merge de overrides do payload no config do worker (2026-10-27).
+//
+// O serviço já injeta o token VIVO no payload (bug de rotação de 2026-09-20).
+// Pelo mesmo motivo, injetamos os endpoints e a identidade: o worker não deve
+// depender de debug_config.json/config.json possivelmente velhos, e o serviço
+// sabe qual endpoint o agent core está usando.
+//
+// O payload tem prioridade; arquivos continuam como fallback.
 
 import (
 	"encoding/json"
@@ -76,6 +79,49 @@ func stringAuthTokenFromPayload(cmd map[string]any) string {
 		return strings.TrimSpace(v)
 	}
 	return ""
+}
+
+// stringFromWorkerPayload extrai uma string não vazia do payload do worker.
+func stringFromWorkerPayload(cmd map[string]any, key string) string {
+	if cmd == nil {
+		return ""
+	}
+	if v, ok := cmd[key].(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
+// mergeWorkerDebugConfigFromPayload aplica os overrides do payload sobre o
+// config lido dos arquivos. Campos ausentes no payload mantêm o arquivo.
+func mergeWorkerDebugConfigFromPayload(cfg WorkerDebugConfig, cmd map[string]any) WorkerDebugConfig {
+	if v := stringFromWorkerPayload(cmd, "natsCurrentUrl"); v != "" {
+		cfg.NatsCurrentURL = v
+	}
+	if v := stringFromWorkerPayload(cmd, "natsServer"); v != "" {
+		cfg.NatsServer = v
+	}
+	if v := stringFromWorkerPayload(cmd, "natsWsServer"); v != "" {
+		cfg.NatsWsServer = v
+	}
+	if v := stringFromWorkerPayload(cmd, "apiServer"); v != "" {
+		cfg.ApiServer = v
+	}
+	if v := stringFromWorkerPayload(cmd, "apiScheme"); v != "" {
+		cfg.ApiScheme = v
+	}
+	return cfg
+}
+
+// mergeWorkerAgentConfigFromPayload aplica clientId/siteId do payload.
+func mergeWorkerAgentConfigFromPayload(cfg WorkerAgentConfig, cmd map[string]any) WorkerAgentConfig {
+	if v := stringFromWorkerPayload(cmd, "clientId"); v != "" {
+		cfg.ClientID = v
+	}
+	if v := stringFromWorkerPayload(cmd, "siteId"); v != "" {
+		cfg.SiteID = v
+	}
+	return cfg
 }
 
 // GetInstallerAuthTokenForWorker lê o authToken do config.json do instalador

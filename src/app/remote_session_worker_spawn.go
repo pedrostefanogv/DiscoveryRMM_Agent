@@ -74,6 +74,188 @@ type respawnBudgetStore struct {
 // remoteSessionRespawnBudget é o orçamento global do processo de serviço.
 var remoteSessionRespawnBudget respawnBudgetStore
 
+// terminalHealthStore guarda o último hint de saúde do ConPTY reportado pelo
+// worker no stderr. O serviço é long-lived e o worker é um processo novo por
+// sessão: sem este store, cada abertura repetiria a escada inteira (9 + 4
+// tentativas) em máquinas onde o AV mata todo filho do ConPTY.
+var terminalHealthStore struct {
+	mu           sync.Mutex
+	blockedUntil time.Time
+}
+
+func setWorkerConptyBlockedUntil(t time.Time) {
+	terminalHealthStore.mu.Lock()
+	terminalHealthStore.blockedUntil = t
+	terminalHealthStore.mu.Unlock()
+}
+
+func clearWorkerConptyBlockedUntil() {
+	terminalHealthStore.mu.Lock()
+	terminalHealthStore.blockedUntil = time.Time{}
+	terminalHealthStore.mu.Unlock()
+}
+
+func workerConptyBlockedUntil() time.Time {
+	terminalHealthStore.mu.Lock()
+	defer terminalHealthStore.mu.Unlock()
+	return terminalHealthStore.blockedUntil
+}
+
+// injectWorkerRuntimeHints injeta no payload do worker os dados VIVOS que ele
+// não deve reler de arquivos possivelmente velhos: token (rotação P2P), NATS,
+// API, identidade e hint de saúde do ConPTY. Usado tanto pelo caminho NATS
+// (remote_debug_commands) quanto pelo IPC (ipc_app_integration).
+func injectWorkerRuntimeHints(a *App, payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	if a != nil {
+		cfg := a.GetDebugConfig()
+		if v := strings.TrimSpace(cfg.AuthToken); v != "" {
+			payload["authToken"] = v
+		}
+		// URL NATS em uso PELO CORE agora: o worker tenta este endpoint primeiro
+		// (no race), herdando o transporte que já está funcionando na máquina.
+		if a.AgentConn != nil {
+			if st := a.AgentConn.GetStatus(); st.Connected && strings.TrimSpace(st.Server) != "" {
+				payload["natsCurrentUrl"] = strings.TrimSpace(st.Server)
+			}
+		}
+		if v := strings.TrimSpace(cfg.NatsServer); v != "" {
+			payload["natsServer"] = v
+		}
+		if v := strings.TrimSpace(cfg.NatsWsServer); v != "" {
+			payload["natsWsServer"] = v
+		}
+		if v := strings.TrimSpace(cfg.ApiServer); v != "" {
+			payload["apiServer"] = v
+		}
+		if v := strings.TrimSpace(cfg.ApiScheme); v != "" {
+			payload["apiScheme"] = v
+		}
+		agentCfg := a.GetAgentConfiguration()
+		if v := strings.TrimSpace(agentCfg.ClientID); v != "" {
+			payload["clientId"] = v
+		}
+		if v := strings.TrimSpace(agentCfg.SiteID); v != "" {
+			payload["siteId"] = v
+		}
+	}
+	if until := workerConptyBlockedUntil(); until.After(time.Now()) {
+		payload["conptyBlockedUntil"] = until.UTC().Format(time.RFC3339)
+	}
+}
+
+// ── Fase 4 (2026-10-27): pool de workers mornos ─────────────────────────────
+// Worker cuja última sessão encerrou fica em linger (warm-idle) com a conexão
+// NATS já estabelecida. O próximo start reusa o processo em vez de pagar
+// CreateProcessAsUser + dial NATS (~0,4 s por abertura).
+
+type warmWorkerEntry struct {
+	w         *remoteSessionWorkerProc
+	sessionID string // chave atual de remoteSessionWorkers.byID para este proc
+}
+
+var warmRemoteSessionWorkers struct {
+	mu      sync.Mutex
+	entries []*warmWorkerEntry
+}
+
+func warmWorkerAlive(w *remoteSessionWorkerProc) bool {
+	if w == nil {
+		return false
+	}
+	select {
+	case <-w.done:
+		return false
+	default:
+		return true
+	}
+}
+
+// addWarmRemoteSessionWorker registra (ou atualiza) o worker como morno.
+// Idempotente por ponteiro: o worker pode voltar ao idle várias vezes.
+func addWarmRemoteSessionWorker(w *remoteSessionWorkerProc) {
+	if w == nil {
+		return
+	}
+	warmRemoteSessionWorkers.mu.Lock()
+	defer warmRemoteSessionWorkers.mu.Unlock()
+	for _, e := range warmRemoteSessionWorkers.entries {
+		if e.w == w {
+			e.sessionID = w.sessionID
+			return
+		}
+	}
+	warmRemoteSessionWorkers.entries = append(warmRemoteSessionWorkers.entries, &warmWorkerEntry{w: w, sessionID: w.sessionID})
+}
+
+func removeWarmRemoteSessionWorker(w *remoteSessionWorkerProc) {
+	if w == nil {
+		return
+	}
+	warmRemoteSessionWorkers.mu.Lock()
+	defer warmRemoteSessionWorkers.mu.Unlock()
+	kept := warmRemoteSessionWorkers.entries[:0]
+	for _, e := range warmRemoteSessionWorkers.entries {
+		if e.w != w {
+			kept = append(kept, e)
+		}
+	}
+	warmRemoteSessionWorkers.entries = kept
+}
+
+// takeWarmRemoteSessionWorker devolve (e remove) o primeiro worker reutilizável,
+// descartando entradas mortas/parando no caminho.
+func takeWarmRemoteSessionWorker() *warmWorkerEntry {
+	warmRemoteSessionWorkers.mu.Lock()
+	defer warmRemoteSessionWorkers.mu.Unlock()
+	var kept []*warmWorkerEntry
+	var taken *warmWorkerEntry
+	for _, e := range warmRemoteSessionWorkers.entries {
+		reusable := warmWorkerAlive(e.w) && !e.w.stopping.Load() && !e.w.intentionalExit.Load()
+		if taken == nil && reusable {
+			taken = e
+			continue
+		}
+		if warmWorkerAlive(e.w) {
+			kept = append(kept, e)
+		}
+	}
+	warmRemoteSessionWorkers.entries = kept
+	return taken
+}
+
+// noteTerminalHealthLine interpreta as linhas [terminal-health] emitidas pelo
+// pacote terminal (ver core/terminal/health.go).
+//
+//	[terminal-health] conpty=blocked until=<RFC3339> reason=<...>
+//	[terminal-health] conpty=ok
+func noteTerminalHealthLine(line string) {
+	const prefix = "[terminal-health]"
+	idx := strings.Index(line, prefix)
+	if idx < 0 {
+		return
+	}
+	rest := line[idx+len(prefix):]
+	if strings.Contains(rest, "conpty=ok") {
+		clearWorkerConptyBlockedUntil()
+		return
+	}
+	if !strings.Contains(rest, "conpty=blocked") {
+		return
+	}
+	for _, field := range strings.Fields(rest) {
+		if !strings.HasPrefix(field, "until=") {
+			continue
+		}
+		raw := strings.TrimPrefix(field, "until=")
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			setWorkerConptyBlockedUntil(t)
+		}
+	}
+}
+
 // reset zera o orçamento de uma sessão (novo start explícito).
 func (s *respawnBudgetStore) reset(id string, n int) {
 	s.mu.Lock()
@@ -172,6 +354,27 @@ func spawnRemoteSessionWorkerAttempt(parent context.Context, payload map[string]
 		remoteSessionRespawnBudget.reset(sessionID, maxRemoteSessionRespawns)
 	}
 
+	// Fase 4 — reuso do worker morno: mesmo processo, nova sessão. O payload
+	// (start) vai pelo stdin framed; o monitor do worker encaminha ao manager.
+	// Economiza CreateProcessAsUser + dial NATS por abertura.
+	if entry := takeWarmRemoteSessionWorker(); entry != nil {
+		ww := entry.w
+		if cur, ok := remoteSessionWorkers.byID[entry.sessionID]; ok && cur == ww {
+			delete(remoteSessionWorkers.byID, entry.sessionID)
+		}
+		ww.sessionID = sessionID
+		ww.payload = cloneWorkerPayload(payload)
+		ww.intentionalExit.Store(false)
+		remoteSessionWorkers.byID[sessionID] = ww
+		if werr := writeWorkerPayload(ww, payload); werr != nil {
+			log.Printf("[remote-session] ERRO: worker morno recusou start (sessionId=%s): %v — spawnando novo", sessionID, werr)
+			delete(remoteSessionWorkers.byID, sessionID)
+		} else {
+			log.Printf("[remote-session] worker morno reusado (sem spawn): sessionId=%s pid=%d", sessionID, ww.proc.Pid)
+			return nil
+		}
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolvendo executável: %w", err)
@@ -204,6 +407,13 @@ func spawnRemoteSessionWorkerAttempt(parent context.Context, payload map[string]
 		return err
 	}
 
+	// Hint de saúde do ConPTY: o serviço lembra entre workers (o worker em si é
+	// um processo novo por sessão). Injetado no payload ANTES do clone usado
+	// pelo watchdog, para o relançamento também herdar o hint.
+	if until := workerConptyBlockedUntil(); until.After(time.Now()) {
+		payload["conptyBlockedUntil"] = until.UTC().Format(time.RFC3339)
+	}
+
 	w := &remoteSessionWorkerProc{
 		sessionID:       sessionID,
 		proc:            proc,
@@ -227,9 +437,12 @@ func spawnRemoteSessionWorkerAttempt(parent context.Context, payload map[string]
 	go func() {
 		_, _ = proc.Wait()
 		close(w.done)
+		removeWarmRemoteSessionWorker(w)
 		remoteSessionWorkers.mu.Lock()
-		if cur, ok := remoteSessionWorkers.byID[sessionID]; ok && cur == w {
-			delete(remoteSessionWorkers.byID, sessionID)
+		// Usa w.sessionID (não o sessionID do spawn): o worker pode ter sido
+		// REUSADO por outra sessão (worker morno) — a chave corrente mudou.
+		if cur, ok := remoteSessionWorkers.byID[w.sessionID]; ok && cur == w {
+			delete(remoteSessionWorkers.byID, w.sessionID)
 		}
 		remoteSessionWorkers.mu.Unlock()
 		// Watchdog: se o worker morreu com a sessão ativa (ex.: logoff no
@@ -468,6 +681,11 @@ func (w *remoteSessionWorkerProc) drainStderr(stderr *os.File) {
 			continue
 		}
 		log.Printf("[remote-session-worker] %s", line)
+		noteTerminalHealthLine(line)
+		// Fase 4: worker entrou em linger (sem sessões ativas) → pool morno.
+		if strings.Contains(line, "warm-idle") {
+			addWarmRemoteSessionWorker(w)
+		}
 		w.rememberStderr(line)
 		if workerLineSignalsIntentionalExit(line) {
 			w.intentionalExit.Store(true)
@@ -851,8 +1069,10 @@ func stopRemoteSessionWorker(sessionID string) {
 	if w == nil {
 		return
 	}
-	// Encerramento explícito: desarma o watchdog de relançamento.
+	// Encerramento explícito: desarma o watchdog de relançamento e tira da
+	// pool morna (não pode ser reusado depois de parado).
 	w.stopping.Store(true)
+	removeWarmRemoteSessionWorker(w)
 	// Worker já morto? Não espera o timeout à toa.
 	select {
 	case <-w.done:

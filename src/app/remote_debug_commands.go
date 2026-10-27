@@ -294,9 +294,7 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			// rejeitava com "Authorization Violation" e a sessão morria no
 			// spawn. O token em memória é a fonte mais fresca; os arquivos
 			// continuam como fallback no próprio worker.
-			if live := strings.TrimSpace(a.DebugSvc.GetConfig().AuthToken); live != "" {
-				parsedPayload["authToken"] = live
-			}
+			injectWorkerRuntimeHints(a, parsedPayload)
 			if err := spawnRemoteSessionWorker(parent, parsedPayload); err != nil {
 				log.Printf("[remote-session] ERRO: worker não spawnado — sessao %s (%s): %v\n", sid, act, err)
 				return true, 1, "", "remote session sem sessão interativa: " + err.Error()

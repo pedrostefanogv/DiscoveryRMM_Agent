@@ -30,6 +30,10 @@ const (
 	BackendConPTY
 	// BackendLegacy: força o console real (pipes). Diagnóstico/compatibilidade.
 	BackendLegacy
+	// BackendConsoleBuffer (Fase 5 — spike, estilo MeshCentral): screen buffer
+	// real com AllocConsole + ReadConsoleOutput/WriteConsoleInput. Opt-in via
+	// DISCOVERY_TERM_BACKEND=consolebuffer; NUNCA no modo auto.
+	BackendConsoleBuffer
 )
 
 // ResolveBackendPolicy lê DISCOVERY_TERM_BACKEND (auto|conpty|legacy).
@@ -39,6 +43,8 @@ func ResolveBackendPolicy() TerminalBackendPolicy {
 		return BackendLegacy
 	case "conpty", "strict":
 		return BackendConPTY
+	case "consolebuffer", "screenbuffer", "meshcentral":
+		return BackendConsoleBuffer
 	default:
 		return BackendAuto
 	}
@@ -75,13 +81,17 @@ const (
 	// AV/EDR no boot). Cada tentativa falha custa ~40 ms + backoff, então um
 	// número alto de tentativas é barato e recupera praticamente todos os casos
 	// (medido na estação: tentativa 1 falhou, tentativa 2 subiu).
-	conptyMaxRetries   = 8
-	conptyRetryBackoff = 150 * time.Millisecond
+	// Teto CURTO (3 tentativas in-process) — 2026-10-27: a escada antiga (9
+	// tentativas + backoff até 1 s) custava ~5,5 s em máquinas onde o AV mata
+	// TODO filho do ConPTY (0xC0000142). 3 tentativas preservam a recuperação
+	// dos casos intermitentes (tentativa 2/3) sem pagar segundos por abertura.
+	conptyMaxRetries   = 2
+	conptyRetryBackoff = 200 * time.Millisecond
 
 	// dispatcherInnerRetries é o retry DENTRO do processo dispatcher. O pai já
 	// repete a escada inteira; manter este número baixo evita que um dispatcher
-	// preso segure a sessão por muito tempo.
-	dispatcherInnerRetries = 3
+	// preso segure a sessão por muito tempo. 2026-10-27: 1 (2 tentativas).
+	dispatcherInnerRetries = 1
 
 	// dispatcherProbeTimeout cobre o boot do dispatcher E as tentativas
 	// internas dele (5 × spawn + sonda). O caminho feliz sai em ~500 ms.
@@ -114,10 +124,29 @@ func NewShellInteractiveRunAs(shell ShellKind, cols, rows int, onOutput func(str
 		return s, EffectiveRunAs(runAs), err
 	}
 
+	// Fase 5 (spike): console-buffer estilo MeshCentral. Opt-in EXPLICITO —
+	// sem escada, sem fallback: o erro sobe para o viewer diagnosticar.
+	if policy == BackendConsoleBuffer {
+		log.Printf("[terminal] backend=console-buffer (spike) forçado por DISCOVERY_TERM_BACKEND")
+		s, err := NewConsoleBufferShellRunAs(shell, cols, rows, onOutput, runAs)
+		return s, EffectiveRunAs(runAs), err
+	}
+
 	if !IsConPTYAvailable() {
 		// Sem as APIs de pseudoconsole não existe alternativa: o console real
 		// (pipes) é o único shell possível nesta máquina.
 		log.Printf("[terminal] ConPTY indisponível neste sistema (requer Windows 10 1809+); usando console real (legacy)")
+		s, err := NewLegacyShellRunAs(shell, cols, rows, onOutput, runAs)
+		return s, EffectiveRunAs(runAs), err
+	}
+
+	// Hint de saúde vindo do serviço (payload do worker): a máquina acabou de
+	// falhar a escada INTEIRA por injeção de DLL. Abrir legacy direto evita
+	// repetir ~1,5 s de tentativas a cada abertura. Só vale no modo AUTO: o
+	// upgrade forçado (DISCOVERY_TERM_BACKEND=conpty) precisa tentar de verdade.
+	if policy == BackendAuto && ConptyBlocked() {
+		log.Printf("[terminal] hint: ConPTY bloqueado até %s — iniciando legacy direto",
+			ConptyBlockedUntil().UTC().Format(time.RFC3339))
 		s, err := NewLegacyShellRunAs(shell, cols, rows, onOutput, runAs)
 		return s, EffectiveRunAs(runAs), err
 	}
@@ -157,8 +186,12 @@ func NewShellInteractiveRunAs(shell ShellKind, cols, rows int, onOutput func(str
 	if detail == "" {
 		detail = "nenhum backend ConPTY disponivel"
 	}
+	injectionFailure := allConPTYInjectionFailures(failures)
 	if legacyAllowExplicit() {
 		log.Printf("[terminal] fallback para console real liberado por DISCOVERY_TERM_ALLOW_LEGACY=1: %s", detail)
+		if injectionFailure {
+			MarkConptyBlocked("0xC0000142")
+		}
 		s, err := NewLegacyShellRunAs(shell, cols, rows, onOutput, runAs)
 		return s, EffectiveRunAs(runAs), err
 	}
@@ -172,8 +205,11 @@ func NewShellInteractiveRunAs(shell ShellKind, cols, rows int, onOutput func(str
 	// com edição local no viewer) é infinitamente melhor que um terminal
 	// morto: degrada AUTOMATICAMENTE e o banner do legacy avisa o operador.
 	// DISCOVERY_TERM_NO_AUTO_LEGACY=1 desliga este fallback.
-	if allConPTYInjectionFailures(failures) && !envFlagOn("DISCOVERY_TERM_NO_AUTO_LEGACY") {
+	if injectionFailure && !envFlagOn("DISCOVERY_TERM_NO_AUTO_LEGACY") {
 		log.Printf("[terminal] ConPTY morto por injecao de DLL (0xC0000142) em todas as tentativas — degradando automaticamente para o console real: %s", detail)
+		// A escada INTEIRA (in-process + dispatcher) falhou por injeção: registra
+		// o hint para a próxima abertura desta máquina ir direto ao legacy.
+		MarkConptyBlocked("0xC0000142")
 		s, err := NewLegacyShellRunAs(shell, cols, rows, onOutput, runAs)
 		return s, EffectiveRunAs(runAs), err
 	}
@@ -218,6 +254,7 @@ func tryConPTY(shell ShellKind, cols, rows int, onOutput func(string), runAs Run
 			}
 			_ = s.Close()
 		} else {
+			MarkConptyHealthy()
 			return s, nil
 		}
 		if attempt < conptyMaxRetries {
@@ -274,6 +311,7 @@ func tryDispatcher(shell ShellKind, cols, rows int, onOutput func(string), runAs
 		_ = ds.Close()
 		return nil, fmt.Errorf("dispatcher não reportou shell vivo")
 	}
+	MarkConptyHealthy()
 	log.Printf("[terminal] usando dispatcher (ConPTY remoto isolado)")
 	return ds, nil
 }
@@ -370,6 +408,10 @@ func ShellBackendName(s IShell) string {
 	}
 	if _, ok := s.(*ConPTYShell); ok {
 		return "conpty"
+	}
+	if _, ok := s.(*ConsoleBufferShell); ok {
+		// Fase 5 (spike): screen buffer real do console do worker.
+		return "consolebuffer"
 	}
 	if _, ok := s.(*dispatcherShell); ok {
 		// O dispatcher executa ConPTY num processo filho isolado: é ConPTY de

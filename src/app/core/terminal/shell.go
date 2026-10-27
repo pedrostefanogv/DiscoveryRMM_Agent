@@ -3,11 +3,14 @@
 package terminal
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 	"unicode/utf16"
 )
 
@@ -143,16 +146,55 @@ func resolveShellWith(shell ShellKind, zsh zshResolver) (ShellKind, string) {
 	}
 }
 
-// IsWSLAvailable verifica se o WSL está instalado e retorna as distribuições disponíveis.
-func IsWSLAvailable() (available bool, distros []string) {
+// Timings do probe de WSL. O wsl.exe pode travar (serviço LxssManager preso,
+// disco lento): sem timeout, AvailableShellKinds nunca retornava e o term.ready
+// nunca era publicado — o terminal ficava "conectando" para sempre.
+const (
+	wslProbeTimeout = 1500 * time.Millisecond
+	wslCacheTTL     = 60 * time.Second
+)
+
+var wslCache struct {
+	mu        sync.Mutex
+	at        time.Time
+	available bool
+	distros   []string
+}
+
+// IsWSLAvailable verifica se o WSL está instalado e retorna as distribuições
+// disponíveis. Cache de 60 s + timeout de 1,5 s (ver comentário acima).
+func IsWSLAvailable() (bool, []string) {
+	wslCache.mu.Lock()
+	if time.Since(wslCache.at) < wslCacheTTL {
+		available := wslCache.available
+		distros := append([]string(nil), wslCache.distros...)
+		wslCache.mu.Unlock()
+		return available, distros
+	}
+	wslCache.mu.Unlock()
+
+	available, distros := probeWSLAvailable()
+
+	wslCache.mu.Lock()
+	wslCache.at = time.Now()
+	wslCache.available = available
+	wslCache.distros = append([]string(nil), distros...)
+	wslCache.mu.Unlock()
+
+	return available, distros
+}
+
+// probeWSLAvailable faz a consulta real (sem cache).
+func probeWSLAvailable() (available bool, distros []string) {
 	// Verifica se wsl.exe existe
 	if _, err := exec.LookPath("wsl.exe"); err != nil {
 		return false, nil
 	}
 
-	// Tenta listar distribuições: wsl.exe -l -q
-	cmd := exec.Command("wsl.exe", "-l", "-q")
-	out, err := cmd.Output()
+	// Tenta listar distribuições: wsl.exe -l -q (com timeout).
+	ctx, cancel := context.WithTimeout(context.Background(), wslProbeTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "wsl.exe", "-l", "-q").Output()
 	if err != nil {
 		return false, nil
 	}

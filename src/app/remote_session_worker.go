@@ -32,6 +32,7 @@ import (
 	"discovery/app/core/platform"
 	"discovery/app/core/remotesession"
 	"discovery/app/core/screen"
+	"discovery/app/core/terminal"
 	"discovery/app/netutil"
 )
 
@@ -56,6 +57,16 @@ func RunRemoteSessionWorker() {
 	sessionID, _ := cmd["sessionId"].(string)
 	fmt.Fprintf(os.Stderr, "[remote-session-worker] iniciando sessão %s\n", sessionID)
 
+	// Hint de saúde do ConPTY vindo do serviço (ver core/terminal/health.go):
+	// quando o AV/EDR acabou de matar a escada inteira, o terminal desta sessão
+	// nasce direto em legacy em vez de repetir ~1,5 s de tentativas.
+	if raw, ok := cmd["conptyBlockedUntil"].(string); ok {
+		if t, perr := time.Parse(time.RFC3339, strings.TrimSpace(raw)); perr == nil {
+			terminal.SetConptyBlockedUntil(t)
+			fmt.Fprintf(os.Stderr, "[remote-session-worker] hint: ConPTY bloqueado até %s\n", t.UTC().Format(time.RFC3339))
+		}
+	}
+
 	// DPI awareness: o worker pode rodar em contexto sem manifest PerMonitorV2
 	// (binário antigo/spawn alternativo). Sem awareness, com escala 125%/150%
 	// o Windows virtualiza GetSystemMetrics/GetCursorPos (lógico) enquanto os
@@ -74,9 +85,11 @@ func RunRemoteSessionWorker() {
 	// torna o problema diagnosticável no agent-service.log com um grep.
 	fmt.Fprintf(os.Stderr, "[remote-session-worker] contexto de privilégio: %s\n", platform.ElevationReport())
 
-	// ── Config (mesma leitura do config de produção do agente) ──
-	cfg := loadWorkerDebugConfig()
-	agentCfg := loadWorkerAgentConfig()
+	// ── Config (mesma leitura do config de produção do agente + overrides do payload) ──
+	// O serviço injeta endpoints/identidade VIVOS no payload; arquivos ficam como
+	// fallback (mesma classe de bug do token velho de 2026-09-20).
+	cfg := mergeWorkerDebugConfigFromPayload(loadWorkerDebugConfig(), cmd)
+	agentCfg := mergeWorkerAgentConfigFromPayload(loadWorkerAgentConfig(), cmd)
 
 	agentID := trimSpace(cfg.AgentID)
 	clientID := trimSpace(agentCfg.ClientID)
@@ -149,6 +162,13 @@ func RunRemoteSessionWorker() {
 			}
 			var cmd map[string]any
 			if json.Unmarshal([]byte(line), &cmd) == nil {
+				// Hint de saúde do ConPTY pode chegar em COMANDOS framed seguintes
+				// (worker morno reusado pelo serviço com payload novo).
+				if raw, ok := cmd["conptyBlockedUntil"].(string); ok {
+					if t, perr := time.Parse(time.RFC3339, strings.TrimSpace(raw)); perr == nil {
+						terminal.SetConptyBlockedUntil(t)
+					}
+				}
 				if act, _ := cmd["action"].(string); act == "stop" {
 					// Fecha a sessao pelo manager ANTES de sair: closeSessionLocked
 					// publica o frame "closed" no .control e o viewer mostra o
@@ -195,17 +215,42 @@ func RunRemoteSessionWorker() {
 	//   3. TODAS as sessões do manager fecharam (expiração, viewer fechou,
 	//      terminal exit) — sem isso o worker ficaria vivo para sempre como
 	//      processo órfão na sessão do usuário.
+	// Fase 4 (2026-10-27) — worker morno: quando a última sessão encerra, o
+	// worker fica "warm-idle" por LINGER aguardando um novo start via stdin
+	// (o monitor de stdin já encaminha comandos framed ao manager). Expirado o
+	// linger sem sessão, encerra. DISCOVERY_RS_WORKER_LINGER=0 desliga
+	// (comportamento antigo: exit ~0,5s após a última sessão).
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	linger := workerLingerDuration()
+	idleSince := time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
 		case <-ticker.C:
 			if mgr.CountActive() == 0 {
-				fmt.Fprintf(os.Stderr, "[remote-session-worker] nenhuma sessão ativa — encerrando\n")
-			}
-			if mgr.CountActive() == 0 {
-				cancel()
+				if idleSince.IsZero() {
+					idleSince = time.Now()
+					if linger > 0 {
+						fmt.Fprintf(os.Stderr, "[remote-session-worker] warm-idle (linger %s)\n", linger)
+					}
+				}
+				if time.Since(idleSince) >= linger {
+					// Janela de corrida (revisão 2026-10-27): um start pode ter
+					// chegado no stdin e ainda NÃO estar registrado pelo monitor
+					// (goroutine separada). Espera curta e re-checa antes de
+					// cancelar — sem isso o worker podia matar a sessão nova
+					// no mesmo tick em que ela chegava.
+					time.Sleep(250 * time.Millisecond)
+					if mgr.CountActive() == 0 {
+						fmt.Fprintf(os.Stderr, "[remote-session-worker] nenhuma sessão ativa — encerrando\n")
+						cancel()
+					} else {
+						idleSince = time.Time{}
+					}
+				}
+			} else {
+				idleSince = time.Time{}
 			}
 		}
 		if ctx.Err() != nil {
@@ -302,6 +347,10 @@ func readStopOrCommandLine(br *bufio.Reader) (string, error) {
 // (drenado pelo serviço para o agent-service.log).
 func connectWorkerNATS(cfg WorkerDebugConfig, agentID, token string) (*nats.Conn, error) {
 	var candidates []string
+	// Transporte já funcionando no core (injetado pelo serviço): primeiro no race.
+	if cur := trimSpace(cfg.NatsCurrentURL); cur != "" {
+		candidates = append(candidates, cur)
+	}
 	if wss := trimSpace(cfg.NatsWsServer); wss != "" {
 		candidates = append(candidates, wss)
 	}
@@ -322,7 +371,12 @@ func connectWorkerNATS(cfg WorkerDebugConfig, agentID, token string) (*nats.Conn
 	}
 	const (
 		nativeDialTimeout = 3 * time.Second // nativo: failover rápido ao wss (dial dropado trava)
-		wsDialTimeout     = 8 * time.Second // ws/wss: TLS + handshake do proxy
+		// ws/wss: TLS + handshake do proxy. 2026-10-27: 3s (era 8s) porque os
+		// candidatos agora são discados EM PARALELO; um WSS quebrado não pode
+		// segurar a sessão por 8s antes de o nativo ser tentado.
+		wsDialTimeout = 3 * time.Second
+		// workerDialTotalTimeout é o teto do race completo (não da tentativa).
+		workerDialTotalTimeout = 4 * time.Second
 	)
 	var attempts []attempt
 	seen := map[string]struct{}{}
@@ -346,27 +400,65 @@ func connectWorkerNATS(cfg WorkerDebugConfig, agentID, token string) (*nats.Conn
 		return nil, fmt.Errorf("nenhum endpoint NATS configurado")
 	}
 
-	var lastErr error
+	// Race de endpoints ("happy eyeballs"): WSS e nativo são discados em
+	// paralelo e o primeiro que autenticar vence. Antes, um WSS quebrado
+	// consumia 8s ANTES de tentar o nativo (latência de abertura do terminal
+	// em redes onde a 443 não serve /nats/).
+	type dialResult struct {
+		nc  *nats.Conn
+		url string
+		err error
+	}
+	results := make(chan dialResult, len(attempts))
 	for _, a := range attempts {
-		fmt.Fprintf(os.Stderr, "[remote-session-worker] tentando NATS %s (timeout %s)\n", a.url, a.timeout)
-		opts := []nats.Option{
-			nats.Name("discovery-rs-worker-" + agentID),
-			nats.Token(token),
-			nats.Timeout(a.timeout),
-			nats.ReconnectWait(10 * time.Second),
-			nats.MaxReconnects(-1),
+		go func(a attempt) {
+			fmt.Fprintf(os.Stderr, "[remote-session-worker] tentando NATS %s (timeout %s, race)\n", a.url, a.timeout)
+			opts := []nats.Option{
+				nats.Name("discovery-rs-worker-" + agentID),
+				nats.Token(token),
+				nats.Timeout(a.timeout),
+				nats.ReconnectWait(10 * time.Second),
+				nats.MaxReconnects(-1),
+			}
+			if a.proxyPath != "" {
+				opts = append(opts, nats.ProxyPath(a.proxyPath))
+			}
+			nc, err := nats.Connect(a.url, opts...)
+			results <- dialResult{nc: nc, url: a.url, err: err}
+		}(a)
+	}
+
+	// closeLateResults fecha conexões que vencerem DEPOIS de já termos devolvido
+	// uma (ou depois do timeout) — sem isso, o race vazaria conexões NATS.
+	closeLateResults := func(rest int) {
+		go func() {
+			for ; rest > 0; rest-- {
+				if extra := <-results; extra.nc != nil {
+					extra.nc.Close()
+				}
+			}
+		}()
+	}
+
+	deadline := time.After(workerDialTotalTimeout)
+	var lastErr error
+	for remaining := len(attempts); remaining > 0; remaining-- {
+		select {
+		case res := <-results:
+			if res.err == nil {
+				closeLateResults(remaining - 1)
+				fmt.Fprintf(os.Stderr, "[remote-session-worker] nats conectado: %s (race)\n", res.url)
+				return res.nc, nil
+			}
+			lastErr = res.err
+			fmt.Fprintf(os.Stderr, "[remote-session-worker] NATS falhou (%s): %v\n", res.url, res.err)
+		case <-deadline:
+			closeLateResults(remaining)
+			if lastErr != nil {
+				return nil, fmt.Errorf("nenhum endpoint NATS disponível em %s: %w", workerDialTotalTimeout, lastErr)
+			}
+			return nil, fmt.Errorf("nenhum endpoint NATS disponível em %s", workerDialTotalTimeout)
 		}
-		if a.proxyPath != "" {
-			opts = append(opts, nats.ProxyPath(a.proxyPath))
-		}
-		nc, err := nats.Connect(a.url, opts...)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[remote-session-worker] NATS falhou (%s): %v\n", a.url, err)
-			lastErr = err
-			continue
-		}
-		fmt.Fprintf(os.Stderr, "[remote-session-worker] nats conectado: %s\n", a.url)
-		return nc, nil
 	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("nenhum endpoint NATS disponível: %w", lastErr)
@@ -378,6 +470,23 @@ func connectWorkerNATS(cfg WorkerDebugConfig, agentID, token string) (*nats.Conn
 // espaço/tab — payloads JSON podem conter \r\n residual).
 func trimSpace(s string) string {
 	return strings.TrimSpace(s)
+}
+
+// workerLingerDuration lê DISCOVERY_RS_WORKER_LINGER (Fase 4 — worker morno).
+// Default 30s; "0"/"false"/"off" desliga (exit imediato após a última sessão,
+// comportamento anterior). Valores inválidos caem no default.
+func workerLingerDuration() time.Duration {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("DISCOVERY_RS_WORKER_LINGER")))
+	switch raw {
+	case "0", "false", "no", "off":
+		return 0
+	case "":
+		return 30 * time.Second
+	}
+	if d, err := time.ParseDuration(raw); err == nil && d >= 0 {
+		return d
+	}
+	return 30 * time.Second
 }
 
 // loadWorkerDebugConfig / loadWorkerAgentConfig: bridges para as mesmas
@@ -406,8 +515,11 @@ type WorkerDebugConfig struct {
 	ApiServer    string
 	NatsServer   string
 	NatsWsServer string
-	AuthToken    string
-	AgentID      string
+	// NatsCurrentURL: URL NATS em uso pelo core no momento do spawn (injetada
+	// pelo serviço). Vai como PRIMEIRO candidato no race de dial.
+	NatsCurrentURL string
+	AuthToken      string
+	AgentID        string
 }
 
 type WorkerAgentConfig struct {
