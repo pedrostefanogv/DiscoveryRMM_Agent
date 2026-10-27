@@ -1490,9 +1490,11 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 			return
 		case <-time.After(10 * time.Second):
 		}
+		seqMu.Lock()
+		currentSeq := seq
+		seqMu.Unlock()
 		st.mu.RLock()
 		sameGen := st.consoleGen == watchGen
-		currentSeq := seq
 		st.mu.RUnlock()
 		if !sameGen || currentSeq > 0 {
 			return // console substituído ou já houve saída — nada a fazer

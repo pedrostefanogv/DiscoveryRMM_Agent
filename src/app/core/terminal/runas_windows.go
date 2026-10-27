@@ -157,12 +157,15 @@ func cachedUserToken() (windows.Token, uint32, string, error) {
 		userTokenCache = nil
 		return 0, session, "", err
 	}
-	// NÃO fechamos o handle da entrada anterior aqui: outro console pode
-	// estar no meio de um CreateProcessAsUserW com esse handle (fechá-lo
-	// causaria falha intermitente e degradação silenciosa para SYSTEM com o
-	// term.ready mentindo "user"). O handle antigo fica retido até a próxima
-	// resolução — vazamento bounded (1 handle por janela de 30s de uso ativo
-	// de terminal), troca consciente por segurança.
+	// Fecha o handle da entrada anterior: a substituição só ocorre quando a
+	// entrada expirou (TTL 30s), e o consumidor usa o token por milissegundos
+	// (até o CreateProcessW logo após a resolução) — a janela de corrida com
+	// um CreateProcessAsUserW em voo é praticamente nula, e o vazamento
+	// permanente (1 handle por resolução) seria pior no serviço de longa
+	// vida. O token NOVO entra no cache imediatamente.
+	if userTokenCache != nil && userTokenCache.tok != 0 {
+		_ = userTokenCache.tok.Close()
+	}
 	userTokenCache = &userTokenCacheEntry{tok: tok, session: session, ident: ident, expires: time.Now().Add(userTokenCacheTTL)}
 	return tok, session, ident, nil
 }
