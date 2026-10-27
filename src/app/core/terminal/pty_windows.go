@@ -99,6 +99,13 @@ func NewShellWithToken(shell string, onOutput func(string), tok windows.Token) (
 		}
 	}
 
+	// Diretório inicial (pedido 2026-10-27): runAs=user → perfil do usuário;
+	// SYSTEM → mantém o cwd herdado (system32). Falha mantém o cwd.
+	if dir := resolveShellStartDir(tok); dir != "" {
+		cmd.Dir = dir
+		stdLog("[terminal] shell legacy inicia em %s", dir)
+	}
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("stdin pipe: %w", err)

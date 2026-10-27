@@ -29,14 +29,14 @@ var stdLog = log.Printf
 // não conflita com o job do processo do agente (quando houver).
 
 const (
-	jobObjectExtendedLimitInformation = 9       // JobObjectInformationClass
+	jobObjectExtendedLimitInformation = 9      // JobObjectInformationClass
 	jobObjectLimitKillOnJobClose      = 0x2000 // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 )
 
 var (
-	procCreateJobObjectW          = kernel32.NewProc("CreateJobObjectW")
-	procSetInformationJobObject   = kernel32.NewProc("SetInformationJobObject")
-	procAssignProcessToJobObject  = kernel32.NewProc("AssignProcessToJobObject")
+	procCreateJobObjectW         = kernel32.NewProc("CreateJobObjectW")
+	procSetInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
+	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
 )
 
 // jobBasicLimitInformation espelha JOBOBJECT_BASIC_LIMIT_INFORMATION (x64).
@@ -74,12 +74,12 @@ type ioCounters struct {
 
 // jobExtendedLimitInformation espelha JOBOBJECT_EXTENDED_LIMIT_INFORMATION.
 type jobExtendedLimitInformation struct {
-	BasicLimitInformation  jobBasicLimitInformation
-	IoInfo                 ioCounters
-	ProcessMemoryLimit     uintptr
-	JobMemoryLimit         uintptr
-	PeakProcessMemoryUsed  uintptr
-	PeakJobMemoryUsed      uintptr
+	BasicLimitInformation jobBasicLimitInformation
+	IoInfo                ioCounters
+	ProcessMemoryLimit    uintptr
+	JobMemoryLimit        uintptr
+	PeakProcessMemoryUsed uintptr
+	PeakJobMemoryUsed     uintptr
 }
 
 // jobObject é o handle do job com kill-on-close. nil-safe em todos os

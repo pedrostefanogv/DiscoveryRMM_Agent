@@ -132,8 +132,16 @@ func NewConPTYShellRunAs(shell ShellKind, cols, rows int, onOutput func(string),
 	// Job Object: filhos do shell morrem junto com o Close (KILL_ON_JOB_CLOSE).
 	job := newKillOnCloseJob()
 
+	// Diretório inicial (pedido 2026-10-27): runAs=user → perfil do usuário;
+	// SYSTEM → mantém system32. Falha do perfil mantém o cwd herdado.
+	var startDirPtr *uint16
+	if dir := resolveShellStartDir(ra.tok); dir != "" {
+		startDirPtr = windows.StringToUTF16Ptr(dir)
+		stdLog("[terminal] shell inicia em %s (requested=%s)", dir, string(runAs))
+	}
+
 	var pi procInfo
-	err = createProcessConPTY(cmdLine, hpc, &pi, ra.tok, envBlock)
+	err = createProcessConPTY(cmdLine, hpc, &pi, ra.tok, envBlock, startDirPtr)
 	if envBlock != nil {
 		// O bloco não é mais necessário após a chamada.
 		destroyEnvironmentBlock(envBlock)
@@ -305,7 +313,7 @@ type procInfo struct {
 	ProcessId uint32
 }
 
-func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo, tok windows.Token, env unsafe.Pointer) error {
+func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo, tok windows.Token, env unsafe.Pointer, currentDir *uint16) error {
 	si := &startupInfoEx{}
 
 	// cb deve ser o tamanho de STARTUPINFOEXW (STARTUPINFOW + lpAttributeList),
@@ -367,7 +375,7 @@ func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo, tok windows.T
 		nil, nil,
 		false,
 		extendedStartupinfoPresent|syscall.CREATE_UNICODE_ENVIRONMENT,
-		envPtr, nil,
+		envPtr, currentDir,
 		si,
 		&piNative,
 	)

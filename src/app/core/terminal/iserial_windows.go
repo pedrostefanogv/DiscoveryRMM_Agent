@@ -141,12 +141,22 @@ func NewShellInteractiveRunAs(shell ShellKind, cols, rows int, onOutput func(str
 	}
 
 	// Hint de saúde vindo do serviço (payload do worker): a máquina acabou de
-	// falhar a escada INTEIRA por injeção de DLL. Abrir legacy direto evita
-	// repetir ~1,5 s de tentativas a cada abertura. Só vale no modo AUTO: o
-	// upgrade forçado (DISCOVERY_TERM_BACKEND=conpty) precisa tentar de verdade.
+	// falhar a escada INTEIRA por injeção de DLL. 2026-10-27 (2ª rodada): em vez
+	// de abrir legacy DIRETO, faz UMA sonda rápida de ConPTY (morte prematura é
+	// detectada em ~20-40ms) — o bloqueio do AV é INTERMITENTE e quando ele já
+	// levantou o shell nasce direto em VT, sem o banner de compatibilidade.
+	// Falhou a sonda → legacy imediato (sem dispatcher, que já falhou junto).
+	// Só vale no modo AUTO: o upgrade forçado (DISCOVERY_TERM_BACKEND=conpty)
+	// precisa tentar de verdade.
 	if policy == BackendAuto && ConptyBlocked() {
-		log.Printf("[terminal] hint: ConPTY bloqueado até %s — iniciando legacy direto",
+		log.Printf("[terminal] hint: ConPTY bloqueado até %s — sonda única antes do legacy",
 			ConptyBlockedUntil().UTC().Format(time.RFC3339))
+		if s, err := tryConPTYAttempts(shell, cols, rows, onOutput, runAs, 0); err == nil {
+			// Bloqueio levantou: ConPTY saudável, hint limpo, VT desde o início.
+			return s, shellEffectiveRunAs(s, runAs), nil
+		}
+		MarkConptyBlocked("0xC0000142 (probe)")
+		log.Printf("[terminal] hint: sonda ConPTY morreu — iniciando legacy (upgrade automático em ~3s)")
 		s, err := NewLegacyShellRunAs(shell, cols, rows, onOutput, runAs)
 		return s, EffectiveRunAs(runAs), err
 	}
@@ -225,9 +235,16 @@ func NewShellInteractiveRunAs(shell ShellKind, cols, rows int, onOutput func(str
 // recorrente do CreateProcessAsUserW (token rejeitado pelo host, ex.: política
 // corporativa) degrada para a identidade herdada nas tentativas seguintes.
 func tryConPTY(shell ShellKind, cols, rows int, onOutput func(string), runAs RunAs) (IShell, error) {
+	return tryConPTYAttempts(shell, cols, rows, onOutput, runAs, conptyMaxRetries)
+}
+
+// tryConPTYAttempts é a versão parametrizável do teto de tentativas:
+// maxRetries=conptyMaxRetries na escada normal; 0 na sonda única do hint
+// (uma tentativa — a morte prematura é detectada em ~20-40ms).
+func tryConPTYAttempts(shell ShellKind, cols, rows int, onOutput func(string), runAs RunAs, maxRetries int) (IShell, error) {
 	var lastErr error
 	effRunAs := runAs
-	for attempt := 0; attempt <= conptyMaxRetries; attempt++ {
+	for attempt := 0; attempt <= maxRetries; attempt++ {
 		firstOutput := &atomic.Bool{}
 		s, err := NewConPTYShellRunAs(shell, cols, rows, func(out string) {
 			firstOutput.Store(true)
@@ -239,7 +256,7 @@ func tryConPTY(shell ShellKind, cols, rows int, onOutput func(string), runAs Run
 				log.Printf("[terminal] spawn run-as=user rejeitado (%v); tentando novamente com identidade herdada", err)
 				effRunAs = RunAsInherit
 			}
-			log.Printf("[terminal] ConPTY falhou no spawn (tentativa %d/%d): %v", attempt+1, conptyMaxRetries+1, err)
+			log.Printf("[terminal] ConPTY falhou no spawn (tentativa %d/%d): %v", attempt+1, maxRetries+1, err)
 		} else if probeForEarlyDeath(s, conptyProbeTimeout, firstOutput) {
 			lastErr = fmt.Errorf("ConPTY morreu prematuramente no startup")
 			// Exit code do filho: 0xC0000142 (DLL injection de AV) vs outros
@@ -247,17 +264,17 @@ func tryConPTY(shell ShellKind, cols, rows int, onOutput func(string), runAs Run
 			// Wait() só chega depois, se chegar).
 			if code, ok := processExitCode(s); ok {
 				log.Printf("[terminal] ConPTY morreu prematuramente (tentativa %d/%d) exitCode=0x%08X; %s",
-					attempt+1, conptyMaxRetries+1, uint32(code), retryLabel(attempt))
+					attempt+1, maxRetries+1, uint32(code), retryLabel(attempt, maxRetries))
 			} else {
 				log.Printf("[terminal] ConPTY morreu prematuramente (tentativa %d/%d); %s",
-					attempt+1, conptyMaxRetries+1, retryLabel(attempt))
+					attempt+1, maxRetries+1, retryLabel(attempt, maxRetries))
 			}
 			_ = s.Close()
 		} else {
 			MarkConptyHealthy()
 			return s, nil
 		}
-		if attempt < conptyMaxRetries {
+		if attempt < maxRetries {
 			// Backoff progressivo (150ms → até 1s): martelar spawns com 150ms
 			// fixos aciona regras comportamentais de AV/EDR (diagnóstico
 			// 2026-10-26: 13 spawns em ~3s → 0xC0000142 em 100% das tentativas;
@@ -383,8 +400,8 @@ func probeForEarlyDeath(s IShell, timeout time.Duration, firstOutput *atomic.Boo
 }
 
 // retryLabel devolve o texto de reação para o log conforme a tentativa restante.
-func retryLabel(attempt int) string {
-	if attempt < conptyMaxRetries {
+func retryLabel(attempt, maxRetries int) string {
+	if attempt < maxRetries {
 		return "tentando novamente"
 	}
 	return "esgotadas as tentativas"
@@ -451,9 +468,10 @@ func NewLegacyShellRunAs(shell ShellKind, cols, rows int, onOutput func(string),
 	// Banner sintético no stream: no legacy o stdout do shell é um PIPE e o
 	// cmd/powershell NÃO imprime banner/prompt por ele (o banner vai para o
 	// console real oculto). Sem o aviso o viewer ficaria em tela vazia.
-	onOutput("\r\n\x1b[33mconsole real (modo compatibilidade): ConPTY indisponivel nesta maquina ou liberado por configuracao.\r\n" +
-		"Stdin em pipe: setas, TAB, Home/End/Delete e Ctrl+C NAO funcionam no shell.\r\n" +
-		"Edicao local no viewer: historico, Backspace, Home/End/Delete, clear/cls e Ctrl+L.\x1b[0m\r\n\r\n")
+	onOutput("\r\n\x1b[33mconsole real (modo compatibilidade TEMPORARIO): o antivirus bloqueou o ConPTY nesta maquina.\r\n" +
+		"O console tenta o modo nativo (VT completo) automaticamente em ~3s.\r\n" +
+		"Enquanto isso: setas, TAB, Home/End/Delete e Ctrl+C NAO funcionam no shell;\r\n" +
+		"edicao local no viewer (historico, Backspace, Home/End/Delete, clear/cls e Ctrl+L).\x1b[0m\r\n\r\n")
 	return s, nil
 }
 

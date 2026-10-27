@@ -75,8 +75,8 @@ func TestMatchVTSequence(t *testing.T) {
 		{"\x1b[D", cbVKLeft, true},
 		{"\x1b[H", cbVKHome, true},
 		{"\x1b[3~", cbVKDelete, true},
-		{"\x1b[Z", 0, false},          // não suportada → ESC puro
-		{"\x1b", 0, false},            // ESC solto
+		{"\x1b[Z", 0, false}, // não suportada → ESC puro
+		{"\x1b", 0, false},   // ESC solto
 	}
 	for _, c := range cases {
 		runes := []rune(c.seq)

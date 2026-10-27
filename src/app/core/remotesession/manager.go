@@ -1249,12 +1249,14 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 	// do StartRunAs) e o operador recupera VT completo sem reabrir.
 	if backend == "legacy" {
 		go func() {
-			// 2026-10-27: primeira tentativa em 15s (não 60s) — se o bloqueio do
-			// AV/EDR levantar rápido, o operador recupera VT cedo; depois mantém
-			// 60s. Máximo de 5 tentativas (era 10): rajada longa de spawns
-			// reativa o bloqueio comportamental do AV sem ganho.
+			// 2026-10-27 (2ª rodada): primeira tentativa em 3s (era 15s) — o
+			// bloqueio do AV/EDR é INTERMITENTE (rajadas) e um spawn ÚNICO não
+			// reativa o bloqueio comportamental; com isso o operador passa no
+			// modo compatibilidade ~3s em vez de ~15s. Depois mantém 60s.
+			// Máximo de 5 tentativas (era 10): rajada longa de spawns reativa
+			// o bloqueio comportamental do AV sem ganho.
 			const (
-				firstUpgradeDelay  = 15 * time.Second
+				firstUpgradeDelay  = 3 * time.Second
 				upgradeInterval    = 60 * time.Second
 				maxUpgradeAttempts = 5
 			)

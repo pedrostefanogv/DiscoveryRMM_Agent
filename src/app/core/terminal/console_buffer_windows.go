@@ -302,6 +302,12 @@ func (s *ConsoleBufferShell) spawnShell() error {
 		HideWindow:    true,
 		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP,
 	}
+	// Diretório inicial (pedido 2026-10-27): o worker/console-buffer roda como
+	// o usuário → perfil do usuário (tok=0 + processo não-SYSTEM resolve pelo
+	// token do próprio processo).
+	if dir := resolveShellStartDir(0); dir != "" {
+		cmd.Dir = dir
+	}
 	cmd.Stdin = s.coninFile
 	cmd.Stdout = s.conoutFile
 	cmd.Stderr = s.conoutFile
