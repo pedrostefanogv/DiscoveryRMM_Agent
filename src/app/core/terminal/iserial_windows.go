@@ -162,6 +162,22 @@ func NewShellInteractiveRunAs(shell ShellKind, cols, rows int, onOutput func(str
 		s, err := NewLegacyShellRunAs(shell, cols, rows, onOutput, runAs)
 		return s, EffectiveRunAs(runAs), err
 	}
+
+	// ── Fallback automático: console real quando o ConPTY morre por injeção ──
+	// Padrão medido em campo (2026-10-26, Kaspersky klhk): TODAS as tentativas
+	// ConPTY (in-process e dispatcher) morrem com 0xC0000142 no boot do filho,
+	// enquanto o spawn legacy (CREATE_NEW_CONSOLE + pipes) sobrevive — a
+	// injeção de DLL do AV mata especificamente os filhos do pseudoconsole.
+	// Nesse cenário, um terminal degradado (sem VT: sem setas/TAB/histórico,
+	// com edição local no viewer) é infinitamente melhor que um terminal
+	// morto: degrada AUTOMATICAMENTE e o banner do legacy avisa o operador.
+	// DISCOVERY_TERM_NO_AUTO_LEGACY=1 desliga este fallback.
+	if allConPTYInjectionFailures(failures) && !envFlagOn("DISCOVERY_TERM_NO_AUTO_LEGACY") {
+		log.Printf("[terminal] ConPTY morto por injecao de DLL (0xC0000142) em todas as tentativas — degradando automaticamente para o console real: %s", detail)
+		s, err := NewLegacyShellRunAs(shell, cols, rows, onOutput, runAs)
+		return s, EffectiveRunAs(runAs), err
+	}
+
 	// A dica da variável de ambiente fica no LOG (diagnóstico), não na mensagem
 	// que chega ao operador no banner do terminal.
 	log.Printf("[terminal] ConPTY indisponivel na pratica (%s); para forcar o console real (pipes, sem VT) use DISCOVERY_TERM_ALLOW_LEGACY=1", detail)
@@ -241,6 +257,37 @@ func tryDispatcher(shell ShellKind, cols, rows int, onOutput func(string), runAs
 	}
 	log.Printf("[terminal] usando dispatcher (ConPTY remoto isolado)")
 	return ds, nil
+}
+
+// allConPTYInjectionFailures reporta se TODAS as causas acumuladas na escada
+// indicam morte prematura por injeção de DLL (0xC0000142) — o padrão do
+// bloqueio de AV/EDR (ex.: Kaspersky klhk) sobre os filhos do ConPTY.
+func allConPTYInjectionFailures(failures []string) bool {
+	if len(failures) == 0 {
+		return false
+	}
+	for _, f := range failures {
+		// Padrões de morte por bloqueio de AV/EDR:
+		//   - "morreu prematuramente": filho do ConPTY morto (0xC0000142) ou
+		//     o processo dispatcher morreu antes da sonda passar;
+		//   - "não conectou aos pipes": o dispatcher morreu/foi morto durante
+		//     as tentativas internas, sem terminar o Accept dos pipes
+		//     (validado em campo 2026-10-26 — mesmo bloqueio).
+		if !strings.Contains(f, "morreu prematuramente") &&
+			!strings.Contains(f, "não conectou aos pipes") {
+			return false
+		}
+	}
+	return true
+}
+
+// envFlagOn lê um flag booleano de ambiente (1/true/yes/on).
+func envFlagOn(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // processExitCode devolve o exit code corrente do processo do shell

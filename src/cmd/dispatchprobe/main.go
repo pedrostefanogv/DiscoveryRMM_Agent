@@ -15,7 +15,10 @@ import (
 )
 
 func main() {
-	exe := `C:\Projetos\RMM_Discovery\Discovery\src\bin\discovery-agent.exe`
+	exe := `C:\Program Files\Discovery\discovery-agent.exe`
+	if len(os.Args) > 1 {
+		exe = os.Args[1]
+	}
 	session := strings.ReplaceAll(uuid.NewString(), "-", "")
 	inPipe := fmt.Sprintf(`\\.\pipe\discovery-term-%s-in`, session)
 	outPipe := fmt.Sprintf(`\\.\pipe\discovery-term-%s-out`, session)
