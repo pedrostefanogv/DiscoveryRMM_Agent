@@ -31,7 +31,19 @@ import (
 var (
 	injectSendSAS         = screen.SendSAS
 	injectLockWorkstation = screen.LockWorkstation
+
+	// sasRequestDelegate, quando registrado (modo worker), delega a geração da
+	// SAS ao SERVIÇO (LocalSystem, sessão 0) via stdin/stderr — o único caminho
+	// com entrega garantida ao winlogon. A experiência de campo (27/10/2026,
+	// Windows Server 2025 em VM) mostrou o SendSAS retornando TRUE dentro do
+	// worker (SYSTEM na sessão interativa) SEM efeito na tela de bloqueio:
+	// com AsUser=FALSE fora da sessão 0 a chamada é aceita e não entregue.
+	sasRequestDelegate func() error
 )
+
+// SetSASRequester registra o delegado de SAS do modo worker (nil volta ao
+// SendSAS local — usado pelos testes).
+func SetSASRequester(fn func() error) { sasRequestDelegate = fn }
 
 // Métodos de injeção de uma combinação (também ecoados ao viewer no feedback).
 const (
@@ -162,7 +174,11 @@ func InjectSpecialKey(raw string) (string, error) {
 
 	switch inj.Method {
 	case comboMethodSAS:
-		if err := injectSendSAS(); err != nil {
+		inject := injectSendSAS
+		if sasRequestDelegate != nil {
+			inject = sasRequestDelegate
+		}
+		if err := inject(); err != nil {
 			return inj.Method, err
 		}
 		return inj.Method, nil

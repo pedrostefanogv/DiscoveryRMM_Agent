@@ -4,6 +4,8 @@ package screen
 
 import (
 	"fmt"
+	"log"
+	"os"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -78,6 +80,10 @@ func SendSAS() error {
 	for _, asUser := range []uintptr{0, 1} {
 		ret, _, callErr := procSendSAS.Call(asUser)
 		if ret != 0 {
+			// Loga o modo aceito: FALSE exige serviço na sessão 0; TRUE exige
+			// SoftwareSASGeneration 2/3. Necessário para diagnosticar em campo
+			// chamadas aceitas SEM entrega (worker na sessão interativa).
+			log.Printf("[sas] SendSAS aceito (AsUser=%t, caller=%s)", asUser != 0, os.Args[0])
 			return nil
 		}
 		lastErr = callErr

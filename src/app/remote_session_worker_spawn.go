@@ -682,6 +682,12 @@ func (w *remoteSessionWorkerProc) drainStderr(stderr *os.File) {
 		}
 		log.Printf("[remote-session-worker] %s", line)
 		noteTerminalHealthLine(line)
+		// Delegação de SAS (Ctrl+Alt+Del): o worker (sessão interativa) pede
+		// que o serviço (LocalSystem, sessão 0) gere a SAS — único caminho com
+		// entrega garantida ao winlogon (ver remote_session_worker_sas.go).
+		if id, ok := parseSASRequestLine(line); ok {
+			handleWorkerSASRequest(w, id)
+		}
 		// Fase 4: worker entrou em linger (sem sessões ativas) → pool morno.
 		if strings.Contains(line, "warm-idle") {
 			addWarmRemoteSessionWorker(w)
@@ -708,6 +714,11 @@ func (w *remoteSessionWorkerProc) drainStderr(stderr *os.File) {
 	_ = stderr.Close()
 }
 
+// remoteSessionStdinMu serializa escritas no stdin do worker: stop, comandos
+// de runtime e respostas de delegação de SAS vêm de goroutines distintas e o
+// pipe é framed (uma escrita interpolada corrompe o quadro do outro).
+var remoteSessionStdinMu sync.Mutex
+
 // writeWorkerPayload envia um comando framed ao stdin do worker.
 func writeWorkerPayload(w *remoteSessionWorkerProc, payload map[string]any) error {
 	data, err := json.Marshal(payload)
@@ -717,6 +728,8 @@ func writeWorkerPayload(w *remoteSessionWorkerProc, payload map[string]any) erro
 	buf := make([]byte, 4+len(data))
 	binary.BigEndian.PutUint32(buf[0:4], uint32(len(data)))
 	copy(buf[4:], data)
+	remoteSessionStdinMu.Lock()
+	defer remoteSessionStdinMu.Unlock()
 	_, err = w.stdin.Write(buf)
 	return err
 }

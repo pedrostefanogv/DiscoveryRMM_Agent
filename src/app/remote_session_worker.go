@@ -57,6 +57,10 @@ func RunRemoteSessionWorker() {
 	sessionID, _ := cmd["sessionId"].(string)
 	fmt.Fprintf(os.Stderr, "[remote-session-worker] iniciando sessão %s\n", sessionID)
 
+	// SAS (Ctrl+Alt+Del) delegada ao serviço (LocalSystem/sessão 0) — único
+	// caminho com entrega garantida ao winlogon. Ver remote_session_worker_sas.go.
+	installServiceSASDelegate()
+
 	// Hint de saúde do ConPTY vindo do serviço (ver core/terminal/health.go):
 	// quando o AV/EDR acabou de matar a escada inteira, o terminal desta sessão
 	// nasce direto em legacy em vez de repetir ~1,5 s de tentativas.
@@ -162,6 +166,11 @@ func RunRemoteSessionWorker() {
 			}
 			var cmd map[string]any
 			if json.Unmarshal([]byte(line), &cmd) == nil {
+				// Resposta do serviço à delegação de SAS (sas-request) — nunca
+				// vai ao manager (ver remote_session_worker_sas.go).
+				if handleSASResultCommand(cmd) {
+					continue
+				}
 				// Hint de saúde do ConPTY pode chegar em COMANDOS framed seguintes
 				// (worker morno reusado pelo serviço com payload novo).
 				if raw, ok := cmd["conptyBlockedUntil"].(string); ok {
