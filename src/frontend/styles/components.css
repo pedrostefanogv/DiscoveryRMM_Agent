@@ -783,6 +783,12 @@
   align-items: center;
 }
 
+/* Botão "Já instalado" desabilitado: sem pointer-events para que o clique
+   caia no card e abra o modal de detalhes (botões disabled engolem o click). */
+.store-card .card-actions button:disabled {
+  pointer-events: none;
+}
+
 .store-card .card-info {
   font-size: 0.75rem;
   color: var(--muted);
