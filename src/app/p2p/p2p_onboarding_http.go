@@ -1,15 +1,22 @@
 package p2p
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// onboardingDeployKeyTTL é o TTL padrão da chave de deploy na oferta de onboarding.
-const onboardingDeployKeyTTL = 30 * time.Minute
+// onboardingDeployKeyTTL é o TTL padrão (e o TETO) da chave de deploy na oferta
+// de onboarding. Alinhado a DeployTokenService.ZeroTouchTokenTtl (10 min) no
+// servidor: anunciar mais validade que o token real fazia o agente falhar no
+// registro com 401/403.
+const onboardingDeployKeyTTL = 10 * time.Minute
 
 // ── Handlers HTTP para /p2p/config/onboard ───────────────────────────────────
 
@@ -32,20 +39,53 @@ func (s *TransferServer) handleP2POnboard(w http.ResponseWriter, r *http.Request
 // provisionamento assinada. Requer que este agente esteja configurado e que a
 // feature DiscoveryEnabled esteja ativa na configuração do servidor.
 func (s *TransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Request) {
-	if s.deps == nil {
-		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	// Mesmo limite do canal libp2p: cada oferta consome um token de uso único.
+	// O listener é loopback-only, mas um processo local poderia minerar tokens.
+	now := time.Now()
+	requester := peer.ID("http:" + requestRemoteIP(r))
+	if !onboardingOfferAllowed(requester, now) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
-	if !s.deps.IsAgentConfigured() {
-		http.Error(w, "not configured", http.StatusNoContent)
+	offer, status, err := s.buildOnboardingOffer(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), status)
 		return
+	}
+	markOnboardingOffer(requester, now)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(offer)
+}
+
+// requestRemoteIP devolve o IP de origem do request (host:porta → IP).
+func requestRemoteIP(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		return strings.TrimSpace(r.RemoteAddr)
+	}
+	return host
+}
+
+// buildOnboardingOffer monta a oferta assinada de provisionamento. É a ÚNICA
+// implementação da regra (feature flag, provisioning token, URL canônica, TTL):
+// usada pelo handler HTTP (loopback) e pelo stream libp2p de onboarding, que é
+// o caminho alcançável na LAN — o listener HTTP local é loopback-only por
+// hardening (achado Z1, 2026-10-29).
+func (s *TransferServer) buildOnboardingOffer(ctx context.Context) (P2POnboardingRequest, int, error) {
+	if s.deps == nil {
+		return P2POnboardingRequest{}, http.StatusServiceUnavailable, fmt.Errorf("unavailable")
+	}
+	if !s.deps.IsAgentConfigured() {
+		return P2POnboardingRequest{}, http.StatusNoContent, fmt.Errorf("not configured")
 	}
 
 	// Respeitar feature flag DiscoveryEnabled (controlada pelo servidor).
 	agentCfg := s.deps.GetAgentConfiguration()
 	if agentCfg.DiscoveryEnabled != nil && !*agentCfg.DiscoveryEnabled {
-		http.Error(w, "zero-touch config registration disabled", http.StatusForbidden)
-		return
+		return P2POnboardingRequest{}, http.StatusForbidden, fmt.Errorf("zero-touch config registration disabled")
 	}
 
 	s.mu.RLock()
@@ -53,15 +93,17 @@ func (s *TransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Reque
 	s.mu.RUnlock()
 
 	// Buscar token de provisionamento temporário na API.
-	deployKey, expiresAt, err := s.deps.RequestProvisioningToken(r.Context())
+	deployKey, expiresAt, err := s.deps.RequestProvisioningToken(ctx)
 	if err != nil {
-		s.deps.Log("[zero-touch] falha ao obter provisioning token: " + err.Error())
-		http.Error(w, "provisioning token unavailable", http.StatusServiceUnavailable)
+		if s.deps != nil {
+			s.deps.Log("[zero-touch] falha ao obter provisioning token: " + err.Error())
+		}
 		recordAutoProvisioningEvent(s.coord, agentID, "", false, "provisioning token error: "+err.Error())
-		return
+		return P2POnboardingRequest{}, http.StatusServiceUnavailable, fmt.Errorf("provisioning token unavailable")
 	}
-	keyLen := len(deployKey)
-	s.deps.Log(fmt.Sprintf("[zero-touch] provisioning token obtido (len=%d, expiresAt=%s)", keyLen, expiresAt))
+	if s.deps != nil {
+		s.deps.Log(fmt.Sprintf("[zero-touch] provisioning token obtido (len=%d, expiresAt=%s)", len(deployKey), expiresAt))
+	}
 
 	// Construir URL canônica (evitar inst.ServerURL legado).
 	// Usa inst.APIScheme() que deriva o scheme de ApiInsecure (campo canônico),
@@ -75,31 +117,38 @@ func (s *TransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Reque
 		serverURL = strings.TrimSpace(inst.ServerURL)
 	}
 	if serverURL == "" {
-		http.Error(w, "server url not configured", http.StatusInternalServerError)
 		recordAutoProvisioningEvent(s.coord, agentID, "", false, "server url missing")
-		return
+		return P2POnboardingRequest{}, http.StatusInternalServerError, fmt.Errorf("server url not configured")
 	}
 
-	// Calcular TTL a partir do expiresAt retornado pela API (com fallback).
+	// Calcular TTL a partir do expiresAt retornado pela API.
+	//
+	// BUGFIX 2026-10-29: antes, expiresAt vazio/ilegível caía no fallback de
+	// 30 min e a oferta anunciava MAIS validade que o token (10 min) — o agente
+	// registrava e recebia 401/403, voltando a "preso". Agora: usa o remaining,
+	// recusa token já vencido e NUNCA anuncia mais que onboardingDeployKeyTTL.
 	ttl := onboardingDeployKeyTTL
 	if parsed, parseErr := time.Parse(time.RFC3339, expiresAt); parseErr == nil {
-		if remaining := time.Until(parsed); remaining > 0 {
-			ttl = remaining
+		remaining := time.Until(parsed)
+		if remaining <= 0 {
+			recordAutoProvisioningEvent(s.coord, agentID, serverURL, false, "provisioning token expirado")
+			return P2POnboardingRequest{}, http.StatusServiceUnavailable, fmt.Errorf("provisioning token expired")
 		}
+		ttl = remaining
+	}
+	if ttl > onboardingDeployKeyTTL {
+		ttl = onboardingDeployKeyTTL
 	}
 
 	offer, err := s.deps.BuildOnboardingOffer(agentID, serverURL, deployKey, ttl)
 	if err != nil {
-		http.Error(w, "failed to build offer", http.StatusInternalServerError)
 		recordAutoProvisioningEvent(s.coord, agentID, serverURL, false, "build offer error: "+err.Error())
-		return
+		return P2POnboardingRequest{}, http.StatusInternalServerError, fmt.Errorf("failed to build offer")
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(offer)
 
 	// Registrar evento de auditoria (lado provisionador).
 	recordAutoProvisioningEvent(s.coord, agentID, serverURL, true, "offer emitida")
+	return offer, http.StatusOK, nil
 }
 
 func (s *TransferServer) handleOnboardReceive(w http.ResponseWriter, r *http.Request) {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -21,6 +22,61 @@ var errNoTransferSource = errors.New("nenhuma fonte de transferencia disponivel"
 // isNoTransferSourceError informa se o erro é de "sem fonte" (nada transferido).
 func isNoTransferSourceError(err error) bool {
 	return errors.Is(err, errNoTransferSource)
+}
+
+// p2pRequesterID devolve o agentId usado como identidade do requester nos
+// streams libp2p (o token de acesso é ligado a ele).
+func (c *Coordinator) p2pRequesterID() string {
+	if c == nil || c.deps == nil {
+		return "peer-local"
+	}
+	id := strings.TrimSpace(c.deps.GetDebugConfig().AgentID)
+	if id == "" {
+		return "peer-local"
+	}
+	return id
+}
+
+// invalidateArtifactOnManifestError só remove o artifact do catálogo quando a
+// falha do manifest indica que ele realmente sumiu/está stale. Erro de
+// CREDENCIAL (token ausente/expirado/rotacionado) não prova nada sobre o
+// artifact — invalidar aqui fazia o artifact "desaparecer" da malha por causa de
+// um restart do peer (bug 2026-10-29).
+func (c *Coordinator) invalidateArtifactOnManifestError(peerAgentID, artifactName string, err error) {
+	if isArtifactAccessAuthError(err) {
+		return
+	}
+	c.InvalidatePeerArtifact(peerAgentID, artifactName)
+}
+
+// fetchManifestWithToken negocia (com cache por peer/artifact) o token de
+// acesso e busca o manifest via /artifact/manifest/1.0.0. A falha de negociação
+// NÃO aborta: segue com token vazio (modo legacy), e o servidor decide se
+// aceita (legacy) ou recusa (require) — antes o manifest ia sempre sem token e
+// todo download chunked morria em "manifest indisponivel" no modo require.
+func (c *Coordinator) fetchManifestWithToken(ctx context.Context, h host.Host, peerID peer.ID, artifactName, requesterID string) (P2PChunkManifest, error) {
+	var logf func(string)
+	if c != nil && c.deps != nil {
+		logf = c.deps.Log
+	}
+	token := p2pAccessTokens.token(ctx, h, peerID, artifactName, requesterID, logf)
+	manifest, err := libp2pFetchManifest(ctx, h, peerID, artifactName, requesterID, token)
+	if err == nil || !isArtifactAccessAuthError(err) {
+		return manifest, err
+	}
+	// Token rejeitado (expirado/rotacionado — o secret do servidor muda a cada
+	// restart do peer): invalida o cache e tenta exatamente uma vez com token
+	// novo, em vez de propagar um erro que o chamador confundiria com "artifact
+	// não existe" e que faria o peer ser removido do catálogo (bug 2026-10-29).
+	p2pAccessTokens.invalidate(peerID)
+	token = p2pAccessTokens.token(ctx, h, peerID, artifactName, requesterID, logf)
+	if strings.TrimSpace(token) == "" {
+		return P2PChunkManifest{}, err
+	}
+	if logf != nil {
+		logf(fmt.Sprintf("[p2p][manifest] token rejeitado por peer=%s artifact=%s; renovado e tentando novamente", peerID.String(), artifactName))
+	}
+	return libp2pFetchManifest(ctx, h, peerID, artifactName, requesterID, token)
 }
 
 // DownloadArtifactFromPeer baixa um artifact de um peer específico e contabiliza
@@ -73,10 +129,11 @@ func (c *Coordinator) downloadArtifactFromPeer(ctx context.Context, artifactName
 		}
 
 		// Obter manifest do peer para download chunked.
-		manifest, manifestErr := libp2pFetchManifest(ctx, h, peerID, artifactName, requesterID)
+		manifest, manifestErr := c.fetchManifestWithToken(ctx, h, peerID, artifactName, requesterID)
 		if manifestErr != nil || manifest.TotalChunks == 0 {
-			// Cache stale: peer não tem mais este artifact. Invalida.
-			c.InvalidatePeerArtifact(sourcePeerID, artifactName)
+			// Cache stale: peer não tem mais este artifact. Invalida (exceto se o
+			// erro for de credencial).
+			c.invalidateArtifactOnManifestError(sourcePeerID, artifactName, manifestErr)
 			err := fmt.Errorf("manifest indisponivel: %w", manifestErr)
 			c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
 			c.emitTransferDone(artifactName, sourcePeerID, "pull", err)
@@ -108,9 +165,9 @@ func (c *Coordinator) downloadArtifactFromPeer(ctx context.Context, artifactName
 				if !ok {
 					continue
 				}
-				otherManifest, otherErr := libp2pFetchManifest(ctx, h, otherPID, artifactName, requesterID)
+				otherManifest, otherErr := c.fetchManifestWithToken(ctx, h, otherPID, artifactName, requesterID)
 				if otherErr != nil || otherManifest.TotalChunks == 0 {
-					c.InvalidatePeerArtifact(otherPeerID, artifactName)
+					c.invalidateArtifactOnManifestError(otherPeerID, artifactName, otherErr)
 					continue
 				}
 				if vErr := validateDownloadManifest(&otherManifest); vErr != nil {
@@ -207,7 +264,7 @@ func (c *Coordinator) downloadArtifactFromPeer(ctx context.Context, artifactName
 			// manifest stale (arquivo substituído por versão diferente com
 			// mesmo nome/tamanho). Invalida o artifact do peer para forçar
 			// re-fetch do manifest em futuras tentativas.
-			if strings.Contains(err.Error(), "checksum divergente") {
+			if isStaleManifestError(err) {
 				c.InvalidatePeerArtifact(sourcePeerID, artifactName)
 				c.recordStaleManifest()
 				c.deps.Log(fmt.Sprintf("[p2p][audit] status=stale-cache action=pull artifact=%s peer=%s source=libp2p msg=manifest stale detectado por checksum divergente; peer invalidado",
@@ -311,13 +368,14 @@ func (c *Coordinator) downloadArtifactSwarm(ctx context.Context, artifactName st
 		return P2PArtifactView{}, err
 	}
 	var manifestErr error
-	manifest, manifestErr = libp2pFetchManifest(ctx, h, peerEntries[0].libp2pID, artifactName, requesterID)
+	manifest, manifestErr = c.fetchManifestWithToken(ctx, h, peerEntries[0].libp2pID, artifactName, requesterID)
 	if manifestErr != nil || manifest.TotalChunks == 0 {
-		// Cache stale: primeiro peer não tem mais este artifact. Invalida e tenta próximo.
-		c.InvalidatePeerArtifact(peerEntries[0].peerID, artifactName)
+		// Cache stale: primeiro peer não tem mais este artifact. Invalida e tenta
+		// próximo (exceto quando a falha é de credencial).
+		c.invalidateArtifactOnManifestError(peerEntries[0].peerID, artifactName, manifestErr)
 		// Tenta o próximo peer da lista, se houver.
 		if len(peerEntries) > 1 {
-			manifest, manifestErr = libp2pFetchManifest(ctx, h, peerEntries[1].libp2pID, artifactName, requesterID)
+			manifest, manifestErr = c.fetchManifestWithToken(ctx, h, peerEntries[1].libp2pID, artifactName, requesterID)
 		}
 		if manifestErr != nil || manifest.TotalChunks == 0 {
 			err := fmt.Errorf("manifest indisponivel: %w", manifestErr)
@@ -344,9 +402,9 @@ func (c *Coordinator) downloadArtifactSwarm(ctx context.Context, artifactName st
 		validPeers := make([]peerEntry, 0, len(peerEntries))
 		validPeers = append(validPeers, peerEntries[0])
 		for _, pe := range peerEntries[1:] {
-			pm, pmErr := libp2pFetchManifest(ctx, h, pe.libp2pID, artifactName, requesterID)
+			pm, pmErr := c.fetchManifestWithToken(ctx, h, pe.libp2pID, artifactName, requesterID)
 			if pmErr != nil || pm.TotalChunks == 0 {
-				c.InvalidatePeerArtifact(pe.peerID, artifactName)
+				c.invalidateArtifactOnManifestError(pe.peerID, artifactName, pmErr)
 				continue
 			}
 			if !strings.EqualFold(strings.TrimSpace(pm.SHA256), strings.TrimSpace(manifest.SHA256)) ||
@@ -413,7 +471,7 @@ func (c *Coordinator) downloadArtifactSwarm(ctx context.Context, artifactName st
 	if err != nil {
 		// Se o erro for de checksum divergente, invalida todos os peers do swarm
 		// que podem estar servindo manifest stale.
-		if strings.Contains(err.Error(), "checksum divergente") {
+		if isStaleManifestError(err) {
 			for _, pe := range peerEntries {
 				c.InvalidatePeerArtifact(pe.peerID, artifactName)
 			}

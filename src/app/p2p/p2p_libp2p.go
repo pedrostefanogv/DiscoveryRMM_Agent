@@ -131,10 +131,13 @@ func (p *p2pLibP2PProvider) Start(
 	// Transportes: TCP sempre; QUIC/v1 apenas quando tcpOnly=false.
 	// QUIC/UDP no Windows tem histórico de quedas durante transferências
 	// paralelas; a flag permite A/B test e rollback rápido.
-	listenAddrs := []string{"/ip4/0.0.0.0/tcp/0"}
-	if !p.tcpOnly {
-		listenAddrs = append(listenAddrs, "/ip4/0.0.0.0/udp/0/quic-v1")
-	}
+	//
+	// BUGFIX D9 (2026-10-29): a porta era SEMPRE efêmera (/tcp/0). Isso torna
+	// impossível ter regra de firewall por porta, invalida o cache de peers e
+	// quebra qualquer NAT a cada restart. Agora usa porta fixa (default 41121,
+	// override DISCOVERY_P2P_LIBP2P_PORT) com fallback para efêmera caso a
+	// porta esteja ocupada — antes, uma falha de bind derrubaria a descoberta.
+	fixedPort := p2pLibP2PFixedPort()
 
 	// TCP + QUIC/v1 sobre IPv4 apenas (IPv6 desativado).
 	// Segurança declarada explicitamente: Noise (preferido) e TLS 1.3.
@@ -150,19 +153,54 @@ func (p *p2pLibP2PProvider) Start(
 			onTrace(fmt.Sprintf("identidade libp2p persistente indisponivel (gerando efemera): %v", idErr))
 		}
 	}
-	opts := []libp2p.Option{
-		libp2p.ListenAddrStrings(listenAddrs...),
-		libp2p.Security(noise.ID, noise.New),
-		libp2p.Security(libp2ptls.ID, libp2ptls.New),
-		libp2p.ConnectionManager(cm),
-		libp2p.ConnectionGater(gater),
+	buildOpts := func(port int) []libp2p.Option {
+		listenAddrs := []string{fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port)}
+		if !p.tcpOnly {
+			listenAddrs = append(listenAddrs, fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", port))
+		}
+		opts := []libp2p.Option{
+			libp2p.ListenAddrStrings(listenAddrs...),
+			libp2p.Security(noise.ID, noise.New),
+			libp2p.Security(libp2ptls.ID, libp2ptls.New),
+			libp2p.ConnectionManager(cm),
+			libp2p.ConnectionGater(gater),
+		}
+		if identity != nil {
+			opts = append(opts, libp2p.Identity(identity))
+		}
+		return opts
 	}
-	if identity != nil {
-		opts = append(opts, libp2p.Identity(identity))
+	var h host.Host
+	var hostErr error
+	if fixedPort > 0 {
+		// Até 3 tentativas: o RestartProvider fecha o host anterior e reabre a
+		// MESMA porta logo em seguida — o rebind pode falhar por um instante
+		// (handle ainda não liberado). Sem retry, cairíamos calados em porta
+		// efêmera e a regra de firewall de 41121 ficaria inútil.
+		for attempt := 1; attempt <= 3; attempt++ {
+			h, hostErr = libp2p.New(buildOpts(fixedPort)...)
+			if hostErr == nil {
+				break
+			}
+			if onTrace != nil {
+				onTrace(fmt.Sprintf("libp2p: bind da porta fixa %d falhou (tentativa %d/3): %v", fixedPort, attempt, hostErr))
+			}
+			time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
+		}
+		if hostErr != nil {
+			// Porta realmente ocupada por outro processo: degrada para efêmera em
+			// vez de derrubar a descoberta (a regra de firewall por porta deixa de
+			// cobrir este processo — o log acima deixa isso explícito).
+			if onTrace != nil {
+				onTrace(fmt.Sprintf("libp2p: porta fixa %d indisponivel, usando porta efemera: %v", fixedPort, hostErr))
+			}
+			h, hostErr = libp2p.New(buildOpts(0)...)
+		}
+	} else {
+		h, hostErr = libp2p.New(buildOpts(0)...)
 	}
-	h, err := libp2p.New(opts...)
-	if err != nil {
-		return fmt.Errorf("libp2p host: %w", err)
+	if hostErr != nil {
+		return fmt.Errorf("libp2p host: %w", hostErr)
 	}
 
 	// Notifiee de diagnóstico: registra desconexões (com transporte e se havia
@@ -174,74 +212,16 @@ func (p *p2pLibP2PProvider) Start(
 	// Stream handler (responder side): when a peer opens a stream to us,
 	// read their info, respond with ours, validate clientId, then emit onPeer.
 	h.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
-		defer s.Close()
-		_ = s.SetDeadline(time.Now().Add(p2pLibP2PHandshakeTimeout))
-
-		var remote p2pLibP2PPeerInfo
-		if err := json.NewDecoder(bufio.NewReader(s)).Decode(&remote); err != nil {
-			return
-		}
-		mine := p2pLibP2PPeerInfo{AgentID: self.AgentID, Host: self.Host, ClientID: p.clientID, HTTPPort: self.Port}
-		if err := json.NewEncoder(s).Encode(mine); err != nil {
-			return
-		}
-
-		if strings.TrimSpace(remote.AgentID) == "" || remote.HTTPPort <= 0 {
-			return
-		}
-
-		// Validação de clientId: rejeita peers de malhas diferentes.
-		if p.clientID != "" && !strings.EqualFold(normalizeClientID(remote.ClientID), p.clientID) {
-			if onTrace != nil {
-				onTrace(fmt.Sprintf("peer rejeitado por clientId divergente: peer=%s clientId=%s esperado=%s",
-					strings.TrimSpace(remote.AgentID), strings.TrimSpace(remote.ClientID), p.clientID))
-			}
-			_ = s.Reset()
-			return
-		}
-
-		remoteAddr := extractIPFromMultiaddr(s.Conn().RemoteMultiaddr().String())
-		if remoteAddr == "" {
-			return
-		}
-		if onTrace != nil {
-			onTrace(fmt.Sprintf("libp2p peer (inbound): agentId=%s clientId=%s addr=%s:%d",
-				remote.AgentID, remote.ClientID, remoteAddr, remote.HTTPPort))
-		}
-		// Registrar mapeamento agentID → peer.ID para transfer streams.
-		if p.registry != nil {
-			if ok, existing, conflict := p.registry.RegisterStrict(remote.AgentID, s.Conn().RemotePeer()); conflict {
-				if onTrace != nil {
-					onTrace(fmt.Sprintf("libp2p peer rejeitado por conflito de identidade: agentId=%s peerAtual=%s peerRegistrado=%s",
-						strings.TrimSpace(remote.AgentID), s.Conn().RemotePeer(), existing))
-				}
-				if p.gater != nil {
-					p.gater.BlockPeer(s.Conn().RemotePeer())
-				}
-				_ = s.Reset()
-				return
-			} else if !ok {
-				return
-			}
-		}
-		peerHost := strings.TrimSpace(remote.Host)
-		if peerHost == "" {
-			peerHost = remoteAddr
-		}
-		onPeer(p2pDiscoveredPeer{
-			AgentID:      strings.TrimSpace(remote.AgentID),
-			ClientID:     strings.TrimSpace(remote.ClientID),
-			Host:         peerHost,
-			Address:      remoteAddr,
-			Port:         remote.HTTPPort,
-			Source:       p2pDiscoveryLibP2P,
-			ConnectedVia: p2pDiscoveryLibP2P,
-		})
+		handleLibP2PHandshakeStream(s, self, p.clientID, p.registry, p.gater, onPeer, onTrace)
 	})
+	// (handler extraído para handleLibP2PHandshakeStream — testável)
 
 	// Registrar todos os protocolos de transporte P2P no host.
 	if p.coord != nil && p.transfer != nil {
 		RegisterP2PProtocols(h, p.coord, p.transfer)
+		// Onboarding por stream: o HTTP local é loopback-only (C4), então a
+		// oferta de zero-touch precisa viajar pelo libp2p para alcançar a LAN.
+		RegisterOnboardingProtocols(h, p.transfer)
 	}
 	if p.registry == nil {
 		p.registry = newLibp2pPeerRegistry()
@@ -293,6 +273,25 @@ func (p *p2pLibP2PProvider) Start(
 		onTrace(fmt.Sprintf("libp2p host iniciado: peerID=%s", h.ID()))
 	}
 	return nil
+}
+
+// p2pLibP2PFixedPort é a porta TCP fixa do host libp2p (default 41121).
+//
+// Porta fixa é pré-requisito para: (a) regra de firewall por porta no
+// instalador, (b) cache de peers estável entre restarts, (c) NAT/port-forward
+// previsível. Override: DISCOVERY_P2P_LIBP2P_PORT; 0 força porta efêmera
+// (comportamento antigo, útil para testes).
+func p2pLibP2PFixedPort() int {
+	const defaultPort = 41121
+	raw := strings.TrimSpace(os.Getenv("DISCOVERY_P2P_LIBP2P_PORT"))
+	if raw == "" {
+		return defaultPort
+	}
+	port, err := strconv.Atoi(raw)
+	if err != nil || port < 0 || port > 65535 {
+		return defaultPort
+	}
+	return port
 }
 
 // p2pConnManagerLimits devolve os limites (low, high) do ConnManager do libp2p.
@@ -366,16 +365,25 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 		return
 	}
 	pi.Addrs = filteredAddrs
+	n.exchangeWithPeer(pi)
+}
 
+// exchangeWithPeer conecta no peer e troca identidade pelo handshake. Separado
+// de HandlePeerFound para permitir teste em processo (loopback), onde o filtro
+// de endereços link-local do HandlePeerFound descartaria o peer.
+func (n *libp2pMDNSNotifee) exchangeWithPeer(pi peer.AddrInfo) {
 	ctx, cancel := context.WithTimeout(context.Background(), p2pLibP2PHandshakeTimeout+discoveryDialJitter)
+	// BUGFIX D1 (2026-10-29): o cancel() NÃO pode vir antes do NewStream abaixo.
+	// Antes, o stream de handshake herdava um contexto JÁ CANCELADO, falhava
+	// sempre com "context canceled" e o peer era descartado — mDNS descobria,
+	// conectava e nunca registrava o agentId (malha P2P ficava vazia).
+	defer cancel()
 	if err := connectPeerIfNotConnected(ctx, n.h, pi, discoveryDialJitter); err != nil {
-		cancel()
 		if n.onTrace != nil {
 			n.onTrace(fmt.Sprintf("libp2p connect falhou peer=%s: %v", pi.ID, err))
 		}
 		return
 	}
-	cancel()
 
 	// Remove do peerstore quaisquer endereços link-local que ainda estejam
 	// armazenados de descobertas anteriores — eles não são roteáveis.
@@ -406,8 +414,10 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 		return
 	}
 
-	// Validação de clientId: rejeita peers de malhas diferentes.
-	if clientID != "" && !strings.EqualFold(normalizeClientID(remote.ClientID), clientID) {
+	// Validação de clientId: rejeita peers de malhas diferentes, mas aceita peer
+	// sem clientId (agente não provisionado) — ver F7/2026-10-29 no responder.
+	remoteClientID := normalizeClientID(remote.ClientID)
+	if clientID != "" && remoteClientID != "" && !strings.EqualFold(remoteClientID, clientID) {
 		if n.onTrace != nil {
 			n.onTrace(fmt.Sprintf("peer rejeitado por clientId divergente: peer=%s clientId=%s esperado=%s",
 				strings.TrimSpace(remote.AgentID), strings.TrimSpace(remote.ClientID), clientID))
@@ -465,6 +475,91 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 		Source:       p2pDiscoveryLibP2P,
 		ConnectedVia: p2pDiscoveryLibP2P,
 	})
+}
+
+// handleLibP2PHandshakeStream é o lado responder do handshake /discovery-p2p/1.0.0:
+// lê a identidade do peer, responde com a nossa, valida clientId, registra o
+// mapeamento agentId→peer.ID e emite onPeer.
+//
+// Extraído de Start para ser testável (regressão do cancel prematuro do
+// contexto — achado D1/2026-10-29).
+func handleLibP2PHandshakeStream(
+	s network.Stream,
+	self p2pSelfEndpoint,
+	clientID string,
+	registry *libp2pPeerRegistry,
+	gater *p2pConnectionGater,
+	onPeer func(p2pDiscoveredPeer),
+	onTrace func(string),
+) {
+	defer s.Close()
+	_ = s.SetDeadline(time.Now().Add(p2pLibP2PHandshakeTimeout))
+
+	var remote p2pLibP2PPeerInfo
+	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&remote); err != nil {
+		return
+	}
+	mine := p2pLibP2PPeerInfo{AgentID: self.AgentID, Host: self.Host, ClientID: clientID, HTTPPort: self.Port}
+	if err := json.NewEncoder(s).Encode(mine); err != nil {
+		return
+	}
+
+	if strings.TrimSpace(remote.AgentID) == "" || remote.HTTPPort <= 0 {
+		return
+	}
+
+	// Validação de clientId: rejeita peers de malhas diferentes, mas ACEITA
+	// peer sem clientId — é o agente ainda não provisionado, que precisa
+	// existir na malha para pedir config no zero-touch (F7/2026-10-29).
+	remoteClientID := normalizeClientID(remote.ClientID)
+	if clientID != "" && remoteClientID != "" && !strings.EqualFold(remoteClientID, clientID) {
+		if onTrace != nil {
+			onTrace(fmt.Sprintf("peer rejeitado por clientId divergente: peer=%s clientId=%s esperado=%s",
+				strings.TrimSpace(remote.AgentID), strings.TrimSpace(remote.ClientID), clientID))
+		}
+		_ = s.Reset()
+		return
+	}
+
+	remoteAddr := extractIPFromMultiaddr(s.Conn().RemoteMultiaddr().String())
+	if remoteAddr == "" {
+		return
+	}
+	if onTrace != nil {
+		onTrace(fmt.Sprintf("libp2p peer (inbound): agentId=%s clientId=%s addr=%s:%d",
+			remote.AgentID, remote.ClientID, remoteAddr, remote.HTTPPort))
+	}
+	// Registrar mapeamento agentID → peer.ID para transfer streams.
+	if registry != nil {
+		if ok, existing, conflict := registry.RegisterStrict(remote.AgentID, s.Conn().RemotePeer()); conflict {
+			if onTrace != nil {
+				onTrace(fmt.Sprintf("libp2p peer rejeitado por conflito de identidade: agentId=%s peerAtual=%s peerRegistrado=%s",
+					strings.TrimSpace(remote.AgentID), s.Conn().RemotePeer(), existing))
+			}
+			if gater != nil {
+				gater.BlockPeer(s.Conn().RemotePeer())
+			}
+			_ = s.Reset()
+			return
+		} else if !ok {
+			return
+		}
+	}
+	peerHost := strings.TrimSpace(remote.Host)
+	if peerHost == "" {
+		peerHost = remoteAddr
+	}
+	if onPeer != nil {
+		onPeer(p2pDiscoveredPeer{
+			AgentID:      strings.TrimSpace(remote.AgentID),
+			ClientID:     strings.TrimSpace(remote.ClientID),
+			Host:         peerHost,
+			Address:      remoteAddr,
+			Port:         remote.HTTPPort,
+			Source:       p2pDiscoveryLibP2P,
+			ConnectedVia: p2pDiscoveryLibP2P,
+		})
+	}
 }
 
 // pickDiscoveryProvider returns the libp2p provider, injecting coord e transfer

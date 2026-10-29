@@ -65,6 +65,13 @@ const (
 	p2pArtifactServeLegacy = "legacy"
 )
 
+// p2pDiscoveryTokenArtifact é o nome de artifact reservado que representa o
+// token de "discovery" (gossip de peers). Nenhum arquivo com esse nome existe:
+// o token emitido para ele só habilita /discovery/peers/1.0.0, que não
+// transfere bytes de artifact. Nomes de arquivo com "*" são inválidos no
+// sistema de arquivos, então não há colisão com artifacts reais.
+const p2pDiscoveryTokenArtifact = "*"
+
 func normalizeP2PArtifactServeMode(mode string) string {
 	if strings.EqualFold(strings.TrimSpace(mode), p2pArtifactServeLegacy) {
 		return p2pArtifactServeLegacy
@@ -290,6 +297,36 @@ func (s *TransferServer) BuildArtifactAccess(artifactName, targetPeerID string) 
 		SizeBytes:      info.Size(),
 		ExpiresAtUTC:   expiresAt.UTC().Format(time.RFC3339),
 	}, nil
+}
+
+// BuildDiscoveryAccess emite um token de "discovery" (artifact "*") para o peer
+// alvo. Diferente de BuildArtifactAccess, NENHUM arquivo precisa existir: o
+// token apenas credencia o peer a ler o gossip de peers (/discovery/peers),
+// superfície que não serve bytes de artifact.
+//
+// O retorno inclui o token em texto (o P2PArtifactAccess não tem campo próprio
+// e a URL de download não faz sentido aqui — fica vazia).
+func (s *TransferServer) BuildDiscoveryAccess(targetPeerID string) (P2PArtifactAccess, string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if len(s.secret) == 0 {
+		return P2PArtifactAccess{}, "", errors.New("servidor P2P não iniciado")
+	}
+
+	ttl := s.tokenTTL
+	if ttl <= 0 {
+		ttl = 15 * time.Minute
+	}
+	expiresAt := time.Now().Add(ttl)
+	token, err := s.issueTokenLocked(p2pDiscoveryTokenArtifact, strings.TrimSpace(targetPeerID), expiresAt)
+	if err != nil {
+		return P2PArtifactAccess{}, "", err
+	}
+	return P2PArtifactAccess{
+		ArtifactName: p2pDiscoveryTokenArtifact,
+		ExpiresAtUTC: expiresAt.UTC().Format(time.RFC3339),
+	}, token, nil
 }
 
 func (s *TransferServer) localArtifactsSnapshot() []P2PArtifactView {

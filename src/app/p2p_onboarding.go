@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,13 +23,42 @@ import (
 
 const (
 	onboardingDeployKeyTTL     = 30 * time.Minute
-	onboardingRetryBase        = 30 * time.Second
-	onboardingRetryMax         = 10 * time.Minute
 	onboardingMaxAttempts      = 0 // 0 = ilimitado enquanto não houver credenciais
-	onboardingRetryInterval    = 60 * time.Second
 	onboardingPeerRecheckDelay = 60 * time.Second
-	onboardingAttemptTimeout   = 25 * time.Second
-	p2pOnboardingEndpoint      = "/p2p/config/onboard"
+	// 40s: a fase libp2p pode gastar até onboardingLibp2pBudget (15s) e o
+	// fallback HTTP até onboardingHTTPPeerTimeout por peer — 25s não caberia e
+	// cortava provisionadores lentos (achado da revisão 2026-10-29).
+	onboardingAttemptTimeout = 40 * time.Second
+	p2pOnboardingEndpoint    = "/p2p/config/onboard"
+
+	// Backoff exponencial com jitter do loop de onboarding (achados Z6/Z13).
+	// O primeiro retry fica entre onboardingRetryBase/2 e onboardingRetryBase e
+	// cresce até onboardingRetryMax (10 min) — antes o loop usava um ticker fixo
+	// de 60s, o que sincronizava todos os agentes de um mesmo site (rebanho) e
+	// mantinha o operador sem diagnóstico quando nada funcionava.
+	onboardingRetryBase = 30 * time.Second
+	// 2 min (antes 10 min): se a config chega por outro caminho (ex.
+	// triggerZeroTouchConfigRegistrationOnPeerDiscovery), o loop ficava até 10
+	// min sem perceber; 2 min mantém a malha responsiva sem virar rebanho.
+	onboardingRetryMax = 2 * time.Minute
+
+	// onboardingLibp2pBudget limita APENAS a fase libp2p da tentativa. O pull de
+	// onboarding precisa ser libp2p porque o listener HTTP que serve
+	// /p2p/config/onboard é loopback-only (hardening C4) — inalcançável da LAN.
+	// Precisa ser MAIOR que o orçamento do provisionador para emitir a oferta
+	// (p2pOnboardAPIBudget=20s + handshake): se o requisitante desistir antes, o
+	// provisionador já emitiu um token de uso único e ele é queimado (MaxUses=1).
+	onboardingLibp2pBudget = 25 * time.Second
+	// onboardingHTTPPeerTimeout é o timeout por peer do fallback HTTP.
+	onboardingHTTPPeerTimeout = 10 * time.Second
+	// onboardingStuckAttempts: a partir desta contagem de tentativas frustradas o
+	// loop registra um diagnóstico agregado (peers conhecidos, último motivo). O
+	// sintoma anterior era o agente preso em "aguardando provisionamento" sem
+	// nenhuma causa exposta ao operador (Z6/Z13).
+	onboardingStuckAttempts = 5
+	// onboardingMaxPeerCauses limita quantas causas por peer entram no erro final
+	// (frotas grandes produzem mensagens ilegíveis).
+	onboardingMaxPeerCauses = 8
 )
 
 // p2pOnboardingState tracks the onboarding progress for this agent.
@@ -36,6 +66,8 @@ type p2pOnboardingState struct {
 	mu            sync.Mutex
 	attempts      int
 	lastAttemptAt time.Time
+	lastReason    string
+	lastError     string
 	configured    bool
 	audit         []P2POnboardingAuditEvent
 }
@@ -128,6 +160,12 @@ func (a *App) tryZeroTouchConfigRegistration(ctx context.Context, state *p2pOnbo
 		state.mu.Lock()
 		state.attempts++
 		state.lastAttemptAt = time.Now().UTC()
+		state.lastReason = strings.TrimSpace(reason)
+		if err != nil {
+			state.lastError = err.Error()
+		} else {
+			state.lastError = ""
+		}
 		state.mu.Unlock()
 	}
 	return true, err
@@ -180,19 +218,137 @@ func (a *App) RunOnboardingLoop(ctx context.Context) {
 		return
 	}
 
-	ticker := time.NewTicker(onboardingRetryInterval)
-	defer ticker.Stop()
+	// Backoff exponencial com jitter: cada rodada espera um tempo crescente
+	// (base*2^n, teto onboardingRetryMax) com jitter em [d/2, d] para
+	// desincronizar agentes que descobriram os mesmos peers juntos. O ticker
+	// fixo anterior (60s) gerava rebanho e nenhum diagnóstico de "preso"
+	// (achados Z6/Z13).
+	failures := 1 // a tentativa de startup já conta como falha
+	for attempt := 0; ; attempt++ {
+		delay := onboardingBackoffDelay(attempt, nil)
+		a.Logs.Append(fmt.Sprintf("[zero-touch] próxima tentativa em %s (backoff com jitter)", delay.Round(time.Second)))
 
-	for {
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
-			if tryAttempt("retry-peers-60s") {
-				return
-			}
+		case <-timer.C:
+		}
+
+		if tryAttempt(fmt.Sprintf("retry-backoff-%s", delay.Round(time.Second))) {
+			return
+		}
+
+		failures++
+		if failures == onboardingStuckAttempts || (failures > onboardingStuckAttempts && failures%onboardingStuckAttempts == 0) {
+			a.logOnboardingStuckDiagnostics(state, failures)
 		}
 	}
+}
+
+// onboardingBackoffDelay devolve o atraso até a próxima tentativa do loop de
+// onboarding: exponencial (onboardingRetryBase * 2^attempt) limitado a
+// onboardingRetryMax, com jitter uniforme em [d/2, d].
+// rnd == nil usa math/rand/v2.Float64; testes injetam um gerador determinístico.
+func onboardingBackoffDelay(attempt int, rnd func() float64) time.Duration {
+	if rnd == nil {
+		rnd = rand.Float64
+	}
+	if attempt < 0 {
+		attempt = 0
+	}
+	delay := onboardingRetryBase
+	for i := 0; i < attempt && delay < onboardingRetryMax; i++ {
+		delay *= 2
+	}
+	if delay > onboardingRetryMax {
+		delay = onboardingRetryMax
+	}
+
+	// Jitter "de baixo": mantém o primeiro retry rápido (base/2) e nunca passa
+	// do teto configurado.
+	jittered := time.Duration(float64(delay) * (0.5 + 0.5*rnd()))
+	if minDelay := onboardingRetryBase / 2; jittered < minDelay {
+		jittered = minDelay
+	}
+	if jittered > onboardingRetryMax {
+		jittered = onboardingRetryMax
+	}
+	return jittered
+}
+
+// logOnboardingStuckDiagnostics registra um diagnóstico agregado quando o loop
+// já falhou várias vezes seguidas: peers conhecidos, endereços tentados e o
+// último motivo da falha. Sem isso o operador só via "aguardando
+// provisionamento" indefinidamente (achados Z6/Z13).
+func (a *App) logOnboardingStuckDiagnostics(state *p2pOnboardingState, failures int) {
+	if a == nil {
+		return
+	}
+
+	var peers []P2PPeerView
+	if a.P2PCoord != nil {
+		peers = a.P2PCoord.GetPeers()
+	}
+
+	attempts, reason, lastErr := 0, "", ""
+	if state != nil {
+		state.mu.Lock()
+		attempts = state.attempts
+		reason = state.lastReason
+		lastErr = state.lastError
+		state.mu.Unlock()
+	}
+
+	a.Logs.Append(fmt.Sprintf("[zero-touch] preso: %d tentativas sem configuração (peers conhecidos=%d, tentativas registradas=%d, último motivo=%q)",
+		failures, len(peers), attempts, reason))
+	if strings.TrimSpace(lastErr) != "" {
+		a.Logs.Append("[zero-touch] preso: último erro = " + lastErr)
+	}
+	if len(peers) == 0 {
+		a.Logs.Append("[zero-touch] preso: nenhum peer descoberto — verifique descoberta de rede (discoveryEnabled) e o kill-switch zeroTouchEnabled no servidor")
+		return
+	}
+	a.Logs.Append("[zero-touch] preso: peers=" + describeOnboardingPeers(peers, onboardingMaxPeerCauses))
+	a.Logs.Append("[zero-touch] preso: o pull de onboarding usa stream libp2p (/discovery-onboard/1.0.0); o endpoint HTTP /p2p/config/onboard é loopback-only (C4)")
+}
+
+// describeOnboardingPeers formata os peers conhecidos para diagnóstico/log,
+// limitando a quantidade de entradas (frotas grandes).
+func describeOnboardingPeers(peers []P2PPeerView, limit int) string {
+	if len(peers) == 0 {
+		return "nenhum"
+	}
+	if limit <= 0 {
+		limit = len(peers)
+	}
+
+	parts := make([]string, 0, limit)
+	for i, peer := range peers {
+		if i >= limit {
+			break
+		}
+		agentID := strings.TrimSpace(peer.AgentID)
+		if agentID == "" {
+			agentID = "<sem-agent-id>"
+		}
+		address := strings.TrimSpace(peer.Address)
+		if address == "" {
+			parts = append(parts, fmt.Sprintf("%s(sem-endereço)", agentID))
+			continue
+		}
+		via := strings.TrimSpace(peer.ConnectedVia)
+		if via == "" {
+			parts = append(parts, fmt.Sprintf("%s@%s:%d", agentID, address, peer.Port))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s@%s:%d/%s", agentID, address, peer.Port, via))
+	}
+	if len(peers) > limit {
+		parts = append(parts, fmt.Sprintf("... (+%d peers)", len(peers)-limit))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (a *App) triggerZeroTouchConfigRegistrationOnPeerDiscovery(ctx context.Context, peer p2pDiscoveredPeer) {
@@ -228,6 +384,20 @@ func (a *App) triggerZeroTouchConfigRegistrationOnPeerDiscovery(ctx context.Cont
 	}
 }
 
+// requestOnboardingFromPeers busca a oferta de onboarding nos peers conhecidos.
+//
+// Caminho PRIMÁRIO: stream libp2p /discovery-onboard/1.0.0. O listener HTTP que
+// serve /p2p/config/onboard escuta apenas em 127.0.0.1 (hardening C4), portanto
+// o pull HTTP a partir de outro host falha SEMPRE — era a causa do agente preso
+// em "aguardando provisionamento" (achado Z1, 2026-10-29).
+//
+// Caminho SECUNDÁRIO (compatibilidade): loop HTTP no endpoint loopback, útil
+// quando o provisionador roda na MESMA máquina ou atrás de um proxy que publica
+// o endpoint.
+//
+// Todas as causas por peer são agregadas no erro final (antes ECONNREFUSED era
+// descartado em silêncio e o operador só via "nenhum peer forneceu configuração
+// válida" — achado Z9).
 func (a *App) requestOnboardingFromPeers(ctx context.Context, state *p2pOnboardingState) error {
 	if a.P2PCoord == nil {
 		return fmt.Errorf("coordinator P2P indisponível")
@@ -236,57 +406,138 @@ func (a *App) requestOnboardingFromPeers(ctx context.Context, state *p2pOnboardi
 	if len(peers) == 0 {
 		return fmt.Errorf("nenhum peer conhecido na rede")
 	}
-	for _, peer := range peers {
-		if strings.TrimSpace(peer.Address) == "" || peer.Port <= 0 {
-			continue
-		}
-		endpoint := fmt.Sprintf("http://%s:%d%s", strings.TrimSpace(peer.Address), peer.Port, p2pOnboardingEndpoint)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		if err != nil {
-			continue
-		}
-		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err := client.Do(req)
-		if err != nil {
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			continue
-		}
-		var offer P2POnboardingRequest
-		if err := json.NewDecoder(resp.Body).Decode(&offer); err != nil {
-			resp.Body.Close()
-			continue
-		}
-		resp.Body.Close()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-		result, applyErr := a.applyOnboardingOffer(offer)
-		event := P2POnboardingAuditEvent{
-			TimestampUTC:  time.Now().UTC().Format(time.RFC3339),
-			SourceAgentID: strings.TrimSpace(offer.SourceAgent),
-			ServerURL:     strings.TrimSpace(offer.ServerURL),
-			Success:       applyErr == nil,
-		}
-		if applyErr != nil {
-			event.Message = applyErr.Error()
-			a.Logs.Append("[zero-touch] oferta rejeitada de " + peer.AgentID + ": " + applyErr.Error())
-		} else {
-			event.Message = "configurado com sucesso"
-			event.TargetAgentID = result.AgentID
-			a.Logs.Append("[zero-touch] configurado via peer=" + peer.AgentID + " agentId=" + result.AgentID)
-		}
-		if state != nil {
-			state.mu.Lock()
-			state.audit = append(state.audit, event)
-			state.configured = applyErr == nil
-			state.mu.Unlock()
-		}
-		if applyErr == nil {
+	causes := make([]string, 0, len(peers)+1)
+
+	// 1) Caminho primário: stream libp2p (alcançável na LAN).
+	libp2pCtx, cancelLibp2p := context.WithTimeout(ctx, onboardingLibp2pBudget)
+	libp2pOffer, libp2pErr := a.P2PCoord.FetchOnboardingOfferFromPeers(libp2pCtx)
+	cancelLibp2p()
+	if libp2pErr != nil {
+		causes = append(causes, "libp2p: "+libp2pErr.Error())
+		a.Logs.Append("[zero-touch] caminho libp2p sem oferta: " + libp2pErr.Error())
+	} else {
+		if _, applyErr := a.applyPeerOnboardingOffer(libp2pOffer, state, "libp2p"); applyErr == nil {
 			return nil
+		} else {
+			causes = append(causes, fmt.Sprintf("libp2p peer=%s: %v", sourceAgentLabel(libp2pOffer), applyErr))
 		}
 	}
-	return fmt.Errorf("nenhum peer forneceu configuração válida")
+
+	// 2) Fallback HTTP loopback (compatibilidade), com causa explícita por peer.
+	for _, peer := range peers {
+		agentID := strings.TrimSpace(peer.AgentID)
+		if agentID == "" {
+			agentID = "<sem-agent-id>"
+		}
+		address := strings.TrimSpace(peer.Address)
+		if address == "" || peer.Port <= 0 {
+			reason := fmt.Sprintf("http peer=%s: sem endereço/porta (port=%d)", agentID, peer.Port)
+			causes = append(causes, reason)
+			a.Logs.Append("[zero-touch] " + reason)
+			continue
+		}
+		endpoint := fmt.Sprintf("http://%s:%d%s", address, peer.Port, p2pOnboardingEndpoint)
+		offer, err := a.fetchOnboardingOfferHTTP(ctx, endpoint)
+		if err != nil {
+			causes = append(causes, fmt.Sprintf("http peer=%s endpoint=%s: %v", agentID, endpoint, err))
+			a.Logs.Append("[zero-touch] HTTP peer=" + agentID + " falhou em " + endpoint + ": " + err.Error())
+			continue
+		}
+		if _, applyErr := a.applyPeerOnboardingOffer(offer, state, "http"); applyErr == nil {
+			return nil
+		} else {
+			causes = append(causes, fmt.Sprintf("http peer=%s endpoint=%s: %v", agentID, endpoint, applyErr))
+		}
+	}
+
+	err := fmt.Errorf("nenhum peer forneceu configuração válida (%d peers; %s)", len(peers), summarizeOnboardingCauses(causes))
+	if state != nil {
+		state.mu.Lock()
+		state.lastError = err.Error()
+		state.mu.Unlock()
+	}
+	return err
+}
+
+// fetchOnboardingOfferHTTP faz o GET /p2p/config/onboard no peer e decodifica a
+// oferta, devolvendo erro EXPLÍCITO (antes ECONNREFUSED/status != 200 eram
+// descartados em silêncio — achado Z9).
+func (a *App) fetchOnboardingOfferHTTP(ctx context.Context, endpoint string) (P2POnboardingRequest, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return P2POnboardingRequest{}, fmt.Errorf("request: %w", err)
+	}
+	client := &http.Client{Timeout: onboardingHTTPPeerTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return P2POnboardingRequest{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		preview, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return P2POnboardingRequest{}, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(preview)))
+	}
+
+	var offer P2POnboardingRequest
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&offer); err != nil {
+		return P2POnboardingRequest{}, fmt.Errorf("decode: %w", err)
+	}
+	return offer, nil
+}
+
+// applyPeerOnboardingOffer aplica a oferta recebida de um peer, registra o
+// evento de auditoria e devolve o resultado. via identifica o caminho
+// (libp2p|http) nas mensagens de log.
+func (a *App) applyPeerOnboardingOffer(offer P2POnboardingRequest, state *p2pOnboardingState, via string) (P2POnboardingResult, error) {
+	result, applyErr := a.applyOnboardingOffer(offer)
+	sourceAgentID := strings.TrimSpace(offer.SourceAgent)
+
+	event := P2POnboardingAuditEvent{
+		TimestampUTC:  time.Now().UTC().Format(time.RFC3339),
+		SourceAgentID: sourceAgentID,
+		ServerURL:     strings.TrimSpace(offer.ServerURL),
+		Success:       applyErr == nil,
+	}
+	if applyErr != nil {
+		event.Message = applyErr.Error()
+		a.Logs.Append("[zero-touch] oferta rejeitada via " + via + " de " + sourceAgentLabel(offer) + ": " + applyErr.Error())
+	} else {
+		event.Message = "configurado com sucesso via " + via
+		event.TargetAgentID = result.AgentID
+		a.Logs.Append("[zero-touch] configurado via " + via + " peer=" + sourceAgentLabel(offer) + " agentId=" + result.AgentID)
+	}
+	if state != nil {
+		state.mu.Lock()
+		state.audit = append(state.audit, event)
+		state.configured = applyErr == nil
+		state.mu.Unlock()
+	}
+	return result, applyErr
+}
+
+// sourceAgentLabel devolve um rótulo legível do peer que emitiu a oferta.
+func sourceAgentLabel(offer P2POnboardingRequest) string {
+	if id := strings.TrimSpace(offer.SourceAgent); id != "" {
+		return id
+	}
+	return "<peer-desconhecido>"
+}
+
+// summarizeOnboardingCauses junta as causas por peer limitando o volume, para o
+// erro/log continuarem legíveis em frotas grandes.
+func summarizeOnboardingCauses(causes []string) string {
+	if len(causes) == 0 {
+		return "sem detalhes"
+	}
+	if len(causes) <= onboardingMaxPeerCauses {
+		return strings.Join(causes, "; ")
+	}
+	return fmt.Sprintf("%s; ... (+%d causas)", strings.Join(causes[:onboardingMaxPeerCauses], "; "), len(causes)-onboardingMaxPeerCauses)
 }
 
 // applyOnboardingOffer validates and persists the received onboarding offer.

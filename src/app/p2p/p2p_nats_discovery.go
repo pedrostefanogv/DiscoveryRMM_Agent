@@ -72,6 +72,37 @@ func (c *Coordinator) HandlePeerOnlineEvent(event agentconn.PeerEventMessage) {
 
 	c.deps.Log(fmt.Sprintf("[p2p][events] conectado via peer.online: agentId=%s peerId=%s",
 		strings.TrimSpace(event.AgentID), strings.TrimSpace(event.PeerID)))
+
+	// BUGFIX D4 (2026-10-29): o peer.online conectava mas NÃO entrava no estado
+	// do coordinator — GetPeers()/UI/gossip continuavam sem o peer mesmo com a
+	// conexão libp2p estabelecida. Aqui ele passa a ser registrado como peer
+	// descoberto (fonte "nats-event").
+	address := firstUsableSnapshotAddr(event.Addrs)
+	if address == "" || event.Port <= 0 {
+		return
+	}
+	// event.Port é a porta do LIBP2P (vem do heartbeat), enquanto
+	// P2PPeerView.Port historicamente é a porta HTTP do P2P. Se o peer já é
+	// conhecido (mDNS/probe/gossip), preserva a porta HTTP dele — sobrescrever
+	// com a porta libp2p quebrava o fallback HTTP do onboarding e a UI
+	// (achado B2 da revisão 2026-10-29).
+	peerKey := strings.ToLower(strings.TrimSpace(event.AgentID))
+	port := event.Port
+	c.mu.RLock()
+	if known, ok := c.peers[peerKey]; ok && known.Peer.Port > 0 {
+		port = known.Peer.Port
+	}
+	c.mu.RUnlock()
+	c.upsertPeer(p2pDiscoveredPeer{
+		AgentID:      strings.TrimSpace(event.AgentID),
+		ClientID:     strings.TrimSpace(event.ClientID),
+		Host:         address,
+		Address:      address,
+		Port:         port,
+		Source:       "nats-event",
+		ConnectedVia: "nats-event",
+		TTLSeconds:   int(p2pPeerTTLFloor.Seconds()),
+	})
 }
 
 func (c *Coordinator) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDiscoverySnapshot) {

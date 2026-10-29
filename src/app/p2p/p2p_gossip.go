@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 // libp2pHostAndRegistry retorna o host e registry libp2p quando o provider
@@ -25,6 +26,18 @@ func (c *Coordinator) libp2pHostAndRegistry() (host.Host, *libp2pPeerRegistry) {
 	return nil, nil
 }
 
+// fetchPeerGossip faz o gossip autenticado de peers para o coordinator,
+// negociando (e cacheando) o token de discovery. Peers antigos — que não
+// conhecem o artifact "*" — são tratados como legacy: catálogo remoto vazio,
+// com log único, sem loop de erro.
+func (c *Coordinator) fetchPeerGossip(ctx context.Context, h host.Host, peerID peer.ID) (libp2pPeersResponse, error) {
+	var logf func(string)
+	if c != nil && c.deps != nil {
+		logf = c.deps.Log
+	}
+	return fetchPeerGossip(ctx, h, peerID, c.p2pRequesterID(), logf)
+}
+
 func (c *Coordinator) pullPeerGossip(ctx context.Context) {
 	c.RefreshPeerArtifactIndex(ctx, "gossip")
 }
@@ -39,7 +52,7 @@ func (c *Coordinator) refreshSinglePeer(ctx context.Context, peer p2pDiscoveredP
 	h, registry := c.libp2pHostAndRegistry()
 	if h != nil && registry != nil {
 		if peerID, ok := registry.Lookup(peer.AgentID); ok {
-			if resp, err := libp2pFetchPeers(ctx, h, peerID); err == nil {
+			if resp, err := c.fetchPeerGossip(ctx, h, peerID); err == nil {
 				c.applyGossipResponse(peer.AgentID, resp.KnownPeers, resp.Artifacts, "gossip-immediate")
 				return
 			}
@@ -95,7 +108,7 @@ func (c *Coordinator) RefreshPeerArtifactIndex(ctx context.Context, source strin
 		// Caminho libp2p: usar stream quando peer estiver no registry.
 		if h != nil && registry != nil {
 			if peerID, ok := registry.Lookup(peer.AgentID); ok {
-				if resp, err := libp2pFetchPeers(ctx, h, peerID); err == nil {
+				if resp, err := c.fetchPeerGossip(ctx, h, peerID); err == nil {
 					catalogSource := strings.TrimSpace(resp.CatalogSource)
 					if catalogSource == "" {
 						catalogSource = source

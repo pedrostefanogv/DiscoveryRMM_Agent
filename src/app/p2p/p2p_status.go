@@ -186,7 +186,7 @@ func (c *Coordinator) GetPeerArtifactIndex() []P2PPeerArtifactIndexView {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			resp, err := libp2pFetchPeers(ctx, h, lpID)
+			resp, err := c.fetchPeerGossip(ctx, h, lpID)
 			if err != nil {
 				return
 			}
@@ -261,7 +261,7 @@ func (c *Coordinator) PeerArtifactIndexCached() []P2PPeerArtifactIndexView {
 //
 // O cache peerArtifacts é populado por:
 //   - gossip pull (RefreshPeerArtifactIndex)
-//   - fetch on-demand (libp2pFetchPeers)
+//   - fetch on-demand (fetchPeerGossip → libp2pFetchPeers autenticado)
 //   - snapshots NATS (ApplyP2PDiscoverySnapshot)
 //
 // Usar o cache evita latência (5s timeout por peer) e permite que o lookup
@@ -316,7 +316,7 @@ func (c *Coordinator) FindArtifactPeers(artifactName string) P2PArtifactAvailabi
 		for _, peer := range peers {
 			if lpID, ok := registry.Lookup(peer.Peer.AgentID); ok {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				resp, err := libp2pFetchPeers(ctx, h, lpID)
+				resp, err := c.fetchPeerGossip(ctx, h, lpID)
 				cancel()
 				if err != nil {
 					continue
@@ -414,7 +414,7 @@ func (c *Coordinator) FindArtifactPeersByID(artifactID string) P2PArtifactAvaila
 		for _, peer := range peers {
 			if lpID, ok := registry.Lookup(peer.Peer.AgentID); ok {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				resp, err := libp2pFetchPeers(ctx, h, lpID)
+				resp, err := c.fetchPeerGossip(ctx, h, lpID)
 				cancel()
 				if err != nil {
 					continue
@@ -534,7 +534,7 @@ func (c *Coordinator) FindArtifactPeersByReleaseID(artifactID string, expectedSH
 		for _, peer := range peers {
 			if lpID, ok := registry.Lookup(peer.Peer.AgentID); ok {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				resp, err := libp2pFetchPeers(ctx, h, lpID)
+				resp, err := c.fetchPeerGossip(ctx, h, lpID)
 				cancel()
 				if err != nil {
 					continue

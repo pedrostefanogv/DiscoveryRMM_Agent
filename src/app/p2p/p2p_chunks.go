@@ -359,7 +359,7 @@ func downloadChunkedLibp2p(
 				// o abort — elas podem se resolver no retry ou no backoff, e
 				// abortar cedo demais mata downloads que só precisavam de
 				// outra tentativa (com 1 peer, a 1ª falha abortava tudo).
-				isChecksumMismatch := strings.Contains(lastErr.Error(), "checksum divergente")
+				isChecksumMismatch := isStaleManifestError(lastErr)
 				if chunkIdx == 0 && isChecksumMismatch && len(failedPeers) >= len(peers) {
 					earlyAbortOnce.Do(func() {
 						if logf != nil {
@@ -483,7 +483,7 @@ func downloadChunkedLibp2p(
 	assembled := hex.EncodeToString(fullHash.Sum(nil))
 	if strings.TrimSpace(manifest.SHA256) != "" && !strings.EqualFold(assembled, manifest.SHA256) {
 		_ = os.Remove(tmpPath)
-		return "", 0, fmt.Errorf("checksum do arquivo final divergente")
+		return "", 0, fmt.Errorf("%w: checksum do arquivo final nao confere", errFinalChecksumMismatch)
 	}
 
 	if err := platform.RenameAtomic(tmpPath, targetPath); err != nil {

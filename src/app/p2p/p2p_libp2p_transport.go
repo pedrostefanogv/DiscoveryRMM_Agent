@@ -81,18 +81,27 @@ const rollingDeadlineInterval = 512 * 1024
 // 0x0" simultâneo em seed e cliente). Com renovação rolante, o timeout passa a
 // valer apenas para inatividade real (stall), não para duração total.
 type rollingDeadlineStreamReader struct {
-	r        io.Reader
-	stream   network.Stream
-	interval int64
-	read     int64
-	next     int64
+	r io.Reader
+	// deadlineSetter é satisfeito por network.Stream; interface local permite
+	// testar a renovação do deadline sem um stream libp2p real.
+	deadlineSetter p2pDeadlineSetter
+	interval       int64
+	read           int64
+	next           int64
+}
+
+// p2pDeadlineSetter abstrai SetDeadline do stream.
+type p2pDeadlineSetter interface {
+	SetDeadline(time.Time) error
 }
 
 func (rr *rollingDeadlineStreamReader) Read(p []byte) (int, error) {
 	n, err := rr.r.Read(p)
 	rr.read += int64(n)
 	if rr.read >= rr.next {
-		_ = rr.stream.SetDeadline(time.Now().Add(libp2pTransferTimeout))
+		if rr.deadlineSetter != nil {
+			_ = rr.deadlineSetter.SetDeadline(time.Now().Add(libp2pTransferTimeout))
+		}
 		rr.next = rr.read + rr.interval
 	}
 	return n, err
@@ -141,6 +150,16 @@ type libp2pPeersResponse struct {
 type libp2pAccessRequest struct {
 	ArtifactName string `json:"artifactName"`
 	RequesterID  string `json:"requesterId"`
+}
+
+// libp2pDiscoveryAccess é a resposta de /artifact/access/1.0.0 quando o cliente
+// pede o artifact reservado p2pDiscoveryTokenArtifact ("*"). Embute
+// P2PArtifactAccess para manter o mesmo shape do protocolo (ArtifactName="*"),
+// acrescentando o token em texto: sem URL de download, o token não teria como
+// chegar ao cliente.
+type libp2pDiscoveryAccess struct {
+	P2PArtifactAccess
+	Token string `json:"token"`
 }
 
 type libp2pManifestRequest struct {
@@ -202,10 +221,27 @@ func validateArtifactAccessToken(transfer *TransferServer, artifactName, request
 
 // artifactAccessTokenCache guarda o token de acesso emitido por um peer para um
 // artifact, evitando um round-trip /artifact/access por chunk (um download de
-// 6 GB pode ter centenas de chunks). Renova sozinho antes do vencimento.
+// 6 GB pode ter centenas de chunks) e por manifest. Renova sozinho antes do
+// vencimento.
+//
+// A chave inclui o artifact porque o token é emitido POR artifact (o HMAC cobre
+// o nome): o mesmo peer pode ter tokens diferentes para artifacts diferentes e
+// para o gossip (p2pDiscoveryTokenArtifact).
 type artifactAccessTokenCache struct {
 	mu      sync.Mutex
-	entries map[peer.ID]cachedArtifactAccess
+	entries map[artifactAccessTokenKey]cachedArtifactAccess
+}
+
+// artifactAccessTokenKey identifica o token de um peer para um artifact.
+// ArtifactName == p2pDiscoveryTokenArtifact identifica o token de discovery.
+type artifactAccessTokenKey struct {
+	peer     peer.ID
+	artifact string
+	// requester é parte da chave: o token HMAC é emitido PARA um requesterID e
+	// é recusado ("peer nao autorizado") se o requester mudar em runtime — o que
+	// acontece no zero-touch, quando o AgentID passa a existir após o onboarding
+	// (bug 2026-10-29: tokens velhos rejeitados → falso legacy).
+	requester string
 }
 
 type cachedArtifactAccess struct {
@@ -220,8 +256,62 @@ const accessTokenRenewMargin = 2 * time.Minute
 // defaultAccessTokenTTL é usado quando o peer não informa ExpiresAtUTC.
 const defaultAccessTokenTTL = 15 * time.Minute
 
+// accessTokenCacheMaxEntries dispara a limpeza de tokens vencidos no cache de
+// processo (chave peer × artifact).
+const accessTokenCacheMaxEntries = 512
+
+// p2pAccessTokens é o cache compartilhado de tokens de acesso (manifest e
+// discovery). O cache de chunks (p2p_chunks.go) continua local a cada download
+// para permitir invalidar por tentativa.
+var p2pAccessTokens = newArtifactAccessTokenCache()
+
 func newArtifactAccessTokenCache() *artifactAccessTokenCache {
-	return &artifactAccessTokenCache{entries: make(map[peer.ID]cachedArtifactAccess)}
+	return &artifactAccessTokenCache{entries: make(map[artifactAccessTokenKey]cachedArtifactAccess)}
+}
+
+// cached devolve o token memorizado quando ainda está longe do vencimento.
+func (c *artifactAccessTokenCache) cached(peerID peer.ID, artifactName, requesterID string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[artifactAccessTokenKey{peer: peerID, artifact: artifactName, requester: requesterID}]
+	if !ok || entry.token == "" {
+		return "", false
+	}
+	if !time.Now().Add(accessTokenRenewMargin).Before(entry.expiresAt) {
+		return "", false
+	}
+	return entry.token, true
+}
+
+// store memoriza o token (ignora token vazio: nada a reutilizar).
+func (c *artifactAccessTokenCache) store(peerID peer.ID, artifactName, requesterID, token string, expiresAt time.Time) {
+	if c == nil || strings.TrimSpace(token) == "" {
+		return
+	}
+	c.mu.Lock()
+	c.entries[artifactAccessTokenKey{peer: peerID, artifact: artifactName, requester: requesterID}] = cachedArtifactAccess{token: token, expiresAt: expiresAt}
+	// O cache de processo cresce com (peer × artifact): descarta vencidos quando
+	// fica grande em vez de crescer indefinidamente.
+	if len(c.entries) > accessTokenCacheMaxEntries {
+		now := time.Now()
+		for key, entry := range c.entries {
+			if now.After(entry.expiresAt) {
+				delete(c.entries, key)
+			}
+		}
+	}
+	c.mu.Unlock()
+}
+
+// accessTokenExpiry normaliza o vencimento informado pelo peer.
+func accessTokenExpiry(access P2PArtifactAccess) time.Time {
+	if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(access.ExpiresAtUTC)); err == nil {
+		return parsed
+	}
+	return time.Now().Add(defaultAccessTokenTTL)
 }
 
 // token devolve o token do peer, negociando quando ausente/expirado. Falha de
@@ -231,11 +321,8 @@ func (c *artifactAccessTokenCache) token(ctx context.Context, h host.Host, peerI
 	if c == nil {
 		return ""
 	}
-	c.mu.Lock()
-	entry, ok := c.entries[peerID]
-	c.mu.Unlock()
-	if ok && entry.token != "" && time.Now().Add(accessTokenRenewMargin).Before(entry.expiresAt) {
-		return entry.token
+	if token, ok := c.cached(peerID, artifactName, requesterID); ok {
+		return token
 	}
 	access, err := libp2pRequestAccess(ctx, h, peerID, artifactName, requesterID)
 	if err != nil {
@@ -246,23 +333,48 @@ func (c *artifactAccessTokenCache) token(ctx context.Context, h host.Host, peerI
 		return ""
 	}
 	token := tokenFromAccessURL(access.URL)
-	expiresAt := time.Now().Add(defaultAccessTokenTTL)
-	if parsed, perr := time.Parse(time.RFC3339, strings.TrimSpace(access.ExpiresAtUTC)); perr == nil {
-		expiresAt = parsed
-	}
-	c.mu.Lock()
-	c.entries[peerID] = cachedArtifactAccess{token: token, expiresAt: expiresAt}
-	c.mu.Unlock()
+	c.store(peerID, artifactName, requesterID, token, accessTokenExpiry(access))
 	return token
 }
 
-// invalidate remove o token cacheado do peer (ex.: token expirado/adulterado).
+// discoveryToken negocia (com cache) o token de discovery ("*"), usado no
+// gossip de peers. Devolve o erro de negociação para que o caller identifique
+// peers antigos (que não conhecem "*") e caia no modo legacy explicitamente.
+func (c *artifactAccessTokenCache) discoveryToken(ctx context.Context, h host.Host, peerID peer.ID, requesterID string, logf func(string)) (string, error) {
+	if c == nil {
+		return "", errors.New("cache de tokens de discovery indisponível")
+	}
+	if token, ok := c.cached(peerID, p2pDiscoveryTokenArtifact, requesterID); ok {
+		return token, nil
+	}
+	access, err := libp2pRequestDiscoveryAccess(ctx, h, peerID, requesterID)
+	if err != nil {
+		if logf != nil {
+			logf(fmt.Sprintf("[p2p][access] negociação do token de discovery falhou peer=%s: %v",
+				peerID.String(), err))
+		}
+		return "", err
+	}
+	token := strings.TrimSpace(access.Token)
+	if token == "" {
+		return "", errors.New("peer devolveu token de discovery vazio")
+	}
+	c.store(peerID, p2pDiscoveryTokenArtifact, requesterID, token, accessTokenExpiry(access.P2PArtifactAccess))
+	return token, nil
+}
+
+// invalidate remove TODOS os tokens cacheados do peer (ex.: token
+// expirado/adulterado/rejeitado), em qualquer artifact.
 func (c *artifactAccessTokenCache) invalidate(peerID peer.ID) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
-	delete(c.entries, peerID)
+	for key := range c.entries {
+		if key.peer == peerID {
+			delete(c.entries, key)
+		}
+	}
 	c.mu.Unlock()
 }
 
@@ -274,6 +386,30 @@ func tokenFromAccessURL(raw string) string {
 		return ""
 	}
 	return u.Query().Get("token")
+}
+
+// errChunkChecksumMismatch marca divergência entre o SHA256 do chunk recebido e
+// o do manifest. Assinatura de manifest stale (peer servindo uma versão antiga
+// do artifact) ou de corrupção — usada para invalidar o peer imediatamente.
+var errChunkChecksumMismatch = errors.New("checksum divergente do chunk")
+
+// errFinalChecksumMismatch marca divergência no SHA256 do arquivo montado a
+// partir dos chunks (manifest stale com o mesmo nome/tamanho).
+var errFinalChecksumMismatch = errors.New("checksum do arquivo final divergente")
+
+// isStaleManifestError indica que a falha do download aponta manifest stale. A
+// detecção usa sentinelas (errors.Is) e mantém um fallback por mensagem para
+// caminhos que ainda não embrulham os sentinelas.
+func isStaleManifestError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errChunkChecksumMismatch) || errors.Is(err, errFinalChecksumMismatch) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "checksum divergente") ||
+		strings.Contains(msg, "checksum do arquivo final divergente")
 }
 
 // isArtifactAccessAuthError indica que a falha do chunk veio de credencial
@@ -309,6 +445,31 @@ type libp2pReplicateResponse struct {
 
 type libp2pErrorResponse struct {
 	Error string `json:"error"`
+	// Code classifica o erro de forma estável (não depende do texto), usado para
+	// distinguir "peer antigo não suporta o protocolo" de "credencial rejeitada"
+	// — antes a heurística casava "peer: " e tratava QUALQUER rejeição como peer
+	// legacy (bug 2026-10-29, apontado na revisão).
+	Code string `json:"code,omitempty"`
+}
+
+// Códigos estáveis de erro do protocolo libp2p.
+const (
+	p2pErrCodeUnsupported = "unsupported" // peer não conhece o protocolo/artifact (legacy)
+	p2pErrCodeAuth        = "auth"        // token ausente/inválido/expirado
+	p2pErrCodeNotFound    = "not_found"   // artifact inexistente
+	p2pErrCodeInvalid     = "invalid"     // payload inválido
+)
+
+// peerStreamError converte a resposta de erro do peer em error de cliente,
+// preservando o código estável (quando o peer o envia) para que os chamadores
+// distingam auth de "protocolo não suportado" sem heurística de texto.
+func peerStreamError(errResp libp2pErrorResponse) error {
+	msg := strings.TrimSpace(errResp.Error)
+	code := strings.TrimSpace(errResp.Code)
+	if code == "" {
+		return fmt.Errorf("peer: %s", msg)
+	}
+	return fmt.Errorf("peer: %s (código %s)", msg, code)
 }
 
 // "—"— Tipos do protocolo /fetch "—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—
@@ -363,7 +524,7 @@ func handleStreamPeers(s network.Stream, coord *Coordinator, transfer *TransferS
 		req = libp2pPeersRequest{} // frame inválido do requester = sem credencial
 	}
 	if err := validateDiscoveryAccessToken(transfer, strings.TrimSpace(req.RequesterID), strings.TrimSpace(req.Token)); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error()})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error(), Code: p2pErrCodeAuth})
 		return
 	}
 
@@ -401,6 +562,18 @@ func handleStreamArtifactAccess(s network.Stream, transfer *TransferServer) {
 	if req.RequesterID == "" {
 		req.RequesterID = "peer-anon"
 	}
+	// Token de discovery ("*"): credencia apenas o gossip de peers. Não exige
+	// que nenhum arquivo exista — antes disso o cliente nunca conseguia
+	// autenticar em /discovery/peers no modo "require" (catálogo sempre vazio).
+	if req.ArtifactName == p2pDiscoveryTokenArtifact {
+		access, token, err := transfer.BuildDiscoveryAccess(req.RequesterID)
+		if err != nil {
+			_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error()})
+			return
+		}
+		_ = json.NewEncoder(s).Encode(libp2pDiscoveryAccess{P2PArtifactAccess: access, Token: token})
+		return
+	}
 	access, err := transfer.BuildArtifactAccess(req.ArtifactName, req.RequesterID)
 	if err != nil {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error()})
@@ -425,7 +598,7 @@ func handleStreamArtifactManifest(s network.Stream, transfer *TransferServer) {
 		return
 	}
 	if err := validateArtifactAccessToken(transfer, req.ArtifactName, req.RequesterID, req.Token); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error()})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error(), Code: p2pErrCodeAuth})
 		return
 	}
 	transfer.mu.RLock()
@@ -537,7 +710,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 		return
 	}
 	if err := validateArtifactAccessToken(transfer, req.ArtifactName, req.RequesterID, req.Token); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error()})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error(), Code: p2pErrCodeAuth})
 		return
 	}
 	transfer.mu.RLock()
@@ -712,7 +885,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 	// Deadline ROLANTE: renovado a cada 512KB enviados — só expira em stall real,
 	// não em transferência lenta (vazão baixa com chunks paralelos).
 	_ = s.SetDeadline(computeTransferDeadline(chunkLen))
-	reader = &rollingDeadlineStreamReader{r: reader, stream: s, interval: rollingDeadlineInterval}
+	reader = &rollingDeadlineStreamReader{r: reader, deadlineSetter: s, interval: rollingDeadlineInterval}
 	// M15: throttle de bandwidth no sender (bytes servidos a peers) — bucket
 	// global da máquina, configurável via servidor.
 	if bwMaxPerSec.Load() > 0 {
@@ -796,9 +969,14 @@ func handleStreamArtifactReplicate(s network.Stream) {
 
 // "—"— Client-side: funções de chamada para peers "—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—
 
-// libp2pFetchPeers abre um stream /discovery/peers/1.0.0 para o peer e retorna
-// a resposta de gossip (catálogo + peers conhecidos).
-func libp2pFetchPeers(ctx context.Context, h host.Host, peerID peer.ID) (libp2pPeersResponse, error) {
+// libp2pFetchPeers abre um stream /discovery/peers/1.0.0 para o peer, envia o
+// frame libp2pPeersRequest (RequesterID + token de discovery) e retorna a
+// resposta de gossip (catálogo + peers conhecidos).
+//
+// O frame é OBRIGATÓRIO a partir do momento em que o servidor passou a exigir
+// token no modo "require": sem ele o catálogo vinha sempre vazio. Peers antigos
+// simplesmente ignoram o frame (não leem do stream) e respondem no mesmo stream.
+func libp2pFetchPeers(ctx context.Context, h host.Host, peerID peer.ID, requesterID, token string) (libp2pPeersResponse, error) {
 	s, err := h.NewStream(ctx, peerID, protoDiscoveryPeers)
 	if err != nil {
 		return libp2pPeersResponse{}, fmt.Errorf("stream peers: %w", err)
@@ -806,11 +984,157 @@ func libp2pFetchPeers(ctx context.Context, h host.Host, peerID peer.ID) (libp2pP
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
 
+	req := libp2pPeersRequest{
+		RequesterID: strings.TrimSpace(requesterID),
+		Token:       strings.TrimSpace(token),
+	}
+	if err := json.NewEncoder(s).Encode(req); err != nil {
+		return libp2pPeersResponse{}, fmt.Errorf("encode peers req: %w", err)
+	}
+
+	// O servidor pode responder libp2pErrorResponse (token ausente/inválido,
+	// modo require). Lê tudo e diferencia erro de resposta — sem isso o JSON de
+	// erro decodificava como "peers vazio" e a causa real (permissão) se perdia.
+	raw, err := io.ReadAll(bufio.NewReader(s))
+	if err != nil {
+		return libp2pPeersResponse{}, fmt.Errorf("read peers resp: %w", err)
+	}
+	var errResp libp2pErrorResponse
+	if json.Unmarshal(raw, &errResp) == nil && strings.TrimSpace(errResp.Error) != "" {
+		return libp2pPeersResponse{}, peerStreamError(errResp)
+	}
 	var resp libp2pPeersResponse
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&resp); err != nil {
+	if err := json.Unmarshal(raw, &resp); err != nil {
 		return libp2pPeersResponse{}, fmt.Errorf("decode peers: %w", err)
 	}
 	return resp, nil
+}
+
+// discoveryLegacyPeerTTL é por quanto tempo um peer identificado como "legacy"
+// (não conhece o token de discovery) fica marcado antes de tentarmos de novo.
+// Evita um stream por ciclo de gossip (45s) contra um peer que nunca vai
+// responder o token — mas permite que um peer atualizado volte a funcionar.
+const discoveryLegacyPeerTTL = 10 * time.Minute
+
+// discoveryLegacyCache marca peers antigos (protocolo sem token de discovery).
+type discoveryLegacyCache struct {
+	mu    sync.Mutex
+	until map[peer.ID]time.Time
+}
+
+var p2pDiscoveryLegacyPeers = &discoveryLegacyCache{until: make(map[peer.ID]time.Time)}
+
+// isLegacy informa se o peer está marcado como legacy e a marca ainda vale.
+func (c *discoveryLegacyCache) isLegacy(peerID peer.ID) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	until, ok := c.until[peerID]
+	if !ok {
+		return false
+	}
+	if time.Now().After(until) {
+		delete(c.until, peerID)
+		return false
+	}
+	return true
+}
+
+// markLegacy marca o peer como legacy. Retorna true somente na primeira vez
+// dentro da janela (permite logar uma única vez, sem loop de erro).
+func (c *discoveryLegacyCache) markLegacy(peerID peer.ID) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if until, ok := c.until[peerID]; ok && time.Now().Before(until) {
+		return false
+	}
+	c.until[peerID] = time.Now().Add(discoveryLegacyPeerTTL)
+	return true
+}
+
+// isLegacyDiscoveryPeerError indica que o peer respondeu um rejeição de
+// protocolo (não conhece o artifact "*") em vez de erro de rede. Só respostas
+// de erro do handler (prefixo "peer: ") marcam o peer como legacy: um timeout
+// não pode congelar o catálogo por 10 minutos.
+func isLegacyDiscoveryPeerError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Só é "legacy" quando o peer REJEITOU o artifact reservado "*" por não
+	// conhecê-lo (comportamento de binário antigo). Erro de credencial, timeout
+	// ou assinatura NÃO pode congelar o catálogo por 10 min: antes a heurística
+	// incluía "peer: " e casava qualquer resposta de erro do servidor.
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "código unsupported") || strings.Contains(msg, "codigo unsupported") {
+		return true
+	}
+	return strings.Contains(msg, "artifact inválido") || strings.Contains(msg, "artifact invalido") ||
+		strings.Contains(msg, "artifact não encontrado") || strings.Contains(msg, "artifact no encontrado")
+}
+
+// fetchPeerGossip faz o gossip autenticado de peers: negocia o token de
+// discovery (cacheado por peer), envia o frame e — em caso de token rejeitado —
+// renova e tenta uma vez. Peers antigos (sem suporte a "*") são marcados como
+// legacy e o catálogo remoto fica vazio, com log único.
+func fetchPeerGossip(ctx context.Context, h host.Host, peerID peer.ID, requesterID string, logf func(string)) (libp2pPeersResponse, error) {
+	requesterID = strings.TrimSpace(requesterID)
+	if requesterID == "" {
+		requesterID = "peer-local"
+	}
+	if p2pDiscoveryLegacyPeers.isLegacy(peerID) {
+		return libp2pPeersResponse{}, fmt.Errorf("peer %s em modo legacy: gossip autenticado indisponível", peerID.String())
+	}
+
+	token, err := p2pAccessTokens.discoveryToken(ctx, h, peerID, requesterID, logf)
+	if err != nil {
+		// ORDEM IMPORTA (bug 2026-10-29): auth ANTES de legacy. Todo erro do
+		// servidor chega como "peer: ..."; classificar legacy primeiro marcava
+		// o peer como "antigo" por 10 min após uma simples rejeição de token
+		// (e o secret do servidor é regenerado a cada restart do peer!).
+		if isArtifactAccessAuthError(err) {
+			p2pAccessTokens.invalidate(peerID)
+			if token2, terr := p2pAccessTokens.discoveryToken(ctx, h, peerID, requesterID, logf); terr == nil {
+				token = token2
+				err = nil
+			}
+		}
+		if err != nil {
+			if isLegacyDiscoveryPeerError(err) && p2pDiscoveryLegacyPeers.markLegacy(peerID) && logf != nil {
+				logf(fmt.Sprintf("[p2p][gossip] peer %s não suporta token de discovery (agente antigo): catálogo remoto desabilitado por %s",
+					peerID.String(), discoveryLegacyPeerTTL))
+			}
+			return libp2pPeersResponse{}, err
+		}
+	}
+
+	resp, err := libp2pFetchPeers(ctx, h, peerID, requesterID, token)
+	if err == nil {
+		return resp, nil
+	}
+	if isArtifactAccessAuthError(err) {
+		// Token morreu no meio (expirou/rotacionou): invalida, renova e tenta 1x.
+		p2pAccessTokens.invalidate(peerID)
+		token2, terr := p2pAccessTokens.discoveryToken(ctx, h, peerID, requesterID, logf)
+		if terr == nil {
+			if resp2, err2 := libp2pFetchPeers(ctx, h, peerID, requesterID, token2); err2 == nil {
+				return resp2, nil
+			} else {
+				err = err2
+			}
+		}
+	}
+	if isLegacyDiscoveryPeerError(err) {
+		if p2pDiscoveryLegacyPeers.markLegacy(peerID) && logf != nil {
+			logf(fmt.Sprintf("[p2p][gossip] peer %s rejeitou o token de discovery (agente antigo): catálogo remoto desabilitado por %s",
+				peerID.String(), discoveryLegacyPeerTTL))
+		}
+	}
+	return libp2pPeersResponse{}, err
 }
 
 // libp2pRequestAccess abre um stream /artifact/access/1.0.0 e retorna o token de acesso.
@@ -833,7 +1157,7 @@ func libp2pRequestAccess(ctx context.Context, h host.Host, peerID peer.ID, artif
 	}
 	var errResp libp2pErrorResponse
 	if json.Unmarshal(raw, &errResp) == nil && errResp.Error != "" {
-		return P2PArtifactAccess{}, fmt.Errorf("peer: %s", errResp.Error)
+		return P2PArtifactAccess{}, peerStreamError(errResp)
 	}
 	var access P2PArtifactAccess
 	if err := json.Unmarshal(raw, &access); err != nil {
@@ -842,8 +1166,41 @@ func libp2pRequestAccess(ctx context.Context, h host.Host, peerID peer.ID, artif
 	return access, nil
 }
 
+// libp2pRequestDiscoveryAccess abre um stream /artifact/access/1.0.0 pedindo o
+// token de discovery (artifact "*") e devolve a resposta com o token.
+func libp2pRequestDiscoveryAccess(ctx context.Context, h host.Host, peerID peer.ID, requesterID string) (libp2pDiscoveryAccess, error) {
+	s, err := h.NewStream(ctx, peerID, protoArtifactAccess)
+	if err != nil {
+		return libp2pDiscoveryAccess{}, fmt.Errorf("stream access: %w", err)
+	}
+	defer s.Close()
+	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
+
+	req := libp2pAccessRequest{ArtifactName: p2pDiscoveryTokenArtifact, RequesterID: requesterID}
+	if err := json.NewEncoder(s).Encode(req); err != nil {
+		return libp2pDiscoveryAccess{}, fmt.Errorf("encode access req: %w", err)
+	}
+	raw, err := io.ReadAll(bufio.NewReader(s))
+	if err != nil {
+		return libp2pDiscoveryAccess{}, fmt.Errorf("read access resp: %w", err)
+	}
+	var errResp libp2pErrorResponse
+	if json.Unmarshal(raw, &errResp) == nil && errResp.Error != "" {
+		return libp2pDiscoveryAccess{}, peerStreamError(errResp)
+	}
+	var access libp2pDiscoveryAccess
+	if err := json.Unmarshal(raw, &access); err != nil {
+		return libp2pDiscoveryAccess{}, fmt.Errorf("decode access resp: %w", err)
+	}
+	return access, nil
+}
+
 // libp2pFetchManifest abre um stream /artifact/manifest/1.0.0 e retorna o manifest de chunks.
-func libp2pFetchManifest(ctx context.Context, h host.Host, peerID peer.ID, artifactName, requesterID string) (P2PChunkManifest, error) {
+// accessToken é o token de /artifact/access/1.0.0 (centenas de chunks por
+// download só abrem manifest uma vez, mas o manifesto também exige credencial no
+// modo "require"). Vazio = peer legacy: o servidor decide (aceita no modo
+// "legacy", recusa no "require").
+func libp2pFetchManifest(ctx context.Context, h host.Host, peerID peer.ID, artifactName, requesterID, accessToken string) (P2PChunkManifest, error) {
 	s, err := h.NewStream(ctx, peerID, protoArtifactManifest)
 	if err != nil {
 		return P2PChunkManifest{}, fmt.Errorf("stream manifest: %w", err)
@@ -851,7 +1208,11 @@ func libp2pFetchManifest(ctx context.Context, h host.Host, peerID peer.ID, artif
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(libp2pManifestTimeout))
 
-	req := libp2pManifestRequest{ArtifactName: artifactName, RequesterID: requesterID}
+	req := libp2pManifestRequest{
+		ArtifactName: artifactName,
+		RequesterID:  requesterID,
+		Token:        strings.TrimSpace(accessToken),
+	}
 	if err := json.NewEncoder(s).Encode(req); err != nil {
 		return P2PChunkManifest{}, fmt.Errorf("encode manifest req: %w", err)
 	}
@@ -861,7 +1222,7 @@ func libp2pFetchManifest(ctx context.Context, h host.Host, peerID peer.ID, artif
 	}
 	var errResp libp2pErrorResponse
 	if json.Unmarshal(raw, &errResp) == nil && errResp.Error != "" {
-		return P2PChunkManifest{}, fmt.Errorf("peer: %s", errResp.Error)
+		return P2PChunkManifest{}, peerStreamError(errResp)
 	}
 	var manifest P2PChunkManifest
 	if err := json.Unmarshal(raw, &manifest); err != nil {
@@ -923,6 +1284,36 @@ func readPayloadExact(reader io.Reader, expected int64) ([]byte, error) {
 	return data, nil
 }
 
+// newChunkPayloadReader monta o pipeline de leitura de um chunk:
+//
+//	payload do stream                        (rede)
+//	  → rollingDeadlineStreamReader          (renova o deadline a cada 512KB)
+//	  → progressReader                       (callback de progresso, se houver)
+//	  → bandwidthThrottleReader              (M15, se o limite estiver ativo)
+//
+// T4: o deadline rolante precisa envolver o leitor que REALMENTE é lido. Antes
+// o progressReader era montado por cima do payload puro e o rolling era
+// descartado — com callback de progresso o deadline nunca era renovado e
+// streams lentos morriam no piso de 2min ("Application error 0x0" simultâneo).
+func newChunkPayloadReader(ctx context.Context, payload io.Reader, stream p2pDeadlineSetter, chunkLen int64, onProgress func(readSoFar, total int64)) io.Reader {
+	var dataReader io.Reader = &rollingDeadlineStreamReader{
+		r:              payload,
+		deadlineSetter: stream,
+		interval:       rollingDeadlineInterval,
+	}
+	if onProgress != nil {
+		dataReader = newProgressReader(dataReader, chunkLen, func(readSoFar int64) {
+			onProgress(readSoFar, chunkLen)
+		})
+	}
+	// M15: throttle de bandwidth (bucket global da máquina, configurável via
+	// servidor) — consome tokens pelos bytes efetivamente baixados.
+	if bwMaxPerSec.Load() > 0 {
+		dataReader = newBandwidthThrottleReader(dataReader, ctx)
+	}
+	return dataReader
+}
+
 // libp2pDownloadChunk abre um stream /artifact/get/1.0.0, solicita um range e
 // salva os bytes no destFile. Verifica SHA256 do chunk após receber.
 // onProgress é opcional —" quando != nil, chamado com (bytesLidosNoChunk, tamanhoDoChunk).
@@ -972,21 +1363,8 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 	if chunkLen != chunk.Size {
 		return fmt.Errorf("chunk %d: tamanho divergente (esperado=%d recebido=%d)", chunk.Index, chunk.Size, chunkLen)
 	}
-	var dataReader io.Reader = payloadReader
-	// Deadline ROLANTE no cliente: renova a cada 512KB recebidos para que o
-	// piso de 2min não expire em transferências lentas (paralelismo alto /
-	// rede WiFi congestionada), apenas em stall real do peer.
-	dataReader = &rollingDeadlineStreamReader{r: payloadReader, stream: s, interval: rollingDeadlineInterval}
-	if onProgress != nil {
-		dataReader = newProgressReader(payloadReader, chunkLen, func(readSoFar int64) {
-			onProgress(readSoFar, chunkLen)
-		})
-	}
-	// M15: throttle de bandwidth (bucket global da máquina, configurável via
-	// servidor) — consome tokens pelos bytes efetivamente baixados.
-	if bwMaxPerSec.Load() > 0 {
-		dataReader = newBandwidthThrottleReader(dataReader, ctx)
-	}
+	// Pipeline de leitura do payload do chunk (ver newChunkPayloadReader).
+	dataReader := newChunkPayloadReader(ctx, payloadReader, s, chunkLen, onProgress)
 
 	// Streaming para disco: grava o chunk em um arquivo temporário enquanto
 	// calcula o SHA256 em fluxo, evitando carregar o chunk inteiro em memória
@@ -1028,7 +1406,7 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 		if len(wantShort) > 12 {
 			wantShort = wantShort[:12]
 		}
-		return fmt.Errorf("chunk %d: checksum divergente (esperado=%s obtido=%s)", chunk.Index, wantShort, gotShort)
+		return fmt.Errorf("chunk %d: checksum divergente (esperado=%s obtido=%s): %w", chunk.Index, wantShort, gotShort, errChunkChecksumMismatch)
 	}
 
 	if err := os.Rename(tmpFile, destFile); err != nil {

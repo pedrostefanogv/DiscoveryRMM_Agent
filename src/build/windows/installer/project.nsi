@@ -56,6 +56,16 @@ Unicode true
 !define DISCOVERY_UI_TASK_NAME "DiscoveryAgentUI"
 !define DISCOVERY_SERVICE_NAME "DiscoveryAgent"
 !define DISCOVERY_FIREWALL_RULE_NAME "Discovery Agent Network Access"
+; O core P2P (TransferServer + host libp2p) roda no SERVICO, nao na UI
+; (discovery-service.exe -> RunServiceMode -> runCoreStartup -> P2PCoord.Run).
+; Regra program-scoped vale por caminho de executavel: sem esta regra o
+; Windows bloqueia todo trafego de entrada do P2P (peers nao conectam).
+!define DISCOVERY_SERVICE_FIREWALL_RULE_NAME "Discovery Agent Service P2P"
+; Regra por porta (defesa em profundidade): faixa HTTP P2P + porta fixa libp2p.
+!define DISCOVERY_P2P_PORTS_RULE_NAME "Discovery Agent P2P Ports"
+!define DISCOVERY_P2P_PORTS_UDP_RULE_NAME "Discovery Agent P2P Ports UDP"
+!define DISCOVERY_P2P_HTTP_PORT_RANGE "41080-41120"
+!define DISCOVERY_P2P_LIBP2P_PORT "41121"
 
 !ifndef ARG_WAILS_AMD64_BINARY
 !ifdef WAILS_AMD64_BINARY
@@ -1383,18 +1393,51 @@ Function PrepareForInPlaceUpdate
 FunctionEnd
 
 Function RegisterWindowsFirewallRule
-   DetailPrint "Registrando regra de Windows Firewall para ${PRODUCT_EXECUTABLE}"
+   DetailPrint "Registrando regras de Windows Firewall (UI + servico + portas P2P)"
 
    # netsh advfirewall: nativo do Windows, sem dependencia de PowerShell ou plugins.
-   # Remove regra anterior (idempotente) e cria nova.
+   # Remove regras anteriores (idempotente) e cria novas.
+
+   # 1) UI (discovery-agent.exe) — mantida por compatibilidade/remote session.
    nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_FIREWALL_RULE_NAME}"'
    Pop $R0
-
    nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_FIREWALL_RULE_NAME}" dir=in action=allow program="$INSTDIR\${PRODUCT_EXECUTABLE}" enable=yes profile=any'
    Pop $R0
-
    ${If} $R0 != 0
       DetailPrint "Aviso: falha ao registrar regra de Windows Firewall para ${PRODUCT_EXECUTABLE}. Codigo: $R0"
+   ${EndIf}
+
+   # 2) SERVICO (discovery-service.exe) — onde o P2P realmente escuta.
+   IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}" 0 fw_service_missing
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_SERVICE_FIREWALL_RULE_NAME}"'
+   Pop $R1
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_SERVICE_FIREWALL_RULE_NAME}" dir=in action=allow program="$INSTDIR\${SERVICE_EXECUTABLE}" enable=yes profile=any'
+   Pop $R1
+   ${If} $R1 != 0
+      DetailPrint "Aviso: falha ao registrar regra de Firewall para ${SERVICE_EXECUTABLE}. Codigo: $R1"
+   ${EndIf}
+   Goto fw_service_done
+   fw_service_missing:
+   DetailPrint "Aviso: ${SERVICE_EXECUTABLE} ausente — regra de firewall do servico nao registrada"
+   fw_service_done:
+
+   # 3) Portas P2P: faixa HTTP de transferencia + porta fixa do libp2p.
+   #    TCP cobre o transporte padrao (tcpOnly=true); UDP cobre QUIC/v1 quando
+   #    tcpOnly=false (sem esta regra o QUIC ficaria bloqueado e o handshake
+   #    cairia em fallback mais lento).
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_P2P_PORTS_RULE_NAME}"'
+   Pop $R2
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_P2P_PORTS_RULE_NAME}" dir=in action=allow protocol=TCP localport=${DISCOVERY_P2P_HTTP_PORT_RANGE},${DISCOVERY_P2P_LIBP2P_PORT} enable=yes profile=any'
+   Pop $R2
+   ${If} $R2 != 0
+      DetailPrint "Aviso: falha ao registrar regra de portas P2P (TCP). Codigo: $R2"
+   ${EndIf}
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_P2P_PORTS_UDP_RULE_NAME}"'
+   Pop $R3
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_P2P_PORTS_UDP_RULE_NAME}" dir=in action=allow protocol=UDP localport=${DISCOVERY_P2P_LIBP2P_PORT} enable=yes profile=any'
+   Pop $R3
+   ${If} $R3 != 0
+      DetailPrint "Aviso: falha ao registrar regra de portas P2P (UDP). Codigo: $R3"
    ${EndIf}
 FunctionEnd
 
@@ -1455,14 +1498,20 @@ ui_startup_fallback:
 FunctionEnd
 
 Function un.UnregisterWindowsFirewallRule
-   DetailPrint "Removendo regra de Windows Firewall de ${PRODUCT_EXECUTABLE}"
+   DetailPrint "Removendo regras de Windows Firewall do agente"
 
    # netsh advfirewall: nativo do Windows, sem PowerShell.
    nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_FIREWALL_RULE_NAME}"'
    Pop $R0
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_SERVICE_FIREWALL_RULE_NAME}"'
+   Pop $R1
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_P2P_PORTS_RULE_NAME}"'
+   Pop $R2
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_P2P_PORTS_UDP_RULE_NAME}"'
+   Pop $R3
 
    ${If} $R0 != 0
-      DetailPrint "Aviso: falha ao remover regra de Windows Firewall de ${PRODUCT_EXECUTABLE}. Codigo: $R0"
+      DetailPrint "Aviso: falha ao remover regra da UI. Codigo: $R0"
    ${EndIf}
 FunctionEnd
 

@@ -26,7 +26,12 @@ const (
 	p2pLANProbeWarmupDelay         = 12 * time.Second
 	// M16: sweep da LAN (/24 × portas) a cada 5min em vez de 2min — reduz o
 	// scanning contínuo da rede mantendo a descoberta em tempo razoável.
-	p2pLANProbeInterval    = 5 * time.Minute
+	p2pLANProbeInterval = 5 * time.Minute
+	// p2pPeerTTLFloor é o TTL mínimo de um peer descoberto. Precisa ser MAIOR
+	// que o intervalo do sweep de LAN: com o antigo TTL de 2 min e probe de
+	// 5 min o peer expirava antes de ser redescoberto e "piscava" fora da
+	// UI/gossip a cada ciclo (achado D5).
+	p2pPeerTTLFloor        = 2 * p2pLANProbeInterval
 	peerArtifactCacheTTL   = 72 * time.Hour // cache de artifacts por peer expira em 72h
 	maxPeerArtifactEntries = 500            // cap máximo de entries no mapa peerArtifacts
 )
@@ -58,6 +63,10 @@ type Coordinator struct {
 	listenAddress     string
 	discoveryProvider p2pDiscoveryProvider
 	transferServer    *TransferServer
+	// lanHealth expõe /p2p/health na interface de LAN (o listener principal do
+	// TransferServer é loopback-only por hardening). Sem ele o probe de LAN
+	// nunca alcança o peer e a descoberta por subnet é impossível (D2).
+	lanHealth *p2pLANHealthServer
 
 	// sha256Cache evita recalcular SHA256 de artifacts locais a cada gossip tick.
 	// A entrada é invalidada quando a mtime do arquivo muda.
@@ -254,6 +263,15 @@ func (c *Coordinator) Shutdown() error {
 	c.mu.Unlock()
 	if provider != nil {
 		provider.Close()
+	}
+	// Cleanup síncrono do servidor de health da LAN (D2). Lido sob c.mu: o
+	// refreshLANHealthServer pode trocá-lo concorrentemente (data race).
+	c.mu.Lock()
+	lanHealth := c.lanHealth
+	c.lanHealth = nil
+	c.mu.Unlock()
+	if lanHealth != nil {
+		lanHealth.Close()
 	}
 	// Cleanup síncrono do TransferServer (HTTP listener).
 	if c.transferServer != nil {
@@ -459,6 +477,11 @@ func (c *Coordinator) Run(ctx context.Context) {
 	if err := c.startTransferServer(runCtx); err != nil {
 		c.setLastError(err)
 		c.deps.Log("[p2p] erro ao iniciar servidor local: " + err.Error())
+	} else {
+		// Health público (sem segredos) na interface de LAN: é o alvo do probe
+		// de descoberta e do anúncio de peerId/addrs. Rotas sensíveis
+		// (/p2p/config/onboard, /p2p/artifact/*) continuam só em loopback.
+		c.startLANHealthServer()
 	}
 	if err := c.startDiscovery(runCtx); err != nil {
 		c.setLastError(err)
@@ -533,6 +556,9 @@ func (c *Coordinator) Run(ctx context.Context) {
 				// periódico cobre a descoberta; não bloqueia o loop principal.
 			}
 		case <-lanProbeTicker.C:
+			// O IP pode ter mudado (DHCP/VPN/wifi): reconcilia o health de LAN
+			// antes do sweep para não anunciar num endereço obsoleto.
+			c.refreshLANHealthServer()
 			select {
 			case lanProbeSem <- struct{}{}:
 				go func() {
@@ -573,8 +599,11 @@ func (c *Coordinator) discoveryTick(now time.Time) error {
 	}
 	c.mu.Lock()
 	for key, peer := range c.peers {
-		expireAfter := 2 * time.Minute
+		expireAfter := p2pPeerTTLFloor
 		if peer.Peer.TTLSeconds > 0 {
+			// TTL explícito vem de quem sabe a validade (ex.: snapshot NATS do
+			// servidor, 120 s): respeitar SEM aplicar o piso, senão um peer que o
+			// servidor já declarou expirado continuaria listado por até 10 min.
 			expireAfter = time.Duration(peer.Peer.TTLSeconds) * time.Second
 		}
 		if now.Sub(peer.LastSeenUTC) > expireAfter {
