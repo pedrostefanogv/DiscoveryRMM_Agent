@@ -730,6 +730,11 @@ func scanWUA(opts ScanOptions) (*ScanResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// O WUA nao lista feature update/upgrade de versao no Windows 11. Usa a
+	// avaliacao WaaS (registro do USO) para incluir o upgrade no inventario.
+	if assessment, ok := readWaaSFeatureAssessment(); ok {
+		pending = appendWaaSFeatureUpdate(pending, assessment, currentDisplayVersion())
+	}
 
 	res := &ScanResult{
 		StartedAt: started,
