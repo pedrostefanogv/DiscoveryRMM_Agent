@@ -32,6 +32,7 @@ const (
 	sessionTrayClassName = "DiscoveryRmmSessionTray"
 	trayCallbackMessage  = 0x8000 + 2 // WM_APP + 2
 	trayRefreshMessage   = 0x8000 + 3 // WM_APP + 3
+	trayPromoteMessage   = 0x8000 + 4 // WM_APP + 4 (recriar ícone após IsPromoted)
 	trayTimerID          = 7
 	trayRefreshMS        = 1000
 
@@ -212,6 +213,9 @@ func NewSessionTray(opts SessionTrayOptions) (*SessionTray, error) {
 		}
 		tray.setBalloon(trayBalloonOnStartup + trayOperatorSuffix(tray.snapshotOperator()))
 		procSetTimer.Call(hwnd, trayTimerID, trayRefreshMS, 0)
+		// Windows 11 esconde ícones novos no overflow; promove este ícone para
+		// a área visível (best-effort, em segundo plano).
+		go tray.promoteSessionTrayIcon()
 		tray.ready <- nil
 
 		var msg trayMsg
@@ -259,6 +263,11 @@ func sessionTrayWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		if balloon := tray.takeBalloon(); balloon != "" {
 			tray.notify(balloon)
 		}
+		return 0
+	case trayPromoteMessage:
+		// O shell lê IsPromoted no NIM_ADD: recria o ícone depois de gravar a
+		// preferência para ele sair do overflow na hora.
+		tray.reapplyIcon()
 		return 0
 	case trayWMTimer:
 		tray.refreshTip()
