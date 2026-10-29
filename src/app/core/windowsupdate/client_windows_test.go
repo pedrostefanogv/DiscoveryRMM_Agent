@@ -25,21 +25,27 @@ func TestPendingCriteriaIncludeOptionalUpdatesAndUpgrades(t *testing.T) {
 		if strings.Contains(lower, "browseonly") {
 			t.Fatalf("criterio ainda filtra BrowseOnly (opcionais): %q", criterion)
 		}
-		// Type='Software' escondia pacotes cujo tipo/metadados nao casam.
-		if strings.Contains(lower, "type=") {
-			t.Fatalf("criterio ainda filtra Type: %q", criterion)
-		}
 		if !strings.Contains(lower, "isinstalled=0") {
 			t.Fatalf("criterio sem IsInstalled=0: %q", criterion)
 		}
 	}
-	if !strings.Contains(strings.ToLower(criteria[0]), "ishidden=0") {
+	primary := strings.ToLower(criteria[0])
+	if !strings.Contains(primary, "ishidden=0") {
 		t.Fatalf("criterio primario deveria excluir ocultos: %q", criteria[0])
+	}
+	// Type='Software' e mantido para nao ler drivers em todo scan (custo).
+	if !strings.Contains(primary, "type='software'") {
+		t.Fatalf("criterio primario deveria manter Type='Software': %q", criteria[0])
 	}
 
 	withHidden := pendingCriteria(true, false)
-	if len(withHidden) != 1 || withHidden[0] != "IsInstalled=0" {
-		t.Fatalf("includeHidden=%v want [IsInstalled=0]", withHidden)
+	if len(withHidden) == 0 || withHidden[0] != "IsInstalled=0 and Type='Software'" {
+		t.Fatalf("includeHidden=%v want primeiro criterio sem IsHidden e com Type=Software", withHidden)
+	}
+
+	withDrivers := pendingCriteria(false, true)
+	if len(withDrivers) == 0 || withDrivers[0] != "IsInstalled=0 and IsHidden=0" {
+		t.Fatalf("includeDrivers=%v want primeiro criterio sem Type", withDrivers)
 	}
 }
 

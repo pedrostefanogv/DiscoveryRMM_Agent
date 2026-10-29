@@ -311,25 +311,26 @@ func searchUpdatesCollection(searcher *ole.IDispatch, criteria string) (*ole.IDi
 
 // pendingCriteria devolve os criterios da busca de pendentes.
 //
-// A busca e AMPLA de proposito: sem Type e sem BrowseOnly.
-//   - BrowseOnly=1 = atualizacao OPCIONAL (inclusive "Windows 11, version
-//     26H2" / upgrades de versao). O Windows Update mostra esses pacotes como
-//     disponiveis, entao o inventario do RMM tambem precisa mostra-los; o
-//     filtro anterior (BrowseOnly=0) os escondia e a maquina aparecia
-//     "atualizada" no RMM enquanto o Windows Update oferecia um upgrade.
-//   - Type='Software' tambem e omitido: upgrades/opcionais podem chegar com
-//     metadados que nao casam com o filtro, e o descarte de drivers ja e feito
-//     em readUpdates (por categoria), com contabilizacao explicita.
+// A diferenca em relacao ao filtro antigo e NAO usar BrowseOnly=0:
+// BrowseOnly=1 = atualizacao OPCIONAL (inclusive upgrades de versao como
+// "Windows 11, version 26H2"). O Windows Update mostra esses pacotes como
+// disponiveis, entao o inventario do RMM tambem precisa mostra-los; o filtro
+// escondia o upgrade e a maquina aparecia "atualizada" no RMM.
 //
-// Variante sem IsHidden e mantida como fallback para WUA que rejeite o
-// criterio (HRESULT de criterio invalido).
+// Type='Software' e mantido de proposito: e o que evita ler todos os drivers
+// (Type='Driver') a cada scan. Feature updates/upgrades continuam sendo
+// Software; drivers seguem fora do escopo, e includeDrivers=true remove o
+// filtro para quem pedir explicitamente. As variantes sem Type/IsHidden sao
+// fallback para WUA que rejeite o criterio (HRESULT de criterio invalido).
 func pendingCriteria(includeHidden, includeDrivers bool) []string {
-	// includeDrivers nao muda o criterio: drivers sao filtrados por categoria
-	// em readUpdates (com skippedReason "driver"), nao pela query WUA.
-	if includeHidden {
-		return []string{"IsInstalled=0"}
+	base := "IsInstalled=0 and Type='Software'"
+	if includeDrivers {
+		base = "IsInstalled=0"
 	}
-	return []string{"IsInstalled=0 and IsHidden=0", "IsInstalled=0"}
+	if includeHidden {
+		return []string{base, "IsInstalled=0"}
+	}
+	return []string{base + " and IsHidden=0", "IsInstalled=0 and IsHidden=0", "IsInstalled=0"}
 }
 
 // searchPending executa a busca de pendentes tentando variantes de criterio,
