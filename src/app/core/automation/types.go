@@ -346,6 +346,12 @@ type PackageManager interface {
 	ListUpgradable(ctx context.Context) (string, error)
 }
 
+// PackagePreparer é opcional: o PackageManager pode pré-carregar (prefetch) o
+// instalador do pacote antes do prompt de confirmação, sem executá-lo.
+type PackagePreparer interface {
+	Prepare(ctx context.Context, packageID string) error
+}
+
 // --- Custom Fields ---
 
 // FieldScopeType classifica o escopo de um custom field (Server, Client, Site, Agent).

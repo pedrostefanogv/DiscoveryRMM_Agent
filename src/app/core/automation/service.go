@@ -34,6 +34,10 @@ const (
 	// timeout interno do executor PSADT (que aplica timeoutAction/politica),
 	// suprimindo o tratamento de timeout declarado pelo servidor.
 	executionHardTimeoutMin = 10 * time.Minute
+	// prefetchTimeout é o teto do prefetch (download antes do prompt). Espelha o
+	// teto do preload coordenado (runP2pPreload), pois a mesma operação (baixar
+	// o instalador) é a que domina o tempo.
+	prefetchTimeout = 30 * time.Minute
 	// executionHardTimeoutMargin e a folga sobre o timeout da policy para o
 	// timeout INTERNO disparar primeiro — o ctx externo e apenas a rede de
 	// seguranca do watchdog.
@@ -718,6 +722,44 @@ func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprin
 	}
 }
 
+// needsArtifactPrefetch informa se a ação precisa baixar o instalador antes de executar.
+func needsArtifactPrefetch(actionType AutomationTaskActionType) bool {
+	switch actionType {
+	case ActionInstallPackage, ActionUpdatePackage, ActionUpdateOrInstallPackage:
+		return true
+	default:
+		return false
+	}
+}
+
+// prefetchPackageArtifact pré-carrega o instalador de uma task de pacote winget
+// (via P2P ou URL) antes do prompt. Best-effort: falhas só são registradas e a
+// execução segue pelo fluxo normal. Não roda para pacotes custom/choco/PSADT,
+// que não passam pelo roteador winget.
+func (s *Service) prefetchPackageArtifact(ctx context.Context, packages PackageManager, task AutomationTask, psadtPolicy PSADTPolicy) {
+	preparer, ok := packages.(PackagePreparer)
+	// Só ações que instalam/atualizam baixam artefato; remoção não precisa de download.
+	if !ok || !needsArtifactPrefetch(task.ActionType) || strings.TrimSpace(task.PackageID) == "" {
+		return
+	}
+	if task.InstallationType != "" && task.InstallationType != InstallationWinget {
+		return
+	}
+	// No modo prompt o chamador já confirmou que há trabalho a fazer; nos demais
+	// modos ainda evitamos baixar um pacote que já está em estado final.
+	if ResolveNotificationMode(task) != NotificationModePrompt && ShouldSkipPackageActionBeforePrompt(ctx, packages, task) {
+		return
+	}
+	pctx, cancel := context.WithTimeout(ctx, prefetchTimeout)
+	defer cancel()
+	startedAt := time.Now()
+	if err := preparer.Prepare(pctx, task.PackageID); err != nil {
+		s.logf("automacao: prefetch do pacote falhou task=%s packageId=%s motivo=%v (execucao seguira pelo fluxo normal)", strings.TrimSpace(task.TaskID), strings.TrimSpace(task.PackageID), err)
+		return
+	}
+	s.logf("automacao: prefetch concluido task=%s packageId=%s em %s", strings.TrimSpace(task.TaskID), strings.TrimSpace(task.PackageID), time.Since(startedAt).Round(time.Millisecond))
+}
+
 // executeTaskAsync dispara a execução em background e informa se ela foi
 // ACEITA (não se já começou a rodar: com a fila ordenada ela pode esperar a vez
 // por minutos). Retorna false quando o agente é inválido ou já existe uma
@@ -877,6 +919,10 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		if ResolveNotificationMode(task) == NotificationModePrompt && ShouldSkipPackageActionBeforePrompt(ctx, packages, task) {
 			s.logf("automacao: task=%s ja em estado final - prompt de confirmacao ignorado", strings.TrimSpace(task.TaskID))
 		} else {
+			// Prefetch ANTES do prompt: o instalador é baixado/publicado no cache
+			// enquanto o app do usuário ainda está aberto; o prompt só aparece com o
+			// arquivo pronto e a execução fica restrita à instalação.
+			s.prefetchPackageArtifact(ctx, packages, task, psadtPolicy)
 			startResp = s.dispatchExecutionNotification(notifyDispatcher, task, entry, nil, deferStateSnapshot, welcome)
 		}
 		if s.shouldDeferExecution(task, startResp) {

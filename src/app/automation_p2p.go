@@ -54,6 +54,10 @@ type automationPackageManagerRouter struct {
 	// fila. Antes, dois cliques da loja (ou loja + task de automação)
 	// podiam falhar um ao outro.
 	pkgActionMu sync.Mutex
+
+	// prepareMu serializa o prefetch (Prepare) entre tasks, evitando dois downloads
+	// simultaneos do mesmo artifact.
+	prepareMu sync.Mutex
 }
 
 func newAutomationPackageManagerRouter(app *App, fallback *services.AppsService) *automationPackageManagerRouter {
@@ -380,6 +384,44 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 		return "", fmt.Errorf("packageId vazio")
 	}
 
+	artifact, _, err := m.acquireArtifactViaP2P(ctx, packageID)
+	if err != nil {
+		return "", err
+	}
+
+	// Só dirigimos o binário quando o MANIFESTO diz como fazê-lo (sidecar do
+	// download) e o escopo não é de usuário. Caso contrário, executá-lo como
+	// SYSTEM com switches do catálogo — que podem descrever OUTRO instalador —
+	// trava o stub (BraveUpdate) e deixa processos órfãos sem instalar nada.
+	if !m.directExecAllowed(artifact) {
+		return "", fmt.Errorf("%w: artifact=%s", errInstallerNotDrivable, artifact)
+	}
+	info, _ := m.artifactManifestInfo(artifact)
+	artifactPath := filepath.Join(m.app.p2pTempDir(), artifact)
+	_, _, catInstallerType := m.catalogInstallerInfo(packageID)
+	if t := strings.TrimSpace(info.InstallerType); t != "" {
+		catInstallerType = t
+	}
+	m.logf("[automation][p2p] execucao direta com switches do MANIFESTO artifact=%s silent=%q scope=%q", artifact, info.Silent, info.Scope)
+	output, err := runLocalInstallerFull(ctx, artifactPath, info.Silent, info.SilentWithProgress, catInstallerType, true)
+	if err != nil {
+		// Erro tipado: o artifact está em disco, apenas a execução falhou.
+		// O caller NÃO deve re-baixar — deve ir direto ao winget install.
+		return "", fmt.Errorf("%w: %v", errInstallerExec, err)
+	}
+	return output, nil
+}
+
+// acquireArtifactViaP2P garante que o artifact do pacote esteja no cache local:
+// resolve a fonte (cache ou peers da LAN) e baixa do peer/swarm quando preciso.
+// NÃO executa o instalador. Reutilizado pelo installViaP2P (execução) e pelo
+// Prepare (prefetch antes do prompt).
+func (m *automationPackageManagerRouter) acquireArtifactViaP2P(ctx context.Context, packageID string) (string, []string, error) {
+	packageID = strings.TrimSpace(packageID)
+	if packageID == "" {
+		return "", nil, fmt.Errorf("packageId vazio")
+	}
+
 	// Warmup: se o P2P ainda não concluiu o discovery inicial (comum no
 	// startup do agent, quando a automação dispara antes do lan-probe),
 	// espera com timeout antes de resolver fontes. Sem isso, o resolve
@@ -392,7 +434,7 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 
 	artifact, peerIDs, err := m.resolveArtifactSources(ctx, packageID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	if len(peerIDs) == 0 {
@@ -451,7 +493,7 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 				break
 			}
 			if !downloaded {
-				return "", fmt.Errorf("falha ao baixar artifact de %d peer(s): %w", len(peerIDs), lastErr)
+				return "", nil, fmt.Errorf("falha ao baixar artifact de %d peer(s): %w", len(peerIDs), lastErr)
 			}
 		}
 	}
@@ -465,225 +507,41 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 		}
 	}
 
-	// Só dirigimos o binário quando o MANIFESTO diz como fazê-lo (sidecar do
-	// download) e o escopo não é de usuário. Caso contrário, executá-lo como
-	// SYSTEM com switches do catálogo — que podem descrever OUTRO instalador —
-	// trava o stub (BraveUpdate) e deixa processos órfãos sem instalar nada.
-	if !m.directExecAllowed(artifact) {
-		return "", fmt.Errorf("%w: artifact=%s", errInstallerNotDrivable, artifact)
-	}
-	info, _ := m.artifactManifestInfo(artifact)
-	artifactPath := filepath.Join(m.app.p2pTempDir(), artifact)
-	_, _, catInstallerType := m.catalogInstallerInfo(packageID)
-	if t := strings.TrimSpace(info.InstallerType); t != "" {
-		catInstallerType = t
-	}
-	m.logf("[automation][p2p] execucao direta com switches do MANIFESTO artifact=%s silent=%q scope=%q", artifact, info.Silent, info.Scope)
-	output, err := runLocalInstallerFull(ctx, artifactPath, info.Silent, info.SilentWithProgress, catInstallerType, true)
-	if err != nil {
-		// Erro tipado: o artifact está em disco, apenas a execução falhou.
-		// O caller NÃO deve re-baixar — deve ir direto ao winget install.
-		return "", fmt.Errorf("%w: %v", errInstallerExec, err)
-	}
-	return output, nil
+	return artifact, peerIDs, nil
 }
 
-// localArtifactNameForPackage devolve o nome do artifact já em cache local para
-// o pacote ("" quando não há).
-func (m *automationPackageManagerRouter) localArtifactNameForPackage(packageID string) string {
-	if m == nil || m.app == nil || m.app.P2PCoord == nil {
-		return ""
+// Prepare é a fase de PREFETCH, chamada pelo serviço de automação ANTES do
+// prompt de confirmação: garante que o instalador esteja no cache local (via
+// P2P ou baixando da fonte winget e publicando no cache). NÃO executa o
+// instalador nem fecha processos — assim o usuário não fica com o app fechado
+// durante o download. Falha aqui é fail-open (a execução ainda tenta o fluxo
+// normal).
+func (m *automationPackageManagerRouter) Prepare(ctx context.Context, packageID string) error {
+	if m == nil || m.app == nil {
+		return nil
 	}
-	artifactID := "winget:" + normalizePackageLookupKey(packageID)
-	if artifactID == "winget:" {
-		return ""
-	}
-	artifacts, err := m.app.ListP2PArtifacts()
-	if err != nil {
-		return ""
-	}
-	for _, a := range artifacts {
-		if !strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactID) || !a.Available {
-			continue
-		}
-		return strings.TrimSpace(a.ArtifactName)
-	}
-	return ""
-}
-
-// directExecAllowed decide se o agente pode executar o artifact local trocando
-// os switches por conta própria. Só com o MANIFESTO conhecido (sidecar gravado
-// no download), com switches silenciosos DECLARADOS por ele e sem escopo de
-// usuário. Em qualquer outra situação vai para o winget, que é quem conhece o
-// binário que ele mesmo baixou.
-func (m *automationPackageManagerRouter) directExecAllowed(artifactName string) bool {
-	info, ok := m.artifactManifestInfo(artifactName)
-	if !ok || info.Scope == "user" {
-		return false
-	}
-	return strings.TrimSpace(info.Silent) != "" || strings.TrimSpace(info.SilentWithProgress) != ""
-}
-
-// resolveArtifactSources localiza o artifact do pacote e retorna TODOS os
-// peers que o anunciam (ordenados), além do nome do arquivo. Tenta primeiro o
-// cache local, depois o índice de artifacts dos peers (gossip/live).
-// Retorna peerIDs vazio quando o artifact está disponível apenas localmente.
-func (m *automationPackageManagerRouter) resolveArtifactSources(ctx context.Context, packageID string) (artifactName string, peerIDs []string, err error) {
-	// artifactID exato: "winget:<packageId>" — lookup deterministico, nao fuzzy.
-	artifactLookupID := "winget:" + normalizePackageLookupKey(packageID)
-	if artifactLookupID == "winget:" {
-		return "", nil, fmt.Errorf("packageId invalido: %s", packageID)
-	}
-
-	// 1. Tenta local primeiro (cache)
-	artifacts, listErr := m.app.ListP2PArtifacts()
-	if listErr == nil {
-		for _, a := range artifacts {
-			if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactLookupID) {
-				return a.ArtifactName, nil, nil
-			}
-		}
-	}
-
-	// 2. Busca em TODOS os peers via gossip (não apenas o primeiro match).
-	m.app.P2PCoord.RefreshPeerArtifactIndex(ctx, "automation-install")
-	// Índice do cache (sem rede): GetP2PPeerArtifactIndex faz fetch live de
-	// TODOS os peers (5s cada) e não deve rodar a cada execução de tarefa.
-	index := m.app.GetP2PPeerArtifactIndexCached()
-	for _, peer := range index {
-		for _, a := range peer.Artifacts {
-			if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactLookupID) {
-				peerIDs = append(peerIDs, strings.TrimSpace(peer.PeerAgentID))
-				if artifactName == "" {
-					artifactName = a.ArtifactName
-				}
-				break
-			}
-		}
-	}
-	if artifactName != "" && len(peerIDs) > 0 {
-		// O ID lógico local pode divergir do anunciado quando o sidecar .meta
-		// não existe (artifact recebido via download P2P). Se já temos o
-		// arquivo em disco com o mesmo nome, instalamos direto sem re-baixar.
-		if existing := m.findLocalArtifactByName(artifactName); existing != "" {
-			m.logf("[automation][p2p] artifact já presente no cache local (por nome), instalando sem re-baixar artifact=%s", artifactName)
-			return artifactName, nil, nil
-		}
-		return artifactName, peerIDs, nil
-	}
-
-	return "", nil, fmt.Errorf("nenhum artifact P2P encontrado para packageId=%s (artifactID=%s)", packageID, artifactLookupID)
-}
-
-// PreloadPackageForP2P faz fetch proativo de um instalador: baixa via winget
-// download e publica no cache P2P — SEM instalar. Usado quando o servidor
-// pede pré-carga de packageIds (policy-sync → PreloadPackageIds), para que
-// sites em deploy tenham os instaladores já na rede P2P quando as tasks de
-// instalação executarem. Não retorna erro ao caller (best-effort, só log):
-// falha aqui não deve afetar o ciclo de automação.
-func (m *automationPackageManagerRouter) PreloadPackageForP2P(ctx context.Context, packageID string) {
 	packageID = strings.TrimSpace(packageID)
-	if packageID == "" || m.app.P2PCoord == nil {
-		return
+	if packageID == "" || !m.shouldUseP2PForWingetInstall() {
+		// Sem P2P ativo a instalação usa o winget direto, que baixa no momento da
+		// execução: não há cache a pré-carregar.
+		return nil
 	}
-	artifactID := "winget:" + normalizePackageLookupKey(packageID)
-	if artifactID == "winget:" {
-		return
-	}
-
-	// Já temos o artifact localmente — nada a fazer.
-	if existing := m.findLocalArtifactByID(artifactID); existing != "" {
-		m.logf("[automation][p2p] preload: artifact já presente localmente packageId=%s", packageID)
-		return
-	}
-
-	// Já existe na rede? Baixa dos peers (swarm) em vez da internet.
-	m.app.P2PCoord.RefreshPeerArtifactIndex(ctx, "preload")
-	index := m.app.GetP2PPeerArtifactIndex()
-	for _, peer := range index {
-		for _, a := range peer.Artifacts {
-			if !strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactID) {
-				continue
-			}
-			artifactName := strings.TrimSpace(a.ArtifactName)
-			if artifactName == "" {
-				continue
-			}
-			if scored := m.app.P2PCoord.PeersWithArtifactScored(artifactID); len(scored) > 0 {
-				if _, err := m.app.P2PCoord.DownloadArtifactSwarm(ctx, artifactName); err == nil {
-					m.logf("[automation][p2p] preload: artifact baixado da rede packageId=%s artifact=%s", packageID, artifactName)
-					return
-				}
-				// Swarm falhou — tenta peers individualmente na ordem de score.
-				downloaded := false
-				for _, cand := range scored {
-					if _, err := m.app.P2PCoord.DownloadArtifactFromPeer(ctx, artifactName, cand.AgentID); err == nil {
-						m.logf("[automation][p2p] preload: artifact baixado via peer packageId=%s peer=%s", packageID, cand.AgentID)
-						downloaded = true
-						break
-					}
-				}
-				if downloaded {
-					return
-				}
-			}
-		}
-	}
-
-	// Não existe na rede: baixa via winget download e publica (vira seed).
-	wingetClient := m.fallback.Winget()
-	if wingetClient == nil {
-		m.logf("[automation][p2p] preload: winget client indisponivel packageId=%s", packageID)
-		return
-	}
-	// Diretório temporário dentro de %WINDIR%/Temp/Discovery (convenção do
-	// agente) — não na temp genérica do processo (os.TempDir vira
-	// C:/Windows/Temp quando o agente roda como SYSTEM).
-	tmpBase, err := platform.EnsureTempDir()
-	if err != nil {
-		m.logf("[automation][p2p] preload: falha ao preparar diretorio temporario packageId=%s: %v", packageID, err)
-		return
-	}
-	tmpDir, err := os.MkdirTemp(tmpBase, "p2p-winget-preload-*")
-	if err != nil {
-		m.logf("[automation][p2p] preload: falha ao criar diretorio temporario packageId=%s: %v", packageID, err)
-		return
-	}
-	defer func() {
-		if removeErr := os.RemoveAll(tmpDir); removeErr != nil {
-			m.logf("[automation][p2p] preload: aviso: falha ao limpar diretorio temporario %s: %v", tmpDir, removeErr)
-		}
-	}()
-
-	m.logf("[automation][p2p] preload: baixando via winget download packageId=%s", packageID)
-	if _, err := wingetClient.Download(ctx, packageID, tmpDir); err != nil {
-		m.logf("[automation][p2p] preload: winget download falhou packageId=%s: %v", packageID, err)
-		return
-	}
-	installerPath, err := findInstallerInDir(tmpDir)
-	if err != nil {
-		m.logf("[automation][p2p] preload: instalador nao encontrado packageId=%s: %v", packageID, err)
-		return
-	}
-
-	installerVersion := automation.VersionFromInstallerFilename(filepath.Base(installerPath))
-	var published p2pmeta.ArtifactView
-	var pubErr error
-	if installerVersion != "" {
-		published, pubErr = m.app.P2PCoord.PublishFileWithIDAndVersion(installerPath, artifactID, installerVersion)
+	m.prepareMu.Lock()
+	defer m.prepareMu.Unlock()
+	if _, _, err := m.acquireArtifactViaP2P(ctx, packageID); err == nil {
+		m.logf("[automation][p2p] prefetch: artifact pronto no cache packageId=%s", packageID)
+		return nil
 	} else {
-		published, pubErr = m.app.P2PCoord.PublishFileWithID(installerPath, artifactID)
+		m.logf("[automation][p2p] prefetch: artifact nao obtido na rede P2P, baixando da fonte packageId=%s motivo=%v", packageID, err)
 	}
-	if pubErr != nil {
-		m.logf("[automation][p2p] preload: falha ao publicar packageId=%s: %v", packageID, pubErr)
-		return
+	// Reusa o caminho existente de pré-carga (peer/swarm → winget download →
+	// publish no cache + manifesto), sem executar o instalador.
+	m.PreloadPackageForP2P(ctx, packageID)
+	if _, _, err := m.acquireArtifactViaP2P(ctx, packageID); err != nil {
+		return err
 	}
-	m.logf("[automation][p2p] preload: artifact publicado no cache P2P packageId=%s artifactID=%s artifactName=%s", packageID, artifactID, published.ArtifactName)
-	// Guarda o que o MANIFESTO diz sobre este binário: é o que autoriza (ou não) a
-	// execução direta depois, e com quais switches.
-	if info, ok := manifestInfoFromDownloadDir(tmpDir); ok {
-		m.writeArtifactManifest(published.ArtifactName, info)
-	}
+	m.logf("[automation][p2p] prefetch: instalador pronto no cache packageId=%s", packageID)
+	return nil
 }
 
 // downloadAndCacheForP2P baixa o instalador via winget download, publica no cache
@@ -1637,4 +1495,202 @@ func (m *automationPackageManagerRouter) resolveP2PPackageVersion(packageID stri
 		}
 	}
 	return best
+}
+
+// directExecAllowed decide se o agente pode executar o artifact local trocando
+// os switches por conta própria. Só com o MANIFESTO conhecido (sidecar gravado
+// no download), com switches silenciosos DECLARADOS por ele e sem escopo de
+// usuário. Em qualquer outra situação vai para o winget, que é quem conhece o
+// binário que ele mesmo baixou.
+func (m *automationPackageManagerRouter) directExecAllowed(artifactName string) bool {
+	info, ok := m.artifactManifestInfo(artifactName)
+	if !ok || info.Scope == "user" {
+		return false
+	}
+	return strings.TrimSpace(info.Silent) != "" || strings.TrimSpace(info.SilentWithProgress) != ""
+}
+
+// resolveArtifactSources localiza o artifact do pacote e retorna TODOS os
+// peers que o anunciam (ordenados), além do nome do arquivo. Tenta primeiro o
+// cache local, depois o índice de artifacts dos peers (gossip/live).
+// Retorna peerIDs vazio quando o artifact está disponível apenas localmente.
+func (m *automationPackageManagerRouter) resolveArtifactSources(ctx context.Context, packageID string) (artifactName string, peerIDs []string, err error) {
+	// artifactID exato: "winget:<packageId>" — lookup deterministico, nao fuzzy.
+	artifactLookupID := "winget:" + normalizePackageLookupKey(packageID)
+	if artifactLookupID == "winget:" {
+		return "", nil, fmt.Errorf("packageId invalido: %s", packageID)
+	}
+
+	// 1. Tenta local primeiro (cache)
+	artifacts, listErr := m.app.ListP2PArtifacts()
+	if listErr == nil {
+		for _, a := range artifacts {
+			if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactLookupID) {
+				return a.ArtifactName, nil, nil
+			}
+		}
+	}
+
+	// 2. Busca em TODOS os peers via gossip (não apenas o primeiro match).
+	m.app.P2PCoord.RefreshPeerArtifactIndex(ctx, "automation-install")
+	// Índice do cache (sem rede): GetP2PPeerArtifactIndex faz fetch live de
+	// TODOS os peers (5s cada) e não deve rodar a cada execução de tarefa.
+	index := m.app.GetP2PPeerArtifactIndexCached()
+	for _, peer := range index {
+		for _, a := range peer.Artifacts {
+			if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactLookupID) {
+				peerIDs = append(peerIDs, strings.TrimSpace(peer.PeerAgentID))
+				if artifactName == "" {
+					artifactName = a.ArtifactName
+				}
+				break
+			}
+		}
+	}
+	if artifactName != "" && len(peerIDs) > 0 {
+		// O ID lógico local pode divergir do anunciado quando o sidecar .meta
+		// não existe (artifact recebido via download P2P). Se já temos o
+		// arquivo em disco com o mesmo nome, instalamos direto sem re-baixar.
+		if existing := m.findLocalArtifactByName(artifactName); existing != "" {
+			m.logf("[automation][p2p] artifact já presente no cache local (por nome), instalando sem re-baixar artifact=%s", artifactName)
+			return artifactName, nil, nil
+		}
+		return artifactName, peerIDs, nil
+	}
+
+	return "", nil, fmt.Errorf("nenhum artifact P2P encontrado para packageId=%s (artifactID=%s)", packageID, artifactLookupID)
+}
+
+// PreloadPackageForP2P faz fetch proativo de um instalador: baixa via winget
+// download e publica no cache P2P — SEM instalar. Usado quando o servidor
+// pede pré-carga de packageIds (policy-sync → PreloadPackageIds), para que
+// sites em deploy tenham os instaladores já na rede P2P quando as tasks de
+// instalação executarem. Não retorna erro ao caller (best-effort, só log):
+// falha aqui não deve afetar o ciclo de automação.
+func (m *automationPackageManagerRouter) PreloadPackageForP2P(ctx context.Context, packageID string) {
+	packageID = strings.TrimSpace(packageID)
+	if packageID == "" || m.app.P2PCoord == nil {
+		return
+	}
+	artifactID := "winget:" + normalizePackageLookupKey(packageID)
+	if artifactID == "winget:" {
+		return
+	}
+
+	// Já temos o artifact localmente — nada a fazer.
+	if existing := m.findLocalArtifactByID(artifactID); existing != "" {
+		m.logf("[automation][p2p] preload: artifact já presente localmente packageId=%s", packageID)
+		return
+	}
+
+	// Já existe na rede? Baixa dos peers (swarm) em vez da internet.
+	m.app.P2PCoord.RefreshPeerArtifactIndex(ctx, "preload")
+	index := m.app.GetP2PPeerArtifactIndex()
+	for _, peer := range index {
+		for _, a := range peer.Artifacts {
+			if !strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactID) {
+				continue
+			}
+			artifactName := strings.TrimSpace(a.ArtifactName)
+			if artifactName == "" {
+				continue
+			}
+			if scored := m.app.P2PCoord.PeersWithArtifactScored(artifactID); len(scored) > 0 {
+				if _, err := m.app.P2PCoord.DownloadArtifactSwarm(ctx, artifactName); err == nil {
+					m.logf("[automation][p2p] preload: artifact baixado da rede packageId=%s artifact=%s", packageID, artifactName)
+					return
+				}
+				// Swarm falhou — tenta peers individualmente na ordem de score.
+				downloaded := false
+				for _, cand := range scored {
+					if _, err := m.app.P2PCoord.DownloadArtifactFromPeer(ctx, artifactName, cand.AgentID); err == nil {
+						m.logf("[automation][p2p] preload: artifact baixado via peer packageId=%s peer=%s", packageID, cand.AgentID)
+						downloaded = true
+						break
+					}
+				}
+				if downloaded {
+					return
+				}
+			}
+		}
+	}
+
+	// Não existe na rede: baixa via winget download e publica (vira seed).
+	wingetClient := m.fallback.Winget()
+	if wingetClient == nil {
+		m.logf("[automation][p2p] preload: winget client indisponivel packageId=%s", packageID)
+		return
+	}
+	// Diretório temporário dentro de %WINDIR%/Temp/Discovery (convenção do
+	// agente) — não na temp genérica do processo (os.TempDir vira
+	// C:/Windows/Temp quando o agente roda como SYSTEM).
+	tmpBase, err := platform.EnsureTempDir()
+	if err != nil {
+		m.logf("[automation][p2p] preload: falha ao preparar diretorio temporario packageId=%s: %v", packageID, err)
+		return
+	}
+	tmpDir, err := os.MkdirTemp(tmpBase, "p2p-winget-preload-*")
+	if err != nil {
+		m.logf("[automation][p2p] preload: falha ao criar diretorio temporario packageId=%s: %v", packageID, err)
+		return
+	}
+	defer func() {
+		if removeErr := os.RemoveAll(tmpDir); removeErr != nil {
+			m.logf("[automation][p2p] preload: aviso: falha ao limpar diretorio temporario %s: %v", tmpDir, removeErr)
+		}
+	}()
+
+	m.logf("[automation][p2p] preload: baixando via winget download packageId=%s", packageID)
+	if _, err := wingetClient.Download(ctx, packageID, tmpDir); err != nil {
+		m.logf("[automation][p2p] preload: winget download falhou packageId=%s: %v", packageID, err)
+		return
+	}
+	installerPath, err := findInstallerInDir(tmpDir)
+	if err != nil {
+		m.logf("[automation][p2p] preload: instalador nao encontrado packageId=%s: %v", packageID, err)
+		return
+	}
+
+	installerVersion := automation.VersionFromInstallerFilename(filepath.Base(installerPath))
+	var published p2pmeta.ArtifactView
+	var pubErr error
+	if installerVersion != "" {
+		published, pubErr = m.app.P2PCoord.PublishFileWithIDAndVersion(installerPath, artifactID, installerVersion)
+	} else {
+		published, pubErr = m.app.P2PCoord.PublishFileWithID(installerPath, artifactID)
+	}
+	if pubErr != nil {
+		m.logf("[automation][p2p] preload: falha ao publicar packageId=%s: %v", packageID, pubErr)
+		return
+	}
+	m.logf("[automation][p2p] preload: artifact publicado no cache P2P packageId=%s artifactID=%s artifactName=%s", packageID, artifactID, published.ArtifactName)
+	// Guarda o que o MANIFESTO diz sobre este binário: é o que autoriza (ou não) a
+	// execução direta depois, e com quais switches.
+	if info, ok := manifestInfoFromDownloadDir(tmpDir); ok {
+		m.writeArtifactManifest(published.ArtifactName, info)
+	}
+}
+
+// localArtifactNameForPackage devolve o nome do artifact já em cache local para
+// o pacote ("" quando não há).
+func (m *automationPackageManagerRouter) localArtifactNameForPackage(packageID string) string {
+	if m == nil || m.app == nil || m.app.P2PCoord == nil {
+		return ""
+	}
+	artifactID := "winget:" + normalizePackageLookupKey(packageID)
+	if artifactID == "winget:" {
+		return ""
+	}
+	artifacts, err := m.app.ListP2PArtifacts()
+	if err != nil {
+		return ""
+	}
+	for _, a := range artifacts {
+		if !strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactID) || !a.Available {
+			continue
+		}
+		return strings.TrimSpace(a.ArtifactName)
+	}
+	return ""
 }
