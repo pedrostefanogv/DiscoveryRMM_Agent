@@ -43,6 +43,7 @@ func (t *SessionTray) promoteSessionTrayIcon() {
 	for attempt := 0; attempt < notifyIconPromoteTries; attempt++ {
 		matched, changed, err := promoteNotifyIconEntries(exe)
 		if changed > 0 {
+			log.Printf("[session-tray] ícone promovido para a área visível da bandeja (IsPromoted=1)")
 			t.requestIconReadd()
 			return
 		}
@@ -72,13 +73,20 @@ func (t *SessionTray) requestIconReadd() {
 	procPostMessageW.Call(hwnd, trayPromoteMessage, 0, 0)
 }
 
-// reapplyIcon recria o ícone para o shell reler IsPromoted.
+// reapplyIcon recria o ícone para o shell reler IsPromoted. O NIM_ADD é
+// tentado mais de uma vez: se o shell estiver ocupado (logon/explorer subindo),
+// uma falha isolada deixaria a sessão sem o ícone de controle.
 func (t *SessionTray) reapplyIcon() {
 	if err := t.removeIcon(); err != nil {
 		log.Printf("[session-tray] falha ao recriar ícone (delete): %v", err)
 	}
-	if err := t.addIcon(); err != nil {
-		log.Printf("[session-tray] falha ao recriar ícone (add): %v", err)
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := t.addIcon(); err == nil {
+			return
+		} else if attempt == 2 {
+			log.Printf("[session-tray] falha ao recriar ícone (add): %v", err)
+		}
+		time.Sleep(150 * time.Millisecond)
 	}
 }
 
