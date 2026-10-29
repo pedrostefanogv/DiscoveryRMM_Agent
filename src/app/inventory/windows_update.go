@@ -173,6 +173,16 @@ func (s *Service) scanWindowsUpdates(verbose bool) (*windowsupdate.ScanResult, e
 		}
 	}
 
+	waasFeatureUpdates := 0
+	for _, update := range result.Updates {
+		if strings.EqualFold(update.Source, "waas") && update.IsPending {
+			waasFeatureUpdates++
+		}
+	}
+	if waasFeatureUpdates > 0 {
+		s.logf(fmt.Sprintf("[windows-update] upgrade de versao (WaaS) no inventario: %d item(ns) informativo(s)", waasFeatureUpdates))
+	}
+
 	skipped := ""
 	if len(result.SkippedReasons) > 0 {
 		skipped = fmt.Sprintf(" reasons=%v", result.SkippedReasons)
@@ -541,10 +551,10 @@ func (s *Service) ReadWindowsUpdatePolicy() (windowsupdate.PolicySettings, error
 // ---- envelope/upload helpers ----------------------------------------------
 
 type agentWindowsUpdateScan struct {
-	Status        string         `json:"status"`
-	DurationMs    int64          `json:"durationMs"`
-	StartedAt     string         `json:"startedAt"`
-	ErrorCode string `json:"errorCode,omitempty"`
+	Status     string `json:"status"`
+	DurationMs int64  `json:"durationMs"`
+	StartedAt  string `json:"startedAt"`
+	ErrorCode  string `json:"errorCode,omitempty"`
 	// SkippedCount vai SEMPRE (inclusive 0): o servidor precisa poder LIMPAR um
 	// contador antigo quando o scan passa a descartar nada. Com omitempty o
 	// "3 ignorados" ficaria congelado no snapshot para sempre.
@@ -571,7 +581,7 @@ type agentWindowsUpdateState struct {
 	// DownloadPercent: porcentagem do download em andamento (0-100). Ponteiro
 	// para o 0% REAL viajar (é informação válida) e o "desconhecido" ficar
 	// ausente. Só é preenchido quando DownloadInProgress.
-	DownloadPercent   *int     `json:"downloadPercent,omitempty"`
+	DownloadPercent *int `json:"downloadPercent,omitempty"`
 	// QFEInstalledCount: ponteiro para distinguir "0 KBs" de "leitura falhou"
 	// (ausente = servidor preserva a contagem conhecida).
 	QFEInstalledCount *int     `json:"qfeInstalledCount,omitempty"`
@@ -651,16 +661,16 @@ type agentWindowsUpdateReboot struct {
 }
 
 type agentWindowsUpdateEnvelope struct {
-	AgentID       string                   `json:"agentId"`
-	CollectedAt   string                   `json:"collectedAt"`
+	AgentID     string `json:"agentId"`
+	CollectedAt string `json:"collectedAt"`
 	// EnvelopeVersion/Capabilities (WU-13, D06): contrato explicito para a API
 	// decidir se entende delta e campos novos. Agente antigo nao envia e a API
 	// cai no caminho completo.
-	EnvelopeVersion int      `json:"envelopeVersion"`
-	Capabilities    []string `json:"capabilities,omitempty"`
+	EnvelopeVersion int                      `json:"envelopeVersion"`
+	Capabilities    []string                 `json:"capabilities,omitempty"`
 	Scan            agentWindowsUpdateScan   `json:"scan"`
-	PendingReboot agentWindowsUpdateReboot `json:"pendingReboot"`
-	Updates       []windowsupdate.Update   `json:"updates"`
+	PendingReboot   agentWindowsUpdateReboot `json:"pendingReboot"`
+	Updates         []windowsupdate.Update   `json:"updates"`
 	// Delta=true: Updates contem apenas os itens alterados e RemovedKeys lista o
 	// que saiu desde o ultimo full (WU-13).
 	Delta       bool     `json:"delta,omitempty"`
