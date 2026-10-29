@@ -8,10 +8,40 @@ package windowsupdate
 // derrubar o update quando a propriedade falha.
 
 import (
+	"strings"
 	"testing"
 
 	ole "github.com/go-ole/go-ole"
 )
+
+func TestPendingCriteriaIncludeOptionalUpdatesAndUpgrades(t *testing.T) {
+	criteria := pendingCriteria(false, false)
+	if len(criteria) == 0 {
+		t.Fatal("pendingCriteria vazio")
+	}
+	for _, criterion := range criteria {
+		lower := strings.ToLower(criterion)
+		// BrowseOnly=0 escondia atualizacoes opcionais (feature updates).
+		if strings.Contains(lower, "browseonly") {
+			t.Fatalf("criterio ainda filtra BrowseOnly (opcionais): %q", criterion)
+		}
+		// Type='Software' escondia pacotes cujo tipo/metadados nao casam.
+		if strings.Contains(lower, "type=") {
+			t.Fatalf("criterio ainda filtra Type: %q", criterion)
+		}
+		if !strings.Contains(lower, "isinstalled=0") {
+			t.Fatalf("criterio sem IsInstalled=0: %q", criterion)
+		}
+	}
+	if !strings.Contains(strings.ToLower(criteria[0]), "ishidden=0") {
+		t.Fatalf("criterio primario deveria excluir ocultos: %q", criteria[0])
+	}
+
+	withHidden := pendingCriteria(true, false)
+	if len(withHidden) != 1 || withHidden[0] != "IsInstalled=0" {
+		t.Fatalf("includeHidden=%v want [IsInstalled=0]", withHidden)
+	}
+}
 
 func TestVariantInt64ReadsMaxDownloadSizeTypes(t *testing.T) {
 	cases := []struct {

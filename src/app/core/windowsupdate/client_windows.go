@@ -309,19 +309,31 @@ func searchUpdatesCollection(searcher *ole.IDispatch, criteria string) (*ole.IDi
 	return collection, nil
 }
 
+// pendingCriteria devolve os criterios da busca de pendentes.
+//
+// A busca e AMPLA de proposito: sem Type e sem BrowseOnly.
+//   - BrowseOnly=1 = atualizacao OPCIONAL (inclusive "Windows 11, version
+//     26H2" / upgrades de versao). O Windows Update mostra esses pacotes como
+//     disponiveis, entao o inventario do RMM tambem precisa mostra-los; o
+//     filtro anterior (BrowseOnly=0) os escondia e a maquina aparecia
+//     "atualizada" no RMM enquanto o Windows Update oferecia um upgrade.
+//   - Type='Software' tambem e omitido: upgrades/opcionais podem chegar com
+//     metadados que nao casam com o filtro, e o descarte de drivers ja e feito
+//     em readUpdates (por categoria), com contabilizacao explicita.
+//
+// Variante sem IsHidden e mantida como fallback para WUA que rejeite o
+// criterio (HRESULT de criterio invalido).
 func pendingCriteria(includeHidden, includeDrivers bool) []string {
-	base := "IsInstalled=0 and Type='Software'"
-	if includeDrivers {
-		base = "IsInstalled=0"
-	}
+	// includeDrivers nao muda o criterio: drivers sao filtrados por categoria
+	// em readUpdates (com skippedReason "driver"), nao pela query WUA.
 	if includeHidden {
-		return []string{base + " and BrowseOnly=0", base}
+		return []string{"IsInstalled=0"}
 	}
-	return []string{base + " and IsHidden=0 and BrowseOnly=0", base + " and IsHidden=0"}
+	return []string{"IsInstalled=0 and IsHidden=0", "IsInstalled=0"}
 }
 
-// searchPending executa a busca de pendentes tentando variantes de criterio
-// (BrowseOnly pode nao existir em WUA antigo).
+// searchPending executa a busca de pendentes tentando variantes de criterio,
+// caindo para a variante sem IsHidden quando o WUA rejeita o criterio.
 func searchPending(searcher *ole.IDispatch, includeHidden, includeDrivers bool) ([]Update, ScanCounters, error) {
 	var lastErr error
 	for _, criteria := range pendingCriteria(includeHidden, includeDrivers) {
@@ -747,9 +759,10 @@ func installWUA(targets []InstallTarget) (*InstallResult, error) {
 	}
 	defer searcher.Release()
 
-	// Busca SEM filtro de hidden: updates ocultos podem ter sido aprovados
-	// explicitamente. A selecao e sempre por GUID/chave canonica.
-	collection, err := searchUpdatesCollection(searcher, "IsInstalled=0 and Type='Software'")
+	// Busca SEM filtro de hidden/BrowseOnly/Type: updates ocultos ou opcionais
+	// (inclusive upgrades de versao) podem ter sido aprovados explicitamente.
+	// A selecao e sempre por GUID/chave canonica.
+	collection, err := searchUpdatesCollection(searcher, "IsInstalled=0")
 	if err != nil {
 		return nil, err
 	}
@@ -775,7 +788,7 @@ func installWUA(targets []InstallTarget) (*InstallResult, error) {
 	installedKeys := map[string]bool(nil)
 	for _, target := range targets {
 		if _, ok := byKey[target.UpdateKey]; !ok {
-			installedKeys = updateKeysFromSearch(session, "IsInstalled=1 and Type='Software'")
+			installedKeys = updateKeysFromSearch(session, "IsInstalled=1")
 			break
 		}
 	}
@@ -1046,7 +1059,9 @@ func updateKeysFromSearch(session *wuaSession, criteria string) map[string]bool 
 // pendingKeysAfterInstall refaz a busca de pendentes para a verificacao
 // pos-instalacao (WU-07).
 func pendingKeysAfterInstall(session *wuaSession) map[string]bool {
-	return updateKeysFromSearch(session, "IsInstalled=0 and Type='Software'")
+	// Mesma amplitude da busca de inventario: opcionais/upgrades tambem contam
+	// como pendentes depois de uma instalacao.
+	return updateKeysFromSearch(session, "IsInstalled=0")
 }
 
 func hideWUA(updateKeys []string, hidden bool) (int, error) {
@@ -1061,7 +1076,7 @@ func hideWUA(updateKeys []string, hidden bool) (int, error) {
 	}
 	defer searcher.Release()
 
-	collection, err := searchUpdatesCollection(searcher, "IsInstalled=0 and Type='Software'")
+	collection, err := searchUpdatesCollection(searcher, "IsInstalled=0")
 	if err != nil {
 		return 0, err
 	}
