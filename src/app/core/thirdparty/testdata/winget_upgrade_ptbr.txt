@@ -1,0 +1,6 @@
+﻿Nome                             ID                 Versão      Disponível  Origem
+----------------------------------------------------------------------------------
+Node.js                          OpenJS.NodeJS.LTS  24.22.1     26.13.0     winget
+RGB Fusion                       GIGABYTE.RGBFusion 3.24.1202.1 3.26.0923.1 winget
+Subsistema do Windows para Linux Microsoft.WSL      2.7.11.0    2.7.14      winget
+3 atualizações disponíveis.

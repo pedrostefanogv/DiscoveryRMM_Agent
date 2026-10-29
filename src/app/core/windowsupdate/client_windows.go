@@ -496,9 +496,10 @@ func readUpdate(update *ole.IDispatch) (Update, bool) {
 			raw.Clear()
 		}
 	}
+	var categoryIDs []string
 	if raw, err := oleutil.GetProperty(update, "Categories"); err == nil {
 		if coll := raw.ToIDispatch(); coll != nil {
-			categories = readCategoryNames(coll)
+			categories, categoryIDs = readCategories(coll)
 			coll.Release()
 		} else {
 			raw.Clear()
@@ -520,7 +521,9 @@ func readUpdate(update *ole.IDispatch) (Update, bool) {
 	}
 	u.Title = truncate(title, 500)
 	u.Description = truncate(description, 2000)
-	u.Severity = severity
+	// Severidade com proveniencia (WU-02/D10): MsrcSeverity vence; sem rating do
+	// fornecedor o agente deriva com teto "Important" (nunca "Critical").
+	u.Severity, u.SeveritySource = ResolveSeverity(severity, categories, title)
 	u.SupportURL = truncate(supportURL, 1000)
 	u.IsPending = true
 	u.IsDownloaded = isDownloaded
@@ -533,16 +536,18 @@ func readUpdate(update *ole.IDispatch) (Update, bool) {
 	u.PublishedAt = lastDeployed
 	u.LastDeployedAt = lastDeployed
 	u.Categories = categories
-	u.Classification = classify(categories)
+	u.CategoryIDs = categoryIDs
+	// WU-14: classifica por GUID (estavel por idioma) e cai para o nome quando
+	// o WUA nao expoe CategoryID (agente/WUA antigo).
+	u.Classification = ClassifyCategory(categoryIDs, categories)
+	u.UpdateType = DeriveUpdateType(categoryIDs, categories)
 	return u, false
 }
 
 // isDriverUpdate informa se o update e um driver (fora do escopo do modulo).
 func isDriverUpdate(u Update) bool {
-	for _, category := range u.Categories {
-		if strings.EqualFold(strings.TrimSpace(category), "drivers") {
-			return true
-		}
+	if IsDriverCategory(u.CategoryIDs, u.Categories) {
+		return true
 	}
 	return strings.EqualFold(strings.TrimSpace(u.Classification), "drivers")
 }
@@ -550,12 +555,7 @@ func isDriverUpdate(u Update) bool {
 // isUpgradeCategory informa se o update pertence a categoria Upgrades. Usado
 // APENAS para diagnostico/metrica: nao descarta nada.
 func isUpgradeCategory(u Update) bool {
-	for _, category := range u.Categories {
-		if strings.EqualFold(strings.TrimSpace(category), "upgrades") {
-			return true
-		}
-	}
-	return false
+	return IsUpgradeCategory(u.CategoryIDs, u.Categories)
 }
 
 // classify escolhe a classificacao exibida a partir das categorias do WUA.
@@ -602,6 +602,47 @@ func readStringCollection(coll *ole.IDispatch) []string {
 		itemRaw.Clear()
 	}
 	return out
+}
+
+// readCategories devolve nomes e CategoryIDs das categorias do update. Os dois
+// sao usados: nome para exibicao, GUID para classificacao independente de
+// idioma (WU-14).
+func readCategories(coll *ole.IDispatch) (names []string, ids []string) {
+	countRaw, err := oleutil.GetProperty(coll, "Count")
+	if err != nil {
+		return nil, nil
+	}
+	count := variantInt(countRaw)
+	countRaw.Clear()
+	names = make([]string, 0, count)
+	ids = make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		itemRaw, err := oleutil.CallMethod(coll, "Item", i)
+		if err != nil {
+			continue
+		}
+		category := itemRaw.ToIDispatch()
+		if category == nil {
+			itemRaw.Clear()
+			continue
+		}
+		if nameRaw, err := oleutil.GetProperty(category, "Name"); err == nil {
+			name := variantString(nameRaw)
+			nameRaw.Clear()
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		if idRaw, err := oleutil.GetProperty(category, "CategoryID"); err == nil {
+			id := NormalizeGUID(variantString(idRaw))
+			idRaw.Clear()
+			if id != "" {
+				ids = append(ids, id)
+			}
+		}
+		category.Release()
+	}
+	return names, ids
 }
 
 func readCategoryNames(coll *ole.IDispatch) []string {
@@ -714,7 +755,7 @@ func installWUA(targets []InstallTarget) (*InstallResult, error) {
 	}
 	defer collection.Release()
 
-	byKey, err := collectUpdatesByKey(collection)
+	byKey, unreadable, err := collectUpdatesByKey(collection)
 	if err != nil {
 		return nil, err
 	}
@@ -727,6 +768,17 @@ func installWUA(targets []InstallTarget) (*InstallResult, error) {
 			}
 		}
 	}()
+
+	// WU-07: alvos ausentes da busca de pendentes podem estar instalados ou ter
+	// saido do catalogo. Consultamos a busca de INSTALADOS uma unica vez, e so
+	// quando existe algum alvo ausente (custo zero no caminho feliz).
+	installedKeys := map[string]bool(nil)
+	for _, target := range targets {
+		if _, ok := byKey[target.UpdateKey]; !ok {
+			installedKeys = updateKeysFromSearch(session, "IsInstalled=1 and Type='Software'")
+			break
+		}
+	}
 
 	result := &InstallResult{}
 	targetColl, err := oleutil.CreateObject("Microsoft.Update.UpdateColl")
@@ -745,7 +797,12 @@ func installWUA(targets []InstallTarget) (*InstallResult, error) {
 	for _, target := range targets {
 		entry, ok := byKey[target.UpdateKey]
 		if !ok {
-			result.NotFound = append(result.NotFound, target.UpdateKey)
+			outcome, isFailure := ClassifyMissingTarget(target.UpdateKey, installedKeys, unreadable)
+			if isFailure {
+				result.Failed = append(result.Failed, outcome)
+			} else {
+				result.Skipped = append(result.Skipped, outcome)
+			}
 			continue
 		}
 		if _, err := oleutil.CallMethod(targetDisp, "Add", entry.update); err != nil {
@@ -799,6 +856,25 @@ func installWUA(targets []InstallTarget) (*InstallResult, error) {
 					}
 				}
 				downloader.Release()
+			}
+		}
+	}
+
+	// WU-17/D16: UM checkpoint por comando, preguicoso, antes da primeira
+	// mutacao real. Definitions nao geram checkpoint; Server e pulado. Falha de
+	// checkpoint NAO aborta a instalacao (fica registrada no resultado).
+	{
+		categories := make([][]string, 0, len(added))
+		for _, target := range added {
+			if entry, ok := byKey[target.UpdateKey]; ok {
+				categories = append(categories, entry.categories)
+			}
+		}
+		if NeedsRestorePoint(categories) {
+			if rpErr := createRestorePoint(restorePointDescription); rpErr != nil {
+				result.RestorePointError = rpErr.Error()
+			} else {
+				result.RestorePointCreated = true
 			}
 		}
 	}
@@ -863,6 +939,25 @@ func installWUA(targets []InstallTarget) (*InstallResult, error) {
 		}
 	}
 
+	// WU-07: verificacao pos-instalacao. Se o update continua aparecendo como
+	// pendente depois de reportar sucesso, ele foi aceito mas ainda nao foi
+	// efetivado: normalmente falta reiniciar. Antes isso passava como sucesso
+	// silencioso e o operador via o mesmo KB pendente no scan seguinte.
+	if len(result.Installed) > 0 {
+		if pendingKeys := pendingKeysAfterInstall(session); len(pendingKeys) > 0 {
+			for _, key := range StillPendingAfterInstall(result.Installed, pendingKeys) {
+				for i := range result.Installed {
+					if result.Installed[i].UpdateKey != key {
+						continue
+					}
+					result.Installed[i].RebootRequired = true
+					result.Installed[i].Error = "instalado, mas ainda listado como pendente: reinicio necessario"
+					result.RebootRequired = true
+				}
+			}
+		}
+	}
+
 	result.DurationMs = time.Since(started).Milliseconds()
 	return result, nil
 }
@@ -871,35 +966,87 @@ type updateEntry struct {
 	update       *ole.IDispatch
 	kbID         string
 	isDownloaded bool
+	// categories alimenta a decisao de restore point (WU-17): definitions nao
+	// precisam de checkpoint.
+	categories []string
 }
 
-func collectUpdatesByKey(collection *ole.IDispatch) (map[string]updateEntry, error) {
+func collectUpdatesByKey(collection *ole.IDispatch) (map[string]updateEntry, int, error) {
 	countRaw, err := oleutil.GetProperty(collection, "Count")
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	count := variantInt(countRaw)
 	countRaw.Clear()
 	out := make(map[string]updateEntry, count)
+	// unreadable conta itens que NAO puderam ser lidos. Um alvo ausente do mapa
+	// so pode ser tratado como "nao oferecido" quando unreadable == 0 (WU-07):
+	// caso contrario o update pode ser justamente um dos ilegiveis.
+	unreadable := 0
 	for i := 0; i < count; i++ {
 		itemRaw, err := oleutil.CallMethod(collection, "Item", i)
 		if err != nil {
+			unreadable++
 			continue
 		}
 		item := itemRaw.ToIDispatch()
 		if item == nil {
 			itemRaw.Clear()
+			unreadable++
 			continue
 		}
 		update, skip := readUpdate(item)
 		if skip {
 			item.Release()
+			unreadable++
 			continue
 		}
 		// guarda a referencia para montar a colecao de instalacao
-		out[update.UpdateKey] = updateEntry{update: item, kbID: update.KBID, isDownloaded: update.IsDownloaded}
+		out[update.UpdateKey] = updateEntry{
+			update:       item,
+			kbID:         update.KBID,
+			isDownloaded: update.IsDownloaded,
+			categories:   update.Categories,
+		}
 	}
-	return out, nil
+	return out, unreadable, nil
+}
+
+// updateKeysFromSearch executa uma busca WUA e devolve o conjunto de chaves
+// canonicas. Usado para saber se um alvo ausente da busca de pendentes ja esta
+// instalado (WU-07). Falha devolve mapa vazio: sem essa informacao o alvo vira
+// skip "not_offered", que e o comportamento mais conservador.
+func updateKeysFromSearch(session *wuaSession, criteria string) map[string]bool {
+	searcher, err := session.searcher()
+	if err != nil {
+		return map[string]bool{}
+	}
+	defer searcher.Release()
+
+	collection, err := searchUpdatesCollection(searcher, criteria)
+	if err != nil {
+		return map[string]bool{}
+	}
+	defer collection.Release()
+
+	byKey, _, err := collectUpdatesByKey(collection)
+	if err != nil {
+		return map[string]bool{}
+	}
+	keys := make(map[string]bool, len(byKey))
+	for key, entry := range byKey {
+		keys[key] = true
+		if entry.update != nil {
+			entry.update.Release()
+		}
+	}
+	return keys
+}
+
+// pendingKeysAfterInstall refaz a busca de pendentes para a verificacao
+// pos-instalacao (WU-07).
+func pendingKeysAfterInstall(session *wuaSession) map[string]bool {
+	return updateKeysFromSearch(session, "IsInstalled=0 and Type='Software'")
 }
 
 func hideWUA(updateKeys []string, hidden bool) (int, error) {
@@ -920,7 +1067,7 @@ func hideWUA(updateKeys []string, hidden bool) (int, error) {
 	}
 	defer collection.Release()
 
-	byKey, err := collectUpdatesByKey(collection)
+	byKey, _, err := collectUpdatesByKey(collection)
 	if err != nil {
 		return 0, err
 	}

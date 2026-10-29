@@ -81,7 +81,21 @@ type Update struct {
 	Description    string   `json:"description,omitempty"`
 	Classification string   `json:"classification,omitempty"`
 	Categories     []string `json:"categories,omitempty"`
+	// CategoryIDs sao os IUpdateCategory.CategoryID (GUID estavel, independente
+	// de idioma). Nao vao para o servidor: servem para classificar localmente
+	// (WU-14).
+	CategoryIDs []string `json:"-"`
 	Severity       string   `json:"severity,omitempty"`
+	// SeveritySource diz se a severidade veio do fornecedor (MSRC) ou foi
+	// derivada pelo agente (decisao D10). Vazio em linhas de QFE (instaladas),
+	// que nao tem rating.
+	SeveritySource string `json:"severitySource,omitempty"`
+	// UpdateType: feature | driver | software (WU-15). Calculado no agente para a
+	// API nao re-derivar por titulo.
+	UpdateType string `json:"updateType,omitempty"`
+	// AvailableVersion: versão disponível de um app de terceiros (WU-19/WU-20).
+	// Usada na assinatura de mudança e exibida na UI; vazia para WUA/QFE.
+	AvailableVersion string `json:"availableVersion,omitempty"`
 
 	IsPending      bool `json:"isPending"`
 	IsInstalled    bool `json:"isInstalled"`
@@ -230,6 +244,14 @@ type InstallTarget struct {
 	KBIDs     []string `json:"kbIds,omitempty"`
 }
 
+// Motivos de SKIP de instalacao (estaveis para a API). Skip NAO e falha:
+// "already_installed" = o update ja esta na maquina; "not_offered" = o update
+// saiu do catalogo (superseded/expirado) entre a aprovacao e a execucao.
+const (
+	InstallSkipAlreadyInstalled = "already_installed"
+	InstallSkipNotOffered       = "not_offered"
+)
+
 // InstallOutcome e o resultado por update.
 type InstallOutcome struct {
 	UpdateKey      string `json:"updateKey"`
@@ -237,15 +259,26 @@ type InstallOutcome struct {
 	ResultCode     int    `json:"resultCode,omitempty"`
 	RebootRequired bool   `json:"rebootRequired"`
 	Error          string `json:"error,omitempty"`
+	// SkipReason preenchido quando o update nao foi instalado mas tambem nao
+	// falhou (already_installed | not_offered). Vazio = resultado normal.
+	SkipReason string `json:"skipReason,omitempty"`
 }
 
 // InstallResult e o resultado de uma instalacao.
 type InstallResult struct {
-	Installed      []InstallOutcome `json:"installed"`
-	Failed         []InstallOutcome `json:"failed"`
-	NotFound       []string         `json:"notFound,omitempty"`
-	RebootRequired bool             `json:"rebootRequired"`
-	DurationMs     int64            `json:"durationMs"`
+	Installed []InstallOutcome `json:"installed"`
+	Failed    []InstallOutcome `json:"failed"`
+	// Skipped sao alvos que nao foram instalados e NAO sao falha (WU-07):
+	// ja instalados ou que sairam do catalogo. Ficam visiveis no resultado.
+	Skipped []InstallOutcome `json:"skipped,omitempty"`
+	// NotFound e mantido para compatibilidade (agentes/servidores antigos):
+	// hoje todo alvo ausente vira Skipped ou Failed, nunca NotFound silencioso.
+	NotFound       []string `json:"notFound,omitempty"`
+	RebootRequired bool     `json:"rebootRequired"`
+	// RestorePointCreated/Error documentam o checkpoint de sistema (WU-17).
+	RestorePointCreated bool   `json:"restorePointCreated,omitempty"`
+	RestorePointError   string `json:"restorePointError,omitempty"`
+	DurationMs          int64  `json:"durationMs"`
 }
 
 // Code = 0 quando todos instalaram, 1 quando houve falha parcial/total.
@@ -256,7 +289,9 @@ func (r *InstallResult) Code() int {
 	if len(r.Failed) > 0 || len(r.NotFound) > 0 {
 		return 1
 	}
-	if len(r.Installed) == 0 {
+	// Sucesso = algo instalado OU tudo legitimamente pulado (ja instalado /
+	// fora do catalogo). Skip nunca derruba o lote.
+	if len(r.Installed) == 0 && len(r.Skipped) == 0 {
 		return 1
 	}
 	return 0

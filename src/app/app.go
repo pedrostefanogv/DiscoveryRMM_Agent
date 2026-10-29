@@ -26,6 +26,7 @@ import (
 	"discovery/app/core/automation"
 	"discovery/app/core/buildinfo"
 	"discovery/app/core/chocolatey"
+	"discovery/app/core/thirdparty"
 	"discovery/app/core/data"
 	"discovery/app/core/database"
 	"discovery/app/core/inventory"
@@ -1033,6 +1034,13 @@ func NewApp(opts AppStartupOptions) *App {
 	// Gerenciador de patches do Windows: cliente WUA (COM) + kill switch vindo
 	// da configuração resolvida do servidor. O cache SQLite é injetado depois
 	// (o DB só existe quando o serviço sobe), em attachInventoryDatabase.
+	// WU-19/WU-20: gerenciadores de terceiros que alimentam o MESMO inventario de
+	// patches (chave choco:<id> / winget:<id>). Os clients ja existem para
+	// deploy de software — nao ha segundo caminho de execucao.
+	a.InventorySvc.SetThirdPartyProviders([]thirdparty.Provider{
+		thirdparty.NewChocoProvider(chocolateyClient),
+		thirdparty.NewWingetProvider(wingetClient),
+	})
 	a.InventorySvc.SetWindowsUpdateDeps(appinventory.WindowsUpdateDeps{
 		Client: windowsupdate.New(windowsupdate.DefaultOptions()),
 		Enabled: func() bool {
@@ -2222,6 +2230,27 @@ func (a *App) runStagedStartup(ctx context.Context) {
 			case <-time.After(interval):
 			}
 			a.runWindowsUpdateStateProbe(ctx)
+		}
+	})
+
+	// Sonda de apps de terceiros (~3h, jitter): compara o inventário com o
+	// último upload e dispara scan+upload quando um app passa a ter atualização.
+	// Sem isso o app só apareceria no scan completo de 6h.
+	a.safeGo(func() {
+		initialDelay := 25*time.Minute + windowsUpdateAgentJitter(strings.TrimSpace(a.GetDebugConfig().AgentID), 10*time.Minute)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(initialDelay):
+		}
+		for {
+			a.runThirdPartyInventoryProbe(ctx)
+			next := thirdPartyProbeInterval(strings.TrimSpace(a.GetDebugConfig().AgentID))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(next):
+			}
 		}
 	})
 

@@ -14,9 +14,8 @@ import (
 )
 
 const (
-	regPathWUPolicyAU = `SOFTWAREPoliciesMicrosoftWindowsWindowsUpdateAU`
-	regPathWUPolicy   = `SOFTWAREPoliciesMicrosoftWindowsWindowsUpdate`
-
+	// Os caminhos das chaves ficam em policy_paths.go (fonte unica). Aqui so
+	// existem os nomes de escopo usados no backup/rollback.
 	policyScopeAU = "AU"
 	policyScopeWU = "WU"
 )
@@ -26,13 +25,13 @@ const (
 func readPolicy() (PolicySettings, error) {
 	settings := PolicySettings{}
 
-	au, err := registry.OpenKey(registry.LOCAL_MACHINE, regPathWUPolicyAU, registry.QUERY_VALUE)
+	au, err := registry.OpenKey(registry.LOCAL_MACHINE, regPathWUPoliciesAU, registry.QUERY_VALUE)
 	if err == nil {
 		defer au.Close()
 		settings.NoAutoUpdate = readPolicyDWORD(au, "NoAutoUpdate")
 		settings.AUOptions = readPolicyDWORD(au, "AUOptions")
 	}
-	wu, err := registry.OpenKey(registry.LOCAL_MACHINE, regPathWUPolicy, registry.QUERY_VALUE)
+	wu, err := registry.OpenKey(registry.LOCAL_MACHINE, regPathWUPolicies, registry.QUERY_VALUE)
 	if err == nil {
 		defer wu.Close()
 		settings.DeferQualityUpdates = readPolicyDWORD(wu, "DeferQualityUpdates")
@@ -55,13 +54,34 @@ func applyPolicy(settings PolicySettings) (*PolicyBackup, error) {
 		Values:     make(map[string]PolicyValue),
 	}
 
-	auKey, _, err := registry.CreateKey(registry.LOCAL_MACHINE, regPathWUPolicyAU, registry.QUERY_VALUE|registry.SET_VALUE)
+	auKey, auExisted, err := registry.CreateKey(registry.LOCAL_MACHINE, regPathWUPoliciesAU, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err != nil {
 		return nil, fmt.Errorf("abrir chave de politica AU: %w", err)
 	}
 	defer auKey.Close()
 
-	wuKey, _, err := registry.CreateKey(registry.LOCAL_MACHINE, regPathWUPolicy, registry.QUERY_VALUE|registry.SET_VALUE)
+	// WU-16/D04: nunca sobrescrever politica que nao e nossa. Se ja existe um
+	// NoAutoUpdate sem a nossa sentinela, quem escreveu foi GPO/administrador.
+	existingNoAutoUpdate := readPolicyDWORD(auKey, "NoAutoUpdate")
+	discoveryManaged := readPolicyDWORD(auKey, discoveryManagedValue) != nil
+	if !PolicyWriteAllowed(existingNoAutoUpdate, discoveryManaged) {
+		return nil, ErrPolicyManagedByGPO
+	}
+
+	// Marca propriedade ANTES de escrever a politica: se a escrita falhar no
+	// meio, o revert ainda sabe que a chave/valor podem ser nossos.
+	backup.Values[policyScopeAU+"\\"+discoveryManagedValue] = readPolicyValue(auKey, discoveryManagedValue)
+	if err := auKey.SetDWordValue(discoveryManagedValue, 1); err != nil {
+		return nil, fmt.Errorf("marcar propriedade da politica AU: %w", err)
+	}
+	if !auExisted {
+		backup.Values[policyScopeAU+"\\"+discoveryCreatedKeyValue] = readPolicyValue(auKey, discoveryCreatedKeyValue)
+		if err := auKey.SetDWordValue(discoveryCreatedKeyValue, 1); err != nil {
+			return nil, fmt.Errorf("marcar criacao da chave AU: %w", err)
+		}
+	}
+
+	wuKey, _, err := registry.CreateKey(registry.LOCAL_MACHINE, regPathWUPolicies, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err != nil {
 		return nil, fmt.Errorf("abrir chave de politica WU: %w", err)
 	}
@@ -103,35 +123,95 @@ func applyPolicy(settings PolicySettings) (*PolicyBackup, error) {
 }
 
 // restorePolicy devolve os valores ao estado capturado no backup.
+//
+// Não CRIA chaves por si só: só cria a chave do escopo quando existe valor a
+// restaurar nela (antes, um revert criava Policies\...\WindowsUpdate vazias na
+// máquina, mesmo sem nada para restaurar).
 func restorePolicy(backup PolicyBackup) error {
-	auKey, _, err := registry.CreateKey(registry.LOCAL_MACHINE, regPathWUPolicyAU, registry.QUERY_VALUE|registry.SET_VALUE)
-	if err != nil {
-		return err
+	keys := make(map[string]registry.Key, 2)
+	closeKeys := func() {
+		for _, key := range keys {
+			_ = key.Close()
+		}
 	}
-	defer auKey.Close()
-	wuKey, _, err := registry.CreateKey(registry.LOCAL_MACHINE, regPathWUPolicy, registry.QUERY_VALUE|registry.SET_VALUE)
-	if err != nil {
-		return err
+
+	openOrCreate := func(path string, needed bool) (registry.Key, bool) {
+		key, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE|registry.SET_VALUE)
+		if err == nil {
+			return key, true
+		}
+		if !needed {
+			return 0, false
+		}
+		created, _, cerr := registry.CreateKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE|registry.SET_VALUE)
+		if cerr != nil {
+			return 0, false
+		}
+		return created, true
 	}
-	defer wuKey.Close()
+
+	if auKey, ok := openOrCreate(regPathWUPoliciesAU, backupHasScope(backup, policyScopeAU)); ok {
+		keys[policyScopeAU] = auKey
+	}
+	if wuKey, ok := openOrCreate(regPathWUPolicies, backupHasScope(backup, policyScopeWU)); ok {
+		keys[policyScopeWU] = wuKey
+	}
 
 	var firstErr error
 	for name, value := range backup.Values {
 		scope, valueName := splitPolicyName(name)
-		var key registry.Key
-		switch scope {
-		case policyScopeAU:
-			key = auKey
-		case policyScopeWU:
-			key = wuKey
-		default:
+		key, ok := keys[scope]
+		if !ok {
 			continue
 		}
 		if err := writePolicyValue(key, valueName, value); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
+
+	// WU-16/D04: limpa as sentinelas de propriedade. Se a chave AU foi criada
+	// por nós e ficou vazia, remove a chave — sem tocar em valores alheios.
+	auKey, hasAU := keys[policyScopeAU]
+	if !hasAU {
+		closeKeys()
+		return firstErr
+	}
+
+	managed := readPolicyDWORD(auKey, discoveryManagedValue) != nil
+	createdByUs := readPolicyDWORD(auKey, discoveryCreatedKeyValue) != nil
+	if managed {
+		_ = auKey.DeleteValue(discoveryManagedValue)
+	}
+	if createdByUs {
+		_ = auKey.DeleteValue(discoveryCreatedKeyValue)
+	}
+
+	removeKey := false
+	if managed && createdByUs {
+		if valueNames, vErr := auKey.ReadValueNames(-1); vErr == nil {
+			if subKeys, sErr := auKey.ReadSubKeyNames(-1); sErr == nil {
+				removeKey = len(valueNames) == 0 && len(subKeys) == 0
+			}
+		}
+	}
+
+	// Fecha os handles ANTES de remover a chave (o Windows não remove chave
+	// com handle aberto).
+	closeKeys()
+	if removeKey {
+		_ = registry.DeleteKey(registry.LOCAL_MACHINE, regPathWUPoliciesAU)
+	}
 	return firstErr
+}
+
+// backupHasScope informa se o backup tem algum valor do escopo informado.
+func backupHasScope(backup PolicyBackup, scope string) bool {
+	for name := range backup.Values {
+		if strings.HasPrefix(name, scope+`\\`) {
+			return true
+		}
+	}
+	return false
 }
 
 func splitPolicyName(name string) (scope, valueName string) {

@@ -10,6 +10,7 @@ import (
 
 	"discovery/app/agentcommands"
 	"discovery/app/core/windowsupdate"
+	"discovery/app/inventory"
 )
 
 // IsWindowsUpdateCommandType verifica se cmdType é do gerenciador de patches.
@@ -125,8 +126,17 @@ func (a *App) handleWindowsUpdateCommand(ctx context.Context, payload any) (bool
 		}
 		result, installErr := a.InventorySvc.InstallWindowsUpdates(ctx, installPayload.Updates)
 		if installErr != nil {
-			a.logWindowsUpdateCommandResult(action, 1, "instalacao falhou: "+installErr.Error(), startedAt)
-			return true, 1, "", "instalacao de windows update falhou: " + installErr.Error()
+			// WU-06: motivo ESTRUTURADO no output (preflight disk_space,
+			// service_stopped, on_battery, ou erro tipado do WUA). A API usa o
+			// errorCode para classificar a falha em vez de adivinhar por texto.
+			code := windowsupdate.ErrorCode(installErr)
+			a.logWindowsUpdateCommandResult(action, 1, "instalacao falhou ("+code+"): "+installErr.Error(), startedAt)
+			output := marshalWindowsUpdateResult(map[string]any{
+				"success":   false,
+				"errorCode": code,
+				"error":     installErr.Error(),
+			})
+			return true, 1, output, "instalacao de windows update falhou (" + code + "): " + installErr.Error()
 		}
 		a.logWindowsUpdateCommandResult(action, result.Code(), fmt.Sprintf("installed=%d failed=%d notFound=%d rebootRequired=%t",
 			len(result.Installed), len(result.Failed), len(result.NotFound), result.RebootRequired), startedAt)
@@ -169,6 +179,52 @@ func (a *App) handleWindowsUpdateCommand(ctx context.Context, payload any) (bool
 			}
 		}
 		return true, exitCode, output, ""
+
+	case "install-third-party":
+		// WU-19/WU-20: upgrade de apps de terceiros (choco/winget). Mesmo
+		// contrato de resultado do WUA para o servidor reutilizar o parser:
+		// installed[]/failed[] com updateKey canonico (choco:<id>).
+		tpSource, tpRequests, tpErr := parseThirdPartyInstallPayload(payloadJSON)
+		if tpErr != nil {
+			return true, 2, "", tpErr.Error()
+		}
+		outcomes, installErr := a.InventorySvc.InstallThirdParty(ctx, tpSource, tpRequests)
+		if installErr != nil {
+			code := "third_party_unavailable"
+			a.logWindowsUpdateCommandResult(action, 1, installErr.Error(), startedAt)
+			return true, 1, marshalWindowsUpdateResult(map[string]any{
+				"success":   false,
+				"errorCode": code,
+				"error":     installErr.Error(),
+			}), installErr.Error()
+		}
+
+		installed := make([]map[string]any, 0, len(outcomes))
+		failed := make([]map[string]any, 0, 4)
+		for _, outcome := range outcomes {
+			entry := map[string]any{"updateKey": outcome.UpdateKey}
+			if outcome.Error != "" {
+				entry["error"] = outcome.Error
+				failed = append(failed, entry)
+				continue
+			}
+			installed = append(installed, entry)
+		}
+		exitCode := 0
+		if len(failed) > 0 {
+			exitCode = 1
+		}
+		a.logWindowsUpdateCommandResult(action, exitCode,
+			fmt.Sprintf("source=%s installed=%d failed=%d", tpSource, len(installed), len(failed)), startedAt)
+		// O inventario de apps muda: reenvia em background como no WUA.
+		go a.refreshWindowsUpdatesAfterInstall()
+		return true, exitCode, marshalWindowsUpdateResult(map[string]any{
+			"success":        exitCode == 0,
+			"installed":      installed,
+			"failed":         failed,
+			"rebootRequired": false,
+			"source":         tpSource,
+		}), ""
 
 	case "hide", "unhide":
 		keys := stringSliceField(payloadJSON, "updateKeys")
@@ -253,6 +309,58 @@ func (a *App) refreshWindowsUpdatesAfterInstall() {
 	}
 	signature, stable := a.windowsUpdateSignaturesOfScan(ctx)
 	a.InventorySvc.SetWindowsUpdateBaselineWithStable(signature, stable)
+}
+
+// parseThirdPartyInstallPayload valida a origem e os ids do comando
+// install-third-party. Os ids sao validados de novo no provider (allowlist) —
+// aqui so barramos lixo obvio e limite de lote.
+func parseThirdPartyInstallPayload(payloadJSON map[string]any) (string, []inventory.ThirdPartyInstallRequest, error) {
+	source := strings.ToLower(strings.TrimSpace(agentcommands.GetStringField(payloadJSON, "source")))
+	switch source {
+	case "choco", "winget":
+	default:
+		return "", nil, fmt.Errorf("origem de terceiros invalida: %q", source)
+	}
+
+	rawApps, ok := payloadJSON["apps"]
+	if !ok {
+		return "", nil, fmt.Errorf("campo 'apps' e obrigatorio")
+	}
+	items, ok := rawApps.([]any)
+	if !ok || len(items) == 0 {
+		return "", nil, fmt.Errorf("campo 'apps' deve ser uma lista nao vazia")
+	}
+	if len(items) > 100 {
+		return "", nil, fmt.Errorf("lote de apps excede o limite de 100")
+	}
+
+	requests := make([]inventory.ThirdPartyInstallRequest, 0, len(items))
+	for _, item := range items {
+		switch value := item.(type) {
+		case string:
+			if id := strings.TrimSpace(value); id != "" {
+				requests = append(requests, inventory.ThirdPartyInstallRequest{ID: id})
+			}
+		case map[string]any:
+			id := strings.TrimSpace(agentcommands.GetStringField(value, "id"))
+			if id == "" {
+				continue
+			}
+			requests = append(requests, inventory.ThirdPartyInstallRequest{
+				ID: id,
+				// Campos do catálogo curado (WU-21): quando presentes, o agente
+				// baixa do fornecedor e valida o SHA-256 antes de executar.
+				InstallerURL:  strings.TrimSpace(agentcommands.GetStringField(value, "installerUrl")),
+				SHA256:        strings.TrimSpace(agentcommands.GetStringField(value, "sha256")),
+				SilentArgs:    strings.TrimSpace(agentcommands.GetStringField(value, "silentArgs")),
+				InstallerType: strings.TrimSpace(agentcommands.GetStringField(value, "installerType")),
+			})
+		}
+	}
+	if len(requests) == 0 {
+		return "", nil, fmt.Errorf("nenhum app valido no payload")
+	}
+	return source, requests, nil
 }
 
 func parseWindowsUpdateInstallPayload(payloadJSON map[string]any) (windowsUpdateInstallPayload, error) {

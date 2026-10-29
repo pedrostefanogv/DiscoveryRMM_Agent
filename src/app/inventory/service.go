@@ -24,6 +24,7 @@ import (
 	"discovery/app/appstore"
 	"discovery/app/core/inventory"
 	"discovery/app/core/models"
+	"discovery/app/core/thirdparty"
 	"discovery/app/core/processutil"
 	"discovery/app/core/tlsutil"
 	"discovery/app/core/windowsupdate"
@@ -208,6 +209,8 @@ type Service struct {
 	wuClient  windowsupdate.Client
 	wuCache   WindowsUpdateCache
 	wuEnabled func() bool
+	// thirdPartyProviders: gerenciadores de terceiros (choco/winget) — WU-19/20.
+	thirdPartyProviders []thirdparty.Provider
 }
 
 // NewService builds an inventory service.

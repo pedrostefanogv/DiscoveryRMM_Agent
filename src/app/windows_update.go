@@ -22,6 +22,12 @@ const (
 	// download em andamento muda a porcentagem a cada minuto e um scan WUA
 	// custa ~15s nestas máquinas.
 	windowsUpdateChangeScanMinGap = 2 * time.Minute
+
+	// Sonda PRÓPRIA de apps de terceiros (WU-19/WU-20): o scan completo roda a
+	// cada 6h; sem esta sonda um app novo demoraria até 6h para aparecer. 3h é
+	// o equilíbrio entre frescor e custo (2 processos por ciclo).
+	windowsUpdateThirdPartyIntervalDefault = 3 * time.Hour
+	windowsUpdateThirdPartyIntervalMinimum = 30 * time.Minute
 )
 
 // windowsUpdateAgentJitter devolve um deslocamento determinístico em
@@ -200,4 +206,47 @@ func (a *App) reportPendingReboot(ctx context.Context) {
 	if _, err := a.InventorySvc.ReportPendingReboot(ctx); err != nil {
 		a.Logs.Append("[windows-update] sonda de reinicio falhou: " + err.Error())
 	}
+}
+
+// runThirdPartyInventoryProbe compara o inventario de apps de terceiros com o
+// ultimo upload e, quando muda, dispara scan+upload com trigger "change"
+// (WU-19/WU-20). Nunca falha o ciclo: erro so loga.
+func (a *App) runThirdPartyInventoryProbe(ctx context.Context) {
+	if a == nil || a.InventorySvc == nil {
+		return
+	}
+	changed, err := a.InventorySvc.ThirdPartyInventoryChanged(ctx)
+	if err != nil {
+		a.Logs.Append("[windows-update] sonda de terceiros falhou: " + err.Error())
+		return
+	}
+	if !changed {
+		return
+	}
+
+	a.Logs.Append("[windows-update] apps de terceiros mudaram: disparando scan+upload")
+	result, scanErr := a.InventorySvc.ScanAndSyncWindowsUpdatesTriggered(ctx, "change")
+	if scanErr != nil {
+		a.Logs.Append("[windows-update] scan por mudanca de terceiros falhou: " + scanErr.Error())
+	}
+	if result != nil {
+		signature, stable := a.windowsUpdateSignaturesOfScan(ctx)
+		a.InventorySvc.SetWindowsUpdateBaselineWithStable(signature, stable)
+	}
+}
+
+// thirdPartyProbeInterval resolve a cadencia da sonda de terceiros (default 3h,
+// minimo 30 min) com jitter deterministico por agente.
+func thirdPartyProbeInterval(agentID string) time.Duration {
+	interval := windowsUpdateThirdPartyIntervalDefault
+	if interval < windowsUpdateThirdPartyIntervalMinimum {
+		interval = windowsUpdateThirdPartyIntervalMinimum
+	}
+	spread := interval / 10
+	jitter := windowsUpdateAgentJitter(agentID, spread)
+	next := interval + 2*jitter - spread
+	if next < windowsUpdateThirdPartyIntervalMinimum {
+		next = windowsUpdateThirdPartyIntervalMinimum
+	}
+	return next
 }

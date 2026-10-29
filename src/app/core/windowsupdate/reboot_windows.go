@@ -29,8 +29,8 @@ const (
 	regPathSetupState       = `SYSTEM\Setup\Status\SysprepStatus`
 	regPathUninstall        = `SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages`
 	regPathWindowsUpdateLog = `SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install`
-	regPathWUPolicies       = `SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate`
-	regPathWUAutoUpdate     = `SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update`
+	// regPathWUPolicies vem de policy_paths.go (fonte unica, testada no CI).
+	regPathWUAutoUpdate = `SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update`
 )
 
 // ImageState values ("SYSTEM\Setup" -> ImageState) que indicam trabalho de
@@ -226,10 +226,50 @@ func pendingServicingImageState() bool {
 	return false
 }
 
-// pendingServicingOperations detecta pacotes CBS com XML pendente. Limitado a
-// 5000 subchaves para nao custar caro em maquinas com muitos pacotes
-// (medido: 6188 pacotes nesta maquina).
+// servicingOpsCacheTTL limita a enumeracao de pacotes CBS (WU-12).
+//
+// A varredura de PendingXmlIdentifier abre TODAS as subchaves de
+// Component Based Servicing\Packages (medido: 6188 pacotes) e roda no caminho
+// em que nenhum outro motivo de reboot foi encontrado — ou seja, na maioria
+// absoluta das sondas de 5 min. Resultado: I/O de registro caro, por agente,
+// a cada 5 minutos, para responder quase sempre "nada pendente".
+//
+// A varredura agora e cacheada por 30 min: XML pendente de servicing nao
+// aparece e desaparece em minutos (ele precede um reboot), entao 30 min de
+// atraso nao muda a decisao operacional e reduz ~6x o custo.
+const servicingOpsCacheTTL = 30 * time.Minute
+
+var servicingOpsCache struct {
+	mu      sync.Mutex
+	checked time.Time
+	pending bool
+	valid   bool
+}
+
+// pendingServicingOperations devolve, com cache, se ha pacote CBS com XML
+// pendente (WU-12).
 func pendingServicingOperations() bool {
+	servicingOpsCache.mu.Lock()
+	if servicingOpsCache.valid && time.Since(servicingOpsCache.checked) < servicingOpsCacheTTL {
+		pending := servicingOpsCache.pending
+		servicingOpsCache.mu.Unlock()
+		return pending
+	}
+	servicingOpsCache.mu.Unlock()
+
+	pending := scanPendingServicingOperations()
+
+	servicingOpsCache.mu.Lock()
+	servicingOpsCache.pending = pending
+	servicingOpsCache.checked = time.Now()
+	servicingOpsCache.valid = true
+	servicingOpsCache.mu.Unlock()
+	return pending
+}
+
+// scanPendingServicingOperations faz a varredura real. Limitado a 5000
+// subchaves para nao custar caro em maquinas com muitos pacotes.
+func scanPendingServicingOperations() bool {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, regPathCBSPackages, registry.ENUMERATE_SUB_KEYS)
 	if err != nil {
 		return false

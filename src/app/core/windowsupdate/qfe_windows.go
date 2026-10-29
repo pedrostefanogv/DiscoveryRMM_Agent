@@ -54,6 +54,9 @@ func buildsInstalledUpdatesFromRows(rows []map[string]any) []Update {
 			Description: title.Description,
 			IsInstalled: true,
 			Source:      SourceQFE,
+			// Linha de QFE é um KB de OS já instalado: sem tipo explícito a UI e
+			// o smoke de máquina real veem "" (WU-15 espera feature/driver/software).
+			UpdateType: "software",
 		}
 		if installedAt := parseWMIInstalledOn(wmiString(row, "InstalledOn")); installedAt != nil {
 			update.InstalledAt = installedAt

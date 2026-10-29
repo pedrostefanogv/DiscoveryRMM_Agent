@@ -1,0 +1,7 @@
+﻿chocolatey|2.7.4|2.7.5|false
+dart-sdk|3.9.0|3.13.7|false
+fvm|4.1.2|4.3.2|false
+python|3.14.7|3.15.2|false
+python3|3.14.7|3.15.2|false
+python314|3.14.7|3.14.10|false
+visualstudio2022buildtools|117.14.37|117.14.42|false

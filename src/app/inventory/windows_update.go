@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"discovery/app/core/thirdparty"
 	"discovery/app/core/windowsupdate"
 	"discovery/app/debug"
 	"discovery/app/netutil"
@@ -39,6 +40,23 @@ type WindowsUpdateDeps struct {
 	Cache  WindowsUpdateCache
 	// Enabled e o kill switch (server config). nil = habilitado.
 	Enabled func() bool
+}
+
+// SetThirdPartyProviders injeta os gerenciadores de apps de terceiros
+// (Chocolatey/winget) usados no inventario e no upgrade — WU-19/WU-20.
+func (s *Service) SetThirdPartyProviders(providers []thirdparty.Provider) {
+	if s == nil {
+		return
+	}
+	s.wuMu.Lock()
+	defer s.wuMu.Unlock()
+	s.thirdPartyProviders = providers
+}
+
+func (s *Service) thirdPartyProvidersSnapshot() []thirdparty.Provider {
+	s.wuMu.Lock()
+	defer s.wuMu.Unlock()
+	return s.thirdPartyProviders
 }
 
 // SetWindowsUpdateDeps injeta as dependencias do modulo de patches. Chamado
@@ -142,6 +160,19 @@ func (s *Service) scanWindowsUpdates(verbose bool) (*windowsupdate.ScanResult, e
 		s.logf(fmt.Sprintf("[windows-update] scan parcial (%s): %v — enviando estado mesmo assim",
 			ScanErrorCode(err), err))
 	}
+	// WU-19/WU-20: apps de terceiros entram no MESMO inventario. Falha de um
+	// provider (choco ausente, winget antigo) nao invalida o scan do WUA.
+	if thirdParty, failures := s.collectThirdPartyUpdates(context.Background()); len(thirdParty) > 0 || len(failures) > 0 {
+		for source, failure := range failures {
+			s.logf("[windows-update] inventario de terceiros: provider " + source + " falhou: " + failure.Error())
+		}
+		if len(thirdParty) > 0 {
+			result.Updates = append(result.Updates, thirdParty...)
+			result.PendingCount += len(thirdParty)
+			s.logf(fmt.Sprintf("[windows-update] inventario de terceiros: %d app(s) com atualizacao", len(thirdParty)))
+		}
+	}
+
 	skipped := ""
 	if len(result.SkippedReasons) > 0 {
 		skipped = fmt.Sprintf(" reasons=%v", result.SkippedReasons)
@@ -241,15 +272,19 @@ func (s *Service) syncWindowsUpdates(ctx context.Context, result *windowsupdate.
 	}
 
 	envelope := buildWindowsUpdateEnvelope(agentID, result, scanErrCode)
-	body, err := json.Marshal(envelope)
+	fullBody, err := json.Marshal(envelope)
 	if err != nil {
 		s.logf("[windows-update] falha ao serializar payload: " + err.Error())
 		return false
 	}
-	hash := hashPayload(body)
+	hash := hashPayload(fullBody)
 
+	var cachedPayload []byte
+	cacheFound := false
 	if cache != nil {
-		if cachedPayload, cachedHash, _, found, cacheErr := cache.GetWindowsUpdateCache(agentID); cacheErr == nil && found {
+		if payload, cachedHash, _, found, cacheErr := cache.GetWindowsUpdateCache(agentID); cacheErr == nil && found {
+			cachedPayload = payload
+			cacheFound = true
 			if cachedHash == hash && !windowsUpdateUploadForced(envelope, cachedPayload) {
 				s.logf(fmt.Sprintf("[windows-update] upload ignorado: payload sem mudancas (status=%s reboot=%t updates=%d)",
 					envelope.Scan.Status, envelope.PendingReboot.Pending, len(envelope.Updates)))
@@ -257,6 +292,28 @@ func (s *Service) syncWindowsUpdates(ctx context.Context, result *windowsupdate.
 			}
 			if cachedHash == hash {
 				s.logf("[windows-update] upload forçado: status do scan ou reinicio pendente mudou com payload igual")
+			}
+		}
+	}
+
+	// WU-13: quando JA vamos enviar e o trigger e "change", tenta reduzir o
+	// payload ao diff. O cache local continua guardando o payload COMPLETO —
+	// e ele que serve de referencia para o proximo diff.
+	body := fullBody
+	if cacheFound {
+		plan := PlanWindowsUpdateDelta(envelope.Updates, cachedPayload, envelope.Scan.Trigger)
+		if plan.UseDelta {
+			// Delta vazio ainda pode ser necessário: o upload foi decidido por
+			// hash/forced, e o que mudou foram status/sonda/reboot — o envelope
+			// leva esses blocos mesmo sem updates alterados.
+			deltaEnvelope := envelope
+			deltaEnvelope.Delta = true
+			deltaEnvelope.Updates = plan.Changed
+			deltaEnvelope.RemovedKeys = plan.Removed
+			if deltaBody, marshalErr := json.Marshal(deltaEnvelope); marshalErr == nil {
+				body = deltaBody
+				s.logf(fmt.Sprintf("[windows-update] envio DELTA: changed=%d removed=%d (full=%d)",
+					len(plan.Changed), len(plan.Removed), len(envelope.Updates)))
 			}
 		}
 	}
@@ -272,7 +329,8 @@ func (s *Service) syncWindowsUpdates(ctx context.Context, result *windowsupdate.
 	}
 
 	if cache != nil {
-		if err := cache.SaveWindowsUpdateCache(agentID, hash, body, result.StartedAt); err != nil {
+		// Sempre o payload COMPLETO: o delta e so transporte.
+		if err := cache.SaveWindowsUpdateCache(agentID, hash, fullBody, result.StartedAt); err != nil {
 			s.logf("[windows-update] aviso: falha ao gravar cache local: " + err.Error())
 		}
 	}
@@ -433,6 +491,19 @@ func (s *Service) InstallWindowsUpdates(ctx context.Context, targets []windowsup
 	s.scanMu.Lock()
 	defer s.scanMu.Unlock()
 
+	// WU-06/D07: preflight ANTES de qualquer mutacao. Servico parado, disco
+	// insuficiente ou bateria (quando a politica bloqueia) viram motivo
+	// estruturado — nunca um erro obscuro no meio do download.
+	//
+	// blockOnBattery=false por padrao (D07: fase 1 apenas avisa); o piso de
+	// disco cobre o maior cumulative update tipico.
+	if failure, onBattery := windowsupdate.RunPreflight(0, false); failure != nil {
+		s.logf("[windows-update] preflight barrou a instalacao: " + failure.Error())
+		return nil, failure
+	} else if onBattery {
+		s.logf("[windows-update] aviso: instalando com a maquina na bateria")
+	}
+
 	result, err := client.Install(ctx, targets)
 	if err != nil {
 		return nil, err
@@ -582,9 +653,18 @@ type agentWindowsUpdateReboot struct {
 type agentWindowsUpdateEnvelope struct {
 	AgentID       string                   `json:"agentId"`
 	CollectedAt   string                   `json:"collectedAt"`
-	Scan          agentWindowsUpdateScan   `json:"scan"`
+	// EnvelopeVersion/Capabilities (WU-13, D06): contrato explicito para a API
+	// decidir se entende delta e campos novos. Agente antigo nao envia e a API
+	// cai no caminho completo.
+	EnvelopeVersion int      `json:"envelopeVersion"`
+	Capabilities    []string `json:"capabilities,omitempty"`
+	Scan            agentWindowsUpdateScan   `json:"scan"`
 	PendingReboot agentWindowsUpdateReboot `json:"pendingReboot"`
 	Updates       []windowsupdate.Update   `json:"updates"`
+	// Delta=true: Updates contem apenas os itens alterados e RemovedKeys lista o
+	// que saiu desde o ultimo full (WU-13).
+	Delta       bool     `json:"delta,omitempty"`
+	RemovedKeys []string `json:"removedKeys,omitempty"`
 	// State e a sonda barata do estado local (campo OPCIONAL: API antiga ignora).
 	State agentWindowsUpdateState `json:"state"`
 }
@@ -642,8 +722,10 @@ func buildWindowsUpdateEnvelope(agentID string, result *windowsupdate.ScanResult
 		rebootCheckedAt = state.CheckedAt
 	}
 	return agentWindowsUpdateEnvelope{
-		AgentID:     agentID,
-		CollectedAt: startedAt.UTC().Format(time.RFC3339),
+		AgentID:         agentID,
+		CollectedAt:     startedAt.UTC().Format(time.RFC3339),
+		EnvelopeVersion: windowsUpdateEnvelopeVersion,
+		Capabilities:    windowsUpdateCapabilities,
 		Scan: agentWindowsUpdateScan{
 			Status:        scanStatusFor(result, scanErrCode),
 			DurationMs:    result.DurationMs,
