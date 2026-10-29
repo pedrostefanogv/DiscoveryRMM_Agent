@@ -695,6 +695,22 @@ func readCategoryNames(coll *ole.IDispatch) []string {
 	return out
 }
 
+// tuneSearcherForScan ajusta o escopo do IUpdateSearcher (IUpdateSearcher3).
+//
+// O escopo DEFAULT do WUA e "machine only" e EXCLUI atualizacoes por usuario
+// (IUpdate4.PerUser). Ofertas de upgrade de versao no Windows 11 aparecem na
+// UI do Windows Update no contexto do usuario; ao escanear como servico elas
+// podem ficar de fora. Tentamos o escopo 4 (machine + all users); em WUA que
+// nao suporta o propriedade o PutProperty falha e o escopo default permanece.
+// Nao e fatal: o scan segue com o comportamento anterior.
+func tuneSearcherForScan(searcher *ole.IDispatch) {
+	if searcher == nil {
+		return
+	}
+	_, _ = oleutil.PutProperty(searcher, "Online", true)
+	_, _ = oleutil.PutProperty(searcher, "SearchScope", int32(4))
+}
+
 func scanWUA(opts ScanOptions) (*ScanResult, error) {
 	started := time.Now().UTC()
 	session, err := openSession()
@@ -708,6 +724,7 @@ func scanWUA(opts ScanOptions) (*ScanResult, error) {
 		return nil, ErrWuaUnavailable
 	}
 	defer searcher.Release()
+	tuneSearcherForScan(searcher)
 
 	pending, counters, err := searchPending(searcher, opts.IncludeHidden, opts.IncludeDrivers)
 	if err != nil {
