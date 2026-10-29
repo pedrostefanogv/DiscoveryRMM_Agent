@@ -317,7 +317,7 @@ func (a *App) refreshWindowsUpdatesAfterInstall() {
 func parseThirdPartyInstallPayload(payloadJSON map[string]any) (string, []inventory.ThirdPartyInstallRequest, error) {
 	source := strings.ToLower(strings.TrimSpace(agentcommands.GetStringField(payloadJSON, "source")))
 	switch source {
-	case "choco", "winget":
+	case "choco", "winget", "msi":
 	default:
 		return "", nil, fmt.Errorf("origem de terceiros invalida: %q", source)
 	}

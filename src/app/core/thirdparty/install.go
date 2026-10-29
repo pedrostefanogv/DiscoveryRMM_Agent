@@ -49,11 +49,15 @@ type CommandRunner func(ctx context.Context, name string, args ...string) (strin
 
 // Installer baixa/verifica/executa instaladores de catálogo.
 type Installer struct {
-	Client     *http.Client
-	Runner     CommandRunner
-	TempDir    string
-	MaxBytes   int64
-	Timeout    time.Duration
+	Client   *http.Client
+	Runner   CommandRunner
+	TempDir  string
+	MaxBytes int64
+	Timeout  time.Duration
+	// SignatureVerifier valida Authenticode; nil = verifyAuthenticode da
+	// plataforma. Injetável para testes (o CI Windows não tem binário assinado
+	// de teste) e para plataformas sem Authenticode.
+	SignatureVerifier func(path string) error
 }
 
 // NewInstaller devolve o instalador com defaults seguros.
@@ -101,6 +105,16 @@ func (i *Installer) Install(ctx context.Context, spec InstallSpec) (string, erro
 		return "", err
 	}
 	if err := VerifyFileSHA256(target, spec.SHA256); err != nil {
+		_ = os.Remove(target)
+		return "", err
+	}
+	// WU-21/D24: hash garante integridade; Authenticode garante autoria. Falha
+	// é fatal (não executamos binário sem assinatura válida no Windows).
+	verifier := installer.SignatureVerifier
+	if verifier == nil {
+		verifier = verifyAuthenticode
+	}
+	if err := verifier(target); err != nil {
 		_ = os.Remove(target)
 		return "", err
 	}

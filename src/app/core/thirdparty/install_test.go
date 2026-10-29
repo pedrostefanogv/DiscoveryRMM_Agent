@@ -33,6 +33,7 @@ func TestInstallerDownloadsVerifiesAndRunsMsi(t *testing.T) {
 	var calls []runnerCall
 	installer := NewInstaller()
 	installer.Client = server.Client()
+	installer.SignatureVerifier = func(string) error { return nil }
 	installer.Runner = func(_ context.Context, name string, args ...string) (string, error) {
 		calls = append(calls, runnerCall{name: name, args: args})
 		return "ok", nil
@@ -73,6 +74,7 @@ func TestInstallerRejectsHashMismatchBeforeRunning(t *testing.T) {
 	ran := false
 	installer := NewInstaller()
 	installer.Client = server.Client()
+	installer.SignatureVerifier = func(string) error { return nil }
 	installer.Runner = func(context.Context, string, ...string) (string, error) {
 		ran = true
 		return "", nil
@@ -90,6 +92,39 @@ func TestInstallerRejectsHashMismatchBeforeRunning(t *testing.T) {
 	}
 	if ran {
 		t.Fatal("instalador NAO pode ser executado com hash divergente")
+	}
+}
+
+func TestInstallerRejectsInvalidSignatureBeforeRunning(t *testing.T) {
+	payload := []byte("sem assinatura valida")
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	ran := false
+	installer := NewInstaller()
+	installer.Client = server.Client()
+	installer.SignatureVerifier = func(string) error {
+		return errors.New("assinatura invalida")
+	}
+	installer.Runner = func(context.Context, string, ...string) (string, error) {
+		ran = true
+		return "", nil
+	}
+
+	_, err := installer.Install(context.Background(), InstallSpec{
+		Source:        SourceWinget,
+		ID:            "Vendor.App",
+		InstallerURL:  server.URL + "/app.exe",
+		SHA256:        sha256Of(payload),
+		InstallerType: "exe",
+	})
+	if err == nil {
+		t.Fatal("assinatura invalida deve bloquear a instalacao")
+	}
+	if ran {
+		t.Fatal("instalador NAO pode executar com assinatura invalida")
 	}
 }
 
@@ -123,6 +158,7 @@ func TestInstallerRunsExeWithSilentArgs(t *testing.T) {
 	var call runnerCall
 	installer := NewInstaller()
 	installer.Client = server.Client()
+	installer.SignatureVerifier = func(string) error { return nil }
 	installer.Runner = func(_ context.Context, name string, args ...string) (string, error) {
 		call = runnerCall{name: name, args: args}
 		return "", nil

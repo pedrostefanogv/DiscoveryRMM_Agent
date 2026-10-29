@@ -22,6 +22,9 @@ import (
 const (
 	SourceChoco  = "choco"
 	SourceWinget = "winget"
+	// SourceMsi é o catálogo próprio com download direto (WU-21): não tem
+	// gerenciador por trás, só URL+SHA-256+assinatura.
+	SourceMsi = "msi"
 )
 
 // AppUpdate e uma atualizacao de aplicativo de terceiros disponivel.
@@ -82,7 +85,7 @@ func FindProvider(providers []Provider, source string) Provider {
 // IsThirdPartySource informa se a origem e de aplicativo de terceiros.
 func IsThirdPartySource(source string) bool {
 	switch strings.ToLower(strings.TrimSpace(source)) {
-	case SourceChoco, SourceWinget:
+	case SourceChoco, SourceWinget, SourceMsi:
 		return true
 	default:
 		return false
