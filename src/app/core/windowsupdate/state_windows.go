@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf16"
 
@@ -38,7 +39,25 @@ const (
 	// logActivityWindow: janela para considerar o WUClient "online" (baixando
 	// ou instalando agora).
 	logActivityWindow = 30 * time.Minute
+	// maxDownloadInProgressAge: idade maxima do evento de download/progresso
+	// para ele ainda contar como "download em andamento". Sem esse limite a
+	// heuristica "ultimo download depois da ultima instalacao bem-sucedida"
+	// mantinha DownloadInProgress=true para SEMPRE quando o Windows baixava e o
+	// usuario adiava a instalacao — o que ainda disparava scans por mudanca.
+	// 6h: um update grande em link lento pode passar de 1h baixando; janela
+	// menor fazia o badge "Baixando" piscar para o meio do download. O limite
+	// continua existindo para o caso "usuário adiou a instalação" (antes era
+	// infinito).
+	maxDownloadInProgressAge = 6 * time.Hour
+	// installedKBsCacheTTL: a enumeracao de CBS (ate 5000 subchaves) e o item
+	// mais caro da sonda de 5 min; o conjunto de KBs instaladas muda em horas,
+	// nao em minutos, entao 1h de cache e conservador.
+	installedKBsCacheTTL = time.Hour
 )
+
+// windowsUpdateNow permite injetar o relogio nos testes (janelas de recencia e
+// TTL do cache). Em producao e time.Now.
+var windowsUpdateNow = time.Now
 
 // WindowsUpdateLogActivity resume o que o WindowsUpdate.log mostra.
 type WindowsUpdateLogActivity struct {
@@ -66,12 +85,20 @@ func ProbeLocalState() WindowsUpdateState {
 		state.WSUSServer = wsus
 		state.PolicyManaged = true
 	}
+	var policyReadable bool
 	state.AuOptions, state.NoAutoUpdate, state.DeferralDays, state.ActiveHoursStart,
-		state.ActiveHoursEnd, state.PolicyErrorCode = readWindowsUpdatePolicySnapshot()
+		state.ActiveHoursEnd, state.PolicyErrorCode, policyReadable = readWindowsUpdatePolicySnapshot()
+	state.PolicyKnown = policyReadable
 
 	reboot := probePendingReboot()
 	state.RebootPending = reboot.Pending
 	state.RebootReasons = append([]string(nil), reboot.Reasons...)
+
+	// Reboot pendente mudando significa que o CBS/PendingFileRename mudou:
+	// invalida o cache de KBs instaladas para a leitura refletir o novo estado.
+	if rebootPendingChanged(reboot.Pending) {
+		InvalidateInstalledKBsCache()
+	}
 
 	// Fonte primaria: log de eventos do WindowsUpdateClient (o log textual foi
 	// descontinuado no Windows 10 1903+). Fallback: WindowsUpdate.log se existir.
@@ -83,7 +110,8 @@ func ProbeLocalState() WindowsUpdateState {
 	}
 	applyWindowsUpdateLogActivity(&state, activity)
 
-	qfes := installedKBsFromRegistry()
+	qfes, qfesKnown := installedKBsFromRegistryWithStatus()
+	state.QFEInstalledCountKnown = qfesKnown
 	state.QFEInstalledCount = len(qfes)
 	if len(qfes) > 8 {
 		state.RecentQFEs = append([]string(nil), qfes[:8]...)
@@ -107,8 +135,27 @@ func ProbeLocalState() WindowsUpdateState {
 
 // readWindowsUpdatePolicySnapshot le a politica efetiva do WU (AUOptions,
 // deferrals, active hours). Todos os valores sao opcionais: zero = ausente.
-func readWindowsUpdatePolicySnapshot() (auOptions int, noAutoUpdate bool, deferralDays int, activeStart, activeEnd *int, errorCode string) {
+func readWindowsUpdatePolicySnapshot() (auOptions int, noAutoUpdate bool, deferralDays int, activeStart, activeEnd *int, errorCode string, readable bool) {
 	paths := []string{regPathWUPolicies, regPathWUAutoUpdate}
+
+	// readable: as chaves de politica foram consultaveis. "Chave nao existe" e
+	// um resultado VALIDO (maquina sem politica => valores vazios e o servidor
+	// limpa os antigos). So falha de leitura/permissao marca false.
+	for _, path := range paths {
+		key, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
+		if err == nil {
+			readable = true
+			key.Close()
+			continue
+		}
+		if os.IsNotExist(err) {
+			// Politica ausente, mas conhecida.
+			readable = true
+			continue
+		}
+		readable = false
+		break
+	}
 
 	readDWORDAny := func(name string) (uint64, bool) {
 		for _, path := range paths {
@@ -149,21 +196,117 @@ func readWindowsUpdatePolicySnapshot() (auOptions int, noAutoUpdate bool, deferr
 		value := int(end)
 		activeEnd = &value
 	}
-	return auOptions, noAutoUpdate, deferralDays, activeStart, activeEnd, errorCode
+	return auOptions, noAutoUpdate, deferralDays, activeStart, activeEnd, errorCode, readable
+}
+
+// Cache em memoria da enumeracao CBS. A sonda roda a cada ~5 min e a
+// enumeracao de ate 5000 subchaves e o item mais caro dela; o conjunto de KBs
+// instaladas so muda em scan/instalacao, quando o cache e invalidado.
+var (
+	installedKBsMu     sync.Mutex
+	installedKBsAt     time.Time
+	installedKBsCached []string
+	// installedKBsLastKnown guarda a ultima leitura BEM-SUCEDIDA e sobrevive ao
+	// Invalidate: quando o CBS esta indisponivel (servicing), a sonda devolve o
+	// ultimo conjunto conhecido em vez de "0 KBs instaladas".
+	installedKBsLastKnown []string
+	// installedKBsGeneration conta as invalidacoes. A enumeracao roda FORA do
+	// mutex (e lenta); sem a geracao, uma invalidacao concorrente podia ser
+	// desfeita pela publicacao de uma leitura antiga ("lost update"), deixando
+	// o cache envenenado por ate 1h.
+	installedKBsGeneration uint64
+	lastRebootPending      struct {
+		known   bool
+		pending bool
+	}
+)
+
+// InvalidateInstalledKBsCache descarta o cache da enumeracao CBS. Deve ser
+// chamada quando o conjunto de KBs instaladas pode ter mudado: scan WUA
+// concluido com sucesso e transicao do reboot pendente.
+func InvalidateInstalledKBsCache() {
+	installedKBsMu.Lock()
+	installedKBsAt = time.Time{}
+	installedKBsCached = nil
+	installedKBsGeneration++
+	installedKBsMu.Unlock()
+}
+
+// rebootPendingChanged informa se o reboot pendente mudou desde a ultima sonda
+// (primeira leitura conta como mudanca para descartar cache de processo antigo).
+func rebootPendingChanged(pending bool) bool {
+	installedKBsMu.Lock()
+	defer installedKBsMu.Unlock()
+	changed := !lastRebootPending.known || lastRebootPending.pending != pending
+	lastRebootPending.known = true
+	lastRebootPending.pending = pending
+	return changed
 }
 
 // installedKBsFromRegistry lista as KBs instaladas via
 // ...\Component Based Servicing\Packages\Package_for_KBxxxxx~... — barato
 // (uma subchave por pacote) e sem WMI. Retorna KBs ordenadas (maior primeiro).
+//
+// O resultado fica em cache por installedKBsCacheTTL (ver
+// InvalidateInstalledKBsCache); quando o cache expira, a enumeracao e refeita.
 func installedKBsFromRegistry() []string {
+	kbs, _ := installedKBsFromRegistryWithStatus()
+	return kbs
+}
+
+// installedKBsFromRegistryWithStatus devolve a lista e se a leitura foi
+// CONFIÁVEL. Falha de leitura (CBS indisponível) devolve o último conjunto
+// conhecido com known=false — o servidor então preserva a contagem antiga em
+// vez de gravar 0.
+func installedKBsFromRegistryWithStatus() ([]string, bool) {
+	now := windowsUpdateNow()
+	installedKBsMu.Lock()
+	if !installedKBsAt.IsZero() && now.Sub(installedKBsAt) < installedKBsCacheTTL {
+		cached := append([]string(nil), installedKBsCached...)
+		installedKBsMu.Unlock()
+		return cached, true
+	}
+	generation := installedKBsGeneration
+	installedKBsMu.Unlock()
+
+	kbs, err := enumerateInstalledKBs()
+	if err != nil {
+		// Falha de leitura (CBS indisponivel durante servicing/TrustedInstaller)
+		// NAO pode virar "nenhuma KB instalada" cacheada por 1h: devolve o
+		// ultimo conjunto conhecido e NAO grava cache, para a proxima sonda de
+		// 5 min tentar de novo.
+		installedKBsMu.Lock()
+		fallback := append([]string(nil), installedKBsLastKnown...)
+		installedKBsMu.Unlock()
+		return fallback, false
+	}
+
+	installedKBsMu.Lock()
+	installedKBsLastKnown = append([]string(nil), kbs...)
+	// Só publica se nenhuma invalidacao aconteceu durante a leitura.
+	if generation == installedKBsGeneration {
+		installedKBsAt = now
+		installedKBsCached = append([]string(nil), kbs...)
+	}
+	installedKBsMu.Unlock()
+	return kbs, true
+}
+
+// enumerateInstalledKBs e a leitura efetiva (variavel para teste, para exercitar
+// TTL/invalidacao/falha sem depender do registro da maquina).
+var enumerateInstalledKBs = readInstalledKBsFromRegistry
+
+// readInstalledKBsFromRegistry faz a enumeracao real do CBS (sem cache).
+// Erro de leitura e distinguido de "nenhuma KB" (lista vazia valida).
+func readInstalledKBsFromRegistry() ([]string, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, regPathCBSPackages, registry.ENUMERATE_SUB_KEYS)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer key.Close()
 	names, err := key.ReadSubKeyNames(5000)
 	if err != nil && len(names) == 0 {
-		return nil
+		return nil, err
 	}
 	seen := make(map[string]struct{}, len(names))
 	out := make([]string, 0, len(names))
@@ -179,7 +322,7 @@ func installedKBsFromRegistry() []string {
 		out = append(out, kb)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] > out[j] })
-	return out
+	return out, nil
 }
 
 // kbFromServicingPackageName extrai o KB de um nome de pacote CBS:
@@ -331,13 +474,26 @@ func ParseWindowsUpdateLogActivity(text string) WindowsUpdateLogActivity {
 	}
 
 	activity.LastDownloadProgress = lastDownloadPercent
-	if lastDownloadPercent >= 0 && lastDownloadPercent < 100 {
-		// Download anunciado e sem instalacao posterior => ainda baixando.
-		if activity.LastInstallTime == nil || lastDownload == nil || activity.LastInstallTime.Before(*lastDownload) {
-			activity.DownloadInProgress = true
-		}
+	if lastDownloadPercent >= 0 && lastDownloadPercent < 100 &&
+		downloadStillInProgress(lastDownload, activity.LastInstallTime, windowsUpdateNow()) {
+		// Download anunciado, sem instalacao posterior e RECENTE => baixando.
+		activity.DownloadInProgress = true
 	}
 	return activity
+}
+
+// downloadStillInProgress decide se o download mais recente ainda conta como
+// "em andamento": precisa ser posterior a ultima instalacao (senao ja foi
+// instalado) E recente (<= maxDownloadInProgressAge). O limite de idade evita
+// "Baixando" eterno quando o usuario adia a instalacao.
+func downloadStillInProgress(lastDownload, lastInstall *time.Time, now time.Time) bool {
+	if lastDownload == nil {
+		return false
+	}
+	if lastInstall != nil && !lastDownload.After(*lastInstall) {
+		return false
+	}
+	return now.Sub(*lastDownload) <= maxDownloadInProgressAge
 }
 
 // mergeWindowsUpdateActivity combina duas fontes: vence o timestamp mais
@@ -377,6 +533,13 @@ func applyWindowsUpdateLogActivity(state *WindowsUpdateState, activity WindowsUp
 	state.LastInstallTime = activity.LastInstallTime
 	state.LastInstallSuccess = activity.LastInstallSuccess
 	state.DownloadInProgress = activity.DownloadInProgress
+	// Progresso de download (0-100). -1/ausente => 0 (omitido no JSON por
+	// omitempty). Nao entra na assinatura do estado (state.go) de proposito.
+	if activity.LastDownloadProgress >= 0 && activity.LastDownloadProgress <= 100 {
+		state.DownloadProgressPercent = activity.LastDownloadProgress
+	} else {
+		state.DownloadProgressPercent = 0
+	}
 }
 
 // windowsUpdateLogTimestamp extrai o timestamp do inicio da linha do log.

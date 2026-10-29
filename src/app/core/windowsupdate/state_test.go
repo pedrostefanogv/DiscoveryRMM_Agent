@@ -31,7 +31,18 @@ func TestParseWindowsUpdateLogActivity(t *testing.T) {
 	}
 }
 
+// fixedWindowsUpdateNow injeta um relogio fixo (janelas de recencia e TTL do
+// cache sao dependentes de tempo) e restaura o original no fim do teste.
+func fixedWindowsUpdateNow(t *testing.T, at time.Time) {
+	t.Helper()
+	previous := windowsUpdateNow
+	windowsUpdateNow = func() time.Time { return at }
+	t.Cleanup(func() { windowsUpdateNow = previous })
+}
+
 func TestParseWindowsUpdateLogActivityDownloadInProgress(t *testing.T) {
+	// Download "agora": a heuristica so vale para evento recente.
+	fixedWindowsUpdateNow(t, time.Date(2026, 10, 18, 10, 20, 0, 0, time.UTC))
 	text := strings.Join([]string{
 		"2026-10-18 10:12:00.0000000 1 2 DownloadManager Baixando - 0% (0 de 1)",
 	}, "\n")
@@ -44,6 +55,52 @@ func TestParseWindowsUpdateLogActivityDownloadInProgress(t *testing.T) {
 	}
 	if activity.LastInstallSuccess != nil {
 		t.Fatal("nao pode haver instalacao bem-sucedida")
+	}
+}
+
+// Usuario adiou a instalacao: o download antigo NAO pode manter "Baixando"
+// para sempre (nem disparar scans por mudanca indefinidamente).
+func TestParseWindowsUpdateLogActivityStaleDownloadIsNotInProgress(t *testing.T) {
+	downloaded := time.Date(2026, 10, 18, 10, 12, 0, 0, time.UTC)
+	// Um minuto além da janela (a janela existe para o caso "usuário adiou a
+	// instalação"; downloads longos de verdade continuam contando).
+	fixedWindowsUpdateNow(t, downloaded.Add(maxDownloadInProgressAge+time.Minute))
+	text := strings.Join([]string{
+		"2026-10-18 10:12:00.0000000 1 2 DownloadManager Baixando - 45% (0 de 1)",
+	}, "\n")
+	activity := ParseWindowsUpdateLogActivity(text)
+	if activity.DownloadInProgress {
+		t.Fatalf("download com mais de %s nao pode contar como em andamento", maxDownloadInProgressAge)
+	}
+	// O progresso continua sendo o ultimo visto (dado historico).
+	if activity.LastDownloadProgress != 45 {
+		t.Fatalf("progresso=%d want 45", activity.LastDownloadProgress)
+	}
+}
+
+// O progresso entra no estado, mas NUNCA na assinatura: cada 1% dispararia um
+// scan completo do WUA.
+func TestApplyWindowsUpdateLogActivityProgressNotInSignature(t *testing.T) {
+	now := time.Now().UTC()
+	progress := WindowsUpdateState{Supported: true, ServiceState: "running", CheckedAt: now}
+	applyWindowsUpdateLogActivity(&progress, WindowsUpdateLogActivity{
+		Read:                 true,
+		DownloadInProgress:   true,
+		LastDownloadProgress: 73,
+	})
+	if progress.DownloadProgressPercent != 73 {
+		t.Fatalf("progresso=%d want 73", progress.DownloadProgressPercent)
+	}
+	without := progress
+	without.DownloadProgressPercent = 0
+	if WindowsUpdateStateSignature(progress) != WindowsUpdateStateSignature(without) {
+		t.Fatal("DownloadProgressPercent nao pode participar da assinatura do estado")
+	}
+	// -1 (desconhecido) => 0, omitido no JSON.
+	unknown := WindowsUpdateState{Supported: true, CheckedAt: now}
+	applyWindowsUpdateLogActivity(&unknown, WindowsUpdateLogActivity{Read: true, LastDownloadProgress: -1})
+	if unknown.DownloadProgressPercent != 0 {
+		t.Fatalf("progresso desconhecido=%d want 0", unknown.DownloadProgressPercent)
 	}
 }
 

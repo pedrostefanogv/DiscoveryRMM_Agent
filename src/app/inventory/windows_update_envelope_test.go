@@ -80,6 +80,191 @@ func TestBuildWindowsUpdateEnvelopeOK(t *testing.T) {
 	}
 }
 
+// downloadPercent e o nome consumido pela API .NET: precisa sair no envelope
+// com a porcentagem da sonda e ser omitido quando desconhecido (0).
+func TestBuildWindowsUpdateEnvelopeDownloadPercent(t *testing.T) {
+	result := sampleScanResult()
+	result.State.DownloadInProgress = true
+	result.State.DownloadProgressPercent = 42
+	envelope := buildWindowsUpdateEnvelope("agent-1", result, "")
+	if envelope.State.DownloadPercent == nil || *envelope.State.DownloadPercent != 42 {
+		t.Fatalf("downloadPercent=%v want 42", envelope.State.DownloadPercent)
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		State map[string]any `json:"state"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.State["downloadPercent"] != float64(42) {
+		t.Fatalf("campo downloadPercent ausente/incorreto: %v", decoded.State["downloadPercent"])
+	}
+
+	// 0% REAL durante download => enviado (é informação válida).
+	result.State.DownloadProgressPercent = 0
+	body, err = json.Marshal(buildWindowsUpdateEnvelope("agent-1", result, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded.State = nil
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.State["downloadPercent"] != float64(0) {
+		t.Fatalf("downloadPercent=0 com download em andamento deveria ser enviado: %v", decoded.State["downloadPercent"])
+	}
+
+	// Sem download em andamento => ausente (não herda percentual antigo).
+	result.State.DownloadInProgress = false
+	result.State.DownloadProgressPercent = 42
+	body, err = json.Marshal(buildWindowsUpdateEnvelope("agent-1", result, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded.State = nil
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded.State["downloadPercent"]; ok {
+		t.Fatal("downloadPercent não pode ser enviado quando não há download")
+	}
+}
+
+// qfeInstalledCount: 0 KBs reais viaja; leitura falha do CBS fica AUSENTE
+// (senão a API gravaria 0 e apagaria a contagem conhecida).
+func TestBuildWindowsUpdateEnvelopeQfeInstalledCount(t *testing.T) {
+	result := sampleScanResult()
+	result.State.QFEInstalledCount = 0
+	result.State.QFEInstalledCountKnown = true
+
+	body, err := json.Marshal(buildWindowsUpdateEnvelope("agent-1", result, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		State map[string]any `json:"state"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.State["qfeInstalledCount"] != float64(0) {
+		t.Fatalf("0 KBs reais deveria ser enviado: %v", decoded.State["qfeInstalledCount"])
+	}
+
+	result.State.QFEInstalledCountKnown = false
+	body, err = json.Marshal(buildWindowsUpdateEnvelope("agent-1", result, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded.State = nil
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded.State["qfeInstalledCount"]; ok {
+		t.Fatal("leitura falha do CBS não pode enviar contagem (gravaria 0)")
+	}
+}
+
+// maxDownloadSize (bug corrigido no WUA) precisa sair no JSON de updates.
+func TestBuildWindowsUpdateEnvelopeMaxDownloadSize(t *testing.T) {
+	result := sampleScanResult()
+	result.Updates = append(result.Updates, windowsupdate.Update{
+		UpdateKey:       "guid:11111111-1111-1111-1111-111111111111:1",
+		Title:           "Cumulative Update",
+		IsPending:       true,
+		MaxDownloadSize: 512_000_000,
+		Source:          windowsupdate.SourceWUA,
+	})
+
+	body, err := json.Marshal(buildWindowsUpdateEnvelope("agent-1", result, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Updates []map[string]any `json:"updates"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, update := range decoded.Updates {
+		if update["maxDownloadSize"] == float64(512_000_000) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("maxDownloadSize ausente no envelope: %v", decoded.Updates)
+	}
+}
+
+// skippedCount vai SEMPRE (mesmo 0): com omitempty o servidor nao conseguia
+// limpar um contador antigo ("3 ignorados" congelado no snapshot).
+func TestBuildWindowsUpdateEnvelopeAlwaysSendsSkippedCount(t *testing.T) {
+	result := sampleScanResult()
+	result.SkippedCount = 0
+	result.SkippedReasons = nil
+
+	body, err := json.Marshal(buildWindowsUpdateEnvelope("agent-1", result, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Scan map[string]any `json:"scan"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := decoded.Scan["skippedCount"]; !ok || value != float64(0) {
+		t.Fatalf("skippedCount=0 deveria ser enviado explicitamente: %v (presente=%v)", value, ok)
+	}
+	if _, ok := decoded.Scan["skippedReasons"]; ok {
+		t.Fatal("skippedReasons vazio deveria ser omitido")
+	}
+}
+
+// activeHoursStart/End vinham sendo lidos pela sonda e NAO subiam no envelope:
+// a API e o site tinham o campo (probe.activeHours*) e nunca recebiam nada.
+func TestBuildWindowsUpdateEnvelopeActiveHours(t *testing.T) {
+	result := sampleScanResult()
+	start, end := 8, 18
+	result.State.ActiveHoursStart = &start
+	result.State.ActiveHoursEnd = &end
+
+	body, err := json.Marshal(buildWindowsUpdateEnvelope("agent-1", result, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		State map[string]any `json:"state"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.State["activeHoursStart"] != float64(8) || decoded.State["activeHoursEnd"] != float64(18) {
+		t.Fatalf("activeHours ausente/incorreto no envelope: start=%v end=%v",
+			decoded.State["activeHoursStart"], decoded.State["activeHoursEnd"])
+	}
+
+	// Sem politica definida: omitido (nao sai 0-0, que seria uma janela valida).
+	result.State.ActiveHoursStart = nil
+	result.State.ActiveHoursEnd = nil
+	body, err = json.Marshal(buildWindowsUpdateEnvelope("agent-1", result, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded.State = nil
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded.State["activeHoursStart"]; ok {
+		t.Fatal("activeHoursStart sem politica deveria ser omitido")
+	}
+}
+
 func TestBuildWindowsUpdateEnvelopeServiceDisabled(t *testing.T) {
 	// Servico desabilitado: cliente devolve resultado parcial + ErrServiceDisabled.
 	result := &windowsupdate.ScanResult{

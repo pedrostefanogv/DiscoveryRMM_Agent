@@ -178,6 +178,17 @@ func (s *Service) WindowsUpdateStateSignature(ctx context.Context) string {
 	return signature
 }
 
+// WindowsUpdateSignatures devolve a assinatura normal e a ESTAVEL do estado
+// atual, numa unica sonda. A estavel ignora os campos volateis de download e
+// alimenta o piso de scan durante download (ver PollWindowsUpdateChanges).
+func (s *Service) WindowsUpdateSignatures(ctx context.Context) (string, string) {
+	if s == nil {
+		return "", ""
+	}
+	state, signature := s.ProbeWindowsUpdateState(ctx)
+	return signature, windowsupdate.WindowsUpdateStateStableSignature(state)
+}
+
 func formatStateTime(value *time.Time) string {
 	if value == nil || value.IsZero() {
 		return "-"
@@ -462,8 +473,11 @@ type agentWindowsUpdateScan struct {
 	Status        string         `json:"status"`
 	DurationMs    int64          `json:"durationMs"`
 	StartedAt     string         `json:"startedAt"`
-	ErrorCode     string         `json:"errorCode,omitempty"`
-	SkippedCount  int            `json:"skippedCount,omitempty"`
+	ErrorCode string `json:"errorCode,omitempty"`
+	// SkippedCount vai SEMPRE (inclusive 0): o servidor precisa poder LIMPAR um
+	// contador antigo quando o scan passa a descartar nada. Com omitempty o
+	// "3 ignorados" ficaria congelado no snapshot para sempre.
+	SkippedCount  int            `json:"skippedCount"`
 	SkippedReason map[string]int `json:"skippedReasons,omitempty"`
 	// Source: wua/qfe; Trigger: periodic | change | command | install.
 	Source  string `json:"source,omitempty"`
@@ -483,14 +497,54 @@ type agentWindowsUpdateState struct {
 	LastInstallSuccess string   `json:"lastInstallSuccess,omitempty"`
 	LastInstallTime    string   `json:"lastInstallTime,omitempty"`
 	DownloadInProgress bool     `json:"downloadInProgress"`
-	QFEInstalledCount  int      `json:"qfeInstalledCount"`
-	RecentQFEs         []string `json:"recentQfes,omitempty"`
-	AuOptions          int      `json:"auOptions,omitempty"`
-	NoAutoUpdate       bool     `json:"noAutoUpdate"`
-	DeferralDays       int      `json:"deferralDays,omitempty"`
-	CheckedAt          string   `json:"checkedAt"`
+	// DownloadPercent: porcentagem do download em andamento (0-100). Ponteiro
+	// para o 0% REAL viajar (é informação válida) e o "desconhecido" ficar
+	// ausente. Só é preenchido quando DownloadInProgress.
+	DownloadPercent   *int     `json:"downloadPercent,omitempty"`
+	// QFEInstalledCount: ponteiro para distinguir "0 KBs" de "leitura falhou"
+	// (ausente = servidor preserva a contagem conhecida).
+	QFEInstalledCount *int     `json:"qfeInstalledCount,omitempty"`
+	RecentQFEs        []string `json:"recentQfes,omitempty"`
+	AuOptions         int      `json:"auOptions,omitempty"`
+	NoAutoUpdate      bool     `json:"noAutoUpdate"`
+	DeferralDays      int      `json:"deferralDays,omitempty"`
+	// ActiveHoursStart/End: janela de horas ativas da politica (0-23). A sonda
+	// ja lia esses valores e eles NAO subiam no envelope — a API/site tinham o
+	// campo e nunca recebiam.
+	ActiveHoursStart *int `json:"activeHoursStart,omitempty"`
+	ActiveHoursEnd   *int `json:"activeHoursEnd,omitempty"`
+	// PolicyKnown: a politica foi lida (permite LIMPAR valores antigos no
+	// servidor quando o WSUS/deferral sai da máquina).
+	PolicyKnown bool   `json:"policyKnown"`
+	CheckedAt   string `json:"checkedAt"`
 	// Signature e o hash estavel do estado: o agente reenvia quando muda.
 	Signature string `json:"signature,omitempty"`
+}
+
+// qfeInstalledCountValue devolve a contagem de KBs do CBS apenas quando a
+// leitura foi confiável (0 KBs reais é válido; falha de leitura é ausente).
+func qfeInstalledCountValue(state windowsupdate.WindowsUpdateState) *int {
+	if !state.QFEInstalledCountKnown {
+		return nil
+	}
+	count := state.QFEInstalledCount
+	if count < 0 {
+		return nil
+	}
+	return &count
+}
+
+// downloadPercentValue devolve a porcentagem para o envelope apenas quando há
+// download em andamento (0% real incluído). Fora de download, ausente.
+func downloadPercentValue(state windowsupdate.WindowsUpdateState) *int {
+	if !state.DownloadInProgress {
+		return nil
+	}
+	percent := state.DownloadProgressPercent
+	if percent < 0 || percent > 100 {
+		return nil
+	}
+	return &percent
 }
 
 func newAgentWindowsUpdateState(state windowsupdate.WindowsUpdateState) agentWindowsUpdateState {
@@ -505,11 +559,15 @@ func newAgentWindowsUpdateState(state windowsupdate.WindowsUpdateState) agentWin
 		LastInstallSuccess: formatStateTime(state.LastInstallSuccess),
 		LastInstallTime:    formatStateTime(state.LastInstallTime),
 		DownloadInProgress: state.DownloadInProgress,
-		QFEInstalledCount:  state.QFEInstalledCount,
+		DownloadPercent:    downloadPercentValue(state),
+		QFEInstalledCount:  qfeInstalledCountValue(state),
 		RecentQFEs:         state.RecentQFEs,
 		AuOptions:          state.AuOptions,
 		NoAutoUpdate:       state.NoAutoUpdate,
 		DeferralDays:       state.DeferralDays,
+		ActiveHoursStart:   state.ActiveHoursStart,
+		ActiveHoursEnd:     state.ActiveHoursEnd,
+		PolicyKnown:        state.PolicyKnown,
 		CheckedAt:          state.CheckedAt.UTC().Format(time.RFC3339),
 		Signature:          windowsupdate.WindowsUpdateStateSignature(state),
 	}

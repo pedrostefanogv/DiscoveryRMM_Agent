@@ -2188,10 +2188,15 @@ func (a *App) runStagedStartup(ctx context.Context) {
 		for {
 			a.runWindowsUpdateScan(ctx)
 			interval := a.windowsUpdateScanInterval()
+			// Jitter em TODOS os ciclos (não só no primeiro): frota provisionada
+			// pela mesma imagem fazia rajada de scans a cada 6h.
+			next := windowsUpdateScanIntervalWithJitter(strings.TrimSpace(a.GetDebugConfig().AgentID), interval)
+			log.Printf("[windows-update] proximo scan completo em %s (intervalo base %s)",
+				next.Round(time.Second), interval)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(interval):
+			case <-time.After(next):
 			}
 		}
 	})

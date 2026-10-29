@@ -60,8 +60,12 @@ func (c *fakeWUClient) Hide(context.Context, []string, bool) (int, error) { retu
 func resetWindowsUpdatePollState() {
 	wuPollMu.Lock()
 	wuLastSign = ""
+	wuLastSignAgentID = ""
 	wuLastSignAt = time.Time{}
 	wuLastChangeScanAt = time.Time{}
+	wuLastFullScanAt = time.Time{}
+	wuLastStableSign = ""
+	wuDownloadSuppressLogged = false
 	wuLastPollInfo = WindowsUpdatePollResult{}
 	wuPollMu.Unlock()
 }
@@ -140,6 +144,90 @@ func TestPollWindowsUpdateChangesRespectsMinScanGap(t *testing.T) {
 	}
 	if result.Scanned || client.scanCount() != 1 {
 		t.Fatalf("scan em rajada nao pode rodar: %+v", result)
+	}
+}
+
+// Download em andamento reescreve a assinatura a cada minuto: nao pode
+// disparar um scan WUA a cada 2 min. A janela e de 30 min (o gap do chamador
+// continua valendo como piso quando for maior).
+func TestPollWindowsUpdateChangesSuppressesScanDuringDownload(t *testing.T) {
+	resetWindowsUpdatePollState()
+	client := &fakeWUClient{
+		state:  windowsupdate.WindowsUpdateState{Supported: true, ServiceState: "running", CheckedAt: time.Now().UTC()},
+		result: sampleScanResult(),
+	}
+	svc := newWindowsUpdateTestService(client)
+
+	// Primeiro ciclo: scan normal.
+	if first := svc.PollWindowsUpdateChanges(context.Background(), 2*time.Minute, "change"); !first.Scanned {
+		t.Fatalf("primeira leitura deveria varrer: %+v", first)
+	}
+
+	// Download comecou (assinatura mudou), ha 5 min do ultimo scan completo.
+	client.setState(windowsupdate.WindowsUpdateState{
+		Supported:               true,
+		ServiceState:            "running",
+		DownloadInProgress:      true,
+		DownloadProgressPercent: 42,
+		CheckedAt:               time.Now().UTC(),
+	})
+	suppressed := svc.PollWindowsUpdateChanges(context.Background(), 2*time.Minute, "change")
+	if !suppressed.Changed {
+		t.Fatalf("mudanca nao detectada: %+v", suppressed)
+	}
+	if suppressed.Scanned || client.scanCount() != 1 {
+		t.Fatalf("scan durante download deve ser suprimido: %+v", suppressed)
+	}
+
+	// Ultimo scan completo passou de 30 min: o download deixa de bloquear.
+	wuPollMu.Lock()
+	old := time.Now().Add(-31 * time.Minute)
+	wuLastChangeScanAt = old
+	wuLastFullScanAt = old
+	wuPollMu.Unlock()
+	after := svc.PollWindowsUpdateChanges(context.Background(), 2*time.Minute, "change")
+	if !after.Scanned || client.scanCount() != 2 {
+		t.Fatalf("apos a janela de 30 min o scan deve rodar: %+v", after)
+	}
+}
+
+// O piso de 30 min vale SO para "mudou apenas o download". Reboot pendente,
+// servico caindo ou KB instalada no meio de um download continuam com o gap
+// normal (2 min) — antes ficavam 30 min invisiveis na UI.
+func TestPollWindowsUpdateChangesDuringDownloadDoesNotDelayRelevantChange(t *testing.T) {
+	resetWindowsUpdatePollState()
+	client := &fakeWUClient{
+		state:  windowsupdate.WindowsUpdateState{Supported: true, ServiceState: "running", CheckedAt: time.Now().UTC()},
+		result: sampleScanResult(),
+	}
+	svc := newWindowsUpdateTestService(client)
+
+	if first := svc.PollWindowsUpdateChanges(context.Background(), 2*time.Minute, "change"); !first.Scanned {
+		t.Fatalf("primeira leitura deveria varrer: %+v", first)
+	}
+
+	// Download em andamento + REBOOT pendente (mudanca relevante) 5 min depois.
+	client.setState(windowsupdate.WindowsUpdateState{
+		Supported:               true,
+		ServiceState:            "running",
+		DownloadInProgress:      true,
+		DownloadProgressPercent: 42,
+		RebootPending:           true,
+		RebootReasons:           []string{windowsupdate.RebootReasonFileRename},
+		CheckedAt:               time.Now().UTC(),
+	})
+	wuPollMu.Lock()
+	old := time.Now().Add(-5 * time.Minute)
+	wuLastChangeScanAt = old
+	wuLastFullScanAt = old
+	wuPollMu.Unlock()
+
+	result := svc.PollWindowsUpdateChanges(context.Background(), 2*time.Minute, "change")
+	if !result.Scanned {
+		t.Fatalf("mudanca relevante durante download nao pode ser adiada por 30 min: %+v", result)
+	}
+	if client.scanCount() != 2 {
+		t.Fatalf("scans=%d want 2", client.scanCount())
 	}
 }
 

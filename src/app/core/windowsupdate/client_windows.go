@@ -159,6 +159,11 @@ func (c *wuaClient) Scan(ctx context.Context, opts ScanOptions) (*ScanResult, er
 	if strings.EqualFold(windowsUpdateServiceState(), "disabled") {
 		return unavailableScanResult(), ErrServiceDisabled
 	}
+	// Invalida o cache do CBS ANTES do scan: scanWUA compoe o estado (state) com
+	// a contagem de KBs instaladas lida no fim, e o cache podia estar velho.
+	// Invalidar depois deixava o PROPRIO envelope do scan com contagem antiga
+	// (a baseline era recalculada ja fresca, e nenhum ciclo detectava a mudanca).
+	InvalidateInstalledKBsCache()
 	result, err := withOp(c, ctx, c.opts.ScanTimeout, func() (*ScanResult, error) {
 		return scanWUA(opts)
 	})
@@ -173,6 +178,11 @@ func (c *wuaClient) Scan(ctx context.Context, opts ScanOptions) (*ScanResult, er
 			partial.State.PolicyErrorCode = ScanErrorFailed
 		}
 		return partial, err
+	}
+	// Scan WUA concluido com sucesso: o conjunto de KBs instaladas pode ter
+	// mudado, entao a proxima sonda barata deve reler o CBS (nao usar o cache).
+	if result != nil && !result.Partial {
+		InvalidateInstalledKBsCache()
 	}
 	return result, err
 }
@@ -411,6 +421,7 @@ func readUpdate(update *ole.IDispatch) (Update, bool) {
 	u := Update{Source: SourceWUA}
 	title, description, severity, supportURL := "", "", "", ""
 	var isDownloaded, isMandatory, isHidden, rebootRequired bool
+	var maxDownloadSize int64
 	var lastDeployed *time.Time
 	var updateID string
 	var revision int
@@ -447,6 +458,13 @@ func readUpdate(update *ole.IDispatch) (Update, bool) {
 	}
 	if raw, err := oleutil.GetProperty(update, "RebootRequired"); err == nil {
 		rebootRequired = variantBool(raw)
+		raw.Clear()
+	}
+	// MaxDownloadSize (IUpdate, bytes): VT_I4/VT_UI4/VT_I8 via late binding. E
+	// um dado OPCIONAL: se a leitura falhar (WUA antigo, propriedade ausente) o
+	// update continua valido com 0 (omitido no JSON).
+	if raw, err := oleutil.GetProperty(update, "MaxDownloadSize"); err == nil {
+		maxDownloadSize = variantInt64(raw)
 		raw.Clear()
 	}
 	if raw, err := oleutil.GetProperty(update, "LastDeploymentChangeTime"); err == nil {
@@ -509,6 +527,9 @@ func readUpdate(update *ole.IDispatch) (Update, bool) {
 	u.IsMandatory = isMandatory
 	u.IsHidden = isHidden
 	u.RequiresReboot = rebootRequired
+	if maxDownloadSize > 0 {
+		u.MaxDownloadSize = maxDownloadSize
+	}
 	u.PublishedAt = lastDeployed
 	u.LastDeployedAt = lastDeployed
 	u.Categories = categories
@@ -971,6 +992,38 @@ func variantInt(v *ole.VARIANT) int {
 		return int(value)
 	}
 	return int(v.Val)
+}
+
+// variantInt64 cobre os tipos inteiros que o WUA devolve em propriedades como
+// MaxDownloadSize: VT_I4/VT_UI4, VT_I8/VT_UI8 e os equivalentes Go.
+func variantInt64(v *ole.VARIANT) int64 {
+	if v == nil {
+		return 0
+	}
+	// Nao usar Value() para VT_I4/VT_UI4: ele devolve int32 e truncaria em
+	// negativo um tamanho acima de 2 GiB. Val ja e int64 e carrega o inteiro
+	// sem sinal para esses tipos.
+	switch v.VT {
+	case ole.VT_I4, ole.VT_UI4, ole.VT_I8, ole.VT_UI8, ole.VT_INT, ole.VT_UINT:
+		return int64(v.Val)
+	}
+	switch value := v.Value().(type) {
+	case int64:
+		return value
+	case int32:
+		return int64(value)
+	case int:
+		return int64(value)
+	case uint64:
+		return int64(value)
+	case uint32:
+		return int64(value)
+	case uint16:
+		return int64(value)
+	case uint8:
+		return int64(value)
+	}
+	return int64(v.Val)
 }
 
 func variantTime(v *ole.VARIANT) *time.Time {

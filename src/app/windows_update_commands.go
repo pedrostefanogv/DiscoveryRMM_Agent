@@ -99,7 +99,8 @@ func (a *App) handleWindowsUpdateCommand(ctx context.Context, payload any) (bool
 		// O estado que acabou de ser enviado vira a referencia da sonda: evita
 		// um scan duplicado por "mudanca" logo depois do comando.
 		if result != nil {
-			a.InventorySvc.SetWindowsUpdateBaseline(a.windowsUpdateSignatureOfScan(ctx))
+			signature, stable := a.windowsUpdateSignaturesOfScan(ctx)
+			a.InventorySvc.SetWindowsUpdateBaselineWithStable(signature, stable)
 		}
 		a.logWindowsUpdateCommandResult(action, 0, fmt.Sprintf("pending=%d installed=%d skipped=%d reboot=%t",
 			result.PendingCount, result.InstalledCount, result.SkippedCount, result.PendingReboot.Pending), startedAt)
@@ -250,7 +251,8 @@ func (a *App) refreshWindowsUpdatesAfterInstall() {
 		a.Logs.Append("[windows-update] refresh pos-instalacao falhou: " + err.Error())
 		return
 	}
-	a.InventorySvc.SetWindowsUpdateBaseline(a.windowsUpdateSignatureOfScan(ctx))
+	signature, stable := a.windowsUpdateSignaturesOfScan(ctx)
+	a.InventorySvc.SetWindowsUpdateBaselineWithStable(signature, stable)
 }
 
 func parseWindowsUpdateInstallPayload(payloadJSON map[string]any) (windowsUpdateInstallPayload, error) {

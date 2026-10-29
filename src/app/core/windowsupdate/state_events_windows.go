@@ -259,11 +259,29 @@ func readWindowsUpdateEvents() WindowsUpdateLogActivity {
 func SummarizeWindowsUpdateEvents(records []WindowsUpdateEventRecord) WindowsUpdateLogActivity {
 	activity := WindowsUpdateLogActivity{Read: true, LastDownloadProgress: -1}
 	var lastDownload *time.Time
+	// Progresso mais RECENTE encontrado no texto dos eventos: no Windows 10
+	// 1903+ o WindowsUpdate.log textual nao existe, entao o evento e a unica
+	// fonte de porcentagem disponivel na sonda barata.
+	var lastProgress struct {
+		percent int
+		at      time.Time
+		set     bool
+	}
 	for _, record := range records {
 		if record.Time == nil {
 			continue
 		}
 		stamp := *record.Time
+
+		// Progresso vale para QUALQUER evento (o id de download varia entre
+		// versoes do Windows e o texto traz "45%").
+		if percent, ok := downloadPercentFromMessage(record.Message); ok &&
+			(!lastProgress.set || !stamp.Before(lastProgress.at)) {
+			lastProgress.percent = percent
+			lastProgress.at = stamp
+			lastProgress.set = true
+		}
+
 		switch record.EventID {
 		case windowsUpdateEventInstallSuccess:
 			if activity.LastInstallSuccess == nil || stamp.After(*activity.LastInstallSuccess) {
@@ -312,11 +330,50 @@ func SummarizeWindowsUpdateEvents(records []WindowsUpdateEventRecord) WindowsUpd
 			}
 		}
 	}
+	if lastProgress.set {
+		activity.LastDownloadProgress = lastProgress.percent
+	}
 	if lastDownload != nil {
-		// Download mais recente que a ultima INSTALACAO BEM-SUCEDIDA: o pacote
-		// esta no disco aguardando instalacao/reboot — estado que a UI precisa
-		// mostrar e que NAO muda a lista de KBs pendentes do WUA.
-		activity.DownloadInProgress = activity.LastInstallSuccess == nil || lastDownload.After(*activity.LastInstallSuccess)
+		// Download mais recente que a ultima INSTALACAO BEM-SUCEDIDA e RECENTE:
+		// o pacote esta no disco aguardando instalacao/reboot — estado que a UI
+		// precisa mostrar e que NAO muda a lista de KBs pendentes do WUA. O
+		// limite de idade (maxDownloadInProgressAge) evita "Baixando" eterno
+		// quando o usuario adia a instalacao por horas/dias.
+		activity.DownloadInProgress = downloadStillInProgress(lastDownload, activity.LastInstallSuccess, windowsUpdateNow())
 	}
 	return activity
+}
+
+// downloadPercentFromMessage extrai "45%" de uma mensagem de evento do
+// WindowsUpdateClient (ex.: "Transferencia concluida: 45%"). Devolve false
+// quando a mensagem nao tem porcentagem valida.
+func downloadPercentFromMessage(message string) (int, bool) {
+	percent := -1
+	for index := 0; index < len(message); index++ {
+		if message[index] != '%' {
+			continue
+		}
+		// Le os digitos imediatamente antes do '%'.
+		end := index
+		start := index
+		for start > 0 && message[start-1] >= '0' && message[start-1] <= '9' && index-start < 3 {
+			start--
+		}
+		if start == end {
+			continue
+		}
+		value := 0
+		for _, char := range message[start:end] {
+			value = value*10 + int(char-'0')
+		}
+		if value < 0 || value > 100 {
+			continue
+		}
+		// O ultimo percentual da mensagem e o mais especifico.
+		percent = value
+	}
+	if percent < 0 {
+		return 0, false
+	}
+	return percent, true
 }

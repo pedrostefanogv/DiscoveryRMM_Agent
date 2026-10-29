@@ -48,8 +48,27 @@ var (
 	wuLastSignAt       time.Time
 	wuLastPollAt       time.Time
 	wuLastChangeScanAt time.Time
-	wuLastPollInfo     WindowsUpdatePollResult
+	// wuLastFullScanAt: ultimo scan COMPLETO (periodico, comando ou por
+	// mudanca). Base da janela de supressao durante download.
+	wuLastFullScanAt time.Time
+	// wuLastStableSign: assinatura SEM os campos volateis de download. Serve
+	// para diferenciar "mudou algo relevante" (reboot/servico/KB instalada) de
+	// "so o progresso do download mudou" — o piso de 30 min vale so para o
+	// segundo caso.
+	wuLastStableSign string
+	wuLastPollInfo   WindowsUpdatePollResult
+	// wuDownloadSuppressLogged evita repetir o mesmo log a cada ciclo de 5 min
+	// enquanto o download estiver em andamento.
+	wuDownloadSuppressLogged bool
 )
+
+// windowsUpdateDownloadScanMinGap e o piso entre scans por mudanca enquanto ha
+// download em andamento: o Windows reescreve a porcentagem a cada minuto, o que
+// muda a assinatura do estado o tempo todo e fazia um scan WUA (~15s) a cada
+// 2 min. 30 min mantem o dado atual sem transformar o download em rajada.
+// O gap minimo do chamador (windowsUpdateChangeScanMinGap) continua valendo
+// como piso quando for MAIOR que este valor.
+const windowsUpdateDownloadScanMinGap = 30 * time.Minute
 
 // LastWindowsUpdatePoll devolve o ultimo resultado da sonda (diagnostico/UI).
 func LastWindowsUpdatePoll() WindowsUpdatePollResult {
@@ -79,6 +98,7 @@ func (s *Service) PollWindowsUpdateChanges(ctx context.Context, minScanGap time.
 
 	state := client.ProbeState(ctx)
 	signature := windowsupdate.WindowsUpdateStateSignature(state)
+	stableSignature := windowsupdate.WindowsUpdateStateStableSignature(state)
 
 	agentID := strings.TrimSpace(s.debugConfig().AgentID)
 	wuPollMu.Lock()
@@ -90,7 +110,14 @@ func (s *Service) PollWindowsUpdateChanges(ctx context.Context, minScanGap time.
 	}
 	first := previous == ""
 	changed := previous != signature
+	// Mudanca RELEVANTE: a assinatura estavel (sem download/progresso) mudou.
+	// So nesse caso o gap normal do chamador vale; o piso maior de download
+	// existe para o "vai e vem" do progresso.
+	stableChanged := first || wuLastStableSign != stableSignature
 	lastScanAt := wuLastChangeScanAt
+	if wuLastFullScanAt.After(lastScanAt) {
+		lastScanAt = wuLastFullScanAt
+	}
 	wuLastPollAt = time.Now()
 	wuPollMu.Unlock()
 
@@ -106,6 +133,7 @@ func (s *Service) PollWindowsUpdateChanges(ctx context.Context, minScanGap time.
 	}
 	if !changed {
 		wuPollMu.Lock()
+		wuDownloadSuppressLogged = false
 		wuLastPollInfo = result
 		wuPollMu.Unlock()
 		return result
@@ -116,24 +144,52 @@ func (s *Service) PollWindowsUpdateChanges(ctx context.Context, minScanGap time.
 		state.ServiceState, state.RebootPending, state.RebootReasons, state.DownloadInProgress,
 		formatStateTime(state.LastInstallSuccess)))
 
-	if minScanGap > 0 && !lastScanAt.IsZero() && time.Since(lastScanAt) < minScanGap {
+	// Piso entre scans por mudanca. Durante download o piso sobe para
+	// windowsUpdateDownloadScanMinGap SÓ quando o que mudou foi o proprio
+	// download (progresso/instalação em andamento). Mudanca de reboot, serviço
+	// ou contagem de KBs mantém o gap normal — antes, um reboot pendente que
+	// aparecia no meio de um download ficava 30 min invisível na UI.
+	effectiveGap := minScanGap
+	downloadingTrim := false
+	if state.DownloadInProgress && !stableChanged && effectiveGap < windowsUpdateDownloadScanMinGap {
+		effectiveGap = windowsUpdateDownloadScanMinGap
+		downloadingTrim = true
+	}
+	if effectiveGap > 0 && !lastScanAt.IsZero() && time.Since(lastScanAt) < effectiveGap {
 		// Evita scan em rajada; a referencia NAO avanca para que a mudanca seja
 		// vista no proximo ciclo.
-		s.logf(fmt.Sprintf("[windows-update] scan sob demanda adiado: ultimo scan ha %s (< %s)",
-			time.Since(lastScanAt).Round(time.Second), minScanGap))
+		message := fmt.Sprintf("[windows-update] scan sob demanda adiado: ultimo scan ha %s (< %s)",
+			time.Since(lastScanAt).Round(time.Second), effectiveGap)
+		if downloadingTrim {
+			message = fmt.Sprintf("[windows-update] scan sob demanda SUPRIMIDO: download em andamento (progresso=%d%%) e ultimo scan ha %s (< %s)",
+				state.DownloadProgressPercent, time.Since(lastScanAt).Round(time.Second), effectiveGap)
+		}
 		wuPollMu.Lock()
+		// Loga uma vez por janela: sem isso a sonda de 5 min repetiria a mesma
+		// linha enquanto o download durasse.
+		shouldLog := !downloadingTrim || !wuDownloadSuppressLogged
+		if downloadingTrim {
+			wuDownloadSuppressLogged = true
+		}
 		wuLastPollInfo = result
 		wuPollMu.Unlock()
+		if shouldLog {
+			s.logf(message)
+		}
 		return result
 	}
 
+	scanAt := time.Now()
 	wuPollMu.Lock()
-	wuLastChangeScanAt = time.Now()
+	wuDownloadSuppressLogged = false
+	wuLastChangeScanAt = scanAt
+	wuLastFullScanAt = scanAt
 	// A referencia avanca JA: se o scan falhar, a proxima mudanca real volta a
 	// disparar (a assinatura de falha inclui serviceState/policyError).
 	wuLastSign = signature
+	wuLastStableSign = stableSignature
 	wuLastSignAgentID = agentID
-	wuLastSignAt = wuLastChangeScanAt
+	wuLastSignAt = scanAt
 	wuPollMu.Unlock()
 
 	// ScanWindowsUpdates respeita scanMu; um scan em andamento (comando do
@@ -154,6 +210,14 @@ func (s *Service) PollWindowsUpdateChanges(ctx context.Context, minScanGap time.
 // scan: usado depois de um scan periodico/comando (o estado que acabou de ser
 // enviado ao servidor passa a ser a referencia).
 func (s *Service) SetWindowsUpdateBaseline(signature string) {
+	s.SetWindowsUpdateBaselineWithStable(signature, "")
+}
+
+// SetWindowsUpdateBaselineWithStable e a forma completa: alem da assinatura
+// normal (que inclui download/progresso), fixa a assinatura ESTAVEL usada para
+// decidir o piso de scan durante download. Sem ela, o primeiro ciclo depois de
+// um scan periódico trataria "só progresso mudou" como mudança relevante.
+func (s *Service) SetWindowsUpdateBaselineWithStable(signature, stableSignature string) {
 	if strings.TrimSpace(signature) == "" {
 		return
 	}
@@ -165,6 +229,11 @@ func (s *Service) SetWindowsUpdateBaseline(signature string) {
 	wuLastSign = signature
 	wuLastSignAgentID = agentID
 	wuLastSignAt = time.Now()
+	// Um scan periodico/comando acabou de enviar o estado: ele tambem conta
+	// como "ultimo scan completo" para a janela de supressao durante download.
+	wuLastFullScanAt = wuLastSignAt
+	wuLastStableSign = stableSignature
+	wuDownloadSuppressLogged = false
 	wuPollMu.Unlock()
 }
 

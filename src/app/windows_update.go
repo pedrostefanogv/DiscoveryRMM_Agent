@@ -24,20 +24,56 @@ const (
 	windowsUpdateChangeScanMinGap = 2 * time.Minute
 )
 
+// windowsUpdateAgentJitter devolve um deslocamento determinístico em
+// [0, spread) derivado do agentId: mesmo agente, mesmo valor entre reinícios.
+// Determinístico (e não aleatório) de propósito: reiniciar o agente não
+// remaneja a frota, mas agentes provisionados pela mesma imagem (com agentIds
+// diferentes) ficam espalhados.
+func windowsUpdateAgentJitter(agentID string, spread time.Duration) time.Duration {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" || spread <= 0 {
+		return 0
+	}
+	seconds := int64(spread / time.Second)
+	if seconds <= 0 {
+		return 0
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(agentID))
+	return time.Duration(int64(h.Sum32()%uint32(seconds))) * time.Second
+}
+
 // windowsUpdateInitialDelay espalha o primeiro scan da frota: 10 min + jitter
 // determinístico de até 5 min derivado do agentId (mesmo agente, mesmo atraso
 // entre reinícios — evita sincronia artificial).
 func windowsUpdateInitialDelay(_ context.Context, a *App) time.Duration {
-	jitter := time.Duration(0)
+	agentID := ""
 	if a != nil {
-		agentID := strings.TrimSpace(a.GetDebugConfig().AgentID)
-		if agentID != "" {
-			h := fnv.New32a()
-			_, _ = h.Write([]byte(agentID))
-			jitter = time.Duration(h.Sum32()%uint32(windowsUpdateJitterMax/time.Second)) * time.Second
-		}
+		agentID = strings.TrimSpace(a.GetDebugConfig().AgentID)
 	}
-	return windowsUpdateInitialDelayDefault + jitter
+	return windowsUpdateInitialDelayDefault + windowsUpdateAgentJitter(agentID, windowsUpdateJitterMax)
+}
+
+// windowsUpdateScanIntervalWithJitter aplica jitter determinístico de ±10% do
+// intervalo em TODOS os ciclos seguintes do scan completo. Sem isso, os ciclos
+// após o primeiro usavam time.After(interval) puro e a frota provisionada pela
+// mesma imagem voltava a fazer rajada a cada 6h (COM + WMI + upload juntos).
+func windowsUpdateScanIntervalWithJitter(agentID string, interval time.Duration) time.Duration {
+	if interval <= 0 || strings.TrimSpace(agentID) == "" {
+		return interval
+	}
+	spread := interval / 10
+	jitter := windowsUpdateAgentJitter(agentID, spread) // [0, spread)
+	// Converte [0, spread) em [-spread, +spread): ±10% em torno do intervalo.
+	offset := 2*jitter - spread
+	next := interval + offset
+	// Nunca abaixo do intervalo minimo documentado (1h por padrão): com
+	// -10% um intervalo configurado de 60 min viraria 54 min e furaria o
+	// contrato do painel/configuração.
+	if next < windowsUpdateScanIntervalMinimum {
+		next = windowsUpdateScanIntervalMinimum
+	}
+	return next
 }
 
 // windowsUpdateScanInterval resolve a cadência do scan COMPLETO a partir da
@@ -114,17 +150,19 @@ func (a *App) runWindowsUpdateScan(ctx context.Context) {
 	// A referência da assinatura passa a ser o estado que acabou de ser
 	// enviado: sem isso o próximo ciclo da sonda dispararia outro scan.
 	if result != nil && !result.StartedAt.IsZero() {
-		a.InventorySvc.SetWindowsUpdateBaseline(a.windowsUpdateSignatureOfScan(ctx))
+		signature, stable := a.windowsUpdateSignaturesOfScan(ctx)
+		a.InventorySvc.SetWindowsUpdateBaselineWithStable(signature, stable)
 	}
 }
 
-// windowsUpdateSignatureOfScan devolve a assinatura do estado atual (sonda
-// barata) para servir de baseline depois de um scan completo.
-func (a *App) windowsUpdateSignatureOfScan(ctx context.Context) string {
+// windowsUpdateSignaturesOfScan devolve a assinatura do estado atual (sonda
+// barata) e a versao ESTAVEL (sem campos volateis de download) para servir de
+// baseline depois de um scan completo.
+func (a *App) windowsUpdateSignaturesOfScan(ctx context.Context) (string, string) {
 	if a == nil || a.InventorySvc == nil {
-		return ""
+		return "", ""
 	}
-	return a.InventorySvc.WindowsUpdateStateSignature(ctx)
+	return a.InventorySvc.WindowsUpdateSignatures(ctx)
 }
 
 // runWindowsUpdateStateProbe roda UM ciclo da sonda barata. Quando a
@@ -136,7 +174,10 @@ func (a *App) runWindowsUpdateStateProbe(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	probe := a.InventorySvc.PollWindowsUpdateChanges(ctx, windowsUpdateChangeScanMinGap, "periodic")
+	// trigger="change": este é o caminho disparado pela mudança de assinatura
+	// (o "periodic" é o loop do scan de 6h). Antes o envelope e o log diziam
+	// "periodic" e o scanTrigger persistido pela API ficava sempre errado.
+	probe := a.InventorySvc.PollWindowsUpdateChanges(ctx, windowsUpdateChangeScanMinGap, "change")
 	if !probe.Changed {
 		return
 	}

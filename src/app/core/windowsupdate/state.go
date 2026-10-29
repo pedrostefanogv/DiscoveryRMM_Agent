@@ -53,6 +53,38 @@ func StateSignatureParts(state WindowsUpdateState) []string {
 	return parts
 }
 
+// StateStableSignatureParts devolve a forma canonica IGNORANDO os campos que
+// mudam durante um download (lastInstall/lastInstallTime/downloadInProgress/
+// online/recentQfes). Serve para responder "mudou algo que importa ou so o
+// progresso do download?" — o piso maior de scan durante download so pode
+// valer para o segundo caso.
+func StateStableSignatureParts(state WindowsUpdateState) []string {
+	reasons := append([]string(nil), state.RebootReasons...)
+	sort.Strings(reasons)
+
+	return []string{
+		"supported=" + boolToken(state.Supported),
+		"service=" + strings.TrimSpace(state.ServiceState),
+		"policyManaged=" + boolToken(state.PolicyManaged),
+		"wsus=" + strings.TrimSpace(state.WSUSServer),
+		"reboot=" + boolToken(state.RebootPending),
+		"reasons=" + strings.Join(reasons, ","),
+		"qfeCount=" + strconv.Itoa(state.QFEInstalledCount),
+		"auOptions=" + strconv.Itoa(state.AuOptions),
+		"noAutoUpdate=" + boolToken(state.NoAutoUpdate),
+		"deferralDays=" + strconv.Itoa(state.DeferralDays),
+		"activeHours=" + formatOptionalInt(state.ActiveHoursStart) + "-" + formatOptionalInt(state.ActiveHoursEnd),
+		"policyError=" + strings.TrimSpace(state.PolicyErrorCode),
+	}
+}
+
+// WindowsUpdateStateStableSignature e o hash da assinatura estavel (sem os
+// campos volateis de download).
+func WindowsUpdateStateStableSignature(state WindowsUpdateState) string {
+	sum := sha256.Sum256([]byte(strings.Join(StateStableSignatureParts(state), "|")))
+	return hex.EncodeToString(sum[:])
+}
+
 // WindowsUpdateStateSignature devolve o hash estavel da assinatura do estado.
 // Estados equivalentes (mesma ordem de motivos, mesmo instante) produzem o
 // mesmo hash; CheckedAt nao participa.

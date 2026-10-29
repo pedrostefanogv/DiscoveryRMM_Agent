@@ -5,6 +5,7 @@ package windowsupdate
 import (
 	"fmt"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf16"
 	"unsafe"
@@ -66,6 +67,11 @@ func buildsInstalledUpdatesFromRows(rows []map[string]any) []Update {
 // "2026-10-16 21:09:57", datetime completo do CIM e RFC3339. O WMI em pt-BR
 // costuma devolver "16/10/2026". Retorna nil quando nao parseavel.
 func parseWMIInstalledOn(raw string) *time.Time {
+	return parseWMIInstalledOnAt(raw, time.Now())
+}
+
+// parseWMIInstalledOnAt e parseWMIInstalledOn com "agora" injetavel (teste).
+func parseWMIInstalledOnAt(raw string, now time.Time) *time.Time {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return nil
@@ -75,6 +81,7 @@ func parseWMIInstalledOn(raw string) *time.Time {
 	if len(value) >= 14 && value[4] == '-' && value[7] == '-' {
 		value = strings.Replace(value, " ", "T", 1)
 	}
+	// Layouts NAO ambiguos: o separador/ordem identifica dia, mes e ano.
 	// CIM datetime normalizado para "AAAA-MM-DD HH:MM:SS". O layout do Go usa
 	// "2006-01-02 15:04:05" como exemplo canonico.
 	layouts := []string{
@@ -82,10 +89,6 @@ func parseWMIInstalledOn(raw string) *time.Time {
 		"2006-01-02",
 		"2006-01-02 15:04:05",
 		"2006-01-02T15:04:05",
-		"01/02/2006",
-		"02/01/2006",
-		"01/02/2006 15:04:05",
-		"02/01/2006 15:04:05",
 		"2006-01-02T15:04:05Z07:00",
 	}
 	for _, layout := range layouts {
@@ -94,6 +97,30 @@ func parseWMIInstalledOn(raw string) *time.Time {
 			return &utc
 		}
 	}
+
+	// Datas com barra: "05/03/2026" casa nos DOIS layouts (dd/mm e mm/dd) e o
+	// resultado depende do locale. Quem decide é o formato curto de data do
+	// próprio Windows (LOCALE_SSHORTDATE): heurística temporal (escolher a mais
+	// recente no passado) trocava dia/mês em pt-BR, que é justamente onde o WMI
+	// devolve "16/10/2026".
+	candidates := make([]installedOnCandidate, 0, 2)
+	for _, layout := range []struct {
+		format   string
+		dayFirst bool
+	}{
+		{format: "02/01/2006 15:04:05", dayFirst: true},
+		{format: "01/02/2006 15:04:05", dayFirst: false},
+		{format: "02/01/2006", dayFirst: true},
+		{format: "01/02/2006", dayFirst: false},
+	} {
+		if parsed, err := time.Parse(layout.format, value); err == nil {
+			candidates = append(candidates, installedOnCandidate{at: parsed.UTC(), dayFirst: layout.dayFirst})
+		}
+	}
+	if chosen := chooseInstalledOn(candidates, now); chosen != nil {
+		return chosen
+	}
+
 	// CIM "[...]" pode vir com microssegundos; tenta o prefixo de 14 digitos.
 	if len(value) >= 8 {
 		digits := value[:8]
@@ -104,6 +131,109 @@ func parseWMIInstalledOn(raw string) *time.Time {
 	}
 	return nil
 }
+
+// installedOnCandidate e uma interpretacao possivel de uma data com barra.
+type installedOnCandidate struct {
+	at       time.Time
+	dayFirst bool
+}
+
+// windowsShortDateDayFirst informa se o formato curto de data do SO é
+// dia-primeiro (pt-BR: dd/MM/yyyy) ou mes-primeiro (en-US: M/d/yyyy).
+// Variavel para teste: em produção le LOCALE_SSHORTDATE via GetLocaleInfoEx.
+var windowsShortDateDayFirst = detectShortDateDayFirst
+
+// chooseInstalledOn escolhe entre as interpretacoes ambiguas de uma data:
+//  1. usa o formato curto de data do SO (locale) como desempate principal;
+//  2. nunca aceita data no FUTURO (instalacao futura é invalida) — se a
+//     interpretacao do locale cair no futuro, tenta a outra;
+//  3. locale desconhecido: heurística antiga (a mais próxima de agora).
+func chooseInstalledOn(candidates []installedOnCandidate, now time.Time) *time.Time {
+	if len(candidates) == 0 {
+		return nil
+	}
+	now = now.UTC()
+	if len(candidates) == 1 {
+		// Uma única interpretação possível: aceita, exceto se estiver no FUTURO
+		// (relógio errado ou data corrompida) — melhor sem data do que com uma
+		// data impossível, ainda mais agora que a recoleta sobrescreve.
+		if candidates[0].at.After(now) {
+			return nil
+		}
+		chosen := candidates[0].at
+		return &chosen
+	}
+
+	notFuture := func(candidate installedOnCandidate) bool { return !candidate.at.After(now) }
+
+	if dayFirst, known := windowsShortDateDayFirst(); known {
+		for _, candidate := range candidates {
+			if candidate.dayFirst == dayFirst && notFuture(candidate) {
+				chosen := candidate.at
+				return &chosen
+			}
+		}
+		// Interpretacao do locale no futuro: fica a outra que nao esteja.
+		for _, candidate := range candidates {
+			if candidate.dayFirst != dayFirst && notFuture(candidate) {
+				chosen := candidate.at
+				return &chosen
+			}
+		}
+	}
+
+	// Locale desconhecido (ou ambas no futuro): mais proxima de agora no
+	// passado; se todas no futuro, a menos distante.
+	var best *time.Time
+	for _, candidate := range candidates {
+		if candidate.at.After(now) {
+			continue
+		}
+		if best == nil || candidate.at.After(*best) {
+			chosen := candidate.at
+			best = &chosen
+		}
+	}
+	if best != nil {
+		return best
+	}
+	for _, candidate := range candidates {
+		if best == nil || candidate.at.Before(*best) {
+			chosen := candidate.at
+			best = &chosen
+		}
+	}
+	return best
+}
+
+// detectShortDateDayFirst le LOCALE_SSHORTDATE do SO. known=false quando o
+// Windows nao responde (chamador cai na heurística temporal).
+func detectShortDateDayFirst() (bool, bool) {
+	const localeShortDate = 0x1F // LOCALE_SSHORTDATE
+
+	buffer := make([]uint16, 128)
+	length, _, _ := procGetLocaleInfoEx.Call(
+		0, // NULL = LOCALE_NAME_USER_DEFAULT (servico: locale do sistema)
+		uintptr(localeShortDate),
+		uintptr(unsafe.Pointer(&buffer[0])),
+		uintptr(len(buffer)),
+	)
+	if length == 0 {
+		return false, false
+	}
+	format := syscall.UTF16ToString(buffer[:length-1])
+	dayIndex := strings.IndexAny(format, "d")
+	monthIndex := strings.Index(format, "M")
+	if dayIndex < 0 || monthIndex < 0 {
+		return false, false
+	}
+	return dayIndex < monthIndex, true
+}
+
+var procGetLocaleInfoEx = func() *syscall.LazyProc {
+	dll := syscall.NewLazyDLL("kernel32.dll")
+	return dll.NewProc("GetLocaleInfoEx")
+}()
 
 // queryWMI executa uma consulta WQL via COM. Valores sao normalizados em
 // string/int64/float64/bool.

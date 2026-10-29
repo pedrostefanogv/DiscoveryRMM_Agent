@@ -185,9 +185,16 @@ type WindowsUpdateState struct {
 	// DownloadInProgress: o log mostra download em andamento sem instalacao
 	// concluida depois dele.
 	DownloadInProgress bool `json:"downloadInProgress"`
+	// DownloadProgressPercent: ultima porcentagem de download vista no log
+	// (0-100); 0 = desconhecido (omitido no JSON). NAO participa da assinatura
+	// do estado: cada 1% mudaria o hash e dispararia um scan completo.
+	DownloadProgressPercent int `json:"downloadProgressPercent,omitempty"`
 
 	// Agregado de KBs instaladas lido do registro (barato: sem WMI).
-	QFEInstalledCount int      `json:"qfeInstalledCount"`
+	// QFEInstalledCountKnown=false quando a leitura do CBS falhou: o servidor
+	// deve PRESERVAR a contagem conhecida em vez de gravar 0.
+	QFEInstalledCount      int  `json:"qfeInstalledCount"`
+	QFEInstalledCountKnown bool `json:"qfeInstalledCountKnown"`
 	RecentQFEs        []string `json:"recentQfes,omitempty"`
 
 	AuOptions        int    `json:"auOptions,omitempty"`
@@ -195,7 +202,12 @@ type WindowsUpdateState struct {
 	DeferralDays     int    `json:"deferralDays,omitempty"`
 	ActiveHoursStart *int   `json:"activeHoursStart,omitempty"`
 	ActiveHoursEnd   *int   `json:"activeHoursEnd,omitempty"`
-	PolicyErrorCode  string `json:"policyErrorCode,omitempty"`
+	// PolicyKnown=true quando a politica de WU foi LIDA (inclusive "nenhuma
+	// politica configurada"): permite ao servidor LIMPAR valores antigos quando
+	// o WSUS/deferral sai da maquina. false = leitura falhou, preserva o
+	// valor conhecido.
+	PolicyKnown     bool   `json:"policyKnown"`
+	PolicyErrorCode string `json:"policyErrorCode,omitempty"`
 
 	CheckedAt time.Time `json:"checkedAt"`
 }

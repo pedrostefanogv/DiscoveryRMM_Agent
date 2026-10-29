@@ -51,11 +51,22 @@ func TestSummarizeWindowsUpdateEvents(t *testing.T) {
 	}
 
 	// Sem instalacao bem-sucedida depois do download: aguardando instalacao/reboot.
+	fixedWindowsUpdateNow(t, downloaded.Add(5*time.Minute))
 	activity = SummarizeWindowsUpdateEvents([]WindowsUpdateEventRecord{
 		{EventID: 41, Time: &downloaded, Message: "Atualizacao baixada."},
 	})
 	if !activity.DownloadInProgress {
 		t.Fatal("download sem instalacao posterior deve ficar em andamento")
+	}
+
+	// Download ANTIGO (usuario adiou a instalacao): nao pode ficar "Baixando"
+	// para sempre nem disparar scans por mudanca.
+	fixedWindowsUpdateNow(t, downloaded.Add(maxDownloadInProgressAge+time.Minute))
+	activity = SummarizeWindowsUpdateEvents([]WindowsUpdateEventRecord{
+		{EventID: 41, Time: &downloaded, Message: "Atualizacao baixada."},
+	})
+	if activity.DownloadInProgress {
+		t.Fatalf("download com mais de %s nao pode contar como em andamento", maxDownloadInProgressAge)
 	}
 }
 
@@ -77,5 +88,48 @@ func TestReadWindowsUpdateEventsRealChannel(t *testing.T) {
 	t.Logf("resumo=%+v", activity)
 	if !activity.Read {
 		t.Fatal("Read deveria ser true")
+	}
+}
+
+// A porcentagem de download tem de vir dos EVENTOS no Windows 10 1903+ (o
+// WindowsUpdate.log textual nao existe mais): sem isso o campo
+// probe.downloadPercent ficava sempre vazio e o badge "Baixando" nao mostrava %.
+func TestSummarizeWindowsUpdateEventsExtractsDownloadPercent(t *testing.T) {
+	older := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
+	newer := older.Add(4 * time.Minute)
+	fixedWindowsUpdateNow(t, newer.Add(time.Minute))
+
+	records := []WindowsUpdateEventRecord{
+		{EventID: 41, Time: &newer, Message: "Transferencia concluida: 45% (0 de 1)"},
+		{EventID: 41, Time: &older, Message: "Download iniciado: 5%"},
+	}
+	activity := SummarizeWindowsUpdateEvents(records)
+	if activity.LastDownloadProgress != 45 {
+		t.Fatalf("progresso=%d want 45 (o evento mais recente manda)", activity.LastDownloadProgress)
+	}
+	if !activity.DownloadInProgress {
+		t.Fatal("download recente deveria estar em andamento")
+	}
+}
+
+// Mensagem sem porcentagem nao inventa progresso; fora da faixa 0-100 e ignorada.
+func TestDownloadPercentFromMessage(t *testing.T) {
+	cases := []struct {
+		message string
+		want    int
+		ok      bool
+	}{
+		{"Baixando - 45% (0 de 1)", 45, true},
+		{"Progresso: 0%", 0, true},
+		{"Concluido 100%", 100, true},
+		{"Transferindo 250%", 0, false},
+		{"Atualizacao baixada.", 0, false},
+		{"", 0, false},
+	}
+	for _, tc := range cases {
+		got, ok := downloadPercentFromMessage(tc.message)
+		if ok != tc.ok || (ok && got != tc.want) {
+			t.Fatalf("downloadPercentFromMessage(%q)=%d,%v want %d,%v", tc.message, got, ok, tc.want, tc.ok)
+		}
 	}
 }
