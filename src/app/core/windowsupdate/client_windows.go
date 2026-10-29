@@ -24,6 +24,13 @@ const (
 	hresultInvalidCriteria uintptr = 0x80240032
 )
 
+// Criterios canonicos do WUA. "Type='Software'" inclui atualizacoes
+// opcionais e upgrades (BrowseOnly nao e filtrado) e evita ler drivers.
+const (
+	wuaPendingSoftwareCriteria   = "IsInstalled=0 and Type='Software'"
+	wuaInstalledSoftwareCriteria = "IsInstalled=1 and Type='Software'"
+)
+
 // Codigos de resultado de download/instalacao do WUA.
 const (
 	wuaResultNotStarted       = 0
@@ -323,7 +330,7 @@ func searchUpdatesCollection(searcher *ole.IDispatch, criteria string) (*ole.IDi
 // filtro para quem pedir explicitamente. As variantes sem Type/IsHidden sao
 // fallback para WUA que rejeite o criterio (HRESULT de criterio invalido).
 func pendingCriteria(includeHidden, includeDrivers bool) []string {
-	base := "IsInstalled=0 and Type='Software'"
+	base := wuaPendingSoftwareCriteria
 	if includeDrivers {
 		base = "IsInstalled=0"
 	}
@@ -760,10 +767,11 @@ func installWUA(targets []InstallTarget) (*InstallResult, error) {
 	}
 	defer searcher.Release()
 
-	// Busca SEM filtro de hidden/BrowseOnly/Type: updates ocultos ou opcionais
+	// Busca SEM filtro de hidden/BrowseOnly: updates ocultos ou opcionais
 	// (inclusive upgrades de versao) podem ter sido aprovados explicitamente.
-	// A selecao e sempre por GUID/chave canonica.
-	collection, err := searchUpdatesCollection(searcher, "IsInstalled=0")
+	// Type='Software' mantem drivers fora (o modulo nao os inventaria) sem
+	// custo de ler centenas de objetos COM. A selecao e por GUID/chave canonica.
+	collection, err := searchUpdatesCollection(searcher, wuaPendingSoftwareCriteria)
 	if err != nil {
 		return nil, err
 	}
@@ -789,7 +797,7 @@ func installWUA(targets []InstallTarget) (*InstallResult, error) {
 	installedKeys := map[string]bool(nil)
 	for _, target := range targets {
 		if _, ok := byKey[target.UpdateKey]; !ok {
-			installedKeys = updateKeysFromSearch(session, "IsInstalled=1")
+			installedKeys = updateKeysFromSearch(session, wuaInstalledSoftwareCriteria)
 			break
 		}
 	}
@@ -1060,9 +1068,9 @@ func updateKeysFromSearch(session *wuaSession, criteria string) map[string]bool 
 // pendingKeysAfterInstall refaz a busca de pendentes para a verificacao
 // pos-instalacao (WU-07).
 func pendingKeysAfterInstall(session *wuaSession) map[string]bool {
-	// Mesma amplitude da busca de inventario: opcionais/upgrades tambem contam
-	// como pendentes depois de uma instalacao.
-	return updateKeysFromSearch(session, "IsInstalled=0")
+	// Mesma busca do inventario: opcionais/upgrades tambem contam como
+	// pendentes depois de uma instalacao.
+	return updateKeysFromSearch(session, wuaPendingSoftwareCriteria)
 }
 
 func hideWUA(updateKeys []string, hidden bool) (int, error) {
@@ -1077,7 +1085,7 @@ func hideWUA(updateKeys []string, hidden bool) (int, error) {
 	}
 	defer searcher.Release()
 
-	collection, err := searchUpdatesCollection(searcher, "IsInstalled=0")
+	collection, err := searchUpdatesCollection(searcher, wuaPendingSoftwareCriteria)
 	if err != nil {
 		return 0, err
 	}
