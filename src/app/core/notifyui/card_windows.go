@@ -151,21 +151,23 @@ type cardFonts struct {
 	processFallback uintptr
 }
 
+// release libera as fontes. É idempotente de propósito: o cleanup defensivo
+// do fim do loop de mensagens pode rodar depois do WM_DESTROY.
 func (f *cardFonts) release() {
 	for _, h := range []uintptr{f.title, f.subtitle, f.body, f.countLabel, f.countValue, f.button, f.hint, f.processFallback} {
 		if h != 0 {
 			winui.DeleteGDIObject(h)
 		}
 	}
+	*f = cardFonts{}
 }
 
 // cardState é o estado do cartão (desenho só na thread da janela).
 type cardState struct {
-	mu       sync.Mutex
-	req      CardRequest
-	decided  bool
-	result   CardResult
-	resultCh chan CardResult
+	mu      sync.Mutex
+	req     CardRequest
+	decided bool
+	result  CardResult
 
 	deadline time.Time
 	total    time.Duration
@@ -303,10 +305,6 @@ func (s *cardState) finish(hwnd uintptr, result CardResult) {
 	s.result = result
 	s.mu.Unlock()
 
-	select {
-	case s.resultCh <- result:
-	default:
-	}
 	if hwnd != 0 {
 		winui.KillTimer(hwnd, cardTimerID)
 		winui.DestroyWindow(hwnd)
@@ -854,7 +852,6 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 		req:      req,
 		total:    total,
 		deadline: time.Now().Add(total),
-		resultCh: make(chan CardResult, 1),
 		hover:    -1,
 		pressed:  -1,
 		layout:   layout,
@@ -866,7 +863,6 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 	// de repinte completo (troca de segundo) em vez do repinte da barra.
 	state.lastClock = state.clockText()
 	state.focus = state.defaultIndex()
-
 
 	x, y = winui.BottomRightOnActiveWorkArea(cardWidth, height, winui.ScalePx(cardPad, scale))
 	winui.MoveResizeWindow(hwnd, x, y, cardWidth, height)
@@ -915,6 +911,16 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 		winui.TranslateMessage(&msg)
 		winui.DispatchMessage(&msg)
 	}
+
+	// Cleanup defensivo: se o loop sair sem WM_DESTROY (GetMessageW devolve -1)
+	// a janela não liberou nada. Todas as liberações são idempotentes, então no
+	// caminho normal isto é no-op.
+	winui.KillTimer(hwnd, cardTimerID)
+	state.releaseProcessIcons()
+	state.fonts.release()
+	state.buffer.Release()
+	state.barBase.Release()
+	cardStates.Delete(hwnd)
 
 	state.mu.Lock()
 	decided := state.decided

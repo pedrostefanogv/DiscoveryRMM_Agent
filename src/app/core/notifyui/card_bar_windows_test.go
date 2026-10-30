@@ -298,6 +298,21 @@ func TestCardPaintIncrementalMatchesFullRepaint(t *testing.T) {
 	}
 }
 
+// TestCardFullPaintKeepsClockInSync cobre o M-2 da revisão: depois de um
+// repinte COMPLETO o relógio desenhado tem que ser o corrente, senão o próximo
+// tick força outro repinte completo sem necessidade (janela ficou coberta).
+func TestCardFullPaintKeepsClockInSync(t *testing.T) {
+	state := newCardTestState(t, 1, 0.5)
+	screen := barTestDC(t, winui.ScalePx(cardWidth, state.scale), state.cardHeight())
+
+	// Relógio "velho" no estado, como se a janela tivesse ficado coberta.
+	state.lastClock = "00:59"
+	state.paint(screen, winui.Rect{})
+	if state.lastClock != state.clockText() {
+		t.Fatalf("lastClock = %q após repinte completo, esperado %q", state.lastClock, state.clockText())
+	}
+}
+
 // TestCardAnimationDoesNotLeakGDI garante que o caminho por quadro (60 fps)
 // não aloca recursos de kernel por frame: cada volta cria apenas objetos GDI+
 // liberados por defer.

@@ -228,13 +228,12 @@ func newPreviewState(t *testing.T, req CardRequest, themeName string, scale floa
 	}
 
 	state := &cardState{
-		req:      req,
-		total:    time.Duration(req.CountdownSeconds) * time.Second,
-		resultCh: make(chan CardResult, 1),
-		hover:    -1,
-		pressed:  -1,
-		layout:   cardLayoutFor(scale, extraHeight, hasCountdown, len(req.Buttons), len(req.ProcessList)),
-		scale:    scale,
+		req:     req,
+		total:   time.Duration(req.CountdownSeconds) * time.Second,
+		hover:   -1,
+		pressed: -1,
+		layout:  cardLayoutFor(scale, extraHeight, hasCountdown, len(req.Buttons), len(req.ProcessList)),
+		scale:   scale,
 	}
 	state.fonts = cardFonts{
 		title:           winui.CreateFont(winui.ScalePx(22, scale), 600),
