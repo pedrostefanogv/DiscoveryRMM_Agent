@@ -20,6 +20,7 @@ var (
 	procShowWindow       = user32.NewProc("ShowWindow")
 	procUpdateWindow     = user32.NewProc("UpdateWindow")
 	procInvalidateRect   = user32.NewProc("InvalidateRect")
+	procGetUpdateRect    = user32.NewProc("GetUpdateRect")
 	procSetTimer         = user32.NewProc("SetTimer")
 	procKillTimer        = user32.NewProc("KillTimer")
 	procGetMessageW      = user32.NewProc("GetMessageW")
@@ -234,6 +235,41 @@ func CurrentThreadID() uint32 {
 func Invalidate(hwnd uintptr) {
 	if hwnd != 0 {
 		procInvalidateRect.Call(hwnd, 0, 0)
+	}
+}
+
+// InvalidateRect marca apenas a região informada para repintura (área vazia =
+// janela inteira). É o que mantém a animação da barra barata: só a faixa da
+// barra é redesenhada/reblitada, sem repintar textos e ícones do cartão.
+func InvalidateRect(hwnd uintptr, r Rect) {
+	if hwnd == 0 {
+		return
+	}
+	if r.Empty() {
+		procInvalidateRect.Call(hwnd, 0, 0)
+		return
+	}
+	nr := r.native()
+	procInvalidateRect.Call(hwnd, uintptr(unsafe.Pointer(&nr)), 0)
+}
+
+// UpdateRect devolve a caixa da região inválida acumulada (GetUpdateRect).
+// Deve ser consultada ANTES de BeginPaint, que limpa a região. Rect vazio
+// significa "nada pendente" ou que a área não pôde ser lida.
+func UpdateRect(hwnd uintptr) Rect {
+	if hwnd == 0 {
+		return Rect{}
+	}
+	var nr nativeRect
+	ret, _, _ := procGetUpdateRect.Call(hwnd, uintptr(unsafe.Pointer(&nr)), 0)
+	if ret == 0 {
+		return Rect{}
+	}
+	return Rect{
+		X: int(nr.Left),
+		Y: int(nr.Top),
+		W: int(nr.Right - nr.Left),
+		H: int(nr.Bottom - nr.Top),
 	}
 }
 

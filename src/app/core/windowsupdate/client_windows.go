@@ -342,8 +342,18 @@ func pendingCriteria(includeHidden, includeDrivers bool) []string {
 
 // searchPending executa a busca de pendentes tentando variantes de criterio,
 // caindo para a variante sem IsHidden quando o WUA rejeita o criterio.
+//
+// Importante (deteccao de pendentes): avalia TODAS as variantes e escolhe a
+// MELHOR — mais itens incluidos e menos itens "unreadable". Uma variante de
+// criterio pode listar o pendente de forma que Item(i)/leitura falhe no
+// contexto do servico (ex.: "Windows 11 Insider Preview Quality Update" ficava
+// unreadable na variante com IsHidden=0), enquanto outra variante le o mesmo
+// item sem erro. Antes a primeira variante que respondia vencia, mesmo com
+// descartes, e o pendente real nunca chegava ao inventario.
 func searchPending(searcher *ole.IDispatch, includeHidden, includeDrivers bool) ([]Update, ScanCounters, error) {
 	var lastErr error
+	var bestUpdates []Update
+	var bestCounters ScanCounters
 	for _, criteria := range pendingCriteria(includeHidden, includeDrivers) {
 		collection, err := searchUpdatesCollection(searcher, criteria)
 		if err != nil {
@@ -352,16 +362,40 @@ func searchPending(searcher *ole.IDispatch, includeHidden, includeDrivers bool) 
 			if errors.As(err, &oleErr) && oleErr.Code() == hresultInvalidCriteria {
 				continue
 			}
-			return nil, ScanCounters{}, err
+			// Erro não-critico da variante: tenta a proxima (o scan do WUA
+			// falha por criterio específico da maquina; outra variante pode
+			// responder).
+			continue
 		}
 		updates, counters, readErr := readUpdates(collection, includeDrivers)
 		collection.Release()
 		if readErr != nil {
-			return nil, ScanCounters{}, readErr
+			lastErr = readErr
+			continue
 		}
-		return updates, counters, nil
+		if bestUpdates == nil || betterScanResult(counters, bestCounters) {
+			bestUpdates, bestCounters = updates, counters
+		}
+	}
+	if bestUpdates != nil {
+		return bestUpdates, bestCounters, nil
 	}
 	return nil, ScanCounters{}, lastErr
+}
+
+// betterScanResult compara dois resultados de busca por variante de criterio:
+// prefere mais itens incluidos; em empate, menos unreadable; em novo empate,
+// mais leituras. O desempate final é estável (primeira variante vence).
+func betterScanResult(a, b ScanCounters) bool {
+	if a.Included != b.Included {
+		return a.Included > b.Included
+	}
+	aUnread := a.Skipped[SkipReasonUnreadable]
+	bUnread := b.Skipped[SkipReasonUnreadable]
+	if aUnread != bUnread {
+		return aUnread < bUnread
+	}
+	return a.Read > b.Read
 }
 
 // ScanCounters contabiliza o que ficou fora do inventario, por motivo. O
@@ -375,6 +409,9 @@ type ScanCounters struct {
 	SkippedN int
 	Upgrades int
 	Drivers  int
+	// UnreadableErr guarda o erro COM do ultimo item ilegivel (diagnóstico do
+	// porquê um pendente real pode ter ficado fora do inventario).
+	UnreadableErr string
 }
 
 func (c *ScanCounters) addSkipped(reason string) {
@@ -400,7 +437,14 @@ func readUpdates(collection *ole.IDispatch, includeDrivers bool) ([]Update, Scan
 	for i := 0; i < count; i++ {
 		itemRaw, err := oleutil.CallMethod(collection, "Item", i)
 		if err != nil {
+			// Retry único: leituras COM de coleção WUA falham de forma
+			// intermitente (p.ex. no contexto do serviço); a segunda tentativa
+			// normalmente recupera o item.
+			itemRaw, err = oleutil.CallMethod(collection, "Item", i)
+		}
+		if err != nil {
 			counters.Read++
+			counters.UnreadableErr = err.Error()
 			counters.addSkipped(SkipReasonUnreadable)
 			continue
 		}
@@ -753,6 +797,7 @@ func scanWUA(opts ScanOptions) (*ScanResult, error) {
 			res.AddSkipped(reason)
 		}
 	}
+	res.UnreadableErr = counters.UnreadableErr
 
 	if opts.IncludeInstalled {
 		installed, err := queryInstalledQFE()

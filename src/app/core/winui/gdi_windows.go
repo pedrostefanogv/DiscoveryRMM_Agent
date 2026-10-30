@@ -102,6 +102,20 @@ func (r Rect) InsetUniform(d int) Rect { return r.Inset(d, d) }
 // Offset desloca o retângulo.
 func (r Rect) Offset(dx, dy int) Rect { return Rect{X: r.X + dx, Y: r.Y + dy, W: r.W, H: r.H} }
 
+// Inflate cresce o retângulo em dx/dy de cada lado (valores negativos encolhem).
+func (r Rect) Inflate(dx, dy int) Rect {
+	return Rect{X: r.X - dx, Y: r.Y - dy, W: r.W + 2*dx, H: r.H + 2*dy}
+}
+
+// ContainsRect informa se other está inteiramente dentro de r (usado para
+// reconhecer que a região inválida é só a faixa da barra de contagem).
+func (r Rect) ContainsRect(other Rect) bool {
+	if other.Empty() {
+		return true
+	}
+	return other.X >= r.X && other.Y >= r.Y && other.Right() <= r.Right() && other.Bottom() <= r.Bottom()
+}
+
 // nativeRect espelha RECT do Win32.
 type nativeRect struct {
 	Left   int32

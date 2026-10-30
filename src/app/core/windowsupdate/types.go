@@ -141,6 +141,10 @@ type ScanResult struct {
 	SkippedCount   int      `json:"skippedCount"`
 	// SkippedReasons detalha o SkippedCount por motivo (driver, no_identity...).
 	SkippedReasons map[string]int `json:"skippedReasons,omitempty"`
+	// UnreadableErr guarda o erro COM do ultimo item ilegivel (diagnostico de
+	// pendentes que ficam fora do inventario por falha de leitura). Consumido
+	// apenas no log do agente; nunca enviado ao servidor.
+	UnreadableErr string `json:"-"`
 	// Partial indica que uma das fontes falhou (ex.: QFE) e o resultado é
 	// incompleto — o servidor não deve tratar listas vazias como remoção.
 	Partial       bool       `json:"partial,omitempty"`

@@ -1,8 +1,13 @@
+//go:build windows
+
 package notifyui
 
 import (
+	"math"
 	"testing"
 	"time"
+
+	"discovery/app/core/winui"
 )
 
 // NormalizeCardRequest garante defaults estáveis usados pelo desenho.
@@ -16,13 +21,13 @@ func TestNormalizeCardRequest(t *testing.T) {
 			name: "defaults sem botões",
 			in:   CardRequest{},
 			want: CardRequest{
-				Title:    "Discovery Agent",
-				Subtitle: "Discovery Agent",
-				Message:  " ",
-				Buttons:  []Button{{ID: "ok", Label: "OK", Kind: "primary"}},
+				Title:           "Discovery Agent",
+				Subtitle:        "Discovery Agent",
+				Message:         " ",
+				Buttons:         []Button{{ID: "ok", Label: "OK", Kind: "primary"}},
 				DefaultButtonID: "ok",
-				CountdownLabel: "",
-				Hint: "Enter confirma · Esc fecha",
+				CountdownLabel:  "",
+				Hint:            "Enter confirma · Esc fecha",
 			},
 		},
 		{
@@ -33,11 +38,11 @@ func TestNormalizeCardRequest(t *testing.T) {
 				Buttons:          []Button{{ID: "cancel", Label: "Cancelar"}, {ID: "go", Label: "Ir"}},
 			},
 			want: CardRequest{
-				Title:    "Teste",
-				Subtitle: "Discovery Agent",
-				Message:  " ",
-				Buttons:  []Button{{ID: "cancel", Label: "Cancelar"}, {ID: "go", Label: "Ir"}},
-				DefaultButtonID: "go",
+				Title:            "Teste",
+				Subtitle:         "Discovery Agent",
+				Message:          " ",
+				Buttons:          []Button{{ID: "cancel", Label: "Cancelar"}, {ID: "go", Label: "Ir"}},
+				DefaultButtonID:  "go",
 				CountdownSeconds: 30,
 				TimeoutButtonID:  "go",
 				CountdownLabel:   "Tempo restante:",
@@ -199,5 +204,169 @@ func TestNormalizeCardRequestProcessList(t *testing.T) {
 	}
 	if got.ProcessList[1].DisplayName != "code.exe" {
 		t.Fatalf("item vazio deveria ser removido: %+v", got.ProcessList[1])
+	}
+}
+
+// ── Barra da contagem regressiva ──
+//
+// Regressão do "chute/pulo" na barra: o preenchimento é calculado em
+// coordenadas fracionárias (nada de arredondar para o pixel inteiro) e avança
+// pouco por quadro, então o movimento é contínuo.
+
+// cardBarFill: cápsula deslocada 1px para dentro do trilho, largura
+// proporcional ao tempo restante e saturação fora de [0,1].
+func TestCardBarFillGeometry(t *testing.T) {
+	track := winui.Rect{X: 24, Y: 200, W: 512, H: cardBarHeight}
+
+	full := cardBarFill(track, 1, 1)
+	if full.X != float64(track.X+cardBarInset) || full.Y != float64(track.Y+cardBarInset) {
+		t.Fatalf("origem do preenchimento = (%v,%v), esperado (%d,%d)", full.X, full.Y, track.X+cardBarInset, track.Y+cardBarInset)
+	}
+	fullWidth := float64(track.W - 2*cardBarInset)
+	if math.Abs(full.W-fullWidth) > 1e-9 || math.Abs(full.H-float64(cardBarHeight-2*cardBarInset)) > 1e-9 {
+		t.Fatalf("tamanho cheio = %vx%v, esperado %vx%d", full.W, full.H, fullWidth, cardBarHeight-2*cardBarInset)
+	}
+	if got, want := cardBarFill(track, 1, 0.5).W, fullWidth*0.5; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("metade = %v, esperado %v", got, want)
+	}
+	if got := cardBarFill(track, 1, 1.7).W; math.Abs(got-fullWidth) > 1e-9 {
+		t.Fatalf("ratio > 1 deveria saturar em %v, veio %v", fullWidth, got)
+	}
+	if !cardBarFill(track, 1, 0).Empty() || !cardBarFill(track, 1, -2).Empty() {
+		t.Fatal("ratio <= 0 deveria devolver preenchimento vazio")
+	}
+
+	// Em 150% de DPI o inset acompanha a escala (senão o aro fica fino demais).
+	scaledTrack := winui.Rect{X: 36, Y: 300, W: 768, H: winui.ScalePx(cardBarHeight, 1.5)}
+	inset := winui.ScalePx(cardBarInset, 1.5)
+	if inset < 2 {
+		t.Fatalf("inset em 150%% = %d, esperado >= 2", inset)
+	}
+	scaled := cardBarFill(scaledTrack, 1.5, 0.25)
+	if got, want := scaled.W, float64(768-2*inset)*0.25; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("largura em 150%% = %v, esperado %v", got, want)
+	}
+}
+
+// TestCardBarFillSmoothMotion prova numericamente a suavidade: em quadros de
+// 16ms o maior salto da borda é a fração de pixel esperada (e a maioria das
+// larguras cai ENTRE pixels, o que só é desenhável com geometria fracionária).
+func TestCardBarFillSmoothMotion(t *testing.T) {
+	track := winui.Rect{X: 24, Y: 200, W: 512, H: cardBarHeight}
+	fullWidth := float64(track.W - 2*cardBarInset)
+	step := 16 * time.Millisecond
+
+	for _, countdown := range []time.Duration{60 * time.Second, 15 * time.Second} {
+		frames := int(countdown / step)
+		prev := cardBarFill(track, 1, 1).W
+		maxDelta := 0.0
+		fractionalFrames := 0
+		for i := 1; i <= frames; i++ {
+			ratio := 1 - float64(i)*float64(step)/float64(countdown)
+			width := cardBarFill(track, 1, ratio).W
+			delta := prev - width
+			if delta < -1e-9 {
+				t.Fatalf("contagem %v: barra cresceu no quadro %d (delta %v)", countdown, i, delta)
+			}
+			if delta > maxDelta {
+				maxDelta = delta
+			}
+			if width != math.Trunc(width) {
+				fractionalFrames++
+			}
+			prev = width
+		}
+		if want := fullWidth * float64(step) / float64(countdown); maxDelta > want*1.01 {
+			t.Fatalf("contagem %v: maior salto/quadro = %.3f px, esperado <= %.3f", countdown, maxDelta, want)
+		}
+		if fractionalFrames < frames/2 {
+			t.Fatalf("contagem %v: só %d de %d quadros com largura fracionária — movimento preso ao pixel", countdown, fractionalFrames, frames)
+		}
+	}
+}
+
+// cardBarArea: a faixa do repinte incremental cobre o trilho com folga para o
+// antialiasing (é o que o WM_TIMER invalida a cada quadro).
+func TestCardBarAreaCoversTrack(t *testing.T) {
+	track := winui.Rect{X: 24, Y: 200, W: 512, H: cardBarHeight}
+	area := cardBarArea(track, 1)
+	if !area.ContainsRect(track) {
+		t.Fatalf("área %+v não cobre o trilho %+v", area, track)
+	}
+	if want := track.Inflate(cardBarPad, cardBarPad); area != want {
+		t.Fatalf("área = %+v, esperado %+v", area, want)
+	}
+	if scaled := cardBarArea(track, 1.5); !scaled.ContainsRect(track) {
+		t.Fatalf("área escalada %+v não cobre o trilho", scaled)
+	}
+	// Trilho ausente (cartão sem contador) devolve área vazia: o chamador
+	// interpreta como "nada a repintar".
+	if !cardBarArea(winui.Rect{}, 1).Empty() {
+		t.Fatal("trilho vazio deveria devolver área vazia")
+	}
+}
+
+// A faixa repintada pela animação precisa cair sobre fundo LISO do cartão: o
+// primeBarBase preenche essa região com theme.Card em vez de copiar o cartão.
+// Se o layout mudar (algo desenhado perto da barra), este teste quebra antes
+// de a animação restaurar o fundo errado.
+func TestCardBarAreaOnFlatCardBackground(t *testing.T) {
+	for _, scale := range []float64{1, 1.25, 1.5, 2} {
+		l := cardLayoutFor(scale, 0, true, 3, 4)
+		area := cardBarArea(l.progressTrack, scale)
+		if area.Empty() {
+			t.Fatalf("escala %v: área vazia", scale)
+		}
+		if area.Y <= l.messageBox.Bottom() {
+			t.Fatalf("escala %v: faixa (%+v) invade a caixa de mensagem (bottom=%d)", scale, area, l.messageBox.Bottom())
+		}
+		if area.Bottom() >= l.buttons[0].Y {
+			t.Fatalf("escala %v: faixa (%+v) invade os botões (Y=%d)", scale, area, l.buttons[0].Y)
+		}
+		// Dentro do cartão e longe das bordas arredondadas (cantos) e da faixa
+		// de accent da esquerda: só assim o fundo da faixa é liso.
+		radius := winui.ScalePx(cardRadius, scale)
+		if area.X <= winui.ScalePx(8, scale) || area.Right() > winui.ScalePx(cardWidth, scale)-radius {
+			t.Fatalf("escala %v: faixa (%+v) encosta na borda/accent do cartão", scale, area)
+		}
+		if area.Y < radius || area.Bottom() > cardHeightFor(l, scale)-radius {
+			t.Fatalf("escala %v: faixa (%+v) cruza um canto arredondado", scale, area)
+		}
+	}
+}
+
+// Layout: a barra é mais alta que a antiga (7px), fica abaixo do relógio e os
+// botões continuam depois dela, dentro das margens do cartão.
+func TestCardLayoutCountdownBar(t *testing.T) {
+	l := cardLayoutFor(1, 0, true, 2, 0)
+	if l.progressTrack.H != cardBarHeight {
+		t.Fatalf("altura da barra = %d, esperado %d", l.progressTrack.H, cardBarHeight)
+	}
+	if l.progressTrack.Y <= l.countValue.Y {
+		t.Fatalf("barra deveria ficar abaixo do relógio: barra.Y=%d relogio.Y=%d", l.progressTrack.Y, l.countValue.Y)
+	}
+	if l.buttons[0].Y <= l.progressTrack.Bottom() {
+		t.Fatalf("botões deveriam ficar abaixo da barra: botao.Y=%d barra.Bottom=%d", l.buttons[0].Y, l.progressTrack.Bottom())
+	}
+	if l.progressTrack.X < cardPad || l.progressTrack.Right() > cardWidth-cardPad {
+		t.Fatalf("barra fora das margens do cartão: %+v", l.progressTrack)
+	}
+
+	scaled := cardLayoutFor(1.5, 0, true, 2, 0)
+	if scaled.progressTrack.H != winui.ScalePx(cardBarHeight, 1.5) {
+		t.Fatalf("altura escalada = %d, esperado %d", scaled.progressTrack.H, winui.ScalePx(cardBarHeight, 1.5))
+	}
+	limit := winui.ScalePx(cardWidth, 1.5) - winui.ScalePx(cardPad, 1.5)
+	if scaled.progressTrack.Right() > limit {
+		t.Fatalf("barra escalada estourou a margem: %+v", scaled.progressTrack)
+	}
+}
+
+// O timer da contagem precisa ser rápido o bastante para parecer contínuo
+// (a 5 fps — 200 ms — o salto por quadro era visível, principalmente em
+// contagens curtas).
+func TestCardAnimTickIsHighFrequency(t *testing.T) {
+	if cardAnimTickMS <= 0 || cardAnimTickMS > 33 {
+		t.Fatalf("cardAnimTickMS = %d ms, esperado <= 33 ms", cardAnimTickMS)
 	}
 }

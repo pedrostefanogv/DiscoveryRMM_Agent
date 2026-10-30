@@ -49,6 +49,31 @@ func TestPendingCriteriaIncludeOptionalUpdatesAndUpgrades(t *testing.T) {
 	}
 }
 
+// TestBetterScanResultPrefersMoreIncluded: entre variantes de criterio de
+// busca, escolhe mais incluidos e, em empate, menos unreadable. O WUA lista o
+// mesmo pendente de formas diferentes por criterio; a variante que descarta o
+// item por falha de leitura nao pode vencer (pendentes invisiveis no servico).
+func TestBetterScanResultPrefersMoreIncluded(t *testing.T) {
+	cases := []struct {
+		name   string
+		cand   ScanCounters
+		best   ScanCounters
+		expect bool
+	}{
+		{name: "mais incluidos vence", cand: ScanCounters{Included: 2}, best: ScanCounters{Included: 1}, expect: true},
+		{name: "empate com menos unreadable vence", cand: ScanCounters{Included: 1, Skipped: map[string]int{SkipReasonUnreadable: 0}}, best: ScanCounters{Included: 1, Skipped: map[string]int{SkipReasonUnreadable: 1}}, expect: true},
+		{name: "empate completo mantem o primeiro", cand: ScanCounters{Included: 1, Read: 1}, best: ScanCounters{Included: 1, Read: 1}, expect: false},
+		{name: "mesmo incluidos, mais unreadable perde", cand: ScanCounters{Included: 1, Skipped: map[string]int{SkipReasonUnreadable: 2}}, best: ScanCounters{Included: 1, Skipped: map[string]int{SkipReasonUnreadable: 1}}, expect: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := betterScanResult(tc.cand, tc.best); got != tc.expect {
+				t.Fatalf("betterScanResult=%v want %v", got, tc.expect)
+			}
+		})
+	}
+}
+
 func TestVariantInt64ReadsMaxDownloadSizeTypes(t *testing.T) {
 	cases := []struct {
 		name string

@@ -187,6 +187,9 @@ func (s *Service) scanWindowsUpdates(verbose bool) (*windowsupdate.ScanResult, e
 	if len(result.SkippedReasons) > 0 {
 		skipped = fmt.Sprintf(" reasons=%v", result.SkippedReasons)
 	}
+	if result.UnreadableErr != "" {
+		skipped += " unreadableErr=" + result.UnreadableErr
+	}
 	s.logf(fmt.Sprintf("[windows-update] scan concluido: pending=%d installed=%d skipped=%d%s reboot=%t(%v) service=%s wuOnline=%t lastInstallSuccess=%s (%dms, total %dms)",
 		result.PendingCount, result.InstalledCount, result.SkippedCount, skipped,
 		result.PendingReboot.Pending, result.PendingReboot.Reasons,

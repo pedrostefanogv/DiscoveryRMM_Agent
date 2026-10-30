@@ -24,20 +24,35 @@ import (
 // opcional e desfechos clicado/timeout/fechado/cancelado.
 
 const (
-	cardClassName   = "DiscoveryRmmNotifyCard"
-	cardWidth       = 560
-	cardRadius      = 16
-	cardPad         = 24
-	cardTimerID     = 1
-	cardTickMS      = 200
-	cardButtonW     = 128
-	cardButtonH     = 38
-	cardButtonGap   = 10
-	cardMaxButtons  = 3
+	cardClassName = "DiscoveryRmmNotifyCard"
+	cardWidth     = 560
+	cardRadius    = 16
+	cardPad       = 24
+	cardTimerID   = 1
+	// cardAnimTickMS é o passo da animação da contagem (≈60 fps). O valor é
+	// pequeno de propósito: a barra anda menos de 0,15 px por quadro em uma
+	// contagem de 60 s, então qualquer quadro perdido é imperceptível — a
+	// posição vem do relógio de parede, nunca de um contador de ticks.
+	cardAnimTickMS = 16
+	// cardBarHeight é a altura de projeto da barra da contagem (px a 96 DPI).
+	// Mais alta que a barra antiga (7) para o preenchimento em cápsula e o
+	// antialiasing sub-pixel aparecerem com nitidez.
+	cardBarHeight = 10
+	// cardBarPad é a folga (px de projeto) em volta da barra incluída no
+	// repinte incremental — cobre o sangramento do antialiasing nas bordas.
+	cardBarPad = 2
+	// cardBarInset afasta o preenchimento do trilho em 1 px: o trilho aparece
+	// como um aro fino em volta da cápsula accent (evita o "halo" escuro que o
+	// antialiasing dos dois contornos cria quando eles coincidem).
+	cardBarInset   = 1
+	cardButtonW    = 128
+	cardButtonH    = 38
+	cardButtonGap  = 10
+	cardMaxButtons = 3
 	// cardProcessRowH/cardProcessIcon dimensionam as linhas da lista de
 	// processos do Welcome (ícone 28px + nome/executável).
-	cardProcessRowH  = 40
-	cardProcessIcon  = 28
+	cardProcessRowH = 40
+	cardProcessIcon = 28
 	// cardMessageMaxExtraPx limita o crescimento da caixa de mensagem (96 DPI).
 	cardMessageMaxExtraPx = 160
 	// cardWMAppCancel fecha o cartão de outra goroutine (cancelamento).
@@ -47,11 +62,11 @@ const (
 // cardLayout devolve os retângulos do cartão em pixels físicos.
 type cardLayout struct {
 	badge, kindIcon, title, subtitle, divider, messageBox, messageText winui.Rect
-	countLabel, countValue, progressTrack                    winui.Rect
-	processBox                                               winui.Rect
-	processRows                                              []winui.Rect
-	buttons                                                  []winui.Rect
-	hint                                                     winui.Rect
+	countLabel, countValue, progressTrack                              winui.Rect
+	processBox                                                         winui.Rect
+	processRows                                                        []winui.Rect
+	buttons                                                            []winui.Rect
+	hint                                                               winui.Rect
 }
 
 // cardLayoutFor monta o layout para a escala/extra informados. Puro
@@ -107,9 +122,9 @@ func cardLayoutFor(scale float64, extraHeight int, hasCountdown bool, nButtons i
 		l.countValue = winui.Rect{X: sw(cardPad), Y: l.countLabel.Bottom() + sw(4), W: sw(120), H: sw(30)}
 		l.progressTrack = winui.Rect{
 			X: sw(cardPad), Y: l.countValue.Bottom() + sw(8),
-			W: sw(cardWidth) - 2*sw(cardPad), H: sw(7),
+			W: sw(cardWidth) - 2*sw(cardPad), H: sw(cardBarHeight),
 		}
-		contentY = l.progressTrack.Bottom() + sw(18)
+		contentY = l.progressTrack.Bottom() + sw(16)
 	}
 
 	// Botões alinhados à direita, na ordem do slice (esquerda→direita): o
@@ -154,19 +169,38 @@ type cardState struct {
 
 	deadline time.Time
 	total    time.Duration
+	// now permite congelar o relógio em testes de desenho (nil = time.Now).
+	// Sem isso a borda da barra anda frações de pixel entre dois quadros e uma
+	// comparação de pixels mediria movimento em vez do desenho em si.
+	now func() time.Time
 
-	theme   winui.Theme
-	fonts   cardFonts
+	// buffer reaproveita o double buffering entre os quadros da animação;
+	// bufferPrimed indica que ele já recebeu um desenho COMPLETO do cartão
+	// (sem isso um repinte parcial mostraria área não pintada).
+	buffer       winui.BackBuffer
+	bufferPrimed bool
+	// barBase é o snapshot estático da FAIXA da barra (fundo liso do cartão +
+	// trilho, sem preenchimento). O antialiasing do GDI+ não é idempotente:
+	// redesenhar a cápsula sobre os pixels do quadro anterior endurece a borda
+	// em poucos quadros. Por isso cada quadro da animação começa restaurando a
+	// faixa a partir do barBase e desenha o preenchimento UMA vez.
+	barBase       winui.BackBuffer
+	barBasePrimed bool
+	// lastClock é o texto mm:ss que está desenhado; quando ele muda é preciso
+	// repintar o cartão inteiro (o relógio é texto, não sofre repinte parcial).
+	lastClock string
+
+	theme winui.Theme
+	fonts cardFonts
 	// processIcons guarda os HICONs da lista de processos (liberados no WM_DESTROY).
 	processIcons []uintptr
-	layout  cardLayout
-	scale   float64
-	hover   int // -1 = nenhum
-	pressed int
-	focus   int
+	layout       cardLayout
+	scale        float64
+	hover        int // -1 = nenhum
+	pressed      int
+	focus        int
 
-	systemCorners  bool
-	dwmCornerRadius int
+	systemCorners bool
 }
 
 // cardHeight computa a altura efetiva (mensagem longa cresce o cartão).
@@ -176,13 +210,71 @@ func (s *cardState) cardHeight() int {
 	return cardHeightFor(s.layout, s.scale)
 }
 
+// currentTime é o relógio do cartão (substituível nos testes).
+func (s *cardState) currentTime() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
 // remaining devolve o tempo restante da contagem (0 quando acabou).
 func (s *cardState) remaining() time.Duration {
-	remaining := time.Until(s.deadline)
+	remaining := s.deadline.Sub(s.currentTime())
 	if remaining < 0 {
 		return 0
 	}
 	return remaining
+}
+
+// cardBarFill devolve o retângulo FRACIONÁRIO do preenchimento da barra para o
+// ratio informado (1 = cheio, 0 = vazio). Função pura: é a base do movimento
+// sub-pixel (a borda direita anda frações de pixel por quadro) e dos testes.
+func cardBarFill(track winui.Rect, scale, ratio float64) winui.RectF {
+	if track.Empty() {
+		return winui.RectF{}
+	}
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+	inset := winui.ScalePx(cardBarInset, scale)
+	width := track.W - 2*inset
+	height := track.H - 2*inset
+	if width <= 0 || height <= 0 || ratio <= 0 {
+		return winui.RectF{}
+	}
+	return winui.RectF{
+		X: float64(track.X + inset),
+		Y: float64(track.Y + inset),
+		W: float64(width) * ratio,
+		H: float64(height),
+	}
+}
+
+// cardBarArea devolve a faixa da barra (trilho + folga) usada pelo repinte
+// incremental da animação. Função pura (testável sem janela).
+func cardBarArea(track winui.Rect, scale float64) winui.Rect {
+	if track.Empty() {
+		return winui.Rect{}
+	}
+	pad := winui.ScalePx(cardBarPad, scale)
+	return track.Inflate(pad, pad)
+}
+
+// clockText é o relógio mm:ss atualmente exposto ao usuário.
+func (s *cardState) clockText() string {
+	return CountdownClock(s.remaining())
+}
+
+// countdownArea é a região mínima que a animação repinta a cada quadro.
+func (s *cardState) countdownArea() winui.Rect {
+	if s.req.CountdownSeconds <= 0 {
+		return winui.Rect{}
+	}
+	return cardBarArea(s.layout.progressTrack, s.scale)
 }
 
 // progressRatio devolve 1.0 no início e 0.0 no fim da contagem.
@@ -327,19 +419,31 @@ func cardWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	case winui.MsgEraseBkgnd:
 		return 1
 	case winui.MsgPaint:
+		// A região inválida precisa ser lida ANTES do BeginPaint (que a limpa):
+		// ela decide se o quadro pode ser só a faixa da barra.
+		dirty := winui.UpdateRect(hwnd)
 		hdc, paint := winui.BeginPaint(hwnd)
-		state.paint(hdc)
+		state.paint(hdc, dirty)
 		winui.EndPaint(hwnd, &paint)
 		return 0
 	case winui.MsgPrintClient:
-		state.paint(wparam)
+		// WM_PRINTCLIENT não informa região: desenha o cartão inteiro.
+		state.paint(wparam, winui.Rect{})
 		return 0
 	case winui.MsgTimer:
 		if state.req.CountdownSeconds > 0 && state.remaining() <= 0 {
 			state.finish(hwnd, state.timeoutResult())
 			return 0
 		}
-		winui.Invalidate(hwnd)
+		// O relógio é texto: só pode ser atualizado com um repinte completo.
+		// Entre trocas de segundo, apenas a faixa da barra é repintada — é o que
+		// dá o movimento contínuo (~60 fps) com custo desprezível.
+		if clock := state.clockText(); clock != state.lastClock {
+			state.lastClock = clock
+			winui.Invalidate(hwnd)
+			return 0
+		}
+		winui.InvalidateRect(hwnd, state.countdownArea())
 		return 0
 	case winui.MsgMouseMove:
 		hover := state.buttonAt(cardLParamX(lparam), cardLParamY(lparam))
@@ -374,7 +478,11 @@ func cardWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		}
 		return 0
 	case winui.MsgSetCursor:
-		if state.buttonAt(cardLParamX(lparam), cardLParamY(lparam)) >= 0 {
+		// O lParam do WM_SETCURSOR vem em coordenadas de TELA: sem converter,
+		// a comparação com os retângulos de cliente nunca casa e o cursor
+		// nunca vira mão sobre os botões.
+		cx, cy := winui.ScreenToClient(hwnd, cardLParamX(lparam), cardLParamY(lparam))
+		if state.buttonAt(cx, cy) >= 0 {
 			winui.SetCursorHand()
 		} else {
 			winui.SetCursorArrow()
@@ -391,6 +499,8 @@ func cardWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	case winui.MsgDestroy:
 		state.releaseProcessIcons()
 		state.fonts.release()
+		state.buffer.Release()
+		state.barBase.Release()
 		cardStates.Delete(hwnd)
 		winui.PostQuitMessage(0)
 		return 0
@@ -398,18 +508,58 @@ func cardWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	return winui.DefWindowProc(hwnd, msg, wparam, lparam)
 }
 
-// paint desenha o cartão inteiro (double buffering como no consent).
-func (s *cardState) paint(screenDC uintptr) {
+// paint desenha o cartão e copia para a tela. Quando a região inválida
+// informada por WM_PAINT cabe na faixa da barra da contagem, o cartão é
+// reaproveitado do back buffer e SÓ a faixa é reblitada — é o que permite a
+// animação a ~60 fps sem redesenhar textos, ícones e o logo a cada quadro.
+func (s *cardState) paint(screenDC uintptr, dirty winui.Rect) {
 	width := winui.ScalePx(cardWidth, s.scale)
 	height := s.cardHeight()
 
-	memDC, bitmap, oldBitmap := winui.BufferedPaint(screenDC, width, height)
-	hdc := memDC
-	if hdc == 0 {
-		hdc = screenDC
-	} else {
-		defer winui.FlushBufferedPaint(screenDC, memDC, bitmap, oldBitmap, width, height)
+	if !s.buffer.Ensure(screenDC, width, height) {
+		// Sem back buffer utilizável o desenho vai direto para a tela.
+		s.bufferPrimed = false
+		s.renderCard(screenDC)
+		return
 	}
+	if area, ok := s.barOnlyArea(dirty); ok {
+		// Restaura o fundo do quadro anterior (trilho sem preenchimento) antes
+		// de redesenhar: sem isso o AA acumula e a borda endurece.
+		s.barBase.BlitTo(s.buffer.DC(), area)
+		s.renderCountdownFill(s.buffer.DC())
+		s.buffer.BlitTo(screenDC, area)
+		return
+	}
+	s.renderCard(s.buffer.DC())
+	s.buffer.BlitTo(screenDC, winui.Rect{W: width, H: height})
+	s.bufferPrimed = true
+	s.primeBarBase()
+	// O relógio da tela agora é o corrente: sem isso o próximo tick faria um
+	// repinte completo redundante (janela ficou coberta > 1s, por exemplo).
+	if s.req.CountdownSeconds > 0 {
+		s.lastClock = s.clockText()
+	}
+}
+
+// barOnlyArea reconhece o quadro em que apenas a barra da contagem mudou (a
+// única região inválida está dentro da faixa da barra).
+func (s *cardState) barOnlyArea(dirty winui.Rect) (winui.Rect, bool) {
+	// Sem o snapshot estático a restauração do fundo não existe: nesse caso o
+	// quadro tem que ser completo (senão o AA acumularia).
+	if !s.bufferPrimed || !s.barBasePrimed || dirty.Empty() || s.req.CountdownSeconds <= 0 {
+		return winui.Rect{}, false
+	}
+	area := s.countdownArea()
+	if area.Empty() || !area.ContainsRect(dirty) {
+		return winui.Rect{}, false
+	}
+	return area, true
+}
+
+// renderCard desenha o cartão inteiro no DC informado.
+func (s *cardState) renderCard(hdc uintptr) {
+	width := winui.ScalePx(cardWidth, s.scale)
+	height := s.cardHeight()
 
 	theme := s.theme
 	l := s.layout
@@ -469,17 +619,8 @@ func (s *cardState) paint(screenDC uintptr) {
 
 	if s.req.CountdownSeconds > 0 {
 		winui.DrawTextSingle(hdc, s.req.CountdownLabel, l.countLabel, s.fonts.countLabel, theme.TextMuted, winui.AlignLeft)
-		winui.DrawTextSingle(hdc, CountdownClock(s.remaining()), l.countValue, s.fonts.countValue, theme.Accent, winui.AlignLeft)
-		winui.FillRoundRectAA(hdc, l.progressTrack, winui.ScalePx(4, s.scale), theme.Border)
-		progress := l.progressTrack
-		progress.W = int(float64(l.progressTrack.W) * s.progressRatio())
-		if progress.W < winui.ScalePx(8, s.scale) {
-			progress.W = winui.ScalePx(8, s.scale)
-		}
-		if progress.W > l.progressTrack.W {
-			progress.W = l.progressTrack.W
-		}
-		winui.FillRoundRectAA(hdc, progress, winui.ScalePx(4, s.scale), theme.Accent)
+		winui.DrawTextSingle(hdc, s.clockText(), l.countValue, s.fonts.countValue, theme.Accent, winui.AlignLeft)
+		s.renderCountdownBar(hdc)
 	}
 
 	winui.DrawTextSingle(hdc, s.req.Hint, l.hint, s.fonts.hint, theme.TextMuted, winui.AlignLeft)
@@ -498,6 +639,72 @@ func (s *cardState) paint(screenDC uintptr) {
 		winui.PaintButton(hdc, rect, button.Label, s.fonts.button, style,
 			s.hover == i, s.pressed == i, false, theme.Accent)
 	}
+}
+
+// renderCountdownBar desenha o trilho e o preenchimento da barra da contagem
+// (caminho do repinte completo; a animação usa renderCountdownFill).
+func (s *cardState) renderCountdownBar(hdc uintptr) {
+	s.renderCountdownTrack(hdc)
+	s.renderCountdownFill(hdc)
+}
+
+// renderCountdownTrack desenha só o trilho (sem preenchimento).
+func (s *cardState) renderCountdownTrack(hdc uintptr) {
+	track := s.layout.progressTrack
+	if s.req.CountdownSeconds <= 0 || track.Empty() {
+		return
+	}
+	winui.FillRoundRectAAf(hdc, winui.RectF{
+		X: float64(track.X), Y: float64(track.Y),
+		W: float64(track.W), H: float64(track.H),
+	}, float64(track.H)/2, s.theme.Card.Blend(s.theme.Border, 80))
+}
+
+// renderCountdownFill desenha só o preenchimento da barra da contagem: cápsula
+// com coordenadas FRACIONÁRIAS — a borda direita avança menos de 1 px por
+// quadro, então o movimento é contínuo em vez de pular de pixel em pixel.
+func (s *cardState) renderCountdownFill(hdc uintptr) {
+	track := s.layout.progressTrack
+	if s.req.CountdownSeconds <= 0 || track.Empty() {
+		return
+	}
+	fill := cardBarFill(track, s.scale, s.progressRatio())
+	if fill.Empty() {
+		return
+	}
+	// Gradiente discreto ancorado no TRILHO (não no preenchimento): a escala
+	// de cor fica fixa durante a contagem em vez de comprimir junto com a
+	// cápsula, o que deixava o fim da contagem quase sólido.
+	winui.FillRoundRectGradientAAf(hdc, fill, float64(track.H)/2,
+		s.theme.Accent.Darken(6), s.theme.Accent.Lighten(10),
+		float64(track.X), float64(track.Right()))
+}
+
+// primeBarBase prepara o snapshot estático da faixa da barra (fundo liso do
+// cartão + trilho, sem preenchimento), que é a fonte da restauração por quadro
+// da animação.
+//
+// A faixa fica sobre uma área lisa do cartão (abaixo da caixa de mensagem e
+// acima dos botões — garantido pelo layout e coberto por teste), então
+// preencher com theme.Card reproduz exatamente o fundo sem custo de cópia.
+func (s *cardState) primeBarBase() {
+	// Sem contador não há animação: não aloca o segundo back buffer (cartões
+	// de alerta/mensagem não pagam esse custo).
+	area := s.countdownArea()
+	if area.Empty() {
+		s.barBase.Release()
+		s.barBasePrimed = false
+		return
+	}
+	width := winui.ScalePx(cardWidth, s.scale)
+	height := s.cardHeight()
+	if !s.barBase.Ensure(s.buffer.DC(), width, height) {
+		s.barBasePrimed = false
+		return
+	}
+	winui.FillRect(s.barBase.DC(), area, s.theme.Card)
+	s.renderCountdownTrack(s.barBase.DC())
+	s.barBasePrimed = true
 }
 
 // drawNotifyBadge desenha o selo do cabeçalho: um sino/alerta genérico no
@@ -655,8 +862,11 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 
 		processIcons: processIcons,
 	}
+	// O relógio já desenhado é a referência para saber quando um tick precisa
+	// de repinte completo (troca de segundo) em vez do repinte da barra.
+	state.lastClock = state.clockText()
 	state.focus = state.defaultIndex()
-	state.dwmCornerRadius = winui.ScalePx(8, scale)
+
 
 	x, y = winui.BottomRightOnActiveWorkArea(cardWidth, height, winui.ScalePx(cardPad, scale))
 	winui.MoveResizeWindow(hwnd, x, y, cardWidth, height)
@@ -667,13 +877,13 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 	}
 	state.theme = winui.DetectTheme()
 	state.fonts = cardFonts{
-		title:       winui.CreateFont(winui.ScalePx(22, scale), 600),
-		subtitle:    winui.CreateFont(winui.ScalePx(14, scale), 400),
-		body:        bodyFont,
-		countLabel:  winui.CreateFont(winui.ScalePx(12, scale), 400),
-		countValue:  winui.CreateFont(winui.ScalePx(26, scale), 600),
-		button:      winui.CreateFont(winui.ScalePx(14, scale), 600),
-		hint:        winui.CreateFont(winui.ScalePx(11, scale), 400),
+		title:      winui.CreateFont(winui.ScalePx(22, scale), 600),
+		subtitle:   winui.CreateFont(winui.ScalePx(14, scale), 400),
+		body:       bodyFont,
+		countLabel: winui.CreateFont(winui.ScalePx(12, scale), 400),
+		countValue: winui.CreateFont(winui.ScalePx(26, scale), 600),
+		button:     winui.CreateFont(winui.ScalePx(14, scale), 600),
+		hint:       winui.CreateFont(winui.ScalePx(11, scale), 400),
 
 		processFallback: winui.CreateFont(winui.ScalePx(14, scale), 600),
 	}
@@ -687,7 +897,7 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 	winui.SetFocusTo(hwnd)
 	winui.UpdateWindow(hwnd)
 	if hasCountdown {
-		winui.SetTimer(hwnd, cardTimerID, cardTickMS)
+		winui.SetTimer(hwnd, cardTimerID, cardAnimTickMS)
 	}
 
 	done := make(chan struct{})
