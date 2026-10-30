@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"discovery/app/appstore"
+	"discovery/app/core/automation"
 	"discovery/app/core/models"
 )
 
@@ -94,8 +96,25 @@ func (a *App) resolveAllowedPackage(ctx context.Context, packageID string) (AppS
 }
 
 // authorizeAutomationPackage autoriza um pacote para automação.
+//
+// Regra de produto: a policy de automação SOBREPÕE a App Store. Antes de
+// consultar a política efetiva da Loja, verifica se o (operação,
+// installationType, packageId) corresponde a uma task ATIVA da policy de
+// automação do agent (estado em memória do automation.Service). Se sim, autoriza
+// com um aviso informativo — sem isso, uma task de automação configurada fora
+// da Loja falhava no gate com exit 13 ("pacote não autorizado para este agent")
+// antes de executar qualquer winget, invisível ao admin, e abria o circuit
+// breaker da task. O gate da instalação MANUAL pela Loja (inventory/resolveAllowed)
+// não é afetado.
 func (a *App) authorizeAutomationPackage(ctx context.Context, installationType, packageID, operation string) error {
-	if a == nil || a.AppStoreSvc == nil {
+	if a == nil {
+		return nil
+	}
+	if a.AutomationSvc != nil && a.AutomationSvc.PackageAuthorizedByPolicy(automation.AppInstallationType(installationType), packageID, operation) {
+		a.Logs.Append(fmt.Sprintf("[automation] pacote %q (%s) autorizado pela policy de automação (sobrepõe a App Store)", packageID, installationType))
+		return nil
+	}
+	if a.AppStoreSvc == nil {
 		return nil
 	}
 	return a.AppStoreSvc.AuthorizeAutomationPackage(ctx, installationType, packageID, operation)

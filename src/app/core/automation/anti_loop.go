@@ -172,6 +172,48 @@ func isScriptContentMissing(result ExecutionResult) bool {
 	return !result.Success && strings.Contains(result.ErrorMessage, errMsgScriptContentMissing)
 }
 
+// resetBreakersForChangedTasks reseta os markers de circuit breaker e backoff
+// de skip de uma task cuja versão mudou na policy (TaskId presente antes e
+// depois com LastUpdatedAt diferente). Editar/corrigir a task no dashboard
+// destrava a task pausada — antes, só SUCESSO resetava o breaker (anti_loop) e
+// o marker sobrevivia ao cleanup (DeleteAutomationMarkersExcept), deixando a
+// task pausada por 24h mesmo depois da correção.
+func (s *Service) resetBreakersForChangedTasks(agentID string, previous, next []AutomationTask) {
+	if s == nil || s.db == nil || strings.TrimSpace(agentID) == "" {
+		return
+	}
+	prevUpdatedAt := make(map[string]string, len(previous))
+	for _, task := range previous {
+		taskID := strings.TrimSpace(task.TaskID)
+		updatedAt := strings.TrimSpace(task.LastUpdatedAt)
+		if taskID == "" || updatedAt == "" {
+			continue
+		}
+		prevUpdatedAt[taskID] = updatedAt
+	}
+	for _, task := range next {
+		taskID := strings.TrimSpace(task.TaskID)
+		updatedAt := strings.TrimSpace(task.LastUpdatedAt)
+		if taskID == "" || updatedAt == "" {
+			continue
+		}
+		prev, exists := prevUpdatedAt[taskID]
+		if !exists || prev == updatedAt {
+			continue
+		}
+		for _, key := range []string{"circuit:fail:" + taskID, "skipbackoff:" + taskID} {
+			removed, err := s.db.DeleteAutomationMarker(agentID, key)
+			if err != nil {
+				s.logf("automacao: falha ao resetar marker %q da task=%s: %v", key, taskID, err)
+				continue
+			}
+			if removed {
+				s.logf("automacao: task=%s alterada na policy (LastUpdatedAt %s -> %s): marker %q resetado (breaker/backoff destravados)", taskID, prev, updatedAt, key)
+			}
+		}
+	}
+}
+
 // updateAntiLoopState atualiza os markers de anti-loop (backoff de skips e
 // circuit breaker) após uma execução de task. Chamado no executeTaskAsync
 // após obter o resultado.

@@ -42,6 +42,19 @@ type Frame struct {
 	ColorSpace uint32
 }
 
+// ChannelOrderReporter é implementado por capturers que normalizam a ordem dos
+// canais de cor (R↔B) em tempo de execução. O loop de captura usa
+// ChannelOrderPending para segurar a PUBLICAÇÃO de frames enquanto a ordem não
+// está decidida — publicar antes disso entrega ao viewer uma tela com as cores
+// invertidas (incidente de 2026-10-29, ver channel_order.go).
+type ChannelOrderReporter interface {
+	// ChannelOrderPending informa se a ordem de canais ainda não foi decidida.
+	ChannelOrderPending() bool
+	// ChannelOrderName devolve a ordem efetiva atual ("BGRA"/"RGBA"/"desconhecida")
+	// — usado em log de diagnóstico do loop de captura.
+	ChannelOrderName() string
+}
+
 // NewCapturer cria o capturador apropriado para o sistema.
 // Prioridade: go-d3d (HW dirty rects + cursor) → DXGI manual → GDI fallback.
 func NewCapturer(monitorIndex int) (Capturer, error) {

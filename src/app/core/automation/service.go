@@ -186,6 +186,60 @@ func (s *Service) SetPackageAuthorization(authorize PackageAuthorizationFunc) {
 	s.packageAuthorize = authorize
 }
 
+// operationMatchesActionType informa se uma operação de pacote do executor
+// (install/upgrade/uninstall) corresponde ao ActionType declarado pela task
+// da policy. UpdateOrInstallPackage cobre install e upgrade.
+func operationMatchesActionType(operation string, actionType AutomationTaskActionType) bool {
+	switch strings.ToLower(strings.TrimSpace(operation)) {
+	case "install":
+		return actionType == ActionInstallPackage || actionType == ActionUpdateOrInstallPackage
+	case "upgrade":
+		return actionType == ActionUpdatePackage || actionType == ActionUpdateOrInstallPackage
+	case "uninstall":
+		return actionType == ActionRemovePackage
+	}
+	return false
+}
+
+// PackageAuthorizedByPolicy informa se o (operation, installationType,
+// packageID) corresponde a uma task ATIVA da policy de automação efetiva do
+// agent (estado em memória mantido pelo policy-sync). É a base do override
+// "policy de automação sobrepõe a App Store" aplicado por
+// app.authorizeAutomationPackage: se a task existe na policy, o gate da Loja
+// não bloqueia a automação.
+func (s *Service) PackageAuthorizedByPolicy(installationType AppInstallationType, packageID, operation string) bool {
+	if s == nil || strings.TrimSpace(packageID) == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, task := range s.state.Tasks {
+		// Tasks de script/comando não declaram pacote: InstallationType vazio
+		// nunca autoriza pacote.
+		if strings.TrimSpace(string(task.InstallationType)) == "" {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(string(task.InstallationType)), strings.TrimSpace(string(installationType))) {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(task.PackageID), strings.TrimSpace(packageID)) {
+			continue
+		}
+		if operationMatchesActionType(operation, task.ActionType) {
+			return true
+		}
+	}
+	return false
+}
+
+// SetStateForTesting substitui o estado em memória do service (uso exclusivo
+// de testes de pacotes externos, ex.: app).
+func (s *Service) SetStateForTesting(state State) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state = state
+}
+
 func (s *Service) SetPSADTPolicyResolver(resolver func() PSADTPolicy) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -469,6 +523,10 @@ func (s *Service) refreshPolicy(ctx context.Context, includeScriptContent bool) 
 	s.state = next
 	s.currentAgent = agentID
 	s.mu.Unlock()
+
+	// Task editada na policy (mesmo TaskId, LastUpdatedAt novo) destrava o
+	// circuit breaker/backoff dela: a versão corrigida volta a ser executável.
+	s.resetBreakersForChangedTasks(agentID, current.Tasks, next.Tasks)
 
 	if err := s.reconcilePolicy(ctx, current, next, agentID); err != nil {
 		s.logf("automacao: falha ao reconciliar policy: %v", err)

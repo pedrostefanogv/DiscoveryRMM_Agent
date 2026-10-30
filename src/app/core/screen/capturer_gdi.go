@@ -22,11 +22,18 @@ var (
 	gdi32                      = syscall.NewLazyDLL("gdi32.dll")
 	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
+	procCreateDIBSection       = gdi32.NewProc("CreateDIBSection")
 	procSelectObject           = gdi32.NewProc("SelectObject")
 	procDeleteDC               = gdi32.NewProc("DeleteDC")
 	procDeleteObject           = gdi32.NewProc("DeleteObject")
 	procBitBlt                 = gdi32.NewProc("BitBlt")
-	procGetDIBits              = gdi32.NewProc("GetDIBits")
+	// GdiFlush: o GDI pode enfileirar o BitBlt; sem o flush a DIB section pode
+	// ser lida antes de a blit ser executada (linha parcialmente atualizada).
+	procGdiFlush = gdi32.NewProc("GdiFlush")
+	// procGetDIBits é usado pela captura de cursor (cursor_sprite.go). O
+	// caminho de captura de tela NÃO usa mais GetDIBits — ver comentário em
+	// gdiCapturer.AcquireNextFrame.
+	procGetDIBits = gdi32.NewProc("GetDIBits")
 )
 
 const (
@@ -48,18 +55,21 @@ type gdiCapturer struct {
 	offsetY      int
 	monitorIndex int
 
-	// Cache de GDI objects (memDC/memBitmap): recriados apenas quando a
-	// geometria muda. Não referenciam o desktop — apenas o screenDC obtido
-	// por frame importa para o BitBlt.
+	// Cache de GDI objects: recriados apenas quando a geometria muda. Não
+	// referenciam o desktop — apenas o screenDC obtido por frame importa para o
+	// BitBlt.
+	//
+	// O bitmap é uma DIB SECTION (CreateDIBSection), que expõe o ponteiro dos
+	// pixels em memória de sistema: o BitBlt escreve DIRETO no buffer que será
+	// entregue ao pipeline, sem GetDIBits. Motivo (incidente de 2026-10-29 em
+	// DESKTOP-DH608V7): GetDIBits falhou 40× seguidas nessa máquina, o capturer
+	// GDI foi descartado no meio da sessão e o pipeline caiu no DXGI go-d3d —
+	// que estava com a ordem de canais errada. Eliminar o GetDIBits remove a
+	// causa raiz do fallback (e é mais rápido: um memcpy a menos por frame).
 	memDC     uintptr
-	memBitmap uintptr
-
-	// frameBuf é reutilizado entre frames (otimização: antes era um
-	// make([]byte, w*h*4) por frame — ~8,3 MB @1080p a 30fps ≈ 250 MB/s de
-	// churn de GC). Contrato idêntico ao go-d3d: o Data do Frame é válido
-	// ATÉ o próximo AcquireNextFrame — o consumidor (session_screen) já copia
-	// para o encode worker antes do próximo acquire.
-	frameBuf []byte
+	dibBitmap uintptr        // HBITMAP (DIB section) selecionado no memDC
+	dibBits   unsafe.Pointer // pixels da DIB (top-down, BGRA 32bpp)
+	dibPrev   uintptr        // objeto que estava selecionado no memDC antes da DIB
 
 	// Throttle da re-detecção de geometria. GetMonitors() usa
 	// syscall.NewCallback, que registra um callback PERMANENTE no runtime
@@ -166,22 +176,11 @@ func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
 		}
 	}
 
-	// Cache de memDC/memBitmap: cria uma vez e reusa (recria quando a
-	// geometria muda via releaseCached acima). O bitmap NÃO referencia o
-	// desktop — a origem (screenDC) é re-adquirida por frame.
-	if c.memDC == 0 {
-		memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
-		if memDC == 0 {
-			return nil, fmt.Errorf("CreateCompatibleDC falhou")
-		}
-		memBitmap, _, _ := procCreateCompatibleBitmap.Call(screenDC, uintptr(c.width), uintptr(c.height))
-		if memBitmap == 0 {
-			procDeleteDC.Call(memDC)
-			return nil, fmt.Errorf("CreateCompatibleBitmap falhou")
-		}
-		procSelectObject.Call(memDC, memBitmap)
-		c.memDC = memDC
-		c.memBitmap = memBitmap
+	// Cache de memDC/DIB: cria uma vez e reusa (recria quando a geometria muda
+	// via releaseCached acima). O bitmap NÃO referencia o desktop — a origem
+	// (screenDC) é re-adquirida por frame.
+	if err := c.ensureDIB(screenDC); err != nil {
+		return nil, err
 	}
 
 	r, _, _ := procBitBlt.Call(c.memDC, 0, 0, uintptr(c.width), uintptr(c.height), screenDC, uintptr(c.offsetX), uintptr(c.offsetY), SRCCOPY)
@@ -192,40 +191,21 @@ func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
 		return nil, fmt.Errorf("BitBlt falhou")
 	}
 
+	// O GDI pode enfileirar a blit; sem o flush a DIB poderia ser lida antes de
+	// a cópia terminar (frame parcialmente atualizado).
+	procGdiFlush.Call()
+
+	// Buffer reutilizável: expõe os pixels da DIB (memória de sistema escrita
+	// pelo BitBlt) sem copiar — o consumidor copia para o encode worker antes
+	// do próximo AcquireNextFrame (mesmo contrato do go-d3d). Elimina o
+	// GetDIBits (que falhava nesta máquina) e ~8 MB de memcpy por frame.
 	bufSize := c.width * c.height * 4
-	// Buffer reutilizável: elimina ~8 MB de alocação por frame (otimização
-	// de churn de GC). O consumidor copia antes do próximo acquire.
-	if cap(c.frameBuf) < bufSize {
-		c.frameBuf = make([]byte, bufSize)
-	}
-	frameData := c.frameBuf[:bufSize]
+	frameData := unsafe.Slice((*byte)(c.dibBits), bufSize)
 
-	// BITMAPINFO header
-	var bi [40]byte
-	bi[0] = 40 // biSize
-	*(*int32)(unsafe.Pointer(&bi[4])) = int32(c.width)
-	*(*int32)(unsafe.Pointer(&bi[8])) = -int32(c.height) // negativo = top-down
-	*(*uint16)(unsafe.Pointer(&bi[12])) = 1              // biPlanes
-	*(*uint16)(unsafe.Pointer(&bi[14])) = 32             // biBitCount
-	*(*uint32)(unsafe.Pointer(&bi[16])) = BI_RGB
-
-	r, _, _ = procGetDIBits.Call(screenDC, c.memBitmap, 0, uintptr(c.height),
-		uintptr(unsafe.Pointer(&frameData[0])),
-		uintptr(unsafe.Pointer(&bi[0])),
-		DIB_RGB_COLORS)
-	if r == 0 {
-		return nil, fmt.Errorf("GetDIBits falhou")
-	}
-
-	// NOTA (cores invertidas, bug 2026-09-07): o 1º parâmetro de GetDIBits
-	// DEVE ser o DC da tela (screenDC), NÃO o memDC. A documentação exige que
-	// o bitmap NÃO esteja selecionado no DC passado — e o memBitmap está
-	// selecionado no memDC. Passar memDC é comportamento indefinido: em
-	// vários drivers o resultado sai com canais R/B corrompidos/invertidos.
-	// O MeshAgent (tile.cpp get_desktop_buffer) passa hDesktopDC exatamente
-	// por isso. Com screenDC, GetDIBits entrega BGRA canônico (B,G,R,A),
-	// que é o contrato esperado pelos encoders (jpeg/webp/tiles).
-
+	// NOTA (contrato de cor): o BitBlt da tela para uma DIB section 32bpp
+	// entrega BGRA canônico (B,G,R,A) — é o formato que os encoders
+	// (jpeg/webp/tiles) esperam. Este caminho NÃO aplica swap R↔B, por isso o
+	// capturer reporta ChannelOrderPending() == false (ver channel_order.go).
 	return &Frame{
 		Data:    frameData,
 		Width:   c.width,
@@ -234,6 +214,52 @@ func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
 		OriginX: c.offsetX,
 		OriginY: c.offsetY,
 	}, nil
+}
+
+// ensureDIB garante memDC + DIB section do tamanho atual (recriados quando a
+// geometria muda). A DIB section expõe os pixels diretamente em memória de
+// sistema (dibBits), permitindo BitBlt direto no buffer entregue ao pipeline.
+func (c *gdiCapturer) ensureDIB(screenDC uintptr) error {
+	if c.memDC != 0 && c.dibBitmap != 0 && c.dibBits != nil {
+		return nil
+	}
+	c.releaseCached()
+
+	memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
+	if memDC == 0 {
+		return fmt.Errorf("CreateCompatibleDC falhou")
+	}
+
+	// BITMAPINFO: header de 40 bytes. biHeight NEGATIVO = top-down (linha 0 no
+	// topo), que é a ordem esperada por Frame.Stride/pipeline.
+	var bi [40]byte
+	bi[0] = 40 // biSize
+	*(*int32)(unsafe.Pointer(&bi[4])) = int32(c.width)
+	*(*int32)(unsafe.Pointer(&bi[8])) = -int32(c.height) // negativo = top-down
+	*(*uint16)(unsafe.Pointer(&bi[12])) = 1              // biPlanes
+	*(*uint16)(unsafe.Pointer(&bi[14])) = 32             // biBitCount
+	*(*uint32)(unsafe.Pointer(&bi[16])) = BI_RGB         // biCompression
+
+	var bits unsafe.Pointer
+	hbm, _, _ := procCreateDIBSection.Call(
+		screenDC,
+		uintptr(unsafe.Pointer(&bi[0])),
+		DIB_RGB_COLORS,
+		uintptr(unsafe.Pointer(&bits)),
+		0, // hSection: memória do sistema
+		0, // offset
+	)
+	if hbm == 0 || bits == nil {
+		procDeleteDC.Call(memDC)
+		return fmt.Errorf("CreateDIBSection falhou (%dx%d)", c.width, c.height)
+	}
+	prev, _, _ := procSelectObject.Call(memDC, hbm)
+
+	c.memDC = memDC
+	c.dibBitmap = hbm
+	c.dibBits = bits
+	c.dibPrev = prev
+	return nil
 }
 
 // Geometry retorna a origem e dimensões atuais da região capturada
@@ -249,10 +275,17 @@ func (c *gdiCapturer) ReleaseFrame() {}
 // releaseCached descarta o cache de GDI objects (uso interno — chamado na
 // troca de geometria/falha de BitBlt; o thread já é o do capturador).
 func (c *gdiCapturer) releaseCached() {
-	if c.memBitmap != 0 {
-		procDeleteObject.Call(c.memBitmap)
-		c.memBitmap = 0
+	if c.memDC != 0 && c.dibPrev != 0 {
+		// Deseleciona a DIB do DC ANTES de destruí-la (DeleteObject de um
+		// bitmap selecionado falha).
+		procSelectObject.Call(c.memDC, c.dibPrev)
+		c.dibPrev = 0
 	}
+	if c.dibBitmap != 0 {
+		procDeleteObject.Call(c.dibBitmap)
+		c.dibBitmap = 0
+	}
+	c.dibBits = nil
 	if c.memDC != 0 {
 		procDeleteDC.Call(c.memDC)
 		c.memDC = 0
@@ -266,5 +299,13 @@ func (c *gdiCapturer) Close() error {
 }
 
 func (c *gdiCapturer) Name() string { return "gdi" }
+
+// ChannelOrderPending é sempre false no GDI: o BitBlt para uma DIB section
+// 32bpp entrega BGRA canônico por construção (não há formato forçado nem
+// fallback de driver). O pipeline não precisa esperar/calibrar este capturer.
+func (c *gdiCapturer) ChannelOrderPending() bool { return false }
+
+// ChannelOrderName informa a ordem efetiva (diagnóstico/log).
+func (c *gdiCapturer) ChannelOrderName() string { return ChannelOrderBGRA.String() + " (gdi)" }
 
 var _ Capturer = (*gdiCapturer)(nil)

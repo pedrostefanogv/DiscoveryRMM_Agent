@@ -62,6 +62,18 @@ type SessionScreen struct {
 
 	tileMode bool // quando true, envia apenas os tiles alterados (EncodeDirtyRects)
 
+	// Gate da ordem de canais (R↔B): enquanto o capturer não decidiu se os
+	// bytes estão em BGRA ou RGBA, os frames são DESCARTADOS (não publicados).
+	// Publicar com a ordem errada mostra a tela com vermelho/azul trocados —
+	// incidente de 2026-10-29 (DESKTOP-DH608V7): ~68 s de cores invertidas
+	// porque o frame ia para o viewer enquanto a calibração decidia.
+	// channelGateUntil limita a espera (a sessão não pode ficar preta se a
+	// calibração nunca concluir — ex.: tela acromática com GDI indisponível).
+	channelGateCap     screen.Capturer
+	channelGateUntil   time.Time
+	channelGateExpired bool // já logou/passou do deadline deste capturer
+	channelGateBlocked bool // frames estão sendo segurados agora
+
 	// Cursor separado: frame não contém cursor; posição/estado via subject .cursor
 	cursorSeparate bool
 	cursorSender   *screen.CursorSpriteSender
@@ -88,6 +100,14 @@ const (
 	idleDelay         = 50 * time.Millisecond  // delay quando tela esta parada
 	afterFailureDelay = 100 * time.Millisecond // delay apos erro de captura
 	deepIdleThreshold = 15                     // frames idle consecutivos antes de deep idle (~3s com DXGI timeout 200ms)
+
+	// channelGateMaxWait: tempo MÁXIMO que a publicação fica segurada esperando
+	// a ordem de canais (R↔B) ser decidida. Curto de propósito: com a decisão
+	// determinística (sonda do DuplicateOutput1 + cache) a ordem já chega
+	// pronta; este prazo cobre só o caminho de calibração por GDI (que pode
+	// falhar em VMs). Depois dele o frame é publicado com a melhor informação
+	// disponível — e a calibração continua tentando corrigir.
+	channelGateMaxWait = 1500 * time.Millisecond
 )
 
 // NewSessionScreen cria uma nova sessao de screen capture.
@@ -495,6 +515,21 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		s.captureFailures = 0
 		captureMsTotal += capMs
 
+		// ── Gate da ordem de canais (R↔B) ──
+		// Não publica o frame antes de o capturer saber se os bytes estão em
+		// BGRA (contrato do pipeline) ou RGBA (precisa swap). Publicar com a
+		// ordem errada = tela com vermelho/azul trocados até a calibração
+		// concluir (incidente de 2026-10-29, ~68 s).
+		if s.channelOrderGate(cap) {
+			cap.ReleaseFrame()
+			// Ao sair do gate o próximo frame precisa ir COMPLETO.
+			s.forceKeyFrame.Store(true)
+			skipped++
+			totalSkipped++
+			time.Sleep(idleDelay)
+			continue
+		}
+
 		// Métricas de input capturadas ANTES do tone mapping/escala: a
 		// cobertura real da captura no desktop virtual e a origem dela. O
 		// tone mapping/ResizeBGRA recriam o Frame (OriginX/OriginY zerados
@@ -677,6 +712,59 @@ func clampCursorCoord(v int) int16 {
 		return maxI16
 	}
 	return int16(v)
+}
+
+// channelOrderGate decide se o frame recém-capturado deve ser DESCARTADO
+// porque a ordem dos canais de cor (R↔B) ainda não foi decidida. Enquanto o
+// capturer não sabe se os bytes estão em BGRA ou RGBA, publicar significa
+// mostrar a tela com vermelho/azul trocados (incidente de 2026-10-29: ~68 s de
+// cores invertidas até a calibração concluir).
+//
+// A espera é limitada por channelGateMaxWait e reiniciada a cada troca de
+// capturer (GDI↔DXGI), porque o capturer novo recomeça a decisão.
+func (s *SessionScreen) channelOrderGate(cap screen.Capturer) bool {
+	reporter, hasReporter := cap.(screen.ChannelOrderReporter)
+	pending := hasReporter && reporter.ChannelOrderPending()
+
+	// Capturer trocado (ou primeiro frame): reabre a janela de espera.
+	if s.channelGateCap != cap {
+		s.channelGateCap = cap
+		s.channelGateExpired = false
+		s.channelGateBlocked = false // estado do capturer ANTERIOR não se aplica
+		s.channelGateUntil = time.Now().Add(channelGateMaxWait)
+		if pending {
+			log.Printf("[remote-session-screen] ordem de canais (R↔B) pendente no capturer %s — segurando a publicação por até %s\n",
+				cap.Name(), channelGateMaxWait)
+		}
+	}
+
+	if !pending {
+		if s.channelGateBlocked || s.channelGateExpired {
+			s.channelGateBlocked = false
+			s.channelGateExpired = false
+			order := "n/a"
+			if hasReporter {
+				order = reporter.ChannelOrderName()
+			}
+			log.Printf("[remote-session-screen] ordem de canais resolvida (%s) — retomando a publicação\n", order)
+			// O primeiro frame publicado depois do gate precisa ser COMPLETO
+			// (o viewer pode ter sido criado sem base de tela).
+			s.forceKeyFrame.Store(true)
+		}
+		return false
+	}
+
+	if time.Now().After(s.channelGateUntil) {
+		if !s.channelGateExpired {
+			s.channelGateExpired = true
+			log.Printf("[remote-session-screen] ordem de canais (R↔B) ainda pendente após %s — publicando com %s; a calibração corrige em seguida se estiver errada\n",
+				channelGateMaxWait, reporter.ChannelOrderName())
+		}
+		return false
+	}
+
+	s.channelGateBlocked = true
+	return true
 }
 
 // maybeFallbackToDXGI troca o capturer após falhas consecutivas de captura

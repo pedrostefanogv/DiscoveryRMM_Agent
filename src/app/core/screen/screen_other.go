@@ -72,6 +72,13 @@ type GPUCapability struct {
 	MemoryMB      int64
 }
 
+// ChannelOrderReporter é implementado por capturers que normalizam a ordem dos
+// canais de cor (R↔B) em tempo de execução. Stub para não-Windows.
+type ChannelOrderReporter interface {
+	ChannelOrderPending() bool
+	ChannelOrderName() string
+}
+
 // NewCapturer retorna erro em plataformas não-Windows.
 func NewCapturer(monitorIndex int) (Capturer, error) {
 	return nil, errNotSupported

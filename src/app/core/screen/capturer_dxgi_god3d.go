@@ -35,9 +35,10 @@ type dxgiGoD3dCapturer struct {
 	monitorIndex int
 	drawCursor   bool // se true, desenha o cursor no frame (compat); false = cursor separado
 
-	// calib resolve a ordem dos canais (RGBA vs BGRA) comparando o frame com
-	// uma captura GDI — ver channel_order.go. Padrão RGBA (comportamento
-	// histórico) até a calibração provar o contrário.
+	// calib resolve a ordem dos canais (RGBA vs BGRA) do frame. A seed vem da
+	// sonda determinística do DuplicateOutput1 (capturer_dxgi_format_probe.go)
+	// + cache do processo; a calibração por GDI é a verificação/fallback —
+	// ver channel_order.go.
 	calib channelCalibrator
 
 	// frameBuf é reutilizado entre frames (otimização de churn de GC: antes
@@ -63,6 +64,18 @@ func NewDXGIGoD3dCapturerMode(monitorIndex int, drawCursor bool) (Capturer, erro
 	if err != nil {
 		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("go-d3d D3D11CreateDevice: %w", err)
+	}
+
+	// ── Ordem de canais: sonda determinística (ANTES de abrir a duplicação) ──
+	// O go-d3d esconde em qual caminho caiu (DuplicateOutput1 x fallback
+	// DuplicateOutput) — o campo needsSwizzle é privado. A sonda reproduz a
+	// mesma decisão (mesmo device, mesmo output, mesmo formato) e diz se os
+	// bytes virão RGBA (swap) ou BGRA (nativo). Só depois a duplicação real é
+	// aberta: o DXGI não permite duas duplicações do mesmo output no mesmo
+	// processo, então a sonda precisa terminar (e liberar) antes.
+	seed, probeErr := detectForcedDuplicateFormat(device, monitorIndex)
+	if probeErr != nil {
+		debugf("sonda de formato DXGI inconclusiva (%v) — a calibração por GDI decide a ordem dos canais", probeErr)
 	}
 
 	dup, err := outputduplication.NewIDXGIOutputDuplication(device, deviceCtx, uint(monitorIndex))
@@ -123,7 +136,10 @@ func NewDXGIGoD3dCapturerMode(monitorIndex int, drawCursor bool) (Capturer, erro
 		height:       height,
 		monitorIndex: monitorIndex,
 		drawCursor:   drawCursor,
-		calib:        newChannelCalibrator(ChannelOrderRGBA),
+		// Cache por processo + seed determinística: o primeiro frame já sai com
+		// a cor certa (antes: palpite RGBA até a calibração concluir).
+		calib: newChannelCalibratorWithKey(
+			channelOrderCacheKey("dxgi-go-d3d", monitorIndex, width, height), seed),
 	}, nil
 }
 
@@ -295,4 +311,16 @@ func (c *dxgiGoD3dCapturer) Close() error {
 
 func (c *dxgiGoD3dCapturer) Name() string {
 	return "dxgi-go-d3d"
+}
+
+// ChannelOrderPending informa se a ordem dos canais (R↔B) ainda não foi
+// decidida. O loop de captura usa isso para segurar a PUBLICAÇÃO até o gate
+// (ver session_screen.go) — publicar antes entrega cores invertidas.
+func (c *dxgiGoD3dCapturer) ChannelOrderPending() bool {
+	return !c.calib.Resolved()
+}
+
+// ChannelOrderName devolve a ordem efetiva atual, para log de diagnóstico.
+func (c *dxgiGoD3dCapturer) ChannelOrderName() string {
+	return c.calib.Order().String() + " (" + c.calib.SeedFrom() + ")"
 }

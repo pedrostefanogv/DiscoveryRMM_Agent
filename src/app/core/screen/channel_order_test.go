@@ -98,7 +98,8 @@ func TestProbeChannelOrderUnrelatedContentIsUnknown(t *testing.T) {
 
 func TestChannelCalibratorAppliesResolvedOrder(t *testing.T) {
 	// Já calibrado como RGBA: apply deve converter para BGRA.
-	cc := channelCalibrator{order: ChannelOrderRGBA, resolved: true}
+	// verified=true: sem isso o apply tentaria calibrar (captura GDI) antes.
+	cc := channelCalibrator{order: ChannelOrderRGBA, resolved: true, verified: true}
 	f := frameFromPixels([][3]byte{{10, 20, 30}, {200, 100, 50}}, 2)
 	original := make([]byte, len(f.Data))
 	copy(original, f.Data)

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"discovery/app/appstore"
+	"discovery/app/core/automation"
 	"discovery/app/core/database"
 	"discovery/app/debug"
 )
@@ -115,5 +116,71 @@ func TestFindAllowedPackageFailsWhenConfigIncomplete(t *testing.T) {
 	_, err := app.findAllowedPackage(context.Background(), "Winget", "Google.Chrome")
 	if err == nil {
 		t.Fatalf("esperava erro quando config está incompleta")
+	}
+}
+
+// newTestAutomationService cria um automation.Service com o estado em memória
+// já populado (uso do override de policy em authorizeAutomationPackage).
+func newTestAutomationService(tasks ...automation.AutomationTask) *automation.Service {
+	svc := automation.NewService(func() automation.RuntimeConfig {
+		return automation.RuntimeConfig{AgentID: "agent-test"}
+	}, nil)
+	svc.SetStateForTesting(automation.State{Available: true, Tasks: tasks})
+	return svc
+}
+
+// Regra de produto: a policy de automação SOBREPÕE a App Store — task ativa
+// (install) com pacote fora da política da Loja é autorizado pelo override.
+func TestAuthorizeAutomationPackageOverrideByAutomationPolicy(t *testing.T) {
+	app := newTestAppStoreApp()
+	app.AutomationSvc = newTestAutomationService(automation.AutomationTask{
+		TaskID:           "01a18960",
+		Name:             "Bleach",
+		ActionType:       automation.ActionInstallPackage,
+		InstallationType: automation.InstallationWinget,
+		PackageID:        "bleachbit.bleachbit",
+		LastUpdatedAt:    "2026-10-29T00:00:00Z",
+	})
+	if err := app.authorizeAutomationPackage(context.Background(), "Winget", "bleachbit.bleachbit", "install"); err != nil {
+		t.Fatalf("override da policy de automação deveria autorizar o pacote: %v", err)
+	}
+}
+
+// UpdateOrInstallPackage cobre as operações install e upgrade.
+func TestAuthorizeAutomationPackageOverrideCoversUpgrade(t *testing.T) {
+	app := newTestAppStoreApp()
+	app.AutomationSvc = newTestAutomationService(automation.AutomationTask{
+		TaskID:           "01a17a4f",
+		Name:             "Thunder",
+		ActionType:       automation.ActionUpdateOrInstallPackage,
+		InstallationType: automation.InstallationWinget,
+		PackageID:        "mozilla.thunderbird.br",
+		LastUpdatedAt:    "2026-10-29T00:00:00Z",
+	})
+	for _, op := range []string{"install", "upgrade"} {
+		if err := app.authorizeAutomationPackage(context.Background(), "Winget", "mozilla.thunderbird.br", op); err != nil {
+			t.Fatalf("operação %q deveria ser autorizada pela policy: %v", op, err)
+		}
+	}
+}
+
+// Pacote FORA da policy de automação continua bloqueado pelo gate da Loja
+// (exit 13 no executor).
+func TestAuthorizeAutomationPackageOutsidePolicyStillBlocked(t *testing.T) {
+	app := newTestAppStoreApp()
+	app.AutomationSvc = newTestAutomationService(automation.AutomationTask{
+		TaskID:           "task-1",
+		Name:             "Chrome",
+		ActionType:       automation.ActionInstallPackage,
+		InstallationType: automation.InstallationWinget,
+		PackageID:        "google.chrome",
+		LastUpdatedAt:    "2026-10-29T00:00:00Z",
+	})
+	app.AppStorePolicy.Set(AppStoreEffectivePolicy{
+		Items: []AppStoreItem{{InstallationType: "Winget", PackageID: "Google.Chrome"}},
+	})
+	err := app.authorizeAutomationPackage(context.Background(), "Winget", "bleachbit.bleachbit", "install")
+	if err == nil || !strings.Contains(err.Error(), "não autorizado") {
+		t.Fatalf("pacote fora da policy deve continuar bloqueado, recebeu: %v", err)
 	}
 }

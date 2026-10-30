@@ -163,10 +163,17 @@ type dxgiCapturer struct {
 	originX, originY int // origem do output no desktop virtual (DesktopCoordinates)
 	monitorIndex     int
 
-	// calib resolve a ordem dos canais (RGBA vs BGRA) contra uma captura GDI
-	// — ver channel_order.go. Aqui o padrão é BGRA: a staging é criada em
-	// B8G8R8A8 e o DuplicateOutput1 normalmente respeita o formato forçado.
+	// calib resolve a ordem dos canais (RGBA vs BGRA) — ver channel_order.go.
+	// A seed é determinística: esta captura CRIA a staging em B8G8R8A8 e força
+	// esse formato no DuplicateOutput1, então quando ele aceita (forcedFormat)
+	// os bytes são BGRA por construção. No fallback o formato é o nativo do
+	// desktop (indefinido) e a calibração por GDI decide.
 	calib channelCalibrator
+
+	// forcedFormat: true quando IDXGIOutput5::DuplicateOutput1 aceitou o formato
+	// forçado (stagingFormat). Antes essa informação era descartada e o
+	// capturer caía no palpite; hoje ela vira seed da ordem de canais.
+	forcedFormat bool
 
 	// HDR / Advanced Color: quando o monitor é HDR, captura em scRGB
 	// (R16G16B16A16_FLOAT, 8 bytes/px) e o pipeline aplica tone mapping.
@@ -190,7 +197,7 @@ type dxgiCapturer struct {
 
 func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 	runtime.LockOSThread()
-	c := &dxgiCapturer{monitorIndex: monitorIndex, calib: newChannelCalibrator(ChannelOrderBGRA)}
+	c := &dxgiCapturer{monitorIndex: monitorIndex}
 
 	// 1. CreateDXGIFactory1
 	hr, _, _ := procCreateDXGIFactory1.Call(
@@ -329,10 +336,15 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 		uintptr(unsafe.Pointer(&supportedFormats[0])),
 		uintptr(unsafe.Pointer(&c.duplication)),
 	)
-	if hr != 0 || c.duplication == nil {
+	if hr == 0 && c.duplication != nil {
+		// DuplicateOutput1 aceitou o formato forçado: a duplicação entrega
+		// exatamente stagingFormat (BGRA em SDR).
+		c.forcedFormat = true
+	} else {
 		// Fallback: DuplicateOutput (formato nativo) — se o desktop for
 		// R8G8B8A8, as cores podem ficar invertidas, mas é melhor que falhar.
 		hr, _, _ = comCall(c.output1, slotOutput1DuplicateOutput, uintptr(c.d3dDevice), uintptr(unsafe.Pointer(&c.duplication)))
+		c.forcedFormat = false
 		// Se caiu no fallback, o formato pode não ser o esperado — desativa HDR
 		// para não interpretar bytes errados.
 		if c.hdr {
@@ -353,7 +365,37 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 		return nil, fmt.Errorf("DuplicateOutput1: HRESULT 0x%X", uint64(hr))
 	}
 
+	// 9. Ordem de canais determinística + cache do processo.
+	// A staging foi criada em stagingFormat e o DuplicateOutput1 o aceitou
+	// (forcedFormat) ⇒ os bytes são exatamente stagingFormat ⇒ BGRA (SDR).
+	// No fallback o formato é o NATIVO do desktop (indefinido) ⇒ seed
+	// desconhecida e a calibração por GDI decide. Antes desta mudança o padrão
+	// era cego (BGRA/RGBA) e a cor errada ia para a tela até a calibração
+	// concluir (incidente de 2026-10-29).
+	seed := ChannelOrderUnknown
+	if c.forcedFormat && !c.hdr {
+		seed = ChannelOrderBGRA
+	}
+	c.calib = newChannelCalibratorWithKey(
+		channelOrderCacheKey("dxgi-manual", monitorIndex, c.width, c.height), seed)
+
 	return c, nil
+}
+
+// ChannelOrderPending informa se a ordem dos canais (R↔B) ainda não foi
+// decidida — o loop de captura segura a publicação até o gate.
+func (c *dxgiCapturer) ChannelOrderPending() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.calib.Resolved()
+}
+
+// ChannelOrderName devolve a ordem efetiva atual, para log de diagnóstico.
+// c.mu: a ordem é escrita por apply() dentro de AcquireNextFrame.
+func (c *dxgiCapturer) ChannelOrderName() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calib.Order().String() + " (" + c.calib.SeedFrom() + ")"
 }
 
 func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
