@@ -957,9 +957,16 @@ func (r *Runtime) runSession(ctx context.Context, cfg Config) error {
 	addNATSAttempt(cfg.NatsServer, "nats")
 
 	if apiHost != "" {
-		fallbackNats := "nats://" + net.JoinHostPort(apiHost, "4222")
-		addNATSAttempt(fallbackNats, "nats (api-fallback)")
-		r.logf("[transport][nats] fallback via apiServer: %s", fallbackNats)
+		// Host atrás do Cloudflare: o NATS nativo bruto (nats://host:4222) nunca
+		// conecta (o Cloudflare só encaminha HTTP/HTTPS) — o dial custa um i/o
+		// timeout inteiro em toda sessão/reconexão. Pula e deixa o WSS cuidar.
+		if isLikelyCloudflareHost(apiHost) {
+			r.logf("[transport][nats] fallback nativo pulado (apiServer=%s atrás do Cloudflare — porta 4222 não é encaminhada)", apiHost)
+		} else {
+			fallbackNats := "nats://" + net.JoinHostPort(apiHost, "4222")
+			addNATSAttempt(fallbackNats, "nats (api-fallback)")
+			r.logf("[transport][nats] fallback via apiServer: %s", fallbackNats)
+		}
 	}
 
 	if len(attempts) == 0 {
