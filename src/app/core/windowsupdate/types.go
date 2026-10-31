@@ -104,7 +104,16 @@ type Update struct {
 	IsHidden       bool `json:"isHidden"`
 	RequiresReboot bool `json:"requiresReboot"`
 
+	// MaxDownloadSize e IUpdate.MaxDownloadSize (bytes) como o WUA reporta.
+	// ATENÇÃO: o WUA reporta o tamanho MÁXIMO do pacote completo (todas as
+	// variações/idiomas), que pode ser ~10x o download real que a tela do
+	// Windows mostra (ex.: Insider Preview: WUA=97.7 GB vs Windows=9,1 GB).
+	// A UI exibe "a partir de min"/"≈ max" quando plausível e omite acima do
+	// limiar — nao tratar divergencia como bug de unidade.
 	MaxDownloadSize int64  `json:"maxDownloadSize,omitempty"`
+	// MinDownloadSize (IUpdate.MinDownloadSize, bytes): menor download possível
+	// (express/ Delta). A UI usa "a partir de X" quando > 0.
+	MinDownloadSize int64  `json:"minDownloadSize,omitempty"`
 	SupportURL      string `json:"supportUrl,omitempty"`
 
 	PublishedAt    *time.Time `json:"publishedAt,omitempty"`

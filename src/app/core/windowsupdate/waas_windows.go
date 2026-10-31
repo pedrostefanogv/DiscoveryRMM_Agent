@@ -3,9 +3,15 @@
 package windowsupdate
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/sys/windows/registry"
 )
@@ -61,6 +67,92 @@ func parseWaaSFeatureAssessment(raw string) (waasFeatureAssessment, bool) {
 		return assessment, false
 	}
 	return assessment, true
+}
+
+// ── Fallback: avaliação WaaS ausente ────────────────────────────────────────
+//
+// O valor WaaSFeatureAssessment só é escrito pelo orquestrador USO após um
+// scan interativo. Máquinas onde o UsoSvc nunca rodou (ou está parado há
+// muito) não têm o valor — e a UI do Windows Update mostra o upgrade de
+// versão por OUTRO caminho, então o RMM exibia "em dia" sem o upgrade (caso
+// reproduzido: Win11 25H2 build 26200.9711 com "Windows 11, versão 26H2
+// disponível" na tela e WaaSFeatureAssessment AUSENTE).
+//
+// Estratégia (best-effort, dentro do timeout do scan):
+//   1. UsoClient StartInteractiveScan — instrui o USO a avaliar/escanear;
+//   2. Poll do registro esperando o valor aparecer (até waasAssessmentWait).
+
+const (
+	waasAssessmentWait      = 60 * time.Second // teto do poll (scan custa tempo)
+	waasAssessmentPollEvery = 3 * time.Second
+	// Teto do proprio UsoClient: ele pode travar esperando a rede/UI. Sem isto
+	// o scan inteiro ficaria preso e o withOp devolveria timeout sem resultado.
+	waasTriggerTimeout = 30 * time.Second
+	// Cooldown entre tentativas FRACASSADAS: em maquinas onde o USO nunca
+	// grava a avaliacao (servico desabilitado por politica, SKU sem feature
+	// update), nao faz sentido gastar 60s de poll em TODO scan (a cada 6h).
+	waasTriggerRetryCooldown = 6 * time.Hour
+)
+
+var (
+	waasTriggerMu        sync.Mutex
+	waasTriggerLastTried time.Time
+)
+
+// usoClientPath devolve o caminho do UsoClient.exe (%SystemRoot%\System32).
+func usoClientPath() string {
+	sysRoot := os.Getenv("SystemRoot")
+	if strings.TrimSpace(sysRoot) == "" {
+		sysRoot = "C:\\Windows"
+	}
+	return filepath.Join(sysRoot, "System32", "usoClient.exe")
+}
+
+// triggerWaaSScan dispara o scan interativo do USO e espera a avaliação de
+// feature update ser gravada. Nunca falha o scan do agente: erro => ok=false.
+func triggerWaaSScan(ctx context.Context) (waasFeatureAssessment, bool) {
+	// Cooldown: tentativa recente que falhou nao se repete a cada scan.
+	waasTriggerMu.Lock()
+	if !waasTriggerLastTried.IsZero() && time.Since(waasTriggerLastTried) < waasTriggerRetryCooldown {
+		waasTriggerMu.Unlock()
+		return waasFeatureAssessment{}, false
+	}
+	waasTriggerLastTried = time.Now()
+	waasTriggerMu.Unlock()
+
+	deadline := time.Now().Add(waasAssessmentWait)
+	ctxDeadline := time.Time{}
+	if ctx != nil {
+		ctxDeadline, _ = ctx.Deadline()
+	}
+	if !ctxDeadline.IsZero() && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+
+	// Best-effort: UsoClient pode falhar (servico desabilitado, política) ou
+	// travar — o timeout curto evita prender o scan; segue com o poll mesmo
+	// assim (a avaliação pode chegar por outro ciclo).
+	triggerCtx, cancel := context.WithTimeout(context.Background(), waasTriggerTimeout)
+	_ = exec.CommandContext(triggerCtx, usoClientPath(), "StartInteractiveScan").Run()
+	cancel()
+
+	for {
+		if assessment, ok := readWaaSFeatureAssessment(); ok {
+			// Sucesso: zera o cooldown para que uma futura perda do valor
+			// (reset do USO) volte a disparar o scan imediatamente.
+			waasTriggerMu.Lock()
+			waasTriggerLastTried = time.Time{}
+			waasTriggerMu.Unlock()
+			return assessment, true
+		}
+		if time.Now().After(deadline) {
+			return waasFeatureAssessment{}, false
+		}
+		if ctx != nil && ctx.Err() != nil {
+			return waasFeatureAssessment{}, false
+		}
+		time.Sleep(waasAssessmentPollEvery)
+	}
 }
 
 // readWaaSFeatureAssessment le a avaliacao do registro. Best-effort: ausencia

@@ -172,7 +172,7 @@ func (c *wuaClient) Scan(ctx context.Context, opts ScanOptions) (*ScanResult, er
 	// (a baseline era recalculada ja fresca, e nenhum ciclo detectava a mudanca).
 	InvalidateInstalledKBsCache()
 	result, err := withOp(c, ctx, c.opts.ScanTimeout, func() (*ScanResult, error) {
-		return scanWUA(opts)
+		return scanWUA(ctx, opts)
 	})
 	if err != nil && result == nil {
 		partial := unavailableScanResult()
@@ -543,6 +543,13 @@ func readUpdate(update *ole.IDispatch) (Update, bool) {
 		maxDownloadSize = variantInt64(raw)
 		raw.Clear()
 	}
+	// MinDownloadSize (bytes): menor download possível (delta/express). Opcional
+	// — ausente em WUAs antigos não invalida o update (0 = omitido no JSON).
+	var minDownloadSize int64
+	if raw, err := oleutil.GetProperty(update, "MinDownloadSize"); err == nil {
+		minDownloadSize = variantInt64(raw)
+		raw.Clear()
+	}
 	if raw, err := oleutil.GetProperty(update, "LastDeploymentChangeTime"); err == nil {
 		lastDeployed = variantTime(raw)
 		raw.Clear()
@@ -608,6 +615,9 @@ func readUpdate(update *ole.IDispatch) (Update, bool) {
 	u.RequiresReboot = rebootRequired
 	if maxDownloadSize > 0 {
 		u.MaxDownloadSize = maxDownloadSize
+	}
+	if minDownloadSize > 0 {
+		u.MinDownloadSize = minDownloadSize
 	}
 	u.PublishedAt = lastDeployed
 	u.LastDeployedAt = lastDeployed
@@ -767,7 +777,7 @@ func tuneSearcherForScan(searcher *ole.IDispatch) {
 	_, _ = oleutil.PutProperty(searcher, "SearchScope", int32(4))
 }
 
-func scanWUA(opts ScanOptions) (*ScanResult, error) {
+func scanWUA(ctx context.Context, opts ScanOptions) (*ScanResult, error) {
 	started := time.Now().UTC()
 	session, err := openSession()
 	if err != nil {
@@ -788,7 +798,13 @@ func scanWUA(opts ScanOptions) (*ScanResult, error) {
 	}
 	// O WUA nao lista feature update/upgrade de versao no Windows 11. Usa a
 	// avaliacao WaaS (registro do USO) para incluir o upgrade no inventario.
+	// Maquinas onde o USO nunca rodou nao tem WaaSFeatureAssessment: dispara
+	// UsoClient StartInteractiveScan e espera a avaliacao (fallback best-effort,
+	// limitado pelo timeout do scan). Sem isso o RMM exibia "em dia" enquanto a
+	// UI do Windows Update mostrava o upgrade de versao (26H2 disponivel).
 	if assessment, ok := readWaaSFeatureAssessment(); ok {
+		pending = appendWaaSFeatureUpdate(pending, assessment, currentDisplayVersion())
+	} else if assessment, ok := triggerWaaSScan(ctx); ok {
 		pending = appendWaaSFeatureUpdate(pending, assessment, currentDisplayVersion())
 	}
 
