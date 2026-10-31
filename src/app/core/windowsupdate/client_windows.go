@@ -422,6 +422,24 @@ func (c *ScanCounters) addSkipped(reason string) {
 	c.SkippedN++
 }
 
+// collectionItem le o item i de uma colecao WUA. O Item de IUpdateCollection
+// e exposto como propget em algumas versoes do WUA: invocacao por DISPATCH_METHOD
+// (CallMethod) falha com DISP_E_MEMBERNOTFOUND ("Membro nao encontrado") e o
+// pendente REAL era descartado como unreadable — o update nunca chegava ao
+// inventario (reproduzido localmente com "Windows 11 Insider Preview Quality
+// Update"). Tentativa 1: metodo; fallback: propget (funciona nas duas formas).
+func collectionItem(coll *ole.IDispatch, i int) (*ole.VARIANT, error) {
+	itemRaw, err := oleutil.CallMethod(coll, "Item", i)
+	if err == nil {
+		return itemRaw, nil
+	}
+	itemRaw, propErr := oleutil.GetProperty(coll, "Item", i)
+	if propErr == nil {
+		return itemRaw, nil
+	}
+	return nil, err // erro original (diagnostico)
+}
+
 func readUpdates(collection *ole.IDispatch, includeDrivers bool) ([]Update, ScanCounters, error) {
 	counters := ScanCounters{}
 	countRaw, err := oleutil.GetProperty(collection, "Count")
@@ -435,13 +453,7 @@ func readUpdates(collection *ole.IDispatch, includeDrivers bool) ([]Update, Scan
 	}
 	out := make([]Update, 0, count)
 	for i := 0; i < count; i++ {
-		itemRaw, err := oleutil.CallMethod(collection, "Item", i)
-		if err != nil {
-			// Retry único: leituras COM de coleção WUA falham de forma
-			// intermitente (p.ex. no contexto do serviço); a segunda tentativa
-			// normalmente recupera o item.
-			itemRaw, err = oleutil.CallMethod(collection, "Item", i)
-		}
+		itemRaw, err := collectionItem(collection, i)
 		if err != nil {
 			counters.Read++
 			counters.UnreadableErr = err.Error()
@@ -658,7 +670,7 @@ func readStringCollection(coll *ole.IDispatch) []string {
 	countRaw.Clear()
 	out := make([]string, 0, count)
 	for i := 0; i < count; i++ {
-		itemRaw, err := oleutil.CallMethod(coll, "Item", i)
+		itemRaw, err := collectionItem(coll, i)
 		if err != nil {
 			continue
 		}
@@ -681,7 +693,7 @@ func readCategories(coll *ole.IDispatch) (names []string, ids []string) {
 	names = make([]string, 0, count)
 	ids = make([]string, 0, count)
 	for i := 0; i < count; i++ {
-		itemRaw, err := oleutil.CallMethod(coll, "Item", i)
+		itemRaw, err := collectionItem(coll, i)
 		if err != nil {
 			continue
 		}
@@ -718,7 +730,7 @@ func readCategoryNames(coll *ole.IDispatch) []string {
 	countRaw.Clear()
 	out := make([]string, 0, count)
 	for i := 0; i < count; i++ {
-		itemRaw, err := oleutil.CallMethod(coll, "Item", i)
+		itemRaw, err := collectionItem(coll, i)
 		if err != nil {
 			continue
 		}
@@ -1073,7 +1085,7 @@ func collectUpdatesByKey(collection *ole.IDispatch) (map[string]updateEntry, int
 	// caso contrario o update pode ser justamente um dos ilegiveis.
 	unreadable := 0
 	for i := 0; i < count; i++ {
-		itemRaw, err := oleutil.CallMethod(collection, "Item", i)
+		itemRaw, err := collectionItem(collection, i)
 		if err != nil {
 			unreadable++
 			continue
