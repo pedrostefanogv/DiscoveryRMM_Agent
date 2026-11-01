@@ -301,6 +301,10 @@ const notificationUXState = {
   rebootDeadlineAt: 0,
   activeProgressGroup: '',
   progressByGroup: {},
+  // Grupos de progresso dispensados manualmente (botão fechar do cartão).
+  // Enquanto o grupo estiver aqui, o cartão NÃO é reexibido — evita o cartão
+  // "fantasma" que voltava a cada evento install_* após o usuário fechar.
+  dismissedProgressGroups: {},
 };
 
 // Intervalo do polling de reavaliação do estado de provisionamento. A
@@ -783,6 +787,7 @@ function ensureNotificationUX() {
       '<div class="ntf-progress-head">' +
         '<strong id="ntfProgressTitle">Progresso da instalação</strong>' +
         '<span id="ntfProgressMeta" class="meta"></span>' +
+        '<button type="button" class="btn btn-xs" id="ntfProgressClose" title="Dispensar" aria-label="Dispensar progresso da instalação">Fechar</button>' +
       '</div>' +
       '<div class="ntf-progress-bar-wrap"><div id="ntfProgressBar" class="ntf-progress-bar"></div></div>' +
       '<div id="ntfProgressDetail" class="ntf-progress-detail"></div>' +
@@ -825,6 +830,7 @@ function ensureNotificationUX() {
     hub: hub,
     bannerStack: document.getElementById('ntfBannerStack'),
     progressCard: document.getElementById('ntfProgressCard'),
+    progressClose: document.getElementById('ntfProgressClose'),
     progressTitle: document.getElementById('ntfProgressTitle'),
     progressMeta: document.getElementById('ntfProgressMeta'),
     progressBar: document.getElementById('ntfProgressBar'),
@@ -846,6 +852,12 @@ function ensureNotificationUX() {
 
   refs.modalOverlay.addEventListener('click', function (e) {
     if (e.target === refs.modalOverlay) closeNotificationModal();
+  });
+
+  refs.progressClose.addEventListener('click', function () {
+    var groupId = notificationUXState.activeProgressGroup;
+    if (groupId) notificationUXState.dismissedProgressGroups[groupId] = true;
+    refs.progressCard.classList.add('hidden');
   });
 
   refs.rebootLaterBtn.addEventListener('click', function () {
@@ -1050,6 +1062,9 @@ function applyProgressFromNotification(notification) {
 
   var group = notificationUXState.progressByGroup[groupId];
   if (!group) {
+    // Novo ciclo de instalação (novo correlationId): limpar dispensa anterior
+    // para o painel reaparecer, e limpar grupos antigos para não vazar memória.
+    delete notificationUXState.dismissedProgressGroups[groupId];
     group = {
       totalTasks: Number(metadata.totalTasks || 0),
       tasks: {},
@@ -1113,6 +1128,13 @@ function renderInstallProgressPanel() {
   var group = notificationUXState.progressByGroup[groupId];
   var tasks = Object.keys(group.tasks).map(function (k) { return group.tasks[k]; });
   if (!tasks.length) {
+    refs.progressCard.classList.add('hidden');
+    return;
+  }
+
+  // Grupo dispensado pelo usuário: o cartão fica fechado até chegar um grupo
+  // NOVO de instalação (novo correlationId), que reabre o painel.
+  if (notificationUXState.dismissedProgressGroups[groupId]) {
     refs.progressCard.classList.add('hidden');
     return;
   }
@@ -1182,7 +1204,11 @@ function handleNotificationEvent(payload) {
   // iniciada: …") e, sem eventType conhecido, exibia o genérico
   // "Notificação de instalação - Notificação".
   var toastHeading = String(notification.title || '').trim() || microcopy.eventLabel;
-  if (!nativeSurface) {
+  // Instalação pela loja: o cartão de progresso no topo já mostra início e
+  // conclusão em tempo real. Toast de install_start era o 2º/3º aviso
+  // redundante da mesma ação — só falha e conclusão ganham toast.
+  var suppressToast = !nativeSurface && (eventType === 'install_start');
+  if (!suppressToast) {
     showToast(toastHeading + (message ? ': ' + message : ''), toastType);
   }
 

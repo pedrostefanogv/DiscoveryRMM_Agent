@@ -456,14 +456,20 @@ async function runAction(action, id, displayID) {
   if (!VALID_ACTIONS.has(action)) return;
   try {
     var itemLabel = displayID || id;
-    showFeedback(action + ' ' + itemLabel + '...');
+    // Instalação pela loja: o painel de "Progresso da instalacao" (cartão no
+    // topo, alimentado pelas notificações install_start/install_end) já cobre
+    // o ciclo completo. Repetir aqui gerava 3+ avisos para a MESMA ação
+    // ("install X...", toast de início, toast de conclusão). Os demais
+    // (uninstall/upgrade) não têm painel e mantêm o feedback em toast.
+    var silentAction = action === 'install';
+    if (!silentAction) showFeedback(action + ' ' + itemLabel + '...');
     var output = '';
 
     if (action === 'install') output = await appApi().Install(id);
     else if (action === 'uninstall') output = await appApi().Uninstall(id);
     else if (action === 'upgrade') output = await appApi().Upgrade(id);
 
-    showFeedback(action + ' concluido para ' + itemLabel);
+    if (!silentAction) showFeedback(action + ' concluido para ' + itemLabel);
     if (installedOutputEl) {
       installedOutputEl.textContent = output || translate('common.noOutput');
     }

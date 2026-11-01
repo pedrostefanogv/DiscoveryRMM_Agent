@@ -24,10 +24,11 @@ import (
 	"discovery/app/appstore"
 	"discovery/app/core/inventory"
 	"discovery/app/core/models"
-	"discovery/app/core/thirdparty"
 	"discovery/app/core/processutil"
+	"discovery/app/core/thirdparty"
 	"discovery/app/core/tlsutil"
 	"discovery/app/core/windowsupdate"
+	"discovery/app/core/winget"
 	"discovery/app/debug"
 	"discovery/app/netutil"
 	"discovery/app/services/hardwareid"
@@ -391,7 +392,21 @@ func (s *Service) Install(id string) (string, error) {
 		if trimmed := strings.TrimSpace(out); trimmed != "" {
 			details["output"] = truncateNotificationOutput(trimmed)
 		}
-		s.emitInstallNotification(correlationID, packageID, "install_failed", "instalacao", "failed", "Falha na instalação", "Não foi possível concluir a instalação do aplicativo.", details)
+		// Mensagem amigável para códigos conhecidos do winget (ex.:
+		// 0x8a150011 hash mismatch por catálogo defasado). O texto cru
+		// "exit status 0x..." fica preservado em details["error"].
+		title, message := "Falha na instalação", "Não foi possível concluir a instalação do aplicativo."
+		searchText := err.Error()
+		if trimmed, ok := details["output"].(string); ok {
+			searchText += "\n" + trimmed
+		}
+		if code, friendly, known := winget.FriendlyFailure(searchText); known {
+			message = friendly
+			if code != "" {
+				details["wingetCode"] = code
+			}
+		}
+		s.emitInstallNotification(correlationID, packageID, "install_failed", "instalacao", "failed", title, message, details)
 		return out, err
 	}
 
