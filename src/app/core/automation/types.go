@@ -146,6 +146,13 @@ type AutomationTask struct {
 	CollectorFieldDefinitionID string `json:"CollectorFieldDefinitionId,omitempty"`
 	// WriteOutputToNote: grava a saida da execucao como uma nota no agent.
 	WriteOutputToNote bool `json:"WriteOutputToNote,omitempty"`
+	// TaskRespectMaintenanceWindow: opt-in por task — quando true, o executor
+	// SÓ executa a acao de pacote DENTRO da janela de manutencao efetiva do
+	// agent (cfg.MaintenanceWindow.Effective(), fuso IANA). Fora da janela a
+	// execucao vira NoOp "deferred_to_window" (sucesso, nao conta como falha
+	// e nao ativa o circuit breaker). Ausente/false = comportamento atual,
+	// garantindo que tasks antigas (policy sem o campo) nao mudem.
+	TaskRespectMaintenanceWindow bool `json:"TaskRespectMaintenanceWindow,omitempty"`
 	// ExecutionOrder: ordem de execucao da task na policy (0–99). O agent roda
 	// da menor para a maior; empate desempata pela LastUpdatedAt mais antiga.
 	ExecutionOrder int `json:"ExecutionOrder,omitempty"`

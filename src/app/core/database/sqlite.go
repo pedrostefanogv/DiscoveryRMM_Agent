@@ -520,6 +520,24 @@ func (db *DB) initializeCurrent() error {
 			checked_at INTEGER NOT NULL,
 			uploaded_at INTEGER
 		);
+
+		-- Ledger LOCAL das execuções de auto-update da Loja (F3): histórico
+		-- consultável no agent (data, pacote, versão alvo, resultado). Aditivo:
+		-- não exige bump de schema (mesmo padrão do windows_update_cache).
+		CREATE TABLE IF NOT EXISTS app_auto_update_executions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id TEXT NOT NULL,
+			installation_type TEXT NOT NULL,
+			package_id TEXT NOT NULL,
+			source TEXT,
+			target TEXT,
+			target_version TEXT,
+			result TEXT NOT NULL,
+			error_message TEXT,
+			executed_at INTEGER NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_auto_update_exec_agent_time ON app_auto_update_executions(agent_id, executed_at DESC);
 	`
 
 	_, err := db.conn.Exec(schema)

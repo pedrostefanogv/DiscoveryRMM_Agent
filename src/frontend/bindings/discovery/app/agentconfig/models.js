@@ -965,11 +965,30 @@ export class MaintenanceWindowConfig {
         }
         if (!("startUtc" in $$source)) {
             /**
-             * StartUTC é o início da janela em UTC ("HH:mm").
+             * StartUTC é o início da janela em UTC ("HH:mm"). Mantido como espelho
+             * calculado pela UI e como caminho LEGADO (usado quando TimeZone/StartTime
+             * ausentes ou inválidos).
              * @member
              * @type {string}
              */
             this["startUtc"] = "";
+        }
+        if (!("startTime" in $$source)) {
+            /**
+             * StartTime é o início da janela em hora LOCAL da TimeZone ("HH:mm").
+             * @member
+             * @type {string}
+             */
+            this["startTime"] = "";
+        }
+        if (!("timeZone" in $$source)) {
+            /**
+             * TimeZone é o ID IANA da zona em que a janela é avaliada
+             * (ex.: "America/Sao_Paulo"). nil/vazio = UTC (comportamento legado).
+             * @member
+             * @type {string | null}
+             */
+            this["timeZone"] = null;
         }
         if (!("durationMinutes" in $$source)) {
             /**

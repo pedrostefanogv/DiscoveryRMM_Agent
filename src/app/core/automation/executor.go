@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/core/maintenance"
 	"discovery/app/core/processutil"
 	"discovery/app/core/winget"
 )
@@ -29,19 +30,24 @@ const (
 
 type PackageAuthorizationFunc func(ctx context.Context, installationType AppInstallationType, packageID, operation string) error
 
-func executeTask(ctx context.Context, packages PackageManager, authorize PackageAuthorizationFunc, task AutomationTask, psadtPolicy PSADTPolicy, customFields map[string]any) ExecutionResult {
+// MaintenanceWindowSource devolve a janela de manutencao efetiva do agent
+// (cfg.MaintenanceWindow.Effective()). Nil = sem gate (tasks antigas e testes
+// nao mudam de comportamento).
+type MaintenanceWindowSource func() maintenance.Window
+
+func executeTask(ctx context.Context, packages PackageManager, authorize PackageAuthorizationFunc, task AutomationTask, psadtPolicy PSADTPolicy, customFields map[string]any, maintenanceWindow MaintenanceWindowSource) ExecutionResult {
 	// RequiresApproval significa "notificar o usuario antes de executar" (prompt
 	// Welcome do PSADT), NAO bloqueio. A confirmacao/adiamento e tratada em
 	// executeTaskAsync via dispatchExecutionNotification; aqui a tarefa executa.
 	switch task.ActionType {
 	case ActionInstallPackage:
-		return executePackageAction(ctx, packages, authorize, task, "install", psadtPolicy)
+		return executePackageAction(ctx, packages, authorize, task, "install", psadtPolicy, maintenanceWindow)
 	case ActionUpdatePackage:
-		return executePackageAction(ctx, packages, authorize, task, "upgrade", psadtPolicy)
+		return executePackageAction(ctx, packages, authorize, task, "upgrade", psadtPolicy, maintenanceWindow)
 	case ActionRemovePackage:
-		return executePackageAction(ctx, packages, authorize, task, "uninstall", psadtPolicy)
+		return executePackageAction(ctx, packages, authorize, task, "uninstall", psadtPolicy, maintenanceWindow)
 	case ActionUpdateOrInstallPackage:
-		upgradeResult := executePackageAction(ctx, packages, authorize, task, "upgrade", psadtPolicy)
+		upgradeResult := executePackageAction(ctx, packages, authorize, task, "upgrade", psadtPolicy, maintenanceWindow)
 		// Skip do upgrade com exit 0 pode significar duas coisas:
 		//   a) pacote ja atualizado  -> nada a fazer, sucesso real
 		//   b) pacote NAO instalado  -> precisa cair para o install
@@ -49,7 +55,7 @@ func executeTask(ctx context.Context, packages PackageManager, authorize Package
 		if upgradeResult.Success && !strings.Contains(upgradeResult.Output, "nao encontrado") {
 			return upgradeResult
 		}
-		installResult := executePackageAction(ctx, packages, authorize, task, "install", psadtPolicy)
+		installResult := executePackageAction(ctx, packages, authorize, task, "install", psadtPolicy, maintenanceWindow)
 		if installResult.Success {
 			return installResult
 		}
@@ -67,10 +73,36 @@ func executeTask(ctx context.Context, packages PackageManager, authorize Package
 	}
 }
 
-func executePackageAction(ctx context.Context, packages PackageManager, authorize PackageAuthorizationFunc, task AutomationTask, operation string, psadtPolicy PSADTPolicy) ExecutionResult {
+func executePackageAction(ctx context.Context, packages PackageManager, authorize PackageAuthorizationFunc, task AutomationTask, operation string, psadtPolicy PSADTPolicy, maintenanceWindow MaintenanceWindowSource) ExecutionResult {
 	packageID := strings.TrimSpace(task.PackageID)
 	if packageID == "" {
 		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "packageId obrigatorio para acao de pacote"}
+	}
+
+	// Janela de manutencao (opt-in por task): TaskRespectMaintenanceWindow=true
+	// e janela ATIVA e agora FORA dela → adia a operacao de pacote (install,
+	// upgrade E uninstall) sem falha: NoOp com exit 0 e metadata de skip
+	// "outside_window" (mesmo motivo usado pelo planner de auto-update). Nao
+	// conta como falha, portanto nao ativa o circuit breaker. Sem janela
+	// (Enabled=false) ou sem fonte de janela (nil) o gate nao se aplica.
+	if task.TaskRespectMaintenanceWindow && maintenanceWindow != nil {
+		if win := maintenanceWindow(); win.Enabled && !win.Contains(time.Now()) {
+			detail, _ := json.Marshal(map[string]any{
+				"maintenanceWindow": map[string]any{
+					"skip":   true,
+					"reason": "outside_window",
+				},
+			})
+			return ExecutionResult{
+				Success:      true,
+				ExitCode:     0,
+				ExitCodeSet:  true,
+				NoOp:         true,
+				NoOpReason:   "fora da janela de manutenção (deferred_to_window)",
+				Output:       "deferred_to_window (fora da janela de manutenção)",
+				MetadataJSON: string(detail),
+			}
+		}
 	}
 
 	installationType := task.InstallationType

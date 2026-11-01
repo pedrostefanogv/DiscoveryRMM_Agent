@@ -212,6 +212,13 @@ type Service struct {
 	wuEnabled func() bool
 	// thirdPartyProviders: gerenciadores de terceiros (choco/winget) — WU-19/20.
 	thirdPartyProviders []thirdparty.Provider
+
+	// ── Fila única de operações de pacote (F3) ──
+	// packageOpMu serializa Install/Uninstall/Upgrade/UpgradeFromSource/
+	// UninstallFromSource/UpgradeAll: automação (tasks de policy), a UI (IPC)
+	// e o auto-update da Loja nunca executam winget/choco em paralelo. Lock no
+	// início de cada função, unlock no fim (defer).
+	packageOpMu sync.Mutex
 }
 
 // NewService builds an inventory service.
@@ -334,6 +341,10 @@ func (s *Service) RefreshCatalog() (models.Catalog, error) {
 
 // Install installs the selected package.
 func (s *Service) Install(id string) (string, error) {
+	// Fila única de pacotes (F3): espera qualquer operação de pacote em curso
+	// (automação, UI ou auto-update) antes de executar winget/choco.
+	s.packageOpMu.Lock()
+	defer s.packageOpMu.Unlock()
 	done := s.beginActivity("instalação")
 	if done != nil {
 		defer done()
@@ -421,6 +432,10 @@ func (s *Service) Install(id string) (string, error) {
 
 // Uninstall removes a package.
 func (s *Service) Uninstall(id string) (string, error) {
+	// Fila única de pacotes (F3): espera qualquer operação de pacote em curso
+	// (automação, UI ou auto-update) antes de executar winget/choco.
+	s.packageOpMu.Lock()
+	defer s.packageOpMu.Unlock()
 	done := s.beginActivity("desinstalação")
 	if done != nil {
 		defer done()
@@ -478,6 +493,10 @@ func (s *Service) Uninstall(id string) (string, error) {
 
 // Upgrade upgrades a package.
 func (s *Service) Upgrade(id string) (string, error) {
+	// Fila única de pacotes (F3): espera qualquer operação de pacote em curso
+	// (automação, UI ou auto-update) antes de executar winget/choco.
+	s.packageOpMu.Lock()
+	defer s.packageOpMu.Unlock()
 	done := s.beginActivity("atualização")
 	if done != nil {
 		defer done()
@@ -525,6 +544,10 @@ func (s *Service) Upgrade(id string) (string, error) {
 // confirmação). Continua passando pelo router de gerenciadores, preservando a
 // otimização P2P e os switches silenciosos do catálogo.
 func (s *Service) UpgradeFromSource(installationType, packageID string) (string, error) {
+	// Fila única de pacotes (F3): espera qualquer operação de pacote em curso
+	// (automação, UI ou auto-update) antes de executar winget/choco.
+	s.packageOpMu.Lock()
+	defer s.packageOpMu.Unlock()
 	done := s.beginActivity("atualização")
 	if done != nil {
 		defer done()
@@ -570,6 +593,10 @@ func (s *Service) UpgradeFromSource(installationType, packageID string) (string,
 // da loja. Usado pelo comando remoto de desinstalação do dashboard (remoção não
 // é bloqueada pela política). Passa pelo router de gerenciadores (winget/choco).
 func (s *Service) UninstallFromSource(installationType, packageID string) (string, error) {
+	// Fila única de pacotes (F3): espera qualquer operação de pacote em curso
+	// (automação, UI ou auto-update) antes de executar winget/choco.
+	s.packageOpMu.Lock()
+	defer s.packageOpMu.Unlock()
 	done := s.beginActivity("desinstalação")
 	if done != nil {
 		defer done()
@@ -615,6 +642,10 @@ func (s *Service) UninstallFromSource(installationType, packageID string) (strin
 
 // UpgradeAll upgrades all packages.
 func (s *Service) UpgradeAll() (string, error) {
+	// Fila única de pacotes (F3): espera qualquer operação de pacote em curso
+	// (automação, UI ou auto-update) antes de executar winget/choco.
+	s.packageOpMu.Lock()
+	defer s.packageOpMu.Unlock()
 	done := s.beginActivity("atualização em lote")
 	if done != nil {
 		defer done()

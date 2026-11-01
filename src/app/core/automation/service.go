@@ -141,6 +141,11 @@ type Service struct {
 	// execução (menor primeiro; empate pela data de update mais antiga).
 	// RunNow/manual não entra na fila. Ver execution_order.go.
 	execQueue executionOrderQueue
+	// maintenanceWindowSource, quando configurado, devolve a janela de
+	// manutenção efetiva do agent (cfg.MaintenanceWindow.Effective()). Nil =
+	// sem gate: tasks antigas (TaskRespectMaintenanceWindow=false) e agentes
+	// sem config não mudam de comportamento.
+	maintenanceWindowSource MaintenanceWindowSource
 }
 
 // policyPreloadRetriggerInterval é o intervalo mínimo para reacionar a MESMA
@@ -238,6 +243,22 @@ func (s *Service) SetStateForTesting(state State) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state = state
+}
+
+// SetMaintenanceWindowSource injeta a fonte da janela de manutenção efetiva
+// (nil-safe: nil = sem gate — tasks antigas não mudam de comportamento).
+func (s *Service) SetMaintenanceWindowSource(source MaintenanceWindowSource) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maintenanceWindowSource = source
+}
+
+// maintenanceWindow devolve a janela efetiva configurada (Window{Enabled:false}
+// quando sem fonte — Contains sempre false, gate inerte).
+func (s *Service) maintenanceWindow() MaintenanceWindowSource {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.maintenanceWindowSource
 }
 
 func (s *Service) SetPSADTPolicyResolver(resolver func() PSADTPolicy) {
@@ -1029,7 +1050,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 
 		// Teto duro: nenhuma execução pode ficar viva indefinidamente.
 		execCtx, cancelExec := context.WithTimeout(ctx, resolveExecutionHardTimeout(psadtPolicy))
-		result := executeTask(execCtx, packages, authorize, task, psadtPolicy, cfCtx.Fields)
+		result := executeTask(execCtx, packages, authorize, task, psadtPolicy, cfCtx.Fields, s.maintenanceWindow())
 		cancelExec()
 
 		// Parseia valores coletados pelo script via protocolo MDZ_COLLECT.

@@ -24,13 +24,14 @@ import (
 	"discovery/app/consolidation"
 	"discovery/app/core/agentconn"
 	"discovery/app/core/automation"
+	"discovery/app/core/autoupdate"
 	"discovery/app/core/buildinfo"
 	"discovery/app/core/chocolatey"
-	"discovery/app/core/thirdparty"
 	"discovery/app/core/data"
 	"discovery/app/core/database"
 	"discovery/app/core/inventory"
 	"discovery/app/core/logstore"
+	"discovery/app/core/maintenance"
 	"discovery/app/core/mcp"
 	"discovery/app/core/memlimit"
 	"discovery/app/core/models"
@@ -44,6 +45,7 @@ import (
 	"discovery/app/core/screenshot"
 	"discovery/app/core/selfupdate"
 	"discovery/app/core/services"
+	"discovery/app/core/thirdparty"
 	"discovery/app/core/windowsupdate"
 	"discovery/app/core/winget"
 	"discovery/app/coreagent"
@@ -337,6 +339,12 @@ type App struct {
 	// M4: fases de startup em andamento — o shutdown loga quantas ficaram
 	// pendentes ao fechar o SQLite após o timeout.
 	startupPhasePending atomic.Int32
+
+	// AutoUpdateSvc (F2): auto-update da Loja no AGENTE. Vive no App (não no
+	// CoreAgent) porque consome serviços de camadas mistas (AppStoreSvc,
+	// UpdatesSvc, InventorySvc, AutomationSvc) e roda SÓ em ServiceMode — na
+	// UI companion quem executa é o serviço.
+	AutoUpdateSvc *autoupdate.Service
 
 	// idleRelease controla a liberação de caches/memória após um período
 	// CONTÍNUO de ociosidade (IdleReleaseDelay). Não roda a cada micro-ociosidade:
@@ -693,6 +701,14 @@ func NewApp(opts AppStartupOptions) *App {
 	})
 	a.packageManagerRouter = newAutomationPackageManagerRouter(a, a.AppsSvc)
 	a.AutomationSvc.SetPackageManager(a.packageManagerRouter)
+	// Janela de manutenção (F3, opt-in por task): tasks com
+	// TaskRespectMaintenanceWindow=true só executam ações de pacote dentro da
+	// janela efetiva (fuso IANA). Nil-safe: Effective() de config nil devolve
+	// janela desligada (sem gate).
+	a.AutomationSvc.SetMaintenanceWindowSource(func() maintenance.Window {
+		win, _ := a.GetAgentConfiguration().MaintenanceWindow.Effective()
+		return win
+	})
 	// Warmup P2P (uma vez por processo): atrasa o primeiro policy-sync (e os
 	// triggers immediate/checkin de startup) até o discovery inicial do P2P
 	// concluir OU o teto de 120s — evita que tasks de instalação baixem da
@@ -1150,6 +1166,60 @@ func NewApp(opts AppStartupOptions) *App {
 		Logf:          a.Logs.Append,
 		Ctx: func() context.Context {
 			return a.ctx
+		},
+	})
+	// Auto-update da Loja (F2): o planner cruza a política efetiva com os
+	// pendentes e executa via InventorySvc.Upgrade (gate da Loja + fila única
+	// de pacotes). Precedência da automação: um pacote dono de task ativa da
+	// policy não entra no auto-update (PackageAuthorizedByPolicy).
+	a.AutoUpdateSvc = autoupdate.New(autoupdate.Deps{
+		LoadPolicy: func(ctx context.Context) (appstore.EffectivePolicy, error) {
+			return a.AppStoreSvc.LoadEffectivePolicy(ctx, false)
+		},
+		PendingUpdates: func() ([]models.UpgradeItem, error) {
+			return a.UpdatesSvc.GetPendingUpdates()
+		},
+		Upgrade: func(ctx context.Context, target string) (string, error) {
+			return a.InventorySvc.Upgrade(target)
+		},
+		IsAutomated: func(installationType, packageID string) bool {
+			return a.AutomationSvc.PackageAuthorizedByPolicy(automation.AppInstallationType(installationType), packageID, "upgrade")
+		},
+		Window: func() maintenance.Window {
+			win, _ := a.GetAgentConfiguration().MaintenanceWindow.Effective()
+			return win
+		},
+		Logf: a.Logs.Append,
+		EmitAutoUpdated: func(count int) {
+			// Best-effort, sem listener obrigatório na UI.
+			a.EmitEvent("store:auto-updated", "count", count)
+		},
+		// Ledger de execuções de auto-update (F3): histórico LOCAL consultável
+		// (decisão de menor risco — sem endpoint/tabela server-side neste
+		// ciclo). Persistido no SQLite do agent e exposto via IPC/evento; falha
+		// de gravação NÃO interrompe o ciclo.
+		RecordExecution: func(execution autoupdate.AutoUpdateExecution) {
+			db := a.CoreAgent.DB
+			if db == nil {
+				return
+			}
+			result := database.AutoUpdateResultSuccess
+			if execution.Result == autoupdate.AutoUpdateResultError {
+				result = database.AutoUpdateResultError
+			}
+			if err := db.InsertAutoUpdateExecution(database.AutoUpdateExecutionEntry{
+				AgentID:          strings.TrimSpace(a.GetDebugConfig().AgentID),
+				InstallationType: execution.InstallationType,
+				PackageID:        execution.PackageID,
+				Source:           execution.Source,
+				Target:           execution.Target,
+				TargetVersion:    execution.TargetVersion,
+				Result:           result,
+				ErrorMessage:     execution.ErrorMessage,
+				ExecutedAt:       execution.ExecutedAt,
+			}); err != nil {
+				a.Logs.Append("[autoupdate pacote] ledger: " + err.Error())
+			}
 		},
 	})
 	a.SelfUpdaterCh = make(chan bool, 4)
@@ -2019,6 +2089,14 @@ func (a *App) runStagedStartup(ctx context.Context) {
 		if a.AutomationSvc != nil {
 			a.safeGo(func() {
 				a.AutomationSvc.Run(ctx, func() {})
+			})
+		}
+
+		// Auto-update da Loja (F2): SÓ em ServiceMode — na UI companion quem
+		// executa é o serviço. Warm-up de 5 min + ciclos de 6h com jitter ≤ 30 min.
+		if a.AutoUpdateSvc != nil && a.RuntimeFlags.ServiceMode {
+			a.safeGo(func() {
+				a.AutoUpdateSvc.Run(ctx)
 			})
 		}
 

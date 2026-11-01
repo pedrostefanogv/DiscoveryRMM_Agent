@@ -108,6 +108,11 @@ type Coordinator struct {
 	downloadLocksMu sync.Mutex
 	downloadLocks   map[string]*downloadLockEntry
 
+	// cloudBootstrapRunMu serializa RunCloudBootstrap (loop automático × botão
+	// manual da UI): dois ciclos concorrentes atrapalhariam o cache de peers
+	// (load/save de arquivo + connectCachedPeers sem coordenação).
+	cloudBootstrapRunMu sync.Mutex
+
 	// ── Lifecycle (Fase 4.1) ──
 	// ctx é o contexto de ciclo de vida, cancelado no Shutdown.
 	ctx    context.Context
@@ -489,6 +494,10 @@ func (c *Coordinator) Run(ctx context.Context) {
 	}
 	// Re-seed automático: mantém cobertura de artifacts em todos os peers.
 	go c.startReseedLoop(runCtx)
+	// Bootstrap P2P via nuvem automático (PULL a cada 60min+jitter; o toggle
+	// CloudBootstrapEnabled gateia os ciclos). O botão manual da UI continua
+	// funcionando para sincronização sob demanda.
+	c.StartCloudBootstrapLoop(runCtx)
 	_ = c.discoveryTick(time.Now())
 
 	discoveryTicker := time.NewTicker(CoordinatorDiscoveryTickSeconds * time.Second)

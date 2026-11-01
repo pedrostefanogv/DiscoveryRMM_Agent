@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"strings"
@@ -16,10 +18,29 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
+// errCloudBootstrapBusy indica que outro ciclo já está em andamento (loop
+// automático × botão manual). NÃO é falha de rede: não deve gerar backoff.
+var errCloudBootstrapBusy = errors.New("cloud bootstrap já em execução")
+
 const (
 	p2pCloudBootstrapEndpoint  = "/api/v1/agent-auth/me/p2p/bootstrap"
 	p2pCloudBootstrapTimeout   = 15 * time.Second
 	p2pCloudBootstrapConnectTO = 10 * time.Second
+
+	// p2pCloudBootstrapInterval é o intervalo entre ciclos de cloud bootstrap
+	// (opção A, decisão 2026-11-01). É PULL: cada agent puxa a lista de peers
+	// do servidor; o servidor NÃO publica nada por heartbeat. Jitter de ±15%
+	// evita sincronização de fase entre agents do mesmo cliente.
+	p2pCloudBootstrapInterval = 60 * time.Minute
+	// p2pCloudBootstrapStartupJitter limita o atraso aleatório da primeira
+	// execução após o startup do coordinator (0..jitter).
+	p2pCloudBootstrapStartupJitter = 60 * time.Second
+	// p2pCloudBootstrapDisabledRecheck é o re-check quando o toggle está
+	// desligado localmente (barato: só lê a config local).
+	p2pCloudBootstrapDisabledRecheck = 5 * time.Minute
+	// p2pCloudBootstrapBackoffMax é o teto do backoff exponencial em falhas
+	// (60min → 2h → 4h → 6h…).
+	p2pCloudBootstrapBackoffMax = 6 * time.Hour
 )
 
 // CloudBootstrapTimeout é o timeout da chamada de cloud bootstrap, exposto
@@ -37,9 +58,10 @@ type p2pCloudBootstrapRequest struct {
 
 // p2pCloudBootstrapPeer é um peer retornado pelo servidor.
 type p2pCloudBootstrapPeer struct {
-	PeerID string   `json:"peerId"`
-	Addrs  []string `json:"addrs"`
-	Port   int      `json:"port"`
+	PeerID  string   `json:"peerId"`
+	AgentID string   `json:"agentId,omitempty"`
+	Addrs   []string `json:"addrs"`
+	Port    int      `json:"port"`
 }
 
 // p2pCloudBootstrapResponse é a resposta do servidor.
@@ -54,6 +76,14 @@ type p2pCloudBootstrapResponse struct {
 //
 // Retorna a quantidade de peers retornada pela API.
 func (c *Coordinator) RunCloudBootstrap(ctx context.Context) (int, error) {
+	// Um ciclo por vez: o loop automático (StartCloudBootstrapLoop) e o botão
+	// manual da UI podem competir; o segundo chamante desiste sem quebrar o
+	// estado do cache de peers.
+	if !c.cloudBootstrapRunMu.TryLock() {
+		return 0, errCloudBootstrapBusy
+	}
+	defer c.cloudBootstrapRunMu.Unlock()
+
 	cfg := c.deps.GetP2PConfig()
 	if !cfg.BootstrapConfig.CloudBootstrapEnabled {
 		return 0, fmt.Errorf("cloud bootstrap P2P desabilitado")
@@ -82,15 +112,12 @@ func (c *Coordinator) RunCloudBootstrap(ctx context.Context) (int, error) {
 	cachedPeers, _ := c.loadP2PPeerCache()
 	cachedPeers = c.connectCachedPeers(ctx, h, cachedPeers)
 
-	// Coletar IPs IPv4 roteáveis e porta do próprio host.
-	selfAddrs := extractRoutableIPv4Addrs(h)
-	selfPeerID := h.ID().String()
-	selfPort := 0
-	if c.transferServer != nil {
-		if p, err := parsePortFromURL(c.transferServer.BaseURL()); err == nil {
-			selfPort = p
-		}
-	}
+	// Coletar IPs IPv4 roteáveis e a PORTA LIBP2P do próprio host.
+	// BUGFIX D8 (2026-11-01): antes era anunciada a porta do transferServer
+	// HTTP (loopback), mas buildAddrInfo diala TCP/QUIC na porta do LISTENER
+	// libp2p — dial sempre na porta errada. GetP2PAddressingInfo extrai a
+	// porta real dos multiaddrs de escuta (mesma fonte do heartbeat).
+	selfPeerID, selfAddrs, selfPort := c.GetP2PAddressingInfo()
 
 	localClientID := normalizeClientID(strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID))
 
@@ -143,6 +170,39 @@ func (c *Coordinator) RunCloudBootstrap(ctx context.Context) (int, error) {
 			Port:       rp.Port,
 			LastSeenAt: time.Now().UTC(),
 		})
+
+		// BUGFIX (revisão 2026-11-01): conectar no libp2p NÃO basta — sem
+		// upsertPeer o peer fica invisível para GetPeers()/UI/gossip/catálogo
+		// (mesmo sintoma do antigo D4 no caminho peer.online). Registra o peer
+		// no estado do coordinator, preservando a porta HTTP conhecida se ele
+		// já era descoberto por outro caminho (mesma regra do peer.online).
+		address := firstUsableSnapshotAddr(rp.Addrs)
+		if address == "" {
+			continue
+		}
+		peerKey := strings.ToLower(strings.TrimSpace(rp.AgentID))
+		if peerKey == "" {
+			// Servidor antigo sem agentId na resposta: usa o peerId como chave.
+			peerKey = strings.ToLower(rp.PeerID)
+		}
+		port := rp.Port
+		c.mu.RLock()
+		if known, ok := c.peers[peerKey]; ok && known.Peer.Port > 0 {
+			port = known.Peer.Port
+		}
+		c.mu.RUnlock()
+		if inserted := c.upsertPeer(p2pDiscoveredPeer{
+			AgentID:      peerKey,
+			ClientID:     localClientID,
+			Host:         address,
+			Address:      address,
+			Port:         port,
+			Source:       "cloud-bootstrap",
+			ConnectedVia: "cloud-bootstrap",
+			TTLSeconds:   int(p2pPeerTTLFloor.Seconds()),
+		}); inserted {
+			peerCount++
+		}
 	}
 
 	if err := c.saveP2PPeerCache(cachedPeers); err != nil {
@@ -150,6 +210,79 @@ func (c *Coordinator) RunCloudBootstrap(ctx context.Context) (int, error) {
 		return peerCount, err
 	}
 	return peerCount, nil
+}
+
+// StartCloudBootstrapLoop roda o cloud bootstrap automaticamente enquanto o
+// coordinator vive (antes só existia o botão manual da UI - revisão 2026-11-01).
+// Primeira execução após jitter de 0..60s; intervalo padrão 60 min com jitter
+// de mais/menos 15%; toggle desligado re-checka em 5 min; falha dobra o
+// intervalo até o teto de 6h, com reset no primeiro sucesso. É PULL: o
+// servidor nao publica nada por heartbeat; cada agent puxa a lista de peers
+// online do seu cliente em POST /me/p2p/bootstrap (HeartbeatCache).
+func (c *Coordinator) StartCloudBootstrapLoop(ctx context.Context) {
+	if c == nil || c.deps == nil {
+		return
+	}
+	go func() {
+		interval := p2pCloudBootstrapInterval
+		startDelay := time.Duration(rand.Int63n(int64(p2pCloudBootstrapStartupJitter) + 1))
+		timer := time.NewTimer(startDelay)
+		defer timer.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+				interval = c.cloudBootstrapCycle(interval)
+				timer.Reset(jitteredInterval(interval))
+			}
+		}
+	}()
+}
+
+// cloudBootstrapCycle executa um ciclo e retorna o intervalo para a próxima
+// tentativa (padrão em sucesso, dobrado em falha, até o teto).
+func (c *Coordinator) cloudBootstrapCycle(current time.Duration) time.Duration {
+	cfg := c.deps.GetP2PConfig()
+	if !cfg.Enabled || !cfg.BootstrapConfig.CloudBootstrapEnabled {
+		return p2pCloudBootstrapDisabledRecheck
+	}
+	bootstrapCtx, cancel := context.WithTimeout(c.Ctx(), CloudBootstrapTimeout+10*time.Second)
+	defer cancel()
+	peers, err := c.RunCloudBootstrap(bootstrapCtx)
+	if errors.Is(err, errCloudBootstrapBusy) {
+		// Outro ciclo (botão manual) está rodando: mantém o intervalo, sem backoff.
+		return current
+	}
+	if err != nil {
+		next := current * 2
+		if next > p2pCloudBootstrapBackoffMax {
+			next = p2pCloudBootstrapBackoffMax
+		}
+		c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] ciclo falhou (proxima tentativa em %s): %v", next, err))
+		return next
+	}
+	if peers > 0 {
+		c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] ciclo concluído: %d peer(s) via nuvem", peers))
+	}
+	return p2pCloudBootstrapInterval
+}
+
+// jitteredInterval aplica jitter de mais/menos 15% a um intervalo (minimo 1s).
+func jitteredInterval(base time.Duration) time.Duration {
+	if base <= 0 {
+		return base
+	}
+	span := base / 7
+	if span <= 0 {
+		span = time.Second
+	}
+	j := time.Duration(rand.Int63n(int64(2*span)+1)) - span
+	out := base + j
+	if out < time.Second {
+		out = time.Second
+	}
+	return out
 }
 
 // connectCachedPeers tenta conectar nos peers do cache local.
