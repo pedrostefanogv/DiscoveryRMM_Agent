@@ -10,6 +10,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	// Embute a base IANA (tzdata) no binário: o agent roda em máquinas Windows
+	// sem Go instalado, onde time.LoadLocation sem tzdata embutido falha — a
+	// janela de manutenção (timeZone IANA) cairia silenciosamente em UTC.
+	_ "time/tzdata"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"

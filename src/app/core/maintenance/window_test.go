@@ -197,3 +197,127 @@ func TestWindowEvaluate(t *testing.T) {
 		t.Fatalf("janela desligada não deveria adiar: %s", d)
 	}
 }
+
+// brSP carrega America/Sao_Paulo (UTC-3, sem horário de verão desde 2019).
+func brSP(t *testing.T) *time.Location {
+	t.Helper()
+	loc, err := time.LoadLocation("America/Sao_Paulo")
+	if err != nil {
+		t.Fatalf("LoadLocation(America/Sao_Paulo): %v", err)
+	}
+	return loc
+}
+
+func TestWindowContainsLocalTimeZone(t *testing.T) {
+	loc := brSP(t)
+	// Janela 23:00 local (America/Sao_Paulo, UTC-3), duração 60 min:
+	// 2024-06-10 (segunda) 23:00 local == 2024-06-11 02:00 UTC.
+	w := Window{Enabled: true, StartLocal: "23:00", Location: loc, DurationMinutes: 60}
+
+	if w.Contains(utcAt(2024, 6, 10, 1, 0)) {
+		t.Fatal("01:00 UTC do dia 10 é 22:00 local do dia 9: fora da janela")
+	}
+	if !w.Contains(utcAt(2024, 6, 11, 2, 30)) {
+		t.Fatal("02:30 UTC do dia 11 é 23:30 local do dia 10: deveria estar dentro")
+	}
+	if w.Contains(utcAt(2024, 6, 11, 3, 0)) {
+		t.Fatal("03:00 UTC do dia 11 é 00:00 local do dia 11: fim da janela (meio-aberto)")
+	}
+	// O mesmo relógio (23:30) em outro instante UTC do dia seguinte não é a janela do dia 10.
+	if !w.Contains(utcAt(2024, 6, 12, 2, 30)) {
+		t.Fatal("23:30 local do dia 11 (02:30 UTC do dia 12) deveria estar dentro")
+	}
+	if w.Contains(utcAt(2024, 6, 12, 1, 0)) {
+		t.Fatal("01:00 UTC do dia 12 é 22:00 local do dia 11: fora")
+	}
+}
+
+func TestWindowNextStartLocalTimeZone(t *testing.T) {
+	loc := brSP(t)
+	w := Window{Enabled: true, StartLocal: "23:00", Location: loc, DurationMinutes: 60}
+	// 2024-06-10 12:00 UTC = 09:00 local de segunda. Próximo início:
+	// 23:00 local de segunda == 2024-06-11 02:00 UTC.
+	got := w.NextStart(utcAt(2024, 6, 10, 12, 0))
+	want := utcAt(2024, 6, 11, 2, 0)
+	if !got.Equal(want) {
+		t.Fatalf("NextStart=%s, want %s", got, want)
+	}
+	// Já dentro da janela (02:30 UTC do dia 11) → próximo é o dia seguinte local.
+	got = w.NextStart(utcAt(2024, 6, 11, 2, 30))
+	if want := utcAt(2024, 6, 12, 2, 0); !got.Equal(want) {
+		t.Fatalf("NextStart dentro da janela=%s, want %s", got, want)
+	}
+}
+
+func TestWindowLocalDayOfWeek(t *testing.T) {
+	loc := brSP(t)
+	// Só segunda-feira (2), 23:00 local (UTC-3), duração 120.
+	// 2024-06-10 é segunda: janela 23:00 seg → 01:00 ter local == 02:00–04:00 UTC de terça.
+	w := Window{Enabled: true, Days: []int{2}, StartLocal: "23:00", Location: loc, DurationMinutes: 120}
+	// 02:30 UTC de terça = 23:30 local de SEGUNDA: dentro (o dia local é que conta,
+	// e o dia UTC de 2024-06-11 é terça/3 — o legado negaria).
+	if !w.Contains(utcAt(2024, 6, 11, 2, 30)) {
+		t.Fatal("23:30 local de segunda deveria estar dentro da janela de segunda")
+	}
+	// 02:30 UTC de quarta = 23:30 local de TERÇA: fora.
+	if w.Contains(utcAt(2024, 6, 12, 2, 30)) {
+		t.Fatal("23:30 local de terça não deveria estar na janela de segunda")
+	}
+	// Próximo início a partir de terça 12:00 UTC = segunda da semana seguinte, 02:00 UTC.
+	got := w.NextStart(utcAt(2024, 6, 11, 12, 0))
+	if want := utcAt(2024, 6, 18, 2, 0); !got.Equal(want) {
+		t.Fatalf("NextStart=%s, want %s", got, want)
+	}
+}
+
+func TestWindowCrossesMidnightLocal(t *testing.T) {
+	loc := brSP(t)
+	w := Window{Enabled: true, StartLocal: "23:00", Location: loc, DurationMinutes: 180}
+	if !w.Contains(utcAt(2024, 6, 11, 4, 30)) { // 01:30 local do dia 11
+		t.Fatal("janela local que cruza a meia-noite deveria conter 01:30 local")
+	}
+	if w.Contains(utcAt(2024, 6, 11, 5, 1)) { // 02:01 local do dia 11
+		t.Fatal("passou do fim da janela local (180 min)")
+	}
+}
+
+func TestWindowDSTAware(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("LoadLocation(America/New_York): %v", err)
+	}
+	w := Window{Enabled: true, StartLocal: "23:00", Location: loc, DurationMinutes: 60}
+	// 2024-03-09 23:00 EST (UTC-5) == 2024-03-10 04:00 UTC.
+	if got, want := w.NextStart(utcAt(2024, 3, 9, 12, 0)), utcAt(2024, 3, 10, 4, 0); !got.Equal(want) {
+		t.Fatalf("NextStart antes do DST=%s, want %s", got, want)
+	}
+	// 2024-03-10 23:00 EDT (UTC-4, após a virada) == 2024-03-11 03:00 UTC.
+	if got, want := w.NextStart(utcAt(2024, 3, 10, 12, 0)), utcAt(2024, 3, 11, 3, 0); !got.Equal(want) {
+		t.Fatalf("NextStart depois do DST=%s, want %s", got, want)
+	}
+}
+
+func TestWindowLegacyFallback(t *testing.T) {
+	loc := brSP(t)
+	// Location nil mesmo com StartLocal: vale StartUTC como UTC (legado).
+	w := Window{Enabled: true, StartUTC: "02:00", StartLocal: "23:00", DurationMinutes: 60}
+	if !w.Contains(utcAt(2024, 6, 10, 2, 30)) {
+		t.Fatal("sem Location o caminho legado (StartUTC em UTC) deveria valer")
+	}
+	if w.Contains(utcAt(2024, 6, 10, 23, 30)) {
+		t.Fatal("sem Location StartLocal deve ser ignorado")
+	}
+	// Location presente mas StartLocal inválido: cai no legado (StartUTC em UTC).
+	w2 := Window{Enabled: true, StartUTC: "02:00", StartLocal: "25:00", Location: loc, DurationMinutes: 60}
+	if !w2.Contains(utcAt(2024, 6, 10, 2, 30)) {
+		t.Fatal("StartLocal inválido deveria cair no caminho legado")
+	}
+	// Sem nenhum horário válido a janela nunca fica ativa.
+	w3 := Window{Enabled: true, StartLocal: "23:00"} // nem Location nem StartUTC
+	if w3.Contains(utcAt(2024, 6, 10, 2, 30)) {
+		t.Fatal("sem horário válido a janela não deveria conter nada")
+	}
+	if got := w3.NextStart(utcAt(2024, 6, 10, 2, 30)); !got.IsZero() {
+		t.Fatalf("sem horário válido NextStart deveria ser zero: %s", got)
+	}
+}

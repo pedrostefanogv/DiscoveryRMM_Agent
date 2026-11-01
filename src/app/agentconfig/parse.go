@@ -448,9 +448,18 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 	cfg.AgentHomeTab = resolveAgentHomeTab(site, cli, srv)
 
 	// Janela de manutenção: herança campo a campo, site > client > server.
-	cfg.MaintenanceWindow = mergeMaintenanceWindow(site.MaintenanceWindow, cli.MaintenanceWindow, srv.MaintenanceWindow)
+	// (site/cli podem estar ausentes no payload: acessar a seção é nil-safe.)
+	cfg.MaintenanceWindow = mergeMaintenanceWindow(
+		mergeField(site, func(s *SiteConfiguration) *MaintenanceWindowConfig { return s.MaintenanceWindow }),
+		mergeField(cli, func(c *ClientConfiguration) *MaintenanceWindowConfig { return c.MaintenanceWindow }),
+		srv.MaintenanceWindow,
+	)
 	// Allowlist de tools MCP: mesma herança.
-	cfg.MCPToolPolicy = mergeMCPToolPolicy(site.MCPToolPolicy, cli.MCPToolPolicy, srv.MCPToolPolicy)
+	cfg.MCPToolPolicy = mergeMCPToolPolicy(
+		mergeField(site, func(s *SiteConfiguration) *MCPToolPolicyConfig { return s.MCPToolPolicy }),
+		mergeField(cli, func(c *ClientConfiguration) *MCPToolPolicyConfig { return c.MCPToolPolicy }),
+		srv.MCPToolPolicy,
+	)
 
 	return cfg
 }
@@ -466,6 +475,8 @@ func parseMaintenanceWindowFromMap(raw map[string]any, key string) *MaintenanceW
 		Enabled:            getBoolPtrFromMap(m, "enabled"),
 		DaysOfWeek:         getIntSliceFromMap(m, "daysOfWeek"),
 		StartUTC:           getStringFromMap(m, "startUtc"),
+		StartTime:          getStringFromMap(m, "startTime"),
+		TimeZone:           getStringPtrFromMap(m, "timeZone"),
 		DurationMinutes:    getIntPtrFromMap(m, "durationMinutes"),
 		RebootGraceSeconds: getIntPtrFromMap(m, "rebootGraceSeconds"),
 	}
@@ -495,6 +506,8 @@ func mergeMaintenanceWindow(site, cli, srv *MaintenanceWindowConfig) *Maintenanc
 	out.Enabled = firstBoolPtr(mwEnabled(site), mwEnabled(cli), mwEnabled(srv))
 	out.DaysOfWeek = firstIntSlice(mwDays(site), mwDays(cli), mwDays(srv))
 	out.StartUTC = firstString(mwStart(site), mwStart(cli), mwStart(srv))
+	out.StartTime = firstString(mwStartTime(site), mwStartTime(cli), mwStartTime(srv))
+	out.TimeZone = firstStringPtr(mwTimeZone(site), mwTimeZone(cli), mwTimeZone(srv))
 	out.DurationMinutes = firstIntPtr(mwDuration(site), mwDuration(cli), mwDuration(srv))
 	out.RebootGraceSeconds = firstIntPtr(mwGrace(site), mwGrace(cli), mwGrace(srv))
 	return out
@@ -518,6 +531,23 @@ func mwStart(c *MaintenanceWindowConfig) string {
 	}
 	return c.StartUTC
 }
+
+// mwStartTime devolve o startTime (hora local) do nível, "" quando ausente.
+func mwStartTime(c *MaintenanceWindowConfig) string {
+	if c == nil {
+		return ""
+	}
+	return c.StartTime
+}
+
+// mwTimeZone devolve o timeZone (IANA) do nível, nil quando ausente.
+func mwTimeZone(c *MaintenanceWindowConfig) *string {
+	if c == nil {
+		return nil
+	}
+	return c.TimeZone
+}
+
 func mwDuration(c *MaintenanceWindowConfig) *int {
 	if c == nil {
 		return nil
@@ -638,6 +668,15 @@ func boolFromPtr[T any](obj *T, getter func(*T) *bool) *bool {
 }
 
 func intFromPtr[T any](obj *T, getter func(*T) *int) *int {
+	if obj == nil {
+		return nil
+	}
+	return getter(obj)
+}
+
+// mergeField devolve um campo de um nível possivelmente ausente (nil-safe),
+// mantendo o padrão dos helpers acima.
+func mergeField[T any, V any](obj *T, getter func(*T) *V) *V {
 	if obj == nil {
 		return nil
 	}

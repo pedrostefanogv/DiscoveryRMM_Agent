@@ -1,6 +1,9 @@
 package agentconfig
 
 import (
+	"strings"
+	"time"
+
 	"discovery/app/core/maintenance"
 	"discovery/app/core/mcp"
 )
@@ -16,6 +19,12 @@ const (
 // Effective converte a config (possivelmente nil) em Window resolvida e no
 // grace de reboot. Janela ausente/desligada → Window{Enabled:false} e grace
 // default (irrelevante: sem janela o deferral nunca acontece).
+//
+// Fuso horário: se TimeZone for um ID IANA válido E StartTime for um "HH:mm"
+// válido, a janela é avaliada em HORA LOCAL dessa zona (Window.Location e
+// Window.StartLocal preenchidos). Caso contrário — timeZone ausente/vazia/
+// inválida ou startTime ausente/inválido — mantém-se o caminho legado:
+// Window.Location nil e StartUTC interpretado como UTC.
 func (c *MaintenanceWindowConfig) Effective() (maintenance.Window, int) {
 	w := maintenance.Window{Enabled: false, DurationMinutes: DefaultMaintenanceWindowDurationMinutes}
 	grace := DefaultRebootGraceSeconds
@@ -25,6 +34,22 @@ func (c *MaintenanceWindowConfig) Effective() (maintenance.Window, int) {
 	w.Enabled = c.Enabled != nil && *c.Enabled
 	w.Days = append([]int(nil), c.DaysOfWeek...)
 	w.StartUTC = c.StartUTC
+	w.StartLocal = strings.TrimSpace(c.StartTime)
+	if c.TimeZone != nil {
+		if tz := strings.TrimSpace(*c.TimeZone); tz != "" {
+			if loc, err := time.LoadLocation(tz); err == nil {
+				w.Location = loc
+			}
+			// ID IANA inválido/desconhecido → Location nil = legado (UTC).
+		}
+	}
+	if w.Location != nil {
+		// Sem startTime válido não há hora local para montar a janela:
+		// volta ao caminho legado (startUtc em UTC).
+		if _, ok := maintenance.ParseClock(w.StartLocal); !ok {
+			w.Location = nil
+		}
+	}
 	if c.DurationMinutes != nil && *c.DurationMinutes > 0 {
 		w.DurationMinutes = *c.DurationMinutes
 	}

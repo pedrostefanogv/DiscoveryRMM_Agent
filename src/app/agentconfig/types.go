@@ -120,8 +120,15 @@ type MaintenanceWindowConfig struct {
 	Enabled *bool `json:"enabled"`
 	// DaysOfWeek: 1=domingo..7=sábado; vazio = todos os dias.
 	DaysOfWeek []int `json:"daysOfWeek"`
-	// StartUTC é o início da janela em UTC ("HH:mm").
+	// StartUTC é o início da janela em UTC ("HH:mm"). Mantido como espelho
+	// calculado pela UI e como caminho LEGADO (usado quando TimeZone/StartTime
+	// ausentes ou inválidos).
 	StartUTC string `json:"startUtc"`
+	// StartTime é o início da janela em hora LOCAL da TimeZone ("HH:mm").
+	StartTime string `json:"startTime"`
+	// TimeZone é o ID IANA da zona em que a janela é avaliada
+	// (ex.: "America/Sao_Paulo"). nil/vazio = UTC (comportamento legado).
+	TimeZone *string `json:"timeZone"`
 	// DurationMinutes: duração em minutos; nil = 60.
 	DurationMinutes *int `json:"durationMinutes"`
 	// RebootGraceSeconds: aviso ao usuário antes do reboot coordenado;

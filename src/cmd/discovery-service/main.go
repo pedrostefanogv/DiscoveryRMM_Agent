@@ -27,6 +27,9 @@ import (
 	"log"
 	"os"
 	"strings"
+	// Mesma razão do discovery-agent: tzdata embutido para time.LoadLocation
+	// funcionar em Windows sem Go (janela de manutenção com timeZone IANA).
+	_ "time/tzdata"
 
 	appkg "discovery/app"
 	"discovery/app/core/memlimit"
