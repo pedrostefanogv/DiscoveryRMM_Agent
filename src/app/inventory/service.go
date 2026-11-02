@@ -513,9 +513,36 @@ func (s *Service) Uninstall(id string) (string, error) {
 		}
 		runCtx, cancel := context.WithTimeout(runCtx, customInstallCommandTimeout)
 		defer cancel()
+
+		// Comando que usa {{installer}}/{{installerDir}} (caso clássico:
+		// "{{installerDir}} /uninstall /quiet") depende do arquivo publicado:
+		// baixa e extrai do mesmo jeito que a instalação, senão o placeholder
+		// chega literal no cmd e a remoção falha. Sem arquivo publicado avisamos
+		// com a causa real em vez de deixar o shell reclamar do token.
+		var uninstallInstallerPath, uninstallWorkDir string
+		if commandReferencesInstaller(uninstallCommand) {
+			// Otimização: só baixamos o instalador quando o comando REALMENTE usa
+			// os placeholders. Comando com caminho absoluto (ex.:
+			// "C:\Program Files\App\uninstall.exe /quiet") não baixa nada.
+			// Quando baixa, deixa o custo explícito no log do agent.
+			s.logf(fmt.Sprintf(
+				"[uninstall %s] comando usa {{installer}}/{{installerDir}}: baixando o instalador publicado (~%d bytes) para resolver o caminho",
+				packageID, allowed.FileSizeBytes))
+			if strings.TrimSpace(allowed.FileURL) == "" {
+				err = fmt.Errorf(
+					"app custom %q usa {{installer}}/{{installerDir}} no comando de desinstalação, mas nenhum instalador foi publicado para este pacote no servidor",
+					packageID)
+				break
+			}
+			uninstallInstallerPath, uninstallWorkDir, err = s.prepareCustomInstallerAsset(runCtx, allowed, packageID, false)
+			if err != nil {
+				break
+			}
+		}
+		uninstallCommand = applyCustomCommandPlaceholders(uninstallCommand, uninstallInstallerPath, uninstallWorkDir)
 		// O tipo do comando de remoção é independente do de instalação
 		// (UninstallCommandKind), permitindo .cmd/.ps1 também na remoção.
-		out, err = s.runCustomShellCommandKind(runCtx, uninstallCommand, "", allowed.UninstallCommandKind)
+		out, err = s.runCustomShellCommandKind(runCtx, uninstallCommand, uninstallWorkDir, allowed.UninstallCommandKind)
 	default:
 		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
 	}
@@ -1133,79 +1160,104 @@ func (s *Service) runCustomInstallCommand(ctx context.Context, allowed appstore.
 	runCtx, cancel := context.WithTimeout(runCtx, customInstallCommandTimeout)
 	defer cancel()
 
-	var installerPath, workDir string
+	// Sem instalador publicado o placeholder nunca é resolvido e o shell falha
+	// com "{{installer}} não é reconhecido como um comando..." — mensagem que
+	// escondia a causa real (pacote sem arquivo publicado no servidor).
 	if strings.TrimSpace(allowed.FileURL) == "" && commandReferencesInstaller(command) {
-		// Sem instalador publicado o placeholder nunca é resolvido e o shell falha
-		// com "{{installer}} não é reconhecido como um comando..." — mensagem que
-		// escondia a causa real (pacote sem arquivo publicado no servidor).
 		return "", fmt.Errorf(
 			"app custom %q usa {{installer}}/{{installerDir}} no comando, mas nenhum instalador foi publicado para este pacote no servidor",
 			packageID)
 	}
-	if strings.TrimSpace(allowed.FileURL) != "" {
-		downloaded := ""
-		fromP2P := false
 
-		// P2P primeiro: se algum agent do site já publicou este instalador na
-		// mesma versão (ou se já está no cache local), baixar da LAN evita
-		// repetir GBs de download da API.
-		if s.customInstallerFromP2P != nil {
-			if path, ok := s.customInstallerFromP2P(runCtx, packageID, allowed.Version); ok {
-				downloaded, fromP2P = path, true
-				s.logf(fmt.Sprintf("[install %s] instalador obtido do cache/rede P2P: %s", packageID, path))
-			}
-		}
-
-		if !fromP2P {
-			path, err := s.downloadCustomAsset(runCtx, allowed, packageID)
-			if err != nil {
-				return "", err
-			}
-			downloaded = path
-			// NÃO remove a pasta imediatamente: instaladores podem disparar um
-			// processo filho que continua lendo os arquivos após o cmd retornar.
-			// A limpeza é agendada com folga (e sobras antigas são varridas).
-			s.scheduleCustomAssetCleanup(filepath.Dir(path))
-
-			// Vira seed: publica o instalador no cache P2P (P2P_Temp) para os
-			// demais agents do site e passa a instalar a partir do artifact
-			// publicado, deixando a cópia temporária apenas como sobra a limpar.
-			// Best-effort — falha aqui não impede a instalação.
-			if s.publishCustomInstallerForP2P != nil {
-				publishedPath, pubErr := s.publishCustomInstallerForP2P(runCtx, packageID, allowed.Version, path)
-				if pubErr != nil {
-					s.logf(fmt.Sprintf("[install %s] aviso: falha ao publicar instalador no P2P: %v", packageID, pubErr))
-				} else if strings.TrimSpace(publishedPath) != "" {
-					downloaded, fromP2P = publishedPath, true
-				}
-			}
-		}
-
-		installerPath = downloaded
-		workDir = filepath.Dir(downloaded)
-
-		if allowed.ExtractZip || strings.EqualFold(filepath.Ext(downloaded), ".zip") {
-			// A pasta do cache P2P não é área de trabalho: extrair ali deixaria
-			// lixo dentro do diretório de artifacts publicados.
-			if fromP2P {
-				if tempDir, err := os.MkdirTemp("", "discovery-custom-*"); err == nil {
-					s.scheduleCustomAssetCleanup(tempDir)
-					workDir = tempDir
-				} else {
-					s.logf(fmt.Sprintf("[install %s] aviso: falha ao criar pasta de extração: %v", packageID, err))
-				}
-			}
-			extractedDir := filepath.Join(workDir, "extracted")
-			if err := extractZipArchive(downloaded, extractedDir); err != nil {
-				return "", err
-			}
-			workDir = resolveExtractionRoot(extractedDir)
-			s.logf(fmt.Sprintf("[install %s] ZIP extraido em %s", packageID, workDir))
-		}
+	installerPath, workDir, err := s.prepareCustomInstallerAsset(runCtx, allowed, packageID, true)
+	if err != nil {
+		return "", err
 	}
 
 	command = applyCustomCommandPlaceholders(command, installerPath, workDir)
 	return s.runCustomShellCommandKind(runCtx, command, workDir, allowed.InstallCommandKind)
+}
+
+// prepareCustomInstallerAsset baixa (ou reaproveita do cache/P2P) o instalador
+// publicado e prepara o diretório de trabalho, extraindo ZIPs quando necessário.
+// Devolve os caminhos usados na substituição de {{installer}}/{{installerDir}}.
+//
+// É compartilhado entre INSTALAÇÃO e DESINSTALAÇÃO: comandos de remoção podem
+// depender do diretório do instalador (ex.: "{{installerDir}} /uninstall /quiet").
+// Antes, a remoção chamava o shell com workDir vazio e sem aplicar placeholders,
+// então o comando falhava mesmo estando configurado no servidor.
+func (s *Service) prepareCustomInstallerAsset(
+	ctx context.Context,
+	allowed appstore.Item,
+	packageID string,
+	publishSeed bool,
+) (installerPath string, workDir string, err error) {
+	if strings.TrimSpace(allowed.FileURL) == "" {
+		return "", "", nil
+	}
+
+	downloaded := ""
+	fromP2P := false
+
+	// P2P primeiro: se algum agent do site já publicou este instalador na
+	// mesma versão (ou se já está no cache local), baixar da LAN evita
+	// repetir GBs de download da API.
+	if s.customInstallerFromP2P != nil {
+		if path, ok := s.customInstallerFromP2P(ctx, packageID, allowed.Version); ok {
+			downloaded, fromP2P = path, true
+			s.logf(fmt.Sprintf("[install %s] instalador obtido do cache/rede P2P: %s", packageID, path))
+		}
+	}
+
+	if !fromP2P {
+		path, err := s.downloadCustomAsset(ctx, allowed, packageID)
+		if err != nil {
+			return "", "", err
+		}
+		downloaded = path
+		// NÃO remove a pasta imediatamente: instaladores podem disparar um
+		// processo filho que continua lendo os arquivos após o cmd retornar.
+		// A limpeza é agendada com folga (e sobras antigas são varridas).
+		s.scheduleCustomAssetCleanup(filepath.Dir(path))
+
+		// Vira seed: publica o instalador no cache P2P (P2P_Temp) para os
+		// demais agents do site e passa a instalar a partir do artifact
+		// publicado, deixando a cópia temporária apenas como sobra a limpar.
+		// Best-effort — falha aqui não impede a instalação. Só faz sentido na
+		// instalação (publishSeed), não na remoção.
+		if publishSeed && s.publishCustomInstallerForP2P != nil {
+			publishedPath, pubErr := s.publishCustomInstallerForP2P(ctx, packageID, allowed.Version, path)
+			if pubErr != nil {
+				s.logf(fmt.Sprintf("[install %s] aviso: falha ao publicar instalador no P2P: %v", packageID, pubErr))
+			} else if strings.TrimSpace(publishedPath) != "" {
+				downloaded, fromP2P = publishedPath, true
+			}
+		}
+	}
+
+	installerPath = downloaded
+	workDir = filepath.Dir(downloaded)
+
+	if allowed.ExtractZip || strings.EqualFold(filepath.Ext(downloaded), ".zip") {
+		// A pasta do cache P2P não é área de trabalho: extrair ali deixaria
+		// lixo dentro do diretório de artifacts publicados.
+		if fromP2P {
+			if tempDir, tempErr := os.MkdirTemp("", "discovery-custom-*"); tempErr == nil {
+				s.scheduleCustomAssetCleanup(tempDir)
+				workDir = tempDir
+			} else {
+				s.logf(fmt.Sprintf("[install %s] aviso: falha ao criar pasta de extração: %v", packageID, tempErr))
+			}
+		}
+		extractedDir := filepath.Join(workDir, "extracted")
+		if err := extractZipArchive(downloaded, extractedDir); err != nil {
+			return "", "", err
+		}
+		workDir = resolveExtractionRoot(extractedDir)
+		s.logf(fmt.Sprintf("[install %s] ZIP extraido em %s", packageID, workDir))
+	}
+
+	return installerPath, workDir, nil
 }
 
 // runCustomShellCommand executa um comando de texto livre de pacote custom via

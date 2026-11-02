@@ -37,6 +37,11 @@ type AppItem struct {
 	// 1 = script CMD/BAT, 2 = script PowerShell.
 	InstallCommandKind   int `json:"installCommandKind"`
 	UninstallCommandKind int `json:"uninstallCommandKind"`
+	// UninstallCommand é o comando de remoção do app custom cadastrado no
+	// servidor. Sem ele na UI o card caía em "Já instalado" (botão desabilitado)
+	// mesmo com o comando configurado — o Go já sabia desinstalar, mas o
+	// frontend não tinha como saber que a remoção estava disponível.
+	UninstallCommand string `json:"uninstallCommand,omitempty"`
 	// DetectionMode: 0 = nenhuma, 1 = vinculado a app do inventário,
 	// 2 = comando de detecção (PowerShell, exit 0 = instalado).
 	DetectionMode       int    `json:"detectionMode"`

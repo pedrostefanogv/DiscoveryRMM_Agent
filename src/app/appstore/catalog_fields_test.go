@@ -19,6 +19,7 @@ func TestBuildCatalogFromPolicyPropagatesCustomFields(t *testing.T) {
 				Publisher:            "Acme",
 				Version:              "2.0.0",
 				InstallCommand:       "setup.exe /S",
+				UninstallCommand:     "{{installerDir}} /uninstall /quiet /clean",
 				InstallCommandKind:   CommandKindPowerShellScript,
 				UninstallCommandKind: CommandKindCmdScript,
 				DetectionMode:        DetectionModeInventoryLink,
@@ -62,6 +63,9 @@ func TestBuildCatalogFromPolicyPropagatesCustomFields(t *testing.T) {
 		{"DetectionMinVersion", pkg.DetectionMinVersion, "1.5.0"},
 		{"DetectionCommand", pkg.DetectionCommand, "exit 0"},
 		{"InstallationType", pkg.InstallationType, string(InstallationCustom)},
+		// O comando de remoção precisa chegar na UI: é ele que habilita o botão
+		// "Remover" do card/modal em vez de "Já instalado" desabilitado.
+		{"UninstallCommand", pkg.UninstallCommand, "{{installerDir}} /uninstall /quiet /clean"},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

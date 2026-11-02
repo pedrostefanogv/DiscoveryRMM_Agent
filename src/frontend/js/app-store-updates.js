@@ -411,6 +411,14 @@ function storeInstallActionLabel(pkg) {
   return packageIsInstalled(pkg) ? translate('action.reinstall') : translate('action.install');
 }
 
+// hasCustomUninstall: o pacote custom tem comando de remoção configurado no
+// servidor? É o único sinal de que "Remover" pode ser oferecido — o backend do
+// agent (inventory.Uninstall) já executa esse comando para InstallationType
+// Custom; sem esse campo na UI o card ficava travado em "Já instalado".
+function hasCustomUninstall(pkg) {
+  return !!(pkg && String(pkg.uninstallCommand || '').trim());
+}
+
 function getContextAction(packageId, pkg) {
   var key = String(packageId || '').toLowerCase();
   var action = state.packageActions[key];
@@ -419,8 +427,14 @@ function getContextAction(packageId, pkg) {
   // o card mostra "Atualizar" em vez de "Remover".
   if (action === 'upgrade') return { action: 'upgrade', label: translate('action.update') };
   if (action === 'uninstall') return { action: 'uninstall', label: translate('action.remove') };
-  // App custom já instalado (detecção do servidor) sem comando de desinstalação
-  // disponível: não mostra "Instalar/Reinstalar" de novo — mostra "Já instalado".
+  // App custom já instalado (detecção do servidor) COM comando de remoção no
+  // servidor: oferece "Remover" (antes só o winget/choco apareciam no mapa de
+  // ações, então o custom ficava preso em "Já instalado").
+  if (packageIsInstalled(pkg) && hasCustomUninstall(pkg)) {
+    return { action: 'uninstall', label: translate('action.remove') };
+  }
+  // App custom já instalado e SEM comando de desinstalação: não mostra
+  // "Instalar/Reinstalar" de novo — mostra "Já instalado" (botão desabilitado).
   if (packageIsInstalled(pkg)) return { action: 'installed', label: translate('store.installedAction') };
   return { action: 'install', label: storeInstallActionLabel(pkg) };
 }

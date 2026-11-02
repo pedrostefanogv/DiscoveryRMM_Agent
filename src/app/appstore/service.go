@@ -660,6 +660,7 @@ func (s *Service) buildCatalogFromPolicy(ctx context.Context, forceRefresh bool)
 			// tem acesso ao inventário local (inventory.MarkCatalogInstalled).
 			InstallCommandKind:   item.InstallCommandKind,
 			UninstallCommandKind: item.UninstallCommandKind,
+			UninstallCommand:     strings.TrimSpace(item.UninstallCommand),
 			DetectionMode:        item.DetectionMode,
 			InventorySoftwareID:  strings.TrimSpace(item.InventorySoftwareID),
 			DetectionName:        strings.TrimSpace(item.DetectionName),
