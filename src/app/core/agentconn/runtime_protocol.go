@@ -37,6 +37,14 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 			return 2, "", "payload sem comando cmd/shell"
 		}
 		cmd = processutil.HideCommandContext(ctx, "cmd", "/C", command)
+		// Linha de comando CRUA: o os/exec do Go escapa aspas embutidas como \"
+		// (regra CommandLineToArgvW), mas o cmd.exe faz parsing cru e rejeitaria
+		// o comando inteiro — ex.: "C:\Program Files\App\x.exe" /quiet virava
+		// '\"C:\Program Files\...\" não é reconhecido'. O /D /S /C com o
+		// comando entre aspas é o mesmo formato usado pelo Node.js (shell:true) e
+		// sobrevive a comandos com VÁRIAS aspas (exe citado + argumento citado),
+		// que o /C puro quebra ao remover a 1a e a última aspa da linha.
+		processutil.ApplyRawCmdLine(cmd, "cmd.exe /D /S /C \""+command+"\"")
 	case "update", "selfupdate":
 		return 0, "update delegado ao self-updater (via HandleCommand)", ""
 	case "restart", "reboot":

@@ -534,7 +534,7 @@ func (s *Service) Uninstall(id string) (string, error) {
 					packageID)
 				break
 			}
-			uninstallInstallerPath, uninstallWorkDir, err = s.prepareCustomInstallerAsset(runCtx, allowed, packageID, false)
+			uninstallInstallerPath, uninstallWorkDir, err = s.prepareCustomInstallerAsset(runCtx, allowed, packageID, customAssetUninstall)
 			if err != nil {
 				break
 			}
@@ -1169,13 +1169,32 @@ func (s *Service) runCustomInstallCommand(ctx context.Context, allowed appstore.
 			packageID)
 	}
 
-	installerPath, workDir, err := s.prepareCustomInstallerAsset(runCtx, allowed, packageID, true)
+	installerPath, workDir, err := s.prepareCustomInstallerAsset(runCtx, allowed, packageID, customAssetInstall)
 	if err != nil {
 		return "", err
 	}
 
 	command = applyCustomCommandPlaceholders(command, installerPath, workDir)
 	return s.runCustomShellCommandKind(runCtx, command, workDir, allowed.InstallCommandKind)
+}
+
+// customAssetOperation identifica em qual operação o instalador custom está
+// sendo preparado. Muda dois detalhes: o prefixo das mensagens de log e se a
+// execução do comando passa a usar o artifact publicado no P2P (instalação) ou
+// continua na cópia local (desinstalação) — ver o bloco de publicação abaixo.
+type customAssetOperation int
+
+const (
+	customAssetInstall customAssetOperation = iota
+	customAssetUninstall
+)
+
+// logPrefix devolve o rótulo da operação usado nas mensagens de log.
+func (op customAssetOperation) logPrefix() string {
+	if op == customAssetUninstall {
+		return "uninstall"
+	}
+	return "install"
 }
 
 // prepareCustomInstallerAsset baixa (ou reaproveita do cache/P2P) o instalador
@@ -1186,11 +1205,16 @@ func (s *Service) runCustomInstallCommand(ctx context.Context, allowed appstore.
 // depender do diretório do instalador (ex.: "{{installerDir}} /uninstall /quiet").
 // Antes, a remoção chamava o shell com workDir vazio e sem aplicar placeholders,
 // então o comando falhava mesmo estando configurado no servidor.
+//
+// Em AMBAS as operações o arquivo baixado da API é publicado no cache P2P do
+// site (vira seed): quem só vai desinstalar também poupa o download dos outros
+// agents. A diferença é que a instalação passa a executar o artifact publicado e
+// a desinstalação continua na cópia local (o artifact tem nome canônico).
 func (s *Service) prepareCustomInstallerAsset(
 	ctx context.Context,
 	allowed appstore.Item,
 	packageID string,
-	publishSeed bool,
+	op customAssetOperation,
 ) (installerPath string, workDir string, err error) {
 	if strings.TrimSpace(allowed.FileURL) == "" {
 		return "", "", nil
@@ -1205,7 +1229,7 @@ func (s *Service) prepareCustomInstallerAsset(
 	if s.customInstallerFromP2P != nil {
 		if path, ok := s.customInstallerFromP2P(ctx, packageID, allowed.Version); ok {
 			downloaded, fromP2P = path, true
-			s.logf(fmt.Sprintf("[install %s] instalador obtido do cache/rede P2P: %s", packageID, path))
+			s.logf(fmt.Sprintf("[%s %s] instalador obtido do cache/rede P2P: %s", op.logPrefix(), packageID, path))
 		}
 	}
 
@@ -1220,16 +1244,23 @@ func (s *Service) prepareCustomInstallerAsset(
 		// A limpeza é agendada com folga (e sobras antigas são varridas).
 		s.scheduleCustomAssetCleanup(filepath.Dir(path))
 
-		// Vira seed: publica o instalador no cache P2P (P2P_Temp) para os
-		// demais agents do site e passa a instalar a partir do artifact
-		// publicado, deixando a cópia temporária apenas como sobra a limpar.
-		// Best-effort — falha aqui não impede a instalação. Só faz sentido na
-		// instalação (publishSeed), não na remoção.
-		if publishSeed && s.publishCustomInstallerForP2P != nil {
+		// Vira seed: publica o instalador no cache P2P (P2P_Temp) para os demais
+		// agents do site — na INSTALAÇÃO e também na DESINSTALAÇÃO. Quem só vai
+		// remover o app também ajuda o site: os outros agents passam a baixar da
+		// LAN em vez de repetir o download da API.
+		// Best-effort: falha aqui não impede a operação.
+		//   • instalação: passa a executar a partir do artifact publicado (nome
+		//     canônico custom-<pkg>-v<ver>.exe), deixando a cópia temporária
+		//     apenas como sobra a limpar;
+		//   • desinstalação: continua executando a CÓPIA LOCAL, porque comandos
+		//     de remoção podem citar o nome ORIGINAL do arquivo em
+		//     {{installerDir}} (ex.: "{{installerDir}}\setup.exe" /uninstall) e o
+		//     artifact publicado é renomeado.
+		if s.publishCustomInstallerForP2P != nil {
 			publishedPath, pubErr := s.publishCustomInstallerForP2P(ctx, packageID, allowed.Version, path)
 			if pubErr != nil {
-				s.logf(fmt.Sprintf("[install %s] aviso: falha ao publicar instalador no P2P: %v", packageID, pubErr))
-			} else if strings.TrimSpace(publishedPath) != "" {
+				s.logf(fmt.Sprintf("[%s %s] aviso: falha ao publicar instalador no P2P: %v", op.logPrefix(), packageID, pubErr))
+			} else if op == customAssetInstall && strings.TrimSpace(publishedPath) != "" {
 				downloaded, fromP2P = publishedPath, true
 			}
 		}
@@ -1246,7 +1277,7 @@ func (s *Service) prepareCustomInstallerAsset(
 				s.scheduleCustomAssetCleanup(tempDir)
 				workDir = tempDir
 			} else {
-				s.logf(fmt.Sprintf("[install %s] aviso: falha ao criar pasta de extração: %v", packageID, tempErr))
+				s.logf(fmt.Sprintf("[%s %s] aviso: falha ao criar pasta de extração: %v", op.logPrefix(), packageID, tempErr))
 			}
 		}
 		extractedDir := filepath.Join(workDir, "extracted")
@@ -1254,7 +1285,7 @@ func (s *Service) prepareCustomInstallerAsset(
 			return "", "", err
 		}
 		workDir = resolveExtractionRoot(extractedDir)
-		s.logf(fmt.Sprintf("[install %s] ZIP extraido em %s", packageID, workDir))
+		s.logf(fmt.Sprintf("[%s %s] ZIP extraido em %s", op.logPrefix(), packageID, workDir))
 	}
 
 	return installerPath, workDir, nil
@@ -1305,6 +1336,9 @@ func (s *Service) runCustomShellCommandKind(ctx context.Context, command, workDi
 		cmd.Dir = workDir
 	}
 	processutil.HideWindow(cmd)
+	// Linha de comando CRUA (quando definida): o cmd.exe faz parsing cru e o
+	// exec do Go escaparia aspas embutidas como \" — ver processutil.ApplyRawCmdLine.
+	processutil.ApplyRawCmdLine(cmd, spec.cmdLine)
 	output, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(output))
 	if err != nil {
@@ -1322,7 +1356,11 @@ func (s *Service) runCustomShellCommandKind(ctx context.Context, command, workDi
 // customCommandSpec descreve como um comando/script custom será executado:
 // argv pronto para exec.CommandContext e, nos modos de script, o corpo a gravar.
 type customCommandSpec struct {
-	argv       []string
+	argv []string
+	// cmdLine, quando não vazio, vai para syscall.SysProcAttr.CmdLine (apenas
+	// Windows): linha de comando CRUA para o cmd.exe/powershell, que fazem
+	// parsing cru e não entendem o \" do exec do Go.
+	cmdLine    string
 	scriptPath string
 	scriptBody string
 	label      string
@@ -1335,12 +1373,17 @@ func buildCustomCommandSpec(kind int, command, workDir string) (customCommandSpe
 	switch kind {
 	case appstore.CommandKindCmdScript:
 		path := filepath.Join(customScriptDir(workDir), "discovery-custom-install.cmd")
-		// O caminho vai SEM aspas no argv: o exec do Go já cita o argumento
-		// quando ele contém espaços (o temp do Windows costuma ter o nome do
-		// usuário). Aspas manuais viravam parte do nome e o cmd /C falhava com
-		// "'\"C:\...\x.cmd\"' não é reconhecido como um comando interno".
+		// O caminho vai SEM aspas no argv (o exec do Go cita quando há espaços)
+		// e com o caminho citado na linha crua. Aqui NÃO se usa o envelope
+		// /D /S /C: o /S remove a 1a e a última aspa da linha e o caminho ficaria
+		// SEM aspas, quebrando em pasta com espaço ("dir com espaco"); com /C
+		// puro a regra "exatamente 2 aspas" preserva o caminho citado.
 		return customCommandSpec{
-			argv:       []string{"cmd", "/C", path},
+			argv: []string{"cmd", "/C", path},
+			// As aspas do caminho vão SÓ na linha crua (CmdLine). No argv elas
+			// seriam escapadas como \" e o cmd /C receberia um nome de arquivo
+			// com aspas no meio.
+			cmdLine:    "cmd.exe /C \"" + path + "\"",
 			scriptPath: path,
 			scriptBody: command,
 			label:      "cmd",
@@ -1348,22 +1391,34 @@ func buildCustomCommandSpec(kind int, command, workDir string) (customCommandSpe
 	case appstore.CommandKindPowerShellScript:
 		path := filepath.Join(customScriptDir(workDir), "discovery-custom-install.ps1")
 		return customCommandSpec{
-			argv:       []string{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path},
+			argv: []string{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path},
+			// -File com o caminho citado na linha crua: sem isso, um workDir com
+			// espaço pode truncar o caminho no primeiro espaço.
+			cmdLine:    "powershell -NoProfile -ExecutionPolicy Bypass -File \"" + path + "\"",
 			scriptPath: path,
 			scriptBody: command,
 			label:      "powershell",
 		}, nil
 	case appstore.CommandKindCommand:
+		// Linha crua com /D /S /C e o comando ENVOLTO em aspas externas: o
+		// parsing cru do cmd.exe remove a 1a e a ÚLTIMA aspa da linha quando
+		// há mais de duas aspas (regra 2 de cmd /?). Sem o envelope, um comando
+		// com caminho citado + argumento citado (ex.: "C:\Program Files\x.exe"
+		// /DEST="C:\pasta com espaço") perdia as aspas internas e quebrava no
+		// primeiro espaço. /D /S /C "<comando>" é o mesmo formato que o Node.js
+		// usa em child_process com shell:true e sobrevive a N aspas internas.
 		return customCommandSpec{
-			argv:  []string{"cmd", "/C", command},
-			label: "comando",
+			argv:    []string{"cmd", "/C", command},
+			cmdLine: `cmd.exe /D /S /C "` + command + `"`,
+			label:   "comando",
 		}, nil
 	default:
 		// Tipo desconhecido (servidor mais novo): mantém o comportamento
 		// retrocompatível de comando único em vez de falhar a instalação.
 		return customCommandSpec{
-			argv:  []string{"cmd", "/C", command},
-			label: "comando",
+			argv:    []string{"cmd", "/C", command},
+			cmdLine: `cmd.exe /D /S /C "` + command + `"`,
+			label:   "comando",
 		}, nil
 	}
 }

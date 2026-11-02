@@ -29,6 +29,9 @@ func TestBuildCustomCommandSpecCommandKind(t *testing.T) {
 	if spec.scriptBody != "" || spec.scriptPath != "" {
 		t.Fatalf("modo comando nao deve gerar arquivo de script: %+v", spec)
 	}
+	if spec.cmdLine != "cmd.exe /D /S /C \"setup.exe /S\"" {
+		t.Fatalf("cmdLine inesperado: %q", spec.cmdLine)
+	}
 }
 
 func TestBuildCustomCommandSpecCmdScript(t *testing.T) {
@@ -45,10 +48,14 @@ func TestBuildCustomCommandSpecCmdScript(t *testing.T) {
 	if spec.argv[0] != "cmd" || spec.argv[1] != "/C" {
 		t.Fatalf("argv inesperado: %v", spec.argv)
 	}
-	// O caminho vai cru no argv: o exec do Go cita quando há espaços. Aspas
-	// manuais fariam o cmd /C procurar um arquivo com aspas no nome.
+	// O caminho vai cru no argv e AS ASPAS ficam só na linha crua (CmdLine),
+	// que o cmd.exe lê sem re-quoting do exec do Go.
 	if spec.argv[2] != spec.scriptPath {
 		t.Fatalf("caminho do .cmd deveria ir sem aspas manuais, veio %q", spec.argv[2])
+	}
+	wantCmdLine := "cmd.exe /C \"" + spec.scriptPath + "\""
+	if spec.cmdLine != wantCmdLine {
+		t.Fatalf("cmdLine = %q, esperado %q", spec.cmdLine, wantCmdLine)
 	}
 	if !strings.Contains(spec.scriptBody, "setup.exe /S") {
 		t.Fatalf("corpo do script deveria conter o comando original, veio %q", spec.scriptBody)
@@ -74,6 +81,9 @@ func TestBuildCustomCommandSpecPowerShellScript(t *testing.T) {
 	}
 	if !strings.Contains(spec.scriptBody, "Start-Process msiexec") {
 		t.Fatalf("corpo do .ps1 deveria conter o comando original, veio %q", spec.scriptBody)
+	}
+	if spec.cmdLine != "powershell -NoProfile -ExecutionPolicy Bypass -File \""+spec.scriptPath+"\"" {
+		t.Fatalf("cmdLine inesperado: %q", spec.cmdLine)
 	}
 }
 
@@ -162,6 +172,85 @@ func TestRunCustomShellCommandKindWithoutWorkDirRemovesScript(t *testing.T) {
 	path := filepath.Join(os.TempDir(), "discovery-custom-install.cmd")
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("script temporario deveria ter sido removido ao final; stat err=%v", err)
+	}
+}
+
+// Regressão (bug de aspas): o cmd.exe faz parsing CRU da linha e o exec do Go
+// escapava aspas embutidas como \\". Modo Comando com caminho citado e caminho
+// com espaço precisam de SysProcAttr.CmdLine (linha crua) para funcionar.
+func TestRunCustomShellCommandKindCommandQuotedPathWithSpace(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "Space Dir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("criar workdir: %v", err)
+	}
+	script := filepath.Join(workDir, "custom tool.cmd")
+	if err := os.WriteFile(script, []byte("@echo off\r\necho quoted-cmd-ok %1\r\n"), 0o755); err != nil {
+		t.Fatalf("gravar script: %v", err)
+	}
+	svc := &Service{}
+
+	command := "\"" + script + "\" arg1"
+	out, err := svc.runCustomShellCommandKind(context.Background(), command, workDir, appstore.CommandKindCommand)
+	if err != nil {
+		t.Fatalf("comando citado com espaco falhou: %v (saida=%q)", err, out)
+	}
+	if !strings.Contains(out, "quoted-cmd-ok arg1") {
+		t.Fatalf("saida inesperada: %q", out)
+	}
+}
+
+func TestRunCustomShellCommandKindPowerShellScriptWorkDirWithSpace(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "Space Dir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("criar workdir: %v", err)
+	}
+	svc := &Service{}
+
+	out, err := svc.runCustomShellCommandKind(context.Background(), "Write-Output 'ps-space-ok'", workDir, appstore.CommandKindPowerShellScript)
+	if err != nil {
+		t.Fatalf("script ps em workdir com espaco falhou: %v (saida=%q)", err, out)
+	}
+	if !strings.Contains(out, "ps-space-ok") {
+		t.Fatalf("saida inesperada: %q", out)
+	}
+}
+
+// Regressão da regra 2 do cmd.exe: com mais de duas aspas na linha, o
+// parsing cru removia a 1a e a última aspa e o comando quebrava no primeiro
+// espaço. O envelope /D /S /C "<comando>" preserva as aspas internas.
+func TestRunCustomShellCommandKindCommandQuotedExeAndQuotedArg(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "Space Dir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("criar workdir: %v", err)
+	}
+	destDir := filepath.Join(workDir, "Dest Two")
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		t.Fatalf("criar dest: %v", err)
+	}
+	script := filepath.Join(workDir, "installer tool.cmd")
+	if err := os.WriteFile(script, []byte("@echo off\r\necho exe-ok %1\r\necho dest-ok %2\r\n"), 0o755); err != nil {
+		t.Fatalf("gravar script: %v", err)
+	}
+	svc := &Service{}
+
+	command := "\"" + script + "\" /DEST=\"" + destDir + "\""
+	out, err := svc.runCustomShellCommandKind(context.Background(), command, workDir, appstore.CommandKindCommand)
+	if err != nil {
+		t.Fatalf("exe citado + arg citado falhou: %v (saida=%q)", err, out)
+	}
+	if !strings.Contains(out, "exe-ok") || !strings.Contains(out, "dest-ok") {
+		t.Fatalf("saida inesperada: %q", out)
+	}
+}
+
+// Comando sem aspas nenhuma continua funcionando com o envelope /D /S /C.
+func TestRunCustomShellCommandKindCommandNoQuotesStillWorks(t *testing.T) {
+	out, err := (&Service{}).runCustomShellCommandKind(context.Background(), "echo hello", "", appstore.CommandKindCommand)
+	if err != nil {
+		t.Fatalf("comando simples falhou: %v (saida=%q)", err, out)
+	}
+	if !strings.Contains(out, "hello") {
+		t.Fatalf("saida inesperada: %q", out)
 	}
 }
 

@@ -162,6 +162,13 @@ func runUninstallCommand(parent context.Context, command string) (string, error)
 
 	cmd := exec.CommandContext(ctx, "cmd", "/C", command)
 	processutil.HideWindow(cmd)
+	// Linha crua (processutil.ApplyRawCmdLine): o UninstallString do registro
+	// quase sempre vem citado (ex.: "C:\Program Files\App\unins.exe" /quiet)
+	// e o exec do Go escaparia as aspas como \" — o cmd.exe, que faz parsing
+	// cru da linha, rejeitaria o comando inteiro. O envelope /D /S /C "..." é o
+	// mesmo formato do Node.js (shell:true) e sobrevive a UninstallStrings com
+	// VÁRIAS aspas (exe citado + argumento citado), que o /C puro quebra.
+	processutil.ApplyRawCmdLine(cmd, "cmd.exe /D /S /C \""+command+"\"")
 	output, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(output))
 	if err != nil {
