@@ -317,7 +317,7 @@ func (a *App) refreshWindowsUpdatesAfterInstall() {
 func parseThirdPartyInstallPayload(payloadJSON map[string]any) (string, []inventory.ThirdPartyInstallRequest, error) {
 	source := strings.ToLower(strings.TrimSpace(agentcommands.GetStringField(payloadJSON, "source")))
 	switch source {
-	case "choco", "winget", "msi":
+	case "choco", "winget":
 	default:
 		return "", nil, fmt.Errorf("origem de terceiros invalida: %q", source)
 	}
@@ -347,9 +347,7 @@ func parseThirdPartyInstallPayload(payloadJSON map[string]any) (string, []invent
 				continue
 			}
 			requests = append(requests, inventory.ThirdPartyInstallRequest{
-				ID: id,
-				// Campos do catálogo curado (WU-21): quando presentes, o agente
-				// baixa do fornecedor e valida o SHA-256 antes de executar.
+				ID:            id,
 				InstallerURL:  strings.TrimSpace(agentcommands.GetStringField(value, "installerUrl")),
 				SHA256:        strings.TrimSpace(agentcommands.GetStringField(value, "sha256")),
 				SilentArgs:    strings.TrimSpace(agentcommands.GetStringField(value, "silentArgs")),

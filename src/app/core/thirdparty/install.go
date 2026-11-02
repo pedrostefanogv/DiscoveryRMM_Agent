@@ -29,7 +29,7 @@ import (
 // ErrHashMismatch indica divergência entre o SHA-256 esperado e o baixado.
 var ErrHashMismatch = errors.New("hash SHA-256 do instalador nao confere")
 
-// InstallSpec descreve como instalar UM app de catálogo.
+// InstallSpec descreve como instalar UM app a partir de um instalador externo.
 type InstallSpec struct {
 	Source        string
 	ID            string
@@ -39,7 +39,7 @@ type InstallSpec struct {
 	InstallerType string
 }
 
-// HasCatalogIntegrity informa se o spec tem URL+hash (caminho curado).
+// HasCatalogIntegrity informa se o spec tem URL+hash do instalador.
 func (s InstallSpec) HasCatalogIntegrity() bool {
 	return strings.TrimSpace(s.InstallerURL) != "" && strings.TrimSpace(s.SHA256) != ""
 }

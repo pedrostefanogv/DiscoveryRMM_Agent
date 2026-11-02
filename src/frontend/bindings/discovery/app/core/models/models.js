@@ -148,6 +148,17 @@ export class AppItem {
              */
             this["uninstallCommandKind"] = 0;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * UninstallCommand é o comando de remoção do app custom cadastrado no
+             * servidor. Sem ele na UI o card caía em "Já instalado" (botão desabilitado)
+             * mesmo com o comando configurado — o Go já sabia desinstalar, mas o
+             * frontend não tinha como saber que a remoção estava disponível.
+             * @member
+             * @type {string | undefined}
+             */
+            this["uninstallCommand"] = undefined;
+        }
         if (!("detectionMode" in $$source)) {
             /**
              * DetectionMode: 0 = nenhuma, 1 = vinculado a app do inventário,

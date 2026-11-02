@@ -23,9 +23,8 @@ type ThirdPartyInstallOutcome struct {
 	Error     string
 }
 
-// ThirdPartyInstallRequest descreve UM app a instalar. Quando traz URL+SHA-256
-// do catálogo curado (WU-21), o agente baixa, verifica e executa o instalador;
-// sem esses campos, delega ao gerenciador (winget/choco) como antes.
+// ThirdPartyInstallRequest descreve UM app a instalar. O agente delega ao
+// gerenciador (winget/choco), que valida o proprio feed.
 type ThirdPartyInstallRequest struct {
 	ID            string
 	InstallerURL  string
