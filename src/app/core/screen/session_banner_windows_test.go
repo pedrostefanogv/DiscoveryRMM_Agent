@@ -14,6 +14,38 @@ import (
 	"discovery/app/core/winui"
 )
 
+// TestHideBannerFromCaptureNuncaFalha garante a regressão do Win10: o banner
+// NUNCA deixa de ser exibido por causa da afinidade de captura.
+//
+// Com HWND inválido a API recusa todas as afinidades (inclusive o WDA_MONITOR),
+// que é o pior caso do degrau: o modo final precisa ser bannerCaptureVisible e
+// o erro do EXCLUDEFROMCAPTURE precisa ser devolvido para o log. Com um HWND
+// real o resultado nunca pode ser o de pior caso.
+func TestHideBannerFromCaptureNuncaFalha(t *testing.T) {
+	mode, err := hideBannerFromCapture(0)
+	if mode != bannerCaptureVisible {
+		t.Fatalf("HWND inválido devolveu modo %d, esperado bannerCaptureVisible", mode)
+	}
+	if err == nil {
+		t.Fatal("HWND inválido deveria reportar o erro do WDA_EXCLUDEFROMCAPTURE")
+	}
+
+	banner, err := NewSessionBanner(BannerOptions{Operator: "Teste"})
+	if err != nil {
+		t.Fatalf("banner não criado: %v", err)
+	}
+	defer banner.Close()
+	banner.mu.Lock()
+	hwnd := banner.hwnd
+	banner.mu.Unlock()
+	if hwnd == 0 {
+		t.Fatal("banner sem HWND")
+	}
+	if mode, _ := hideBannerFromCapture(hwnd); mode == bannerCaptureVisible {
+		t.Fatal("janela real não deveria cair no pior caso de afinidade")
+	}
+}
+
 // TestBannerScaleForDPI cobre o fator de escala do cartão (PerMonitorV2).
 func TestBannerScaleForDPI(t *testing.T) {
 	cases := []struct {

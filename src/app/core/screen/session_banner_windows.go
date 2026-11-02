@@ -4,6 +4,7 @@ package screen
 
 import (
 	"fmt"
+	"log"
 	"runtime"
 	"strings"
 	"sync"
@@ -30,12 +31,22 @@ import (
 // (screen.SessionTray): o usuário local encerra a sessão sem que nenhuma janela
 // fique por cima dos apps.
 //
-// O banner continua excluído da captura: o viewer e a gravação não podem vê-lo.
-// Se a exclusão não for suportada pelo Windows, a janela NÃO é exibida (melhor
-// sem banner do que vazando no stream).
+// O banner continua escondido da captura: o viewer e a gravação não podem vê-lo.
+// Na ordem, tentamos WDA_EXCLUDEFROMCAPTURE (Win10 2004+) → WDA_MONITOR (Win7+,
+// aparece preto no stream) e, se NENHUMA afinidade for aceita (ex.: Win10 antigo
+// ou VM sem "recursos de memória" para o window manager isolar a janela, que
+// devolve ERROR_NOT_ENOUGH_MEMORY), o banner é exibido sem exclusão em vez de
+// simplesmente não existir: o usuário local PRECISA saber que está sendo
+// acessado.
 
 const (
-	// wdaExcludeFromCapture é o SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE).
+	// wdaNone/WdaMonitor/WdaExcludeFromCapture são os valores de
+	// SetWindowDisplayAffinity usados para esconder o banner da captura:
+	// WDA_NONE só funciona com WDA_MONITOR já aplicado (antes exige WDA_NONE);
+	// WDA_MONITOR (Win7+) pinta a janela de preto no stream e serve de degrau
+	// intermediário para o WDA_EXCLUDEFROMCAPTURE (Win10 2004+).
+	wdaNone               = 0x00000000
+	wdaMonitor            = 0x00000001
 	wdaExcludeFromCapture = 0x00000011
 
 	bannerClassName = "DiscoveryRmmSessionBanner"
@@ -55,6 +66,51 @@ const (
 )
 
 var procSetWindowDisplayAffinity = user32DLL.NewProc("SetWindowDisplayAffinity")
+
+// bannerCaptureMode descreve como o banner se esconde da captura de tela.
+type bannerCaptureMode int
+
+const (
+	// bannerCaptureExcluded: WDA_EXCLUDEFROMCAPTURE — o viewer não vê o
+	// cartão (Win10 2004+). Cenário ideal.
+	bannerCaptureExcluded bannerCaptureMode = iota
+	// bannerCaptureBlack: WDA_MONITOR — o cartão aparece PRETO no stream
+	// (Win7+). Não vaza o texto, mas ocupa a área.
+	bannerCaptureBlack
+	// bannerCaptureVisible: nenhuma afinidade aceita; o cartão aparece no
+	// stream. Último recurso, ainda melhor do que não avisar o usuário.
+	bannerCaptureVisible
+)
+
+// hideBannerFromCapture tenta esconder o banner da captura em ordem de
+// preferência e devolve o modo obtido + erro acumulado (só não-nil quando
+// nenhuma afinidade foi aplicada).
+//
+// Por que não "tudo ou nada": o WDA_EXCLUDEFROMCAPTURE depende do compositor
+// isolar o conteúdo da janela e pode falhar com ERROR_NOT_ENOUGH_MEMORY (8) em
+// Win10/VM. Antes disso, a falha cancelava o banner inteiro — o usuário acessado
+// ficava sem qualquer aviso. Nunca deixa a sessão sem indicador.
+func hideBannerFromCapture(hwnd uintptr) (bannerCaptureMode, error) {
+	var (
+		mode       = bannerCaptureExcluded
+		excludeErr error
+	)
+	if ok, _, callErr := procSetWindowDisplayAffinity.Call(hwnd, wdaExcludeFromCapture); ok == 0 {
+		excludeErr = fmt.Errorf("WDA_EXCLUDEFROMCAPTURE falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
+		mode = bannerCaptureBlack
+	}
+	if mode != bannerCaptureVisible {
+		// WDA_NONE antes do WDA_MONITOR: a API só troca para WDA_MONITOR a
+		// partir de WDA_NONE, e o EXCLUDEFROMCAPTURE pode ter deixado o estado
+		// pendente.
+		procSetWindowDisplayAffinity.Call(hwnd, wdaNone)
+		if ok, _, _ := procSetWindowDisplayAffinity.Call(hwnd, wdaMonitor); ok != 0 {
+			return mode, nil
+		}
+		mode = bannerCaptureVisible
+	}
+	return mode, excludeErr
+}
 
 // BannerOptions descreve o banner a criar. Não há botão: a desconexão é feita
 // pelo ícone da bandeja (SessionTray), para não bloquear cliques do app em uso.
@@ -208,8 +264,10 @@ func (b *SessionBanner) paintMetrics() (width, height, radius int, scale float64
 	return width, height, radius, scale
 }
 
-// NewSessionBanner cria e exibe o banner na thread dedicada. Retorna erro se a
-// janela não puder ser excluída da captura (nesse caso nada é exibido).
+// NewSessionBanner cria e exibe o banner na thread dedicada. Retorna erro
+// apenas se a janela não puder ser criada; quando a exclusão da captura é
+// recusada pelo Windows, o banner é exibido mesmo assim (ver
+// hideBannerFromCapture).
 //
 // O tamanho final (janela, raio, fontes e coordenadas de desenho) é escalado
 // pelo DPI efetivo do monitor compartilhado — com PerMonitorV2 o Windows NÃO
@@ -252,11 +310,14 @@ func NewSessionBanner(opts BannerOptions) (*SessionBanner, error) {
 		banner.mu.Unlock()
 		bannerStates.Store(hwnd, &bannerState{banner: banner})
 
-		// Fora da captura: sem isso o banner apareceria no viewer/gravação.
-		if ok, _, affinityErr := procSetWindowDisplayAffinity.Call(hwnd, wdaExcludeFromCapture); ok == 0 {
-			winui.DestroyWindow(hwnd)
-			banner.ready <- fmt.Errorf("SetWindowDisplayAffinity falhou: %v (errno=%d)", affinityErr, errnoOf(affinityErr))
-			return
+		// Fora da captura (degradando quando o Windows não suporta). O banner é
+		// exibido mesmo no pior caso: sem aviso o usuário acessado não sabe que
+		// há uma sessão aberta (regressão observada no Win10).
+		captureMode, captureErr := hideBannerFromCapture(hwnd)
+		if captureErr != nil {
+			log.Printf("[session-banner] exclusão da captura indisponível, banner exibido sem exclusão: %v", captureErr)
+		} else if captureMode != bannerCaptureExcluded {
+			log.Printf("[session-banner] WDA_EXCLUDEFROMCAPTURE indisponível; usando WDA_MONITOR (o banner aparece preto no stream)")
 		}
 
 		// DPI efetivo do monitor compartilhado. Com manifest PerMonitorV2 o
