@@ -2512,6 +2512,51 @@ window.dsvTicketCommentScreenshot = function (dataUrl) {
 
 // ── Anexos na ABERTURA do chamado (fila local ate o ticket existir) ────────
 
+// buildPendingAttachmentTile monta o tile de um anexo PENDENTE no composer
+// (ainda nao enviado ao servidor), com o mesmo visual do composer do chat:
+// miniatura para imagens, quadro com o nome para os demais arquivos e o botao
+// "x" para remover. onRemove e chamado no clique para tirar o item da fila.
+function buildPendingAttachmentTile(item, onRemove) {
+  var tile = document.createElement('div');
+  tile.className = 'chat-attachment';
+
+  var base64 = item.base64Data || item.base64 || '';
+  var name = item.fileName || 'anexo';
+  var isImage = String(item.contentType || '').toLowerCase().indexOf('image/') === 0;
+  if (isImage && base64) {
+    var thumb = document.createElement('img');
+    thumb.src = 'data:' + item.contentType + ';base64,' + base64;
+    thumb.alt = name;
+    thumb.title = name;
+    tile.appendChild(thumb);
+  } else {
+    var file = document.createElement('span');
+    file.className = 'chat-attachment-file';
+    file.textContent = name;
+    file.title = name;
+    tile.appendChild(file);
+  }
+
+  var meta = document.createElement('span');
+  meta.className = 'chat-attachment-meta';
+  var bytes = Number(item.sizeBytes) > 0 ? Number(item.sizeBytes) : base64ApproxBytes(base64);
+  meta.textContent = bytes > 0 ? name + ' (' + commentAttachmentSizeLabel(bytes) + ')' : name;
+  tile.appendChild(meta);
+
+  var remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'chat-attachment-remove';
+  remove.title = translate('chat.screenshotRemove');
+  remove.setAttribute('aria-label', translate('chat.screenshotRemove'));
+  remove.textContent = '\u00d7';
+  remove.addEventListener('click', function () {
+    if (typeof onRemove === 'function') onRemove();
+  });
+  tile.appendChild(remove);
+
+  return tile;
+}
+
 function renderNewTicketAttachments() {
   if (!newTicketAttachmentsEl) return;
   newTicketAttachmentsEl.innerHTML = '';

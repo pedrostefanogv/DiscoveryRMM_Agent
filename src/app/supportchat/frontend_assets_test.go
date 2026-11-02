@@ -885,7 +885,8 @@ func TestModaisDoChat_VisiveisSoNaAreaDoChat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("não foi possível ler %s: %v", cssPath, err)
 	}
-	cssText := string(css)
+	// Normaliza EOL: checkout com core.autocrlf grava CRLF e a regra é a mesma.
+	cssText := strings.ReplaceAll(string(css), "\r\n", "\n")
 	for _, rule := range []string{
 		"#supportChatView .chat-panel.support-chat-panel {\n  position: relative;",
 		"#supportChatView .sc-modal-overlay {\n  position: absolute;",
