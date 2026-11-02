@@ -214,8 +214,9 @@ type Service struct {
 	thirdPartyProviders []thirdparty.Provider
 
 	// ── Fila única de operações de pacote (F3) ──
-	// packageOpMu serializa Install/Uninstall/Upgrade/UpgradeFromSource/
-	// UninstallFromSource/UpgradeAll: automação (tasks de policy), a UI (IPC)
+	// packageOpMu serializa Install/InstallFromSource/Uninstall/Upgrade/
+	// UpgradeFromSource/UninstallFromSource/UpgradeAll: automação (tasks de
+	// policy), a UI (IPC)
 	// e o auto-update da Loja nunca executam winget/choco em paralelo. Lock no
 	// início de cada função, unlock no fim (defer).
 	packageOpMu sync.Mutex
@@ -657,6 +658,60 @@ func (s *Service) UpgradeFromSource(installationType, packageID string) (string,
 	s.logf(out)
 	if err == nil {
 		s.scheduleInventoryRefreshAfterPackageChange("upgrade", packageID)
+	}
+	return out, err
+}
+
+// InstallFromSource instala um pacote do catálogo sem consultar a política
+// da loja. Usado pelo comando remoto de instalação do dashboard (o servidor
+// aplica o gate de confirmação antes de despachar). Continua passando pelo
+// router de gerenciadores, preservando a otimização P2P e os switches
+// silenciosos do catálogo.
+func (s *Service) InstallFromSource(installationType, packageID string) (string, error) {
+	// Fila única de pacotes (F3): espera qualquer operação de pacote em curso
+	// (automação, UI ou auto-update) antes de executar winget/choco.
+	release, ok := s.tryLockPackageOperation()
+	if !ok {
+		return "", fmt.Errorf("fila de pacotes ocupada: outra operação não terminou em %s", packageOperationQueueTimeout)
+	}
+	defer release()
+	done := s.beginActivity("instalação")
+	if done != nil {
+		defer done()
+	}
+
+	packageID = strings.TrimSpace(packageID)
+	if packageID == "" {
+		return "", fmt.Errorf("id do pacote é obrigatório")
+	}
+
+	s.logf("[software-install " + packageID + "] " + time.Now().Format("15:04:05"))
+
+	var out string
+	var err error
+	switch normalizeAppStoreInstallationType(installationType) {
+	case string(appstore.InstallationWinget):
+		out, err = s.apps.Install(s.ctx(), packageID)
+	case string(appstore.InstallationChocolatey):
+		out, err = s.runChocolatey(s.ctx(), "install", packageID)
+	case string(appstore.InstallationCustom):
+		// Custom exige o Item (comando/arquivo), que vem do catálogo/loja.
+		allowed, resolveErr := s.resolveAllowed(s.ctx(), packageID)
+		if resolveErr != nil {
+			err = resolveErr
+			break
+		}
+		if normalizeAppStoreInstallationType(allowed.InstallationType) != string(appstore.InstallationCustom) {
+			err = fmt.Errorf("pacote %q não é do tipo Custom", packageID)
+			break
+		}
+		out, err = s.runCustomInstallCommand(s.ctx(), allowed, packageID)
+	default:
+		err = fmt.Errorf("installationType %q não suportado para instalação remota", installationType)
+	}
+	s.logf(out)
+	if err == nil {
+		s.scheduleInventoryRefreshAfterPackageChange("install", packageID)
 	}
 	return out, err
 }

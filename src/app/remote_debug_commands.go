@@ -354,6 +354,11 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		return a.handleSoftwareUninstallCommand(parent, payload)
 	}
 
+	// Instalação de software do catálogo (comando remoto do dashboard).
+	if IsSoftwareInstallCommandType(cmdType) {
+		return a.handleSoftwareInstallCommand(parent, payload)
+	}
+
 	// Gerenciador de patches do Windows (WUA): scan/install/hide/policy.
 	if IsWindowsUpdateCommandType(cmdType) {
 		return a.handleWindowsUpdateCommand(parent, payload)
