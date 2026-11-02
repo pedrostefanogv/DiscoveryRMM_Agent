@@ -146,6 +146,11 @@ type Service struct {
 	// sem gate: tasks antigas (TaskRespectMaintenanceWindow=false) e agentes
 	// sem config não mudam de comportamento.
 	maintenanceWindowSource MaintenanceWindowSource
+	// deferRetryHook, quando configurado (observabilidade/testes), intercepta
+	// o agendamento do defer de janela feito por deferPackageActionToWindow —
+	// registra o instante agendado sem mudar a API pública. Nil na produção:
+	// o agendamento real (scheduleDeferRetry) roda.
+	deferRetryHook func(agentID string, task AutomationTask, sourceType AutomationExecutionSourceType, triggerType TriggerType, at time.Time)
 }
 
 // policyPreloadRetriggerInterval é o intervalo mínimo para reacionar a MESMA
@@ -259,6 +264,50 @@ func (s *Service) maintenanceWindow() MaintenanceWindowSource {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.maintenanceWindowSource
+}
+
+// deferPackageActionToWindow adia (defer) uma AÇÃO DE PACOTE que respeita a
+// janela de manutenção quando AGORA está FORA dela: agenda a tentativa para o
+// NextStart da janela (scheduleDeferRetry) e devolve true — o chamador NÃO
+// deve executar nem armar marcador de dedup (task one-shot adiada não é
+// "feita"; o NoOp "deferred_to_window" do executor só era detectado DEPOIS
+// de a execução existir, e o marcador armado no onStart fazia a task sumir).
+//
+// Devolve false (sem defer — o chamador segue o fluxo normal) quando:
+//   - a task não é de pacote ou não respeita a janela
+//     (TaskRespectMaintenanceWindow=false — o executor não aplicaria o gate);
+//   - a fonte de janela é nil (agente sem config — comportamento legado);
+//   - a janela está desligada (Enabled=false — sem gate);
+//   - agora está DENTRO da janela (executa agora);
+//   - NextStart é zero (horário de início inválido — não há quando reagendar).
+//
+// Idempotente: policy-syncs repetidos fora da janela re-armam o MESMO timer
+// (scheduleDeferRetry para o anterior) — sem multiplicação de retries.
+func (s *Service) deferPackageActionToWindow(agentID string, task AutomationTask, sourceType AutomationExecutionSourceType, triggerType TriggerType) bool {
+	if !task.TaskRespectMaintenanceWindow || !isPackageAction(task.ActionType) {
+		return false
+	}
+	source := s.maintenanceWindow()
+	if source == nil {
+		return false
+	}
+	win := source()
+	now := time.Now()
+	if !win.Enabled || win.Contains(now) {
+		return false
+	}
+	nextStart := win.NextStart(now)
+	if nextStart.IsZero() {
+		s.logf("automacao: task=%s fora da janela mas sem proximo inicio valido (start invalido) - executando sem defer", strings.TrimSpace(task.TaskID))
+		return false
+	}
+	s.logf("automacao: task=%s adiada para a janela de manutencao (nextStart=%s, trigger=%s)", strings.TrimSpace(task.TaskID), nextStart.UTC().Format(time.RFC3339), string(triggerType))
+	if s.deferRetryHook != nil {
+		s.deferRetryHook(agentID, task, sourceType, triggerType, nextStart)
+		return true
+	}
+	s.scheduleDeferRetry(agentID, task, sourceType, triggerType, nextStart)
+	return true
 }
 
 func (s *Service) SetPSADTPolicyResolver(resolver func() PSADTPolicy) {
@@ -409,6 +458,11 @@ func (s *Service) triggerUserLoginTasks(ctx context.Context, sessionID uint32) {
 	s.mu.RUnlock()
 	for _, task := range orderedExecutionTasks(state.Tasks) {
 		if !task.TriggerOnUserLogin {
+			continue
+		}
+		// Gate de janela: task de pacote adiada não executa agora (o timer do
+		// defer cobre o retry na janela).
+		if s.deferPackageActionToWindow(agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin) {
 			continue
 		}
 		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin, nil, nil)
@@ -635,10 +689,17 @@ func (s *Service) reconcilePolicy(ctx context.Context, previous State, current S
 	if !s.userLoginHandled {
 		triggered := false
 		for _, task := range orderedExecutionTasks(current.Tasks) {
-			if task.TriggerOnUserLogin {
-				triggered = true
-				s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin, nil, nil)
+			if !task.TriggerOnUserLogin {
+				continue
 			}
+			// Gate de janela: task adiada NÃO conta como disparada — sem o
+			// userLoginHandled o próximo policy-sync reavalia (e re-arma o
+			// defer), em vez de perder a task até o próximo logon.
+			if s.deferPackageActionToWindow(agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin) {
+				continue
+			}
+			triggered = true
+			s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin, nil, nil)
 		}
 		if triggered {
 			s.userLoginHandled = true
@@ -675,6 +736,12 @@ func (s *Service) shouldSkipTriggeredPackageTask(ctx context.Context, task Autom
 }
 
 func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint string, task AutomationTask) {
+	// Gate de janela de manutenção ANTES do dedup de marcador: task one-shot
+	// adiada não é marcada como feita (o retorno aqui pula AMBOS os ramos
+	// abaixo — com e sem db — e o retry é agendado para o NextStart).
+	if s.deferPackageActionToWindow(agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate) {
+		return
+	}
 	if s.db == nil || agentID == "" || fingerprint == "" {
 		if dec, skip := s.shouldSkipTriggeredPackageTask(ctx, task); skip {
 			s.logf("automacao: task=%s dispensada no gatilho immediate (%s) - execucao nao criada", strings.TrimSpace(task.TaskID), dec.Reason)
@@ -748,6 +815,11 @@ func (s *Service) TriggerAgentCheckInTasks(ctx context.Context) {
 			continue
 		}
 		taskID := strings.TrimSpace(task.TaskID)
+		// Gate de janela ANTES do marcador de ciclo: task adiada não arma o
+		// marker "checkin:cycle" (senão ficaria marcada como feita por 1h).
+		if s.deferPackageActionToWindow(agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn) {
+			continue
+		}
 		if s.db != nil {
 			markerKey := "checkin:cycle:" + taskID
 			if raw, found, err := s.db.GetAutomationMarker(agentID, markerKey); err == nil && found {
@@ -767,6 +839,11 @@ func (s *Service) TriggerAgentCheckInTasks(ctx context.Context) {
 	}
 }
 func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprint string, task AutomationTask) {
+	// Gate de janela de manutenção ANTES do dedup de marcador (mesmo padrão
+	// do triggerImmediate, cobrindo AMBOS os ramos).
+	if s.deferPackageActionToWindow(agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn) {
+		return
+	}
 	if s.db == nil || agentID == "" || fingerprint == "" {
 		if dec, skip := s.shouldSkipTriggeredPackageTask(ctx, task); skip {
 			s.logf("automacao: task=%s dispensada no gatilho checkin (%s) - execucao nao criada", strings.TrimSpace(task.TaskID), dec.Reason)
@@ -1427,6 +1504,11 @@ func (s *Service) rebuildRecurringSchedules(ctx context.Context, previous, curre
 		entryID, err := cronInstance.AddFunc(strings.TrimSpace(task.ScheduleCron), func() {
 			agentID := strings.TrimSpace(s.getConfig().AgentID)
 			taskID := strings.TrimSpace(taskCopy.TaskID)
+			// Gate de janela de manutenção ANTES do dedup de marcador (cooldown):
+			// fora da janela, adia para o NextStart e sai sem tocar em markers.
+			if s.deferPackageActionToWindow(agentID, taskCopy, sourceForTrigger(TriggerTypeRecurring), TriggerTypeRecurring) {
+				return
+			}
 			// Dedup persistente: evita reexecucao apos crash do agente no mesmo intervalo do cron.
 			// Verifica cooldown de 60s - se a ultima execucao foi ha menos de 60s, pula.
 			s.mu.RLock()

@@ -52,7 +52,11 @@ func (db *DB) InsertAutoUpdateExecution(entry AutoUpdateExecutionEntry) error {
 	if err != nil {
 		return fmt.Errorf("database: inserir execução de auto-update: %w", err)
 	}
-	_ = res
+	// LastInsertId preenche o ID da linha (best-effort: driver sem suporte
+	// apenas deixa o ID zero, sem mascarar o sucesso da gravação).
+	if id, idErr := res.LastInsertId(); idErr == nil {
+		entry.ID = id
+	}
 
 	// Retenção best-effort (mesmo caminho tolerante dos outboxes).
 	cutoff := time.Now().Add(-AutoUpdateExecutionRetention).Unix()

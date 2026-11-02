@@ -221,6 +221,39 @@ type Service struct {
 	packageOpMu sync.Mutex
 }
 
+// packageOperationQueueTimeout limita quanto tempo uma operação espera pela
+// fila única de pacotes antes de desistir com erro claro (antes o Lock()
+// bloqueava indefinidamente — um UpgradeAll longo travava a UI por tempo
+// indeterminado, sem chance de cancelamento). Variável (não const) para os
+// testes poderem encurtar a espera.
+var packageOperationQueueTimeout = 30 * time.Minute
+
+// packageOperationQueuePollInterval é o intervalo de reavaliação do TryLock.
+const packageOperationQueuePollInterval = 250 * time.Millisecond
+
+// tryLockPackageOperation tenta entrar na fila única de pacotes. Devolve a
+// função de liberação e true quando obteve a vez; false quando estourou
+// packageOperationQueueTimeout (aí nada foi adquirido e não há o que liberar).
+func (s *Service) tryLockPackageOperation() (release func(), ok bool) {
+	if s == nil {
+		return func() {}, true
+	}
+	if s.packageOpMu.TryLock() {
+		return s.packageOpMu.Unlock, true
+	}
+	s.logf("fila de pacotes ocupada - aguardando operacao em curso (limite " + packageOperationQueueTimeout.String() + ")")
+	deadline := time.Now().Add(packageOperationQueueTimeout)
+	for {
+		if s.packageOpMu.TryLock() {
+			return s.packageOpMu.Unlock, true
+		}
+		if time.Now().After(deadline) {
+			return nil, false
+		}
+		time.Sleep(packageOperationQueuePollInterval)
+	}
+}
+
 // NewService builds an inventory service.
 func NewService(opts Options) *Service {
 	logf := opts.Logf
@@ -343,8 +376,11 @@ func (s *Service) RefreshCatalog() (models.Catalog, error) {
 func (s *Service) Install(id string) (string, error) {
 	// Fila única de pacotes (F3): espera qualquer operação de pacote em curso
 	// (automação, UI ou auto-update) antes de executar winget/choco.
-	s.packageOpMu.Lock()
-	defer s.packageOpMu.Unlock()
+	release, ok := s.tryLockPackageOperation()
+	if !ok {
+		return "", fmt.Errorf("fila de pacotes ocupada: outra operação não terminou em %s", packageOperationQueueTimeout)
+	}
+	defer release()
 	done := s.beginActivity("instalação")
 	if done != nil {
 		defer done()
@@ -434,8 +470,11 @@ func (s *Service) Install(id string) (string, error) {
 func (s *Service) Uninstall(id string) (string, error) {
 	// Fila única de pacotes (F3): espera qualquer operação de pacote em curso
 	// (automação, UI ou auto-update) antes de executar winget/choco.
-	s.packageOpMu.Lock()
-	defer s.packageOpMu.Unlock()
+	release, ok := s.tryLockPackageOperation()
+	if !ok {
+		return "", fmt.Errorf("fila de pacotes ocupada: outra operação não terminou em %s", packageOperationQueueTimeout)
+	}
+	defer release()
 	done := s.beginActivity("desinstalação")
 	if done != nil {
 		defer done()
@@ -495,8 +534,11 @@ func (s *Service) Uninstall(id string) (string, error) {
 func (s *Service) Upgrade(id string) (string, error) {
 	// Fila única de pacotes (F3): espera qualquer operação de pacote em curso
 	// (automação, UI ou auto-update) antes de executar winget/choco.
-	s.packageOpMu.Lock()
-	defer s.packageOpMu.Unlock()
+	release, ok := s.tryLockPackageOperation()
+	if !ok {
+		return "", fmt.Errorf("fila de pacotes ocupada: outra operação não terminou em %s", packageOperationQueueTimeout)
+	}
+	defer release()
 	done := s.beginActivity("atualização")
 	if done != nil {
 		defer done()
@@ -546,8 +588,11 @@ func (s *Service) Upgrade(id string) (string, error) {
 func (s *Service) UpgradeFromSource(installationType, packageID string) (string, error) {
 	// Fila única de pacotes (F3): espera qualquer operação de pacote em curso
 	// (automação, UI ou auto-update) antes de executar winget/choco.
-	s.packageOpMu.Lock()
-	defer s.packageOpMu.Unlock()
+	release, ok := s.tryLockPackageOperation()
+	if !ok {
+		return "", fmt.Errorf("fila de pacotes ocupada: outra operação não terminou em %s", packageOperationQueueTimeout)
+	}
+	defer release()
 	done := s.beginActivity("atualização")
 	if done != nil {
 		defer done()
@@ -595,8 +640,11 @@ func (s *Service) UpgradeFromSource(installationType, packageID string) (string,
 func (s *Service) UninstallFromSource(installationType, packageID string) (string, error) {
 	// Fila única de pacotes (F3): espera qualquer operação de pacote em curso
 	// (automação, UI ou auto-update) antes de executar winget/choco.
-	s.packageOpMu.Lock()
-	defer s.packageOpMu.Unlock()
+	release, ok := s.tryLockPackageOperation()
+	if !ok {
+		return "", fmt.Errorf("fila de pacotes ocupada: outra operação não terminou em %s", packageOperationQueueTimeout)
+	}
+	defer release()
 	done := s.beginActivity("desinstalação")
 	if done != nil {
 		defer done()
@@ -644,8 +692,11 @@ func (s *Service) UninstallFromSource(installationType, packageID string) (strin
 func (s *Service) UpgradeAll() (string, error) {
 	// Fila única de pacotes (F3): espera qualquer operação de pacote em curso
 	// (automação, UI ou auto-update) antes de executar winget/choco.
-	s.packageOpMu.Lock()
-	defer s.packageOpMu.Unlock()
+	release, ok := s.tryLockPackageOperation()
+	if !ok {
+		return "", fmt.Errorf("fila de pacotes ocupada: outra operação não terminou em %s", packageOperationQueueTimeout)
+	}
+	defer release()
 	done := s.beginActivity("atualização em lote")
 	if done != nil {
 		defer done()

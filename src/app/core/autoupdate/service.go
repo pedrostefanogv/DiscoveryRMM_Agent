@@ -9,9 +9,13 @@
 //     o mesmo pacote (PackageAuthorizedByPolicy), o auto-update NÃO executa
 //     (skip automated_by_task) — evita corrida entre o executor de tasks e o
 //     auto-update.
-//   - Janela de manutenção: com a janela ATIVA e agora FORA dela, nenhum
-//     upgrade roda (skip outside_window). Com a janela DESLIGADA não há gate
-//     (semântica igual ao deferral de power: janela off = sem restrição).
+//   - Janela de manutenção: o auto-update da Loja SÓ executa DENTRO da janela
+//     ativa (AutoUpdateAllowedNow). Janela desligada/ausente/config não
+//     carregada = auto-update desativado (o servidor não pediu janela); fora
+//     da janela ativa o ciclo é adiado ("fora da janela (deferred)"). No
+//     PLANNER puro, o skip outside_window só se aplica quando a janela está
+//     ativa — janela desligada não gera skip (ShouldRunNow é o helper interno
+//     do plano, não o gate de execução).
 //   - Limite por ciclo (MaxPerCycle) e espaçamento mínimo entre execuções.
 //   - Nunca reinicia o agente; reboot é responsabilidade da janela/policy.
 package autoupdate
@@ -157,11 +161,12 @@ func matchKey(installationType, packageID string) string {
 	return t + "|" + strings.ToLower(strings.TrimSpace(packageID))
 }
 
-// ShouldRunNow informa se o auto-update pode executar AGORA contra a janela de
-// manutenção. Semântica igual ao deferral de power:
-//   - janela DESLIGADA (Enabled=false) → true (sem gate);
+// ShouldRunNow é o HELPER INTERNO do plano: informa se um item do planner
+// escapa do skip "outside_window". Semântica (não é o gate de execução):
+//   - janela DESLIGADA (Enabled=false) → true (sem skip: o gate de execução,
+//     AutoUpdateAllowedNow, já bloqueou o ciclo inteiro antes do plano);
 //   - janela ATIVA e now dentro → true;
-//   - janela ATIVA e now fora → false (aguardar a próxima janela).
+//   - janela ATIVA e now fora → false (skip outside_window).
 func ShouldRunNow(win maintenance.Window, now time.Time) bool {
 	if !win.Enabled {
 		return true
@@ -169,8 +174,21 @@ func ShouldRunNow(win maintenance.Window, now time.Time) bool {
 	return win.Contains(now)
 }
 
+// AutoUpdateAllowedNow é o GATE DE EXECUÇÃO do auto-update: o ciclo só roda
+// DENTRO da janela de manutenção ativa. Retorna false quando a janela está
+// desligada (Enabled=false — inclusive Window zero: config não carregada /
+// servidor não pediu janela) ou quando está ativa e now está fora dela.
+func AutoUpdateAllowedNow(win maintenance.Window, now time.Time) bool {
+	return win.Enabled && win.Contains(now)
+}
+
 // Plan é o planner puro (testável sem I/O): cruza a política efetiva da Loja
 // com os updates pendentes e devolve o plano do ciclo.
+//
+// ATENÇÃO: Plan NÃO aplica a janela de manutenção (passa maintenance.Window{}
+// de propósito, para os testes puros). O ciclo real usa RunOnce, que chama
+// AutoUpdateAllowedNow e só segue DENTRO da janela ativa — nunca use Plan como
+// se ele respeitasse a janela.
 //
 // Ordem de avaliação por item aprovado com AutoUpdateEnabled=true:
 //  1. no_update — não está na lista de pendentes;
@@ -377,13 +395,21 @@ func (s *Service) RunOnce(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
+	// Defensivo: chamador sem contexto não pode panica.
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	now := s.nowTime()
 	window := maintenance.Window{}
 	if s.deps.Window != nil {
 		window = s.deps.Window()
 	}
-	if !ShouldRunNow(window, now) {
-		s.logf(fmt.Sprintf("fora da janela de manutenção (enabled=true, dias=%v, duração=%dmin) — ciclo adiado", window.Days, window.DurationMinutes))
+	if !AutoUpdateAllowedNow(window, now) {
+		if window.Enabled {
+			s.logf("fora da janela (deferred) — ciclo adiado")
+		} else {
+			s.logf("janela de manutenção desligada — auto-update desativado")
+		}
 		return nil
 	}
 

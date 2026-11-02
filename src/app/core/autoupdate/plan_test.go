@@ -181,21 +181,44 @@ func TestPlanMaxPerCycle(t *testing.T) {
 
 // ── WindowGate ──────────────────────────────────────────────────────────────
 
-func TestShouldRunNowForaDaJanelaIANA(t *testing.T) {
+// Gate de EXECUÇÃO (novo contrato): o auto-update só roda DENTRO da janela
+// ativa; janela desligada/ausente (Window zero) = não executa.
+func TestAutoUpdateAllowedNowContrato(t *testing.T) {
 	win := saoPauloWindow(nil, "02:00", 60)
 	// Fora da janela (12:30 SP) → false.
-	if ShouldRunNow(win, saoPauloTime(t, "12:30")) {
+	if AutoUpdateAllowedNow(win, saoPauloTime(t, "12:30")) {
 		t.Fatal("esperava false fora da janela")
 	}
 	// Dentro (02:30 SP) → true.
+	if !AutoUpdateAllowedNow(win, saoPauloTime(t, "02:30")) {
+		t.Fatal("esperava true dentro da janela")
+	}
+	// Janela desligada → false (auto-update desativado).
+	off := win
+	off.Enabled = false
+	if AutoUpdateAllowedNow(off, saoPauloTime(t, "02:30")) {
+		t.Fatal("esperava false com janela desligada")
+	}
+	// Window zero/nil (config não carregada) → false.
+	if AutoUpdateAllowedNow(maintenance.Window{}, saoPauloTime(t, "02:30")) {
+		t.Fatal("esperava false com Window zero (config não carregada)")
+	}
+}
+
+// ShouldRunNow é helper interno do plano (skip outside_window só quando a
+// janela está ativa): janela desligada → true (o GATE já bloqueou o ciclo).
+func TestShouldRunNowHelperDoPlano(t *testing.T) {
+	win := saoPauloWindow(nil, "02:00", 60)
+	if ShouldRunNow(win, saoPauloTime(t, "12:30")) {
+		t.Fatal("esperava false fora da janela")
+	}
 	if !ShouldRunNow(win, saoPauloTime(t, "02:30")) {
 		t.Fatal("esperava true dentro da janela")
 	}
-	// Janela desligada → true (sem gate, semântica do deferral de power).
 	off := win
 	off.Enabled = false
 	if !ShouldRunNow(off, saoPauloTime(t, "12:30")) {
-		t.Fatal("esperava true com janela desligada")
+		t.Fatal("helper do plano: esperava true com janela desligada")
 	}
 }
 
@@ -236,8 +259,9 @@ func TestRunOnceExecutaUpgradesComFila(t *testing.T) {
 			return "saida " + target, nil
 		},
 		IsAutomated: func(installationType, packageID string) bool { return packageID == "c.pacote" },
-		Window:      func() maintenance.Window { return maintenance.Window{} },
-		Logf:        func(string) {},
+		// Janela ativa cobrindo o dia inteiro (contrato: só executa dentro).
+		Window: func() maintenance.Window { return saoPauloWindow(nil, "00:00", 1440) },
+		Logf:   func(string) {},
 		// -1 desativa o espaçamento no teste.
 		MinSpacing:  -1,
 		MaxPerCycle: MaxPerCycle,
@@ -269,6 +293,7 @@ func TestRunOnceFalhaDePolicyNaoExecutaUpgrade(t *testing.T) {
 		},
 		PendingUpdates: func() ([]models.UpgradeItem, error) { return nil, nil },
 		Upgrade:        func(context.Context, string) (string, error) { upgrades++; return "", nil },
+		Window:         func() maintenance.Window { return saoPauloWindow(nil, "00:00", 1440) },
 		Logf:           func(string) {},
 		MinSpacing:     -1,
 	}
@@ -278,6 +303,37 @@ func TestRunOnceFalhaDePolicyNaoExecutaUpgrade(t *testing.T) {
 	}
 	if upgrades != 0 {
 		t.Fatalf("nenhum upgrade deveria rodar, rodaram %d", upgrades)
+	}
+}
+
+// Janela desligada/ausente (Window zero — config não carregada): o ciclo não
+// varre, não executa e não falha (auto-update desativado).
+func TestRunOnceJanelaDesligadaNaoVarre(t *testing.T) {
+	varre := false
+	var mensagens []string
+	deps := Deps{
+		LoadPolicy:     func(context.Context) (appstore.EffectivePolicy, error) { return appstore.EffectivePolicy{}, nil },
+		PendingUpdates: func() ([]models.UpgradeItem, error) { varre = true; return nil, nil },
+		Upgrade:        func(context.Context, string) (string, error) { return "", nil },
+		Window:         func() maintenance.Window { return maintenance.Window{} },
+		Logf:           func(line string) { mensagens = append(mensagens, line) },
+		MinSpacing:     -1,
+	}
+	svc := New(deps)
+	if err := svc.RunOnce(nil); err != nil {
+		t.Fatalf("janela desligada não deveria falhar (e nil ctx não pode panica): %v", err)
+	}
+	if varre {
+		t.Fatal("janela desligada o ciclo não deveria varrer updates")
+	}
+	achou := false
+	for _, m := range mensagens {
+		if strings.Contains(m, "janela de manutenção desligada — auto-update desativado") {
+			achou = true
+		}
+	}
+	if !achou {
+		t.Fatalf("esperava log 'janela desligada', veio: %v", mensagens)
 	}
 }
 
