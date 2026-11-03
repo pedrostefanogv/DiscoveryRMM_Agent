@@ -715,52 +715,94 @@ async function bootstrapApp() {
   }
 }
 
-function hideTabIfNeeded(tabBtn, viewEl, flag) {
+// setTabVisibility aplica a visibilidade de uma entrada do menu (e da view
+// correspondente) a partir de "deve ficar oculta". A decisão é REVERSÍVEL — e
+// não apenas "esconde" — porque o modo debug precisa reexibir abas que o gate
+// de feature flags ocultou: quando as runtime flags mudam (setRuntimeFlags), a
+// função roda de novo e reaplica o estado correto para o modo atual.
+//
+// A view NUNCA é reexibida aqui: quem mostra uma view é o setActiveTab (só a
+// aba ativa fica visível). Reexibir a view de uma feature desabilitada deixaria
+// vários painéis empilhados na tela.
+function setTabVisibility(tabBtn, viewEl, shouldHide) {
   if (!tabBtn) return;
-  if (flag === false) {
-    tabBtn.classList.add("hidden");
-    if (viewEl) viewEl.classList.add("hidden");
+  tabBtn.classList.toggle("hidden", !!shouldHide);
+  if (shouldHide && viewEl) {
+    viewEl.classList.add("hidden");
   }
 }
 
-// applyAgentFeatureVisibility esconde abas cujas funcionalidades estão
-// desabilitadas na configuração efetiva do agent.
+// hideTab só OCULTA (nunca reexibe). Usado nas abas cuja visibilidade base é
+// controlada pelo modo de runtime (applyRuntimeTabVisibility): o gate de feature
+// flag não pode reexibir em modo normal uma aba que o modo escondeu.
+function hideTab(tabBtn, viewEl) {
+  if (!tabBtn) return;
+  tabBtn.classList.add("hidden");
+  if (viewEl) viewEl.classList.add("hidden");
+}
+
+// applyAgentFeatureVisibility aplica o gate de feature flags da configuração
+// efetiva do agent sobre as entradas do menu.
 //
-// É idempotente e APENAS esconde (nunca reexibe): a visibilidade por modo de
-// runtime (applyRuntimeTabVisibility) roda de novo quando as runtime flags
-// mudam e reexibiria uma aba desabilitada no servidor. Devolve true quando havia
-// configuração para aplicar.
+// MODO DEBUG: abrir o agent em modo debug precisa mostrar TODAS as entradas
+// disponíveis do menu — inclusive P2P, Zero-Touch e as abas que o servidor
+// desabilitou — porque é nelas que se diagnostica a integração. Por isso o gate
+// de feature flag é IGNORADO por completo quando isDebugRuntimeMode() é true
+// (antes o P2P sumia do menu mesmo em debug: applyAgentFeatureVisibility rodava
+// depois do GetAgentConfiguration e voltava a esconder a aba).
+//
+// Fora do modo debug o gate continua valendo e é reaplicado a cada mudança de
+// runtime flags. Devolve true quando havia configuração para aplicar.
 function applyAgentFeatureVisibility() {
   var cfg = window.__discoveryAgentConfig;
   if (!cfg) {
     return false;
   }
+  // Em modo debug nenhuma aba é ocultada pelo servidor.
+  var debugMode = isDebugRuntimeMode();
 
-  hideTabIfNeeded(tabStoreBtn, storeViewEl, cfg.appStoreEnabled);
-  hideTabIfNeeded(tabChatBtn, chatViewEl, cfg.chatAIEnabled);
-  hideTabIfNeeded(tabSupportBtn, supportViewEl, cfg.supportEnabled);
-  hideTabIfNeeded(tabKnowledgeBtn, knowledgeViewEl, cfg.knowledgeBaseEnabled);
+  setTabVisibility(
+    tabStoreBtn,
+    storeViewEl,
+    !debugMode && cfg.appStoreEnabled === false,
+  );
+  setTabVisibility(
+    tabChatBtn,
+    chatViewEl,
+    !debugMode && cfg.chatAIEnabled === false,
+  );
+  setTabVisibility(
+    tabSupportBtn,
+    supportViewEl,
+    !debugMode && cfg.supportEnabled === false,
+  );
+  setTabVisibility(
+    tabKnowledgeBtn,
+    knowledgeViewEl,
+    !debugMode && cfg.knowledgeBaseEnabled === false,
+  );
 
   // P2P exige um caminho de descoberta (Descoberta de Rede na LAN ou Bootstrap
-  // P2P via Nuvem). Sem nenhum dos dois os agents não se encontram, então o
-  // menu P2P não é exibido.
+  // P2P via Nuvem). Sem nenhum dos dois os agents não se encontram.
+  //
+  // P2P e Zero-Touch são abas de diagnóstico: a visibilidade BASE é do modo de
+  // runtime (applyRuntimeTabVisibility), que as mostra só em debug. Aqui o flag
+  // do servidor só pode OCULTAR (nunca reexibir) — usar setTabVisibility aqui
+  // reexibiria o P2P em modo normal quando a feature estivesse habilitada,
+  // anulando o gate de modo.
   var p2pDependencyMissing =
     cfg.discoveryEnabled === false && cfg.cloudBootstrapEnabled === false;
-  hideTabIfNeeded(
-    tabP2PBtn,
-    p2pViewEl,
-    cfg.p2pFilesEnabled === false || p2pDependencyMissing,
-  );
+  if (!debugMode && (cfg.p2pFilesEnabled === false || p2pDependencyMissing)) {
+    hideTab(tabP2PBtn, p2pViewEl);
+  }
 
   // Zero-touch depende de estar habilitado no servidor e da Descoberta de Rede
-  // ativa para os agents se encontrarem.
+  // ativa para os agents se encontrarem. Em debug aparece sempre.
   var zeroTouchAllowed =
     cfg.zeroTouchEnabled !== false && cfg.discoveryEnabled !== false;
-  hideTabIfNeeded(
-    tabZeroTouchConfigBtn,
-    zeroTouchConfigViewEl,
-    !zeroTouchAllowed,
-  );
+  if (!debugMode && !zeroTouchAllowed) {
+    hideTab(tabZeroTouchConfigBtn, zeroTouchConfigViewEl);
+  }
 
   return true;
 }

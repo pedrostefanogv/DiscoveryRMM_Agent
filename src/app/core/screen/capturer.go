@@ -55,6 +55,16 @@ type ChannelOrderReporter interface {
 	ChannelOrderName() string
 }
 
+// registraCapturer publica o capturer ativo para quem precisa consultá-lo fora do
+// pipeline (hoje o banner, que pergunta se a captura sabe contornar uma região).
+// Sem isso a emenda nunca liga em produção: o banner cairia sempre na escada do
+// SetWindowDisplayAffinity, que no Windows 10 sem DWM devolve errno=8 e acaba
+// deixando o cartão visível no stream.
+func registraCapturer(c Capturer) Capturer {
+	SetCapturerAtual(c)
+	return c
+}
+
 // NewCapturer cria o capturador apropriado para o sistema.
 // Prioridade: go-d3d (HW dirty rects + cursor) → DXGI manual → GDI fallback.
 func NewCapturer(monitorIndex int) (Capturer, error) {
@@ -72,7 +82,7 @@ func NewCapturerMode(monitorIndex int, drawCursor bool) (Capturer, error) {
 	if ac, err := DetectAdvancedColor(monitorIndex); err == nil && ac != nil && ac.IsHDR {
 		c, err := NewDXGICapturer(monitorIndex)
 		if err == nil {
-			return c, nil
+			return registraCapturer(c), nil
 		}
 		// Se o DXGI manual falhar, cai para o fluxo normal (go-d3d → GDI).
 	}
@@ -80,13 +90,17 @@ func NewCapturerMode(monitorIndex int, drawCursor bool) (Capturer, error) {
 	// Tenta go-d3d primeiro (HW dirty rects, release otimizado)
 	c, err := NewDXGIGoD3dCapturerMode(monitorIndex, drawCursor)
 	if err == nil {
-		return c, nil
+		return registraCapturer(c), nil
 	}
 	// Fallback: DXGI manual (VTable syscall)
 	c, err = NewDXGICapturer(monitorIndex)
 	if err == nil {
-		return c, nil
+		return registraCapturer(c), nil
 	}
 	// Fallback final: GDI BitBlt (VM sem GPU, RDP)
-	return NewGDICapturerMonitor(monitorIndex)
+	c, err = NewGDICapturerMonitor(monitorIndex)
+	if err != nil {
+		return nil, err
+	}
+	return registraCapturer(c), nil
 }

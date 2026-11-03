@@ -167,13 +167,15 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			pp.MaxDefers = 3
 		}
 
-		// ── Janela de manutenção: deferral ──
-		// Janela ativa e agora FORA da janela → não executa: reporta
-		// deferred_to_window + nextRunAt pelo canal de comandos existente.
-		if d := a.deferPowerForMaintenance(action); d != nil {
-			a.Logs.Append(fmt.Sprintf("[agent] %s-action [MAINTENANCE] fora da janela — adiado para %s", action, d.NextRunAt.UTC().Format(time.RFC3339)))
-			return true, 0, maintenanceDeferredResult(d), ""
-		}
+		// ── Janela de manutenção: comando INTERATIVO nunca é adiado ──
+		// A janela vale para automação/patch e autoupdate; um pedido de
+		// power vindo do console executa AGORA mesmo fora da janela. Quando
+		// ela está ativa e estamos fora, apenas registra WARN (a janela foi
+		// ignorada) — antes o comando era adiado para deferred_to_window,
+		// um beco sem saída que nunca executava e ainda devolvia
+		// exitCode=0 (sucesso falso) ao servidor. force=true segue
+		// executando sempre (agora redundante: interativo nunca adia).
+		a.warnInteractivePowerOutsideMaintenanceWindow(action)
 
 		// Cancela qualquer deferred restart ou power silencioso pendente se
 		// receber um novo comando de power.
@@ -183,16 +185,24 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		if pp.NotifyUser {
 			// ── AVISO FLUENTE: mensagem + contador visivel ──
 			a.Logs.Append(fmt.Sprintf("[agent] %s-action [NOTIFY] delay=%ds force=%t — aviso Fluent com contador", action, pp.DelaySeconds, pp.Force))
-			result := a.showNativePowerCountdown(action, pp.DelaySeconds, pp.Message, pp.Force)
+			// Hook de teste (powerCountdownHook) quando definido; produção usa
+			// o countdown nativo real (PSADT).
+			var result string
+			if powerCountdownHook != nil {
+				result = powerCountdownHook(a, action, pp.DelaySeconds, pp.Message, pp.Force)
+			} else {
+				result = a.showNativePowerCountdown(action, pp.DelaySeconds, pp.Message, pp.Force)
+			}
 			switch result {
 			case "proceed":
-				// OK ou contador terminou: executa imediatamente (o contador ja deu o prazo).
-				exitCode, output, errText := a.executeSystemPowerAction(parent, action, 0, pp.Force, pp.Message)
+				// OK ou contador terminou: executa imediatamente (o contador ja
+				// deu o prazo). O output sai no contrato JSON (executed/failed).
+				exitCode, output, errText := a.executePowerWithContract(parent, action, pp.Force, pp.Message)
 				return true, exitCode, output, errText
 
 			case "defer":
 				a.scheduleDeferredRestart(action, pp)
-				return true, 0, fmt.Sprintf("%s adiado pelo usuário (defer=%d/%d, %dmin)", action, 1, pp.MaxDefers, pp.DeferMinutes), ""
+				return true, 0, deferredByUserOutput(action, 1, pp.MaxDefers, pp.DeferMinutes), ""
 
 			default:
 				// "fallback" — PSADT indisponível: usa o pipeline nativo de notificação.
@@ -216,14 +226,14 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 					// 'Forcar' ativo: o usuario nao pode bloquear a acao. Executa
 					// mesmo se negou/expirou o aviso.
 					a.Logs.Append(fmt.Sprintf("[agent] %s-action [FORCE] aviso respondeu %q — prosseguindo (force)", action, notifResp.Result))
-					exitCode, output, errText := a.executeSystemPowerAction(parent, action, 0, pp.Force, pp.Message)
+					exitCode, output, errText := a.executePowerWithContract(parent, action, pp.Force, pp.Message)
 					return true, exitCode, output, errText
 				}
 				if notifResp.Result == "approved" {
-					exitCode, output, errText := a.executeSystemPowerAction(parent, action, 0, pp.Force, pp.Message)
+					exitCode, output, errText := a.executePowerWithContract(parent, action, pp.Force, pp.Message)
 					return true, exitCode, output, errText
 				}
-				return true, 10, notifResp.Message, "usuário negou a reinicialização"
+				return true, 10, newPowerOutput("denied", action, "usuário negou a reinicialização").line(), "usuário negou a reinicialização"
 			}
 		}
 
@@ -243,9 +253,12 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		}
 		if pp.DelaySeconds > 0 {
 			a.scheduleSilentPowerAction(action, pp)
-			return true, 0, fmt.Sprintf("%s agendado silenciosamente em %ds (sem aviso nativo)", action, pp.DelaySeconds), ""
+			msg := fmt.Sprintf("%s agendado silenciosamente em %ds (sem aviso nativo)", action, pp.DelaySeconds)
+			out := newPowerOutput("scheduled", action, msg)
+			out.DelaySeconds = pp.DelaySeconds
+			return true, 0, out.line(), ""
 		}
-		exitCode, output, errText := a.executeSystemPowerAction(parent, action, 0, pp.Force, "")
+		exitCode, output, errText := a.executePowerWithContract(parent, action, pp.Force, "")
 		return true, exitCode, output, errText
 	}
 

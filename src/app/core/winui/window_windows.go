@@ -43,9 +43,17 @@ var (
 	procGetDpiForWindow  = user32.NewProc("GetDpiForWindow")
 	procScreenToClient   = user32.NewProc("ScreenToClient")
 
+	procIsWindowVisible = user32.NewProc("IsWindowVisible")
+	procGetWindowRect   = user32.NewProc("GetWindowRect")
+	procGetClientRect   = user32.NewProc("GetClientRect")
+	procGetAncestor     = user32.NewProc("GetAncestor")
+
 	procCreateRoundRectRgn = gdi32.NewProc("CreateRoundRectRgn")
 	procGetCurrentThreadID = kernel32.NewProc("GetCurrentThreadId")
 )
+
+// GaRoot: GetAncestor(GA_ROOT) — devolve a janela top-level dona do HWND.
+const GaRoot = 2
 
 // Mensagens e estilos do Win32 usados pelas janelas do agente.
 const (
@@ -346,6 +354,56 @@ func MoveResizeWindow(hwnd uintptr, x, y, width, height int) {
 	procSetWindowPos.Call(hwnd, 0, uintptr(x), uintptr(y),
 		uintptr(width), uintptr(height), swpNoZOrder|swpNoActivate)
 }
+
+// VisibleRect devolve o retângulo em que a janela está REALMENTE aparecendo na
+// tela física: parte de GetWindowRect, recorta pelo cliente (as janelas do
+// agente não têm borda), pela janela top-level dona (Popup filho de ninguém
+// esconde junto com o pai) e pela visibilidade efetiva do Windows.
+//
+// Retorna false quando nada da janela está visível ao usuário — é o sinal para
+// a captura voltar ao caminho normal. Existe para o capturer GDI poder
+// "remendar" a região do banner (ver screen.GdiCaptureAllowsShrink).
+//
+// O cliente NÃO é convertido para screen: aqui só as DIMENSÕES da área cliente
+// importam, e elas valem para o popup (sem borda, rect de janela == rect de
+// cliente).
+func VisibleRect(hwnd uintptr) (Rect, bool) {
+	var win Rect
+	if hwnd == 0 || rectEmpty(procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&win)))) {
+		return Rect{}, false
+	}
+	if visible, _, _ := procIsWindowVisible.Call(hwnd); visible == 0 {
+		return Rect{}, false
+	}
+
+	area := win
+	var client Rect
+	if !rectEmpty(procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&client)))) {
+		if client.W > 0 && client.W < area.W {
+			area.W = client.W
+		}
+		if client.H > 0 && client.H < area.H {
+			area.H = client.H
+		}
+	}
+
+	root, _, _ := procGetAncestor.Call(hwnd, GaRoot)
+	if root != 0 && root != hwnd {
+		var owner Rect
+		if rectEmpty(procGetWindowRect.Call(root, uintptr(unsafe.Pointer(&owner)))) {
+			return Rect{}, false
+		}
+		area = area.Intersect(owner)
+	}
+
+	if area.W <= 0 || area.H <= 0 {
+		return Rect{}, false
+	}
+	return area, true
+}
+
+// rectEmpty indica que GetRect*W falhou (o chamador trata como não visível).
+func rectEmpty(callReturn uintptr, _ uintptr, _ error) bool { return callReturn == 0 }
 
 // EnsureTopMost recoloca a janela no topo da ordem Z sem alterar posição/tamanho.
 func EnsureTopMost(hwnd uintptr) {

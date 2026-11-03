@@ -408,8 +408,10 @@ function applyRuntimeTabVisibility() {
     setActiveTab('store');
   }
 
-  // Reaplica o gate por feature flags do agent: setRuntimeFlags roda de novo
-  // quando as runtime flags mudam e reexibiria uma aba desabilitada no servidor.
+  // Reaplica o gate por feature flags do agent. Ele é a última palavra no modo
+  // normal (reexibe/esconde conforme a configuração efetiva) e é IGNORADO no
+  // modo debug: abrir o agent em debug mostra todas as entradas do menu, mesmo
+  // as features que o servidor desabilitou (P2P, Zero-Touch, Loja, Chat, ...).
   if (typeof applyAgentFeatureVisibility === 'function') {
     applyAgentFeatureVisibility();
   }

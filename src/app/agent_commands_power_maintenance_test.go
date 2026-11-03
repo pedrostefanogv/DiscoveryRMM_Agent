@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -35,18 +36,16 @@ func TestEvaluatePowerMaintenanceDefersOutsideWindow(t *testing.T) {
 	if d := evaluatePowerMaintenance(win, utcAtPower(2024, 1, 8, 2, 30)); d != nil {
 		t.Fatalf("dentro da janela não deveria adiar: %s", d.NextRunAt)
 	}
-	// Fora da janela: adia para a próxima janela (amanhã 02:00).
+	// Fora da janela: a avaliação aponta deferral com a próxima janela
+	// (amanhã 02:00). ATENÇÃO: para comando de power INTERATIVO isso NÃO
+	// causa adiamento — o chamador (remote_debug_commands.go) usa a
+	// avaliação apenas para emitir WARN e executa agora.
 	d := evaluatePowerMaintenance(win, utcAtPower(2024, 1, 8, 5, 0))
 	if d == nil {
-		t.Fatal("fora da janela deveria adiar")
+		t.Fatal("fora da janela deveria apontar deferral")
 	}
 	if want := utcAtPower(2024, 1, 9, 2, 0); !d.NextRunAt.Equal(want) {
 		t.Fatalf("nextRunAt=%s, want %s", d.NextRunAt, want)
-	}
-	// Resultado serializado para o canal de comandos.
-	out := maintenanceDeferredResult(d)
-	if want := `{"status":"deferred_to_window","nextRunAt":"2024-01-09T02:00:00Z"}`; out != want {
-		t.Fatalf("resultado=%s, want %s", out, want)
 	}
 }
 
@@ -58,32 +57,71 @@ func TestEvaluatePowerMaintenanceDisabledNeverDefers(t *testing.T) {
 	}
 }
 
-// deferPowerForMaintenance usa o relógio injetável (maintenanceNow) e a
-// config efetiva do App: com clock simulado FORA da janela, adia; DENTRO, não.
-func TestDeferPowerForMaintenanceUsesInjectedClock(t *testing.T) {
-	a := &App{}
-	a.AgentConfig = mustParseAgentConfigForMaintenance(t, `{"maintenanceWindow":{"enabled":true,"startUtc":"02:00","durationMinutes":60}}`)
+// warnInteractivePowerOutsideMaintenanceWindow usa o relógio injetável
+// (maintenanceNow) e a config efetiva do App. Sempre "executa agora": FORA da
+// janela → true (janela ignorada, WARN emitido); DENTRO → false; o comando
+// interativo NUNCA recebe deferral (a função devolve bool, não struct —
+// impossível adiar por contrato).
+func TestWarnInteractivePowerOutsideMaintenanceWindow(t *testing.T) {
+	// powerApp (agent_commands_power_handler_test.go) cria o App com buffer de
+	// logs inicializado: o WARN precisa ser capturável via Logs.GetAll().
+	a := powerApp(t, `{"maintenanceWindow":{"enabled":true,"startUtc":"02:00","durationMinutes":60}}`)
 
 	orig := maintenanceNow
 	defer func() { maintenanceNow = orig }()
 
 	maintenanceNow = func() time.Time { return utcAtPower(2024, 1, 8, 5, 0) } // fora
-	if d := a.deferPowerForMaintenance("restart"); d == nil {
-		t.Fatal("fora da janela deveria adiar")
+	if !a.warnInteractivePowerOutsideMaintenanceWindow("restart") {
+		t.Fatal("fora da janela deveria registrar janela ignorada (executa com WARN)")
+	}
+	// WARN inclui a próxima janela em RFC3339 UTC (2024-01-09 02:00 UTC).
+	found := false
+	for _, l := range a.Logs.GetAll() {
+		if strings.Contains(l, "2024-01-09T02:00:00Z") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("WARN deveria citar nextRunAt=2024-01-09T02:00:00Z; logs:\n%s", strings.Join(a.Logs.GetAll(), "\n"))
 	}
 
 	maintenanceNow = func() time.Time { return utcAtPower(2024, 1, 8, 2, 30) } // dentro
-	if d := a.deferPowerForMaintenance("restart"); d != nil {
-		t.Fatalf("dentro da janela não deveria adiar: %s", d.NextRunAt)
+	if a.warnInteractivePowerOutsideMaintenanceWindow("restart") {
+		t.Fatal("dentro da janela não deveria registrar nada")
 	}
 }
 
-// Kill switch enabled=false: nunca adia, independente do relógio.
-func TestDeferPowerForMaintenanceKillSwitchOff(t *testing.T) {
+// Comando de power INTERATIVO com janela FECHADA (kill switch off): nunca
+// adia — prova do comportamento exigido (restart do console executa).
+func TestInteractivePowerWithClosedWindowNeverDefers(t *testing.T) {
 	a := &App{}
 	a.AgentConfig = mustParseAgentConfigForMaintenance(t, `{"maintenanceWindow":{"enabled":false,"startUtc":"02:00"}}`)
-	if d := a.deferPowerForMaintenance("restart"); d != nil {
-		t.Fatal("kill switch off não deveria adiar")
+	for _, action := range []string{"restart", "reboot", "shutdown"} {
+		if a.warnInteractivePowerOutsideMaintenanceWindow(action) {
+			t.Fatalf("%s: kill switch off não deveria registrar janela ignorada", action)
+		}
+	}
+	// Sem config de janela: idem, executa sem WARN e sem deferral.
+	a2 := &App{}
+	if a2.warnInteractivePowerOutsideMaintenanceWindow("restart") {
+		t.Fatal("sem maintenanceWindow não deveria registrar nada")
+	}
+}
+
+// windowSpanLabel: rótulo "HH:mm-HH:mm" para o WARN (start + duração,
+// enrolando a meia-noite quando necessário).
+func TestWindowSpanLabel(t *testing.T) {
+	win := maintenance.Window{Enabled: true, StartUTC: "02:00", DurationMinutes: 60}
+	if got, want := windowSpanLabel(win), "02:00-03:00"; got != want {
+		t.Fatalf("span=%s, want %s", got, want)
+	}
+	cross := maintenance.Window{Enabled: true, StartUTC: "23:30", DurationMinutes: 60}
+	if got, want := windowSpanLabel(cross), "23:30-00:30"; got != want {
+		t.Fatalf("span cruzando meia-noite=%s, want %s", got, want)
+	}
+	broken := maintenance.Window{Enabled: true, StartUTC: "x", DurationMinutes: 60}
+	if got := windowSpanLabel(broken); got == "02:00-03:00" {
+		t.Fatalf("config quebrada deveria dar rótulo genérico, got %s", got)
 	}
 }
 

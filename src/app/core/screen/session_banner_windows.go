@@ -32,12 +32,17 @@ import (
 // fique por cima dos apps.
 //
 // O banner continua escondido da captura: o viewer e a gravação não podem vê-lo.
-// Na ordem, tentamos WDA_EXCLUDEFROMCAPTURE (Win10 2004+) → WDA_MONITOR (Win7+,
-// aparece preto no stream) e, se NENHUMA afinidade for aceita (ex.: Win10 antigo
-// ou VM sem "recursos de memória" para o window manager isolar a janela, que
-// devolve ERROR_NOT_ENOUGH_MEMORY), o banner é exibido sem exclusão em vez de
-// simplesmente não existir: o usuário local PRECISA saber que está sendo
-// acessado.
+// Ordem de preferência (ver hideBannerFromCapture):
+//
+//  1. CaptureExclusionSupported (capturer GDI): a captura contorna a área do
+//     banner — o cartão aparece íntegro na tela FÍSICA e não aparece de forma
+//     alguma no stream. É o único caminho que funciona em Win10/VM onde
+//     SetWindowDisplayAffinity devolve ERROR_NOT_ENOUGH_MEMORY (8) para TODOS
+//     os valores.
+//  2. WDA_EXCLUDEFROMCAPTURE (Win10 2004+): o compositor remove a janela.
+//  3. WDA_MONITOR (Win7+): o cartão aparece preto no stream.
+//  4. Nada disso: o banner é exibido sem exclusão em vez de simplesmente não
+//     existir — o usuário local PRECISA saber que está sendo acessado.
 
 const (
 	// wdaNone/WdaMonitor/WdaExcludeFromCapture são os valores de
@@ -77,20 +82,66 @@ const (
 	// bannerCaptureBlack: WDA_MONITOR — o cartão aparece PRETO no stream
 	// (Win7+). Não vaza o texto, mas ocupa a área.
 	bannerCaptureBlack
-	// bannerCaptureVisible: nenhuma afinidade aceita; o cartão aparece no
-	// stream. Último recurso, ainda melhor do que não avisar o usuário.
+	// bannerCaptureRegiao: o banner fica na tela física e a CAPTURA contorna a
+	// área dele (capturer GDI com emenda por região). Nada do cartão chega ao
+	// viewer. Usado quando SetWindowDisplayAffinity é recusado.
+	bannerCaptureRegiao
+	// bannerCaptureVisible: nenhuma afinidade nem emenda aceita; o cartão
+	// aparece no stream. Último recurso, ainda melhor do que não avisar o
+	// usuário.
 	bannerCaptureVisible
 )
 
-// hideBannerFromCapture tenta esconder o banner da captura em ordem de
-// preferência e devolve o modo obtido + erro acumulado (só não-nil quando
-// nenhuma afinidade foi aplicada).
+// bannerCaptureModeName descreve o modo obtido no log da sessão.
+func bannerCaptureModeName(mode bannerCaptureMode) string {
+	switch mode {
+	case bannerCaptureExcluded:
+		return "WDA_EXCLUDEFROMCAPTURE"
+	case bannerCaptureBlack:
+		return "WDA_MONITOR (preto no stream)"
+	case bannerCaptureRegiao:
+		return "captura com emenda de região"
+	default:
+		return "sem exclusão"
+	}
+}
+
+// hideBannerFromCapture esconde o banner da captura pela melhor técnica que o
+// sistema aceitar e devolve o modo obtido + erro (não-nil quando NADA protegeu
+// o stream: o banner ficará visível para o operador).
 //
 // Por que não "tudo ou nada": o WDA_EXCLUDEFROMCAPTURE depende do compositor
 // isolar o conteúdo da janela e pode falhar com ERROR_NOT_ENOUGH_MEMORY (8) em
-// Win10/VM. Antes disso, a falha cancelava o banner inteiro — o usuário acessado
-// ficava sem qualquer aviso. Nunca deixa a sessão sem indicador.
+// Win10/VM — e nessa máquina NENHUM valor de afinidade é aceito (ver relato no
+// topo do arquivo). Antes disso, a falha cancelava o banner inteiro — o usuário
+// acessado ficava sem qualquer aviso. Nunca deixa a sessão sem indicador.
 func hideBannerFromCapture(hwnd uintptr) (bannerCaptureMode, error) {
+	// Degrau 1: o próprio pipeline de captura contorna o banner. É o único
+	// caminho em que o cartão fica íntegro na tela física E fora do stream
+	// mesmo sem afinidade de display.
+	if CaptureExclusionSupported() {
+		return bannerCaptureRegiao, nil
+	}
+	mode, err := applyDisplayAffinity(hwnd)
+	if err == nil || mode != bannerCaptureVisible {
+		return mode, err
+	}
+	// A afinidade falhou por completo. Se o último capturer do processo sabia
+	// emendar, a captura desta sessão deve ser do mesmo tipo (mesma máquina,
+	// mesmo driver) e o cartão continua fora do stream — reportar "sem
+	// exclusão" aqui só confundiria o diagnóstico em campo.
+	if emendaConhecida.Load() {
+		return bannerCaptureRegiao, nil
+	}
+	// Nem afinidade nem emenda: o cartão vai aparecer no stream, mas o usuário
+	// acessado PRECISA saber que a sessão existe. Melhor avisar (com o erro no
+	// log) do que sumir com o banner.
+	return bannerCaptureVisible, err
+}
+
+// applyDisplayAffinity aplica SetWindowDisplayAffinity na ordem de preferência
+// e devolve o modo obtido + erro acumulado.
+func applyDisplayAffinity(hwnd uintptr) (bannerCaptureMode, error) {
 	var (
 		mode       = bannerCaptureExcluded
 		excludeErr error
@@ -222,6 +273,7 @@ func bannerWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		winui.DestroyWindow(hwnd)
 		return 0
 	case winui.MsgDestroy:
+		unregisterBannerCapture(hwnd)
 		banner.fonts.release()
 		banner.fonts = bannerFonts{}
 		bannerStates.Delete(hwnd)
@@ -309,15 +361,30 @@ func NewSessionBanner(opts BannerOptions) (*SessionBanner, error) {
 		banner.hwnd = hwnd
 		banner.mu.Unlock()
 		bannerStates.Store(hwnd, &bannerState{banner: banner})
+		// Registra o banner para o capturer GDI contornar a área dele quando o
+		// Windows recusar SetWindowDisplayAffinity (Win10/VM). Precisa vir ANTES
+		// de hideBannerFromCapture, que consulta CaptureExclusionSupported.
+		registerBannerCapture(hwnd)
 
 		// Fora da captura (degradando quando o Windows não suporta). O banner é
 		// exibido mesmo no pior caso: sem aviso o usuário acessado não sabe que
 		// há uma sessão aberta (regressão observada no Win10).
+		// O banner é registrado para a emenda ANTES desta decisão (linha acima), e a
+		// emenda roda na captura independentemente do modo escolhido aqui. O log
+		// precisa refletir isso: no Win10 a afinidade falha sempre (errno=8) e o
+		// cartão continua fora do stream pela emenda.
 		captureMode, captureErr := hideBannerFromCapture(hwnd)
-		if captureErr != nil {
-			log.Printf("[session-banner] exclusão da captura indisponível, banner exibido sem exclusão: %v", captureErr)
-		} else if captureMode != bannerCaptureExcluded {
-			log.Printf("[session-banner] WDA_EXCLUDEFROMCAPTURE indisponível; usando WDA_MONITOR (o banner aparece preto no stream)")
+		emenda := CaptureExclusionSupported()
+		switch {
+		case captureErr == nil && captureMode == bannerCaptureRegiao:
+			log.Printf("[session-banner] banner fora da captura via %s", bannerCaptureModeName(captureMode))
+		case captureErr == nil:
+			log.Printf("[session-banner] banner fora da captura via %s (emenda de região também registrada)",
+				bannerCaptureModeName(captureMode))
+		case emenda:
+			log.Printf("[session-banner] banner fora da captura via captura com emenda de região (afinidade recusada: %v)", captureErr)
+		default:
+			log.Printf("[session-banner] AVISO exclusão da captura indisponível, banner exibido sem exclusão: %v", captureErr)
 		}
 
 		// DPI efetivo do monitor compartilhado. Com manifest PerMonitorV2 o

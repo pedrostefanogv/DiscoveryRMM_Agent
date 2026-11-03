@@ -91,14 +91,18 @@ Detalhes em [BRANCHING.md](BRANCHING.md).
 1. Feche o agente pelo ícone na bandeja do sistema (clique com botão direito → **Sair / Exit**).
 2. Abra o agente novamente **segurando `Shift`** ao clicar no ícone/atalho.
 
-> O modo debug exibe logs detalhados na interface e habilita painéis de diagnóstico internos.
+> O modo debug exibe logs detalhados, habilita os painéis de diagnóstico internos e mostra **todas**
+> as entradas do menu (P2P, Zero-Touch, Loja, Chat IA, Suporte, Base de Conhecimento etc.),
+> inclusive as que estiverem desabilitadas na configuração do servidor.
 
 **EN:** To open the agent UI in debug mode:
 
 1. Close the agent from the system tray icon (right-click → **Exit**).
 2. Reopen the agent **while holding `Shift`** when clicking the icon/shortcut.
 
-> Debug mode shows detailed logs in the UI and enables internal diagnostics panels.
+> Debug mode shows detailed logs, enables the internal diagnostics panels and displays **every**
+> menu entry (P2P, Zero-Touch, Store, AI Chat, Support, Knowledge Base, etc.), including those
+> disabled by the server configuration.
 
 ---
 

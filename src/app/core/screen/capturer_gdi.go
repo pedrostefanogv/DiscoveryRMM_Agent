@@ -71,6 +71,11 @@ type gdiCapturer struct {
 	dibBits   unsafe.Pointer // pixels da DIB (top-down, BGRA 32bpp)
 	dibPrev   uintptr        // objeto que estava selecionado no memDC antes da DIB
 
+	// Histórico de um quadro usado pela emenda do banner (ver
+	// banner_patch_windows.go): a área do banner é preenchida com o quadro
+	// anterior em vez de ir ao ar. Alocado 1× por geometria.
+	bannerPrev []byte
+
 	// Throttle da re-detecção de geometria. GetMonitors() usa
 	// syscall.NewCallback, que registra um callback PERMANENTE no runtime
 	// (limite ~2000 por processo) — chamar a cada frame esgotaria os slots
@@ -136,13 +141,17 @@ func newGDICapturerRegionIdx(offsetX, offsetY, width, height, monitorIndex int) 
 	}
 	procReleaseDC.Call(0, screenDC)
 
-	return &gdiCapturer{
+	c := &gdiCapturer{
 		width:        width,
 		height:       height,
 		offsetX:      offsetX,
 		offsetY:      offsetY,
 		monitorIndex: monitorIndex,
-	}, nil
+	}
+	// Registra este capturer como o ativo: o banner consulta o registry para
+	// saber se a captura sabe contornar a área dele (emenda de região).
+	SetCapturerAtual(c)
+	return c, nil
 }
 
 func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
@@ -183,12 +192,21 @@ func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
 		return nil, err
 	}
 
-	r, _, _ := procBitBlt.Call(c.memDC, 0, 0, uintptr(c.width), uintptr(c.height), screenDC, uintptr(c.offsetX), uintptr(c.offsetY), SRCCOPY)
-	if r == 0 {
+	// Histórico da emenda do banner: uma alocação por geometria, fora do
+	// caminho por frame.
+	c.ensureBannerHistorico()
+
+	// Captura o quadro. Quando há um banner "Sessão remota em andamento" visível
+	// neste monitor, a área dele é preenchida com o quadro anterior em vez de ser
+	// enviada ao operador — o cartão existe apenas na tela FÍSICA quando o
+	// Windows recusa SetWindowDisplayAffinity (Win10/VM). Ver
+	// banner_patch_windows.go. Sem banner registrado o caminho é o mesmo de
+	// antes (um BitBlt do quadro inteiro).
+	if err := c.captureFrameAvoidingBanner(screenDC); err != nil {
 		// BitBlt pode falhar em troca de desktop — descarta o cache para
 		// recriar os objetos no próximo frame (possível geometria nova).
 		c.releaseCached()
-		return nil, fmt.Errorf("BitBlt falhou")
+		return nil, err
 	}
 
 	// O GDI pode enfileirar a blit; sem o flush a DIB poderia ser lida antes de
@@ -274,7 +292,18 @@ func (c *gdiCapturer) ReleaseFrame() {}
 
 // releaseCached descarta o cache de GDI objects (uso interno — chamado na
 // troca de geometria/falha de BitBlt; o thread já é o do capturador).
+//
+// O ALVO da emenda (banner/aviso da bandeja) NÃO é limpo aqui: quem registra e
+// desregistra é a janela (registerBannerCapture/unregisterBannerCapture). Zerar
+// neste ponto fazia a emenda parar de esconder o cartão depois de qualquer
+// recriação do capturer (troca de geometria, fallback DXGI↔GDI) — o banner
+// voltava a vazar para o stream no meio da sessão.
 func (c *gdiCapturer) releaseCached() {
+	// Serializa com a captura: Close() pode rodar em outra goroutine enquanto o
+	// loop ainda está em AcquireNextFrame.
+	bannerCaptureMu.Lock()
+	defer bannerCaptureMu.Unlock()
+
 	if c.memDC != 0 && c.dibPrev != 0 {
 		// Deseleciona a DIB do DC ANTES de destruí-la (DeleteObject de um
 		// bitmap selecionado falha).
@@ -286,6 +315,9 @@ func (c *gdiCapturer) releaseCached() {
 		c.dibBitmap = 0
 	}
 	c.dibBits = nil
+	// Histórico da emenda fica desatualizado com a geometria antiga.
+	c.bannerPrev = nil
+	bannerCapturePrimed.Store(false)
 	if c.memDC != 0 {
 		procDeleteDC.Call(c.memDC)
 		c.memDC = 0
@@ -294,6 +326,11 @@ func (c *gdiCapturer) releaseCached() {
 
 func (c *gdiCapturer) Close() error {
 	c.releaseCached()
+	// Despublica este capturer se ele ainda for o ativo (pode ter sido trocado
+	// por outro no meio da sessão).
+	if atualCapturerEh(c) {
+		SetCapturerAtual(nil)
+	}
 	runtime.UnlockOSThread()
 	return nil
 }

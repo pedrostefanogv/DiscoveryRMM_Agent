@@ -284,6 +284,9 @@ func sessionTrayWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		procDestroyWindow.Call(hwnd)
 		return 0
 	case trayWMDestroy:
+		// O aviso próprio é uma janela irmã: encerrar o ícone sem fechá-lo
+		// deixaria um cartão órfão na tela física.
+		EncerrarTrayBalloon()
 		sessionTrayStates.Delete(hwnd)
 		procPostQuitMessage.Call(0)
 		return 0
@@ -515,8 +518,20 @@ func (t *SessionTray) takeBalloon() string {
 	return message
 }
 
-// notify mostra um balloon na área de notificação.
+// notify exibe o aviso da bandeja. Desde 2026-11-03 o aviso é uma janela
+// NOSSA (session_tray_balloon_windows.go) e não o balloon do explorer: o
+// balloon é desenhado pelo shell, na mesma janela top-level da área de trabalho,
+// e por isso aparecia no stream do acesso remoto no Windows 11 (o operador via o
+// cartão escuro sobre a barra de tarefas). A janela própria é registrada no alvo
+// da emenda de captura e fica só na tela física.
 func (t *SessionTray) notify(message string) {
+	t.showTrayBalloon(message)
+}
+
+// notifyDoShell mostra o balloon clássico (Shell_NotifyIconW NIF_INFO). Só é
+// usado quando a janela própria não pôde ser criada — o usuário acessado precisa
+// saber da sessão mesmo que o aviso vaze para o stream.
+func (t *SessionTray) notifyDoShell(message string) {
 	if strings.TrimSpace(message) == "" {
 		return
 	}

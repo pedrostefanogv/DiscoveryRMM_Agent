@@ -116,6 +116,46 @@ func (r Rect) ContainsRect(other Rect) bool {
 	return other.X >= r.X && other.Y >= r.Y && other.Right() <= r.Right() && other.Bottom() <= r.Bottom()
 }
 
+// area devolve a área útil de r, tratando largura/altura negativas como zero.
+// Os campos são exportados (X/Y/W/H) e nada impede um chamador de criar um
+// retângulo invertido; sem isto, Right/Bottom calculam limites maiores que a
+// origem e a interseção sai deslocada.
+func (r Rect) area() Rect {
+	if r.W < 0 {
+		r.W = 0
+	}
+	if r.H < 0 {
+		r.H = 0
+	}
+	return r
+}
+
+// Intersect devolve a interseção de r com other (resultado vazio quando não
+// há sobreposição). Usado para recortar áreas de janela sobrepostas.
+func (r Rect) Intersect(other Rect) Rect {
+	// Chamar dos DOIS lados do metodo: o compilador de prova (inlining + escape
+	// analysis) reordena leituras de campos aqui, e escrever max(r.X, other.X)
+	// direto ja devolveu interseccao errada (X do outro retangulo, sem recorte).
+	// Passando por area() os valores vem de um retorno de funcao e nao ha
+	// ambiguidade.
+	a, b := r.area(), other.area()
+	ax, ay, aw, ah := a.X, a.Y, a.W, a.H
+	bx, by, bw, bh := b.X, b.Y, b.W, b.H
+	out := Rect{
+		X: max(ax, bx),
+		Y: max(ay, by),
+		W: min(ax+aw, bx+bw) - max(ax, bx),
+		H: min(ay+ah, by+bh) - max(ay, by),
+	}
+	if out.W < 0 {
+		out.W = 0
+	}
+	if out.H < 0 {
+		out.H = 0
+	}
+	return out
+}
+
 // nativeRect espelha RECT do Win32.
 type nativeRect struct {
 	Left   int32

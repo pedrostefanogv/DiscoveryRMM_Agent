@@ -419,8 +419,12 @@ func (r *Runtime) executeAndPublishNATSCommand(ctx context.Context, nc *nats.Con
 		if err := publishJSONResult(nc, subjects.Result, confirmation); err != nil {
 			// Sem confirmacao publicada NAO adianta ackar: deixar a mensagem
 			// pendente permite a reentrega e o result final ainda sai.
-			r.logf("falha ao publicar confirmacao antecipada do comando de energia (cmdId=%s): %v", env.CommandID, err)
-			r.enqueueCommandResultOutbox("nats", env.DispatchID, env.CommandID, confirmation.ExitCode, confirmation.Output, "", err)
+			// IMPORTANTE: o ack antecipado NAO vai para o outbox — ele
+			// descreve uma acao "agendada" (exit=0) e, se o drain reenviasse
+			// DEPOIS do result final, a API reverteria Failed->Completed.
+			// Falha aqui é só log: o result final (logo abaixo, no mesmo
+			// fluxo) é que segue para o outbox e corrige o estado.
+			r.logf("falha ao publicar confirmacao antecipada do comando de energia (cmdId=%s): %v — ack antecipado descartado (fora do outbox)", env.CommandID, err)
 		} else {
 			if requiresAck {
 				if err := ackNATSMessage(msg); err != nil {

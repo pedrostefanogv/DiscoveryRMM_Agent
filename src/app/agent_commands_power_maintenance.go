@@ -8,13 +8,19 @@ import (
 	"discovery/app/core/maintenance"
 )
 
-// ── Janela de manutenção: deferral de comandos de power ──
+// ── Janela de manutenção vs. comando de power INTERATIVO ──
 //
-// Quando maintenanceWindow.enabled=true e "agora" está FORA da janela, um
-// comando restart/reboot/shutdown do servidor é ADIADO: nada é executado e o
-// resultado volta pelo canal de comandos existente com status
-// "deferred_to_window" e nextRunAt = início da próxima janela. Janela
-// desligada (kill switch) ou dentro da janela → comportamento atual.
+// A janela de manutenção (maintenanceWindow) vale para AUTOMAÇÃO (patch,
+// core/automation com TaskRespectMaintenanceWindow) e autoupdate. Um comando
+// de power INTERATIVO (restart/reboot/shutdown que chega pelo canal de
+// comandos a partir do console) NUNCA é adiado por ela: o operador pediu a
+// ação agora, e o deferral antigo era um beco sem saída (nada reagendava a
+// execução em NextRunAt e o resultado voltava exitCode=0 — sucesso falso).
+//
+// Quando a janela está ativa e "agora" está FORA dela, o comando segue o
+// fluxo normal e um log WARN registra que a janela foi ignorada. force=true
+// sempre executa, independente de janela (reforçado no fluxo: o comando
+// interativo nem chega a avaliar deferral).
 
 // maintenanceNow é o relógio usado pela avaliação da janela. Variável de
 // pacote para injeção simples nos testes (sem parametrizar toda a cadeia).
@@ -35,31 +41,56 @@ func evaluatePowerMaintenance(win maintenance.Window, now time.Time) *powerMaint
 	return &powerMaintenanceDeferral{NextRunAt: d.NextRunAt}
 }
 
-// deferPowerForMaintenance aplica a avaliação com a config efetiva e o
-// relógio corrente. nil = seguir o fluxo normal do comando.
-func (a *App) deferPowerForMaintenance(action string) *powerMaintenanceDeferral {
+// windowSpanLabel monta o rótulo "HH:mm-HH:mm" da janela para logs, na zona
+// em que ela é avaliada (local de Location + StartLocal quando configurados,
+// senão o legado StartUTC em UTC). Config quebrada (horário inválido) →
+// rótulo genérico. Usa apenas API exportada de maintenance (o pacote não
+// expõe usesLocalClock/duration) e replica o default de duração (60min).
+func windowSpanLabel(win maintenance.Window) string {
+	clock, durMin := win.StartUTC, agentconfig.DefaultMaintenanceWindowDurationMinutes
+	if win.Location != nil {
+		if _, ok := maintenance.ParseClock(win.StartLocal); ok {
+			clock = win.StartLocal
+		}
+	}
+	if win.DurationMinutes > 0 {
+		durMin = win.DurationMinutes
+	}
+	startMin, ok := maintenance.ParseClock(clock)
+	if !ok {
+		return "janela de manutenção"
+	}
+	endMin := (startMin + durMin) % 1440
+	return fmt.Sprintf("%02d:%02d-%02d:%02d", startMin/60, startMin%60, endMin/60, endMin%60)
+}
+
+// warnInteractivePowerOutsideMaintenanceWindow avalia a janela de manutenção
+// para um comando de power INTERATIVO (canal de comandos do console).
+// NUNCA adia: quando a janela está ativa e "agora" está FORA dela, emite o
+// log WARN correspondente e retorna true para o chamador registrar que a
+// janela foi ignorada. Janela desligada (kill switch), sem config ou dentro
+// da janela → false, fluxo normal.
+func (a *App) warnInteractivePowerOutsideMaintenanceWindow(action string) bool {
 	if a == nil {
-		return nil
+		return false
 	}
 	cfg := a.GetAgentConfiguration()
 	if cfg.MaintenanceWindow == nil {
-		return nil
+		return false
 	}
 	win, _ := cfg.MaintenanceWindow.Effective()
 	if !win.Enabled {
-		return nil
+		return false
 	}
-	return evaluatePowerMaintenance(win, maintenanceNow())
-}
-
-// maintenanceDeferredResult serializa o resultado de deferral para o canal de
-// comandos (status + nextRunAt em RFC3339 UTC).
-func maintenanceDeferredResult(d *powerMaintenanceDeferral) string {
-	next := ""
-	if d != nil && !d.NextRunAt.IsZero() {
-		next = d.NextRunAt.UTC().Format(time.RFC3339)
+	d := evaluatePowerMaintenance(win, maintenanceNow())
+	if d == nil {
+		// Dentro da janela: nada a registrar, segue o fluxo normal.
+		return false
 	}
-	return fmt.Sprintf(`{"status":"deferred_to_window","nextRunAt":%q}`, next)
+	// LogBuffer.Append é nil-safe (Buffer não inicializado → no-op), o que
+	// mantém o helper testável com um App{} zerado.
+	a.Logs.Append(fmt.Sprintf("[agent] %s-action [MAINTENANCE] janela ativa (%s) mas comando interativo — executando agora (próxima janela: %s)", action, windowSpanLabel(win), nextRunAtRFC3339(d.NextRunAt)))
+	return true
 }
 
 // ── Reboot coordenado: aviso (grace) ao usuário ──
@@ -77,6 +108,15 @@ func (a *App) rebootGraceSeconds() int {
 	}
 	_, grace := cfg.MaintenanceWindow.Effective()
 	return grace
+}
+
+// nextRunAtRFC3339 formata o início da próxima janela para o WARN (RFC3339
+// UTC). Zero time (janela sem próxima ocorrência agendável) → "desconhecida".
+func nextRunAtRFC3339(next time.Time) string {
+	if next.IsZero() {
+		return "desconhecida"
+	}
+	return next.UTC().Format(time.RFC3339)
 }
 
 // notifyRebootGrace mostra o toast local "Reboot agendado pela TI em Ns —

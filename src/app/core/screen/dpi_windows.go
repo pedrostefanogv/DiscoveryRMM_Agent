@@ -98,6 +98,54 @@ func EnsurePerMonitorDPIAwareness() bool {
 // DpiAwarenessSource retorna como a awareness foi garantida (diagnóstico).
 func DpiAwarenessSource() string { return dpiAwareSource }
 
+// procShcoreGetDpiForMonitor lê o DPI efetivo de um monitor pelo handle.
+// procMonitorFromPoint devolve o monitor dono de um ponto do desktop virtual.
+var (
+	procShcoreGetDpiForMonitor = syscall.NewLazyDLL("shcore.dll").NewProc("GetDpiForMonitor")
+	procMonitorFromPoint       = user32.NewProc("MonitorFromPoint")
+)
+
+// MDT_EFFECTIVE_DPI (shcore): DPI considerando a escala que o usuário escolheu.
+const (
+	mdtEffectiveDPI = 0
+	// MONITOR_DEFAULTTONEAREST: nunca devolve NULL (monitor mais próximo).
+	monitorDefaultToNearest = 2
+)
+
+// dpiMonitorDaCoordenada devolve o DPI efetivo (96 = 100%) do monitor que
+// contém o ponto (x, y) em coordenadas FÍSICAS. Cai para 96 quando o sistema
+// não expõe a API (Win7/8) ou o monitor não é identificável, o que mantém o
+// layout de projeto.
+//
+// Usado pelos cartões nativos (banner/aviso da bandeja) em setups
+// multi-monitor com escalas diferentes: cada cartão precisa nascer no tamanho
+// do monitor onde aparece.
+func dpiMonitorDaCoordenada(x, y int) int {
+	if procMonitorFromPoint.Find() != nil {
+		return 96
+	}
+	// POINT físico (LONG x LONG) — NÃO é winui.Rect (campos de 64 bits).
+	pt := struct {
+		X int32
+		Y int32
+	}{X: int32(x), Y: int32(y)}
+	handle, _, _ := procMonitorFromPoint.Call(uintptr(unsafe.Pointer(&pt)), monitorDefaultToNearest)
+	if handle == 0 {
+		return 96
+	}
+	// GetDpiForMonitor só existe no Win8.1+; sem ela, 96 (layout de projeto).
+	if procShcoreGetDpiForMonitor.Find() != nil {
+		return 96
+	}
+	var dpix, dpiy uint32
+	ret, _, _ := procShcoreGetDpiForMonitor.Call(handle, mdtEffectiveDPI,
+		uintptr(unsafe.Pointer(&dpix)), uintptr(unsafe.Pointer(&dpiy)))
+	if ret == 0 && dpix >= 96 {
+		return int(dpix)
+	}
+	return 96
+}
+
 // shcorePerMonitorActive verifica se o processo já é PER_MONITOR_DPI_AWARE.
 func shcorePerMonitorActive() bool {
 	if procShcoreGetProcessDpiAwareness.Find() != nil {

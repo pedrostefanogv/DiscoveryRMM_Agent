@@ -79,6 +79,12 @@ type ChannelOrderReporter interface {
 	ChannelOrderName() string
 }
 
+// SetCapturerAtual não faz nada em plataformas não-Windows.
+func SetCapturerAtual(c Capturer) {}
+
+// CaptureExclusionSupported é sempre falso em plataformas não-Windows.
+func CaptureExclusionSupported() bool { return false }
+
 // NewCapturer retorna erro em plataformas não-Windows.
 func NewCapturer(monitorIndex int) (Capturer, error) {
 	return nil, errNotSupported
