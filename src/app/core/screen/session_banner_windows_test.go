@@ -282,7 +282,6 @@ var (
 	testProcWindowFromPoint = testUser32.NewProc("WindowFromPoint")
 	testProcSendMessageW    = testUser32.NewProc("SendMessageW")
 	testProcGetClassLongW   = testUser32.NewProc("GetClassLongW")
-
 )
 
 type testPoint struct {
@@ -365,12 +364,12 @@ func TestSessionBannerClickThrough(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 		}
 		if !vivo {
-			// GetWindowRect devolve zeros aqui: a janela existe (IsWindowVisible=1)
-			// mas o Windows não expõe o retângulo para este processo. Sem retângulo
-			// não há como montar o hit-test por WindowFromPoint, então o teste não
-			// pode exercitar o click-through neste ambiente — o WM_NCHITTEST
-			// (abaixo) continua sendo verificado.
-			t.Skipf("GetWindowRect devolveu retângulo vazio para o banner (hwnd=%d) — hit-test por WindowFromPoint indisponível nesta sessão", banner.hwnd)
+			// CUIDADO: até 2026-11-03 este ramo escondia um BUG (winui.Rect com 32
+			// bytes passado para GetWindowRect, que escreve 16) — VisibleRect
+			// devolvia ok=false SEMPRE e o teste era pulado em toda máquina. O
+			// layout foi corrigido (winui.rectFromNative) e o skip agora só cobre
+			// ambiente realmente sem desktop interativo.
+			t.Skipf("GetWindowRect devolveu retângulo vazio para o banner (hwnd=%d) — sem desktop interativo para hit-test", banner.hwnd)
 		}
 	}
 	point := testPoint{X: int32(x + bw/2), Y: int32(y + bh/2)}

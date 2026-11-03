@@ -21,11 +21,14 @@ func injetarAfinidade(t *testing.T, aceita func(value uint32) bool) *[]uint32 {
 	t.Helper()
 	anteriorSet, anteriorGet := affinitySet, affinityGet
 	chamadas := &[]uint32{}
-	affinitySet = func(_ uintptr, value uint32) bool {
+	affinitySet = func(_ uintptr, value uint32) (bool, error) {
 		*chamadas = append(*chamadas, value)
-		return aceita(value)
+		if aceita(value) {
+			return true, nil
+		}
+		return false, errTeste
 	}
-	affinityGet = func(uintptr) uint32 { return 0 }
+	affinityGet = func(uintptr) (uint32, bool) { return 0, true }
 	t.Cleanup(func() {
 		affinitySet, affinityGet = anteriorSet, anteriorGet
 	})
@@ -116,19 +119,26 @@ func TestReavaliarBannerNoCapturer(t *testing.T) {
 	limparMascaras(t)
 	anteriorSet, anteriorGet := affinitySet, affinityGet
 	anteriorDecidido := bannerModoDecidido.Load()
+	anteriorAtraso := reavaliarAtraso
+	// Sem debounce no teste: a reavaliação precisa ser observável na mesma chamada.
+	reavaliarAtraso = 0
 	t.Cleanup(func() {
 		affinitySet, affinityGet = anteriorSet, anteriorGet
+		reavaliarAtraso = anteriorAtraso
 		bannerModoDecidido.Store(anteriorDecidido)
 		SetCapturerAtual(nil)
 		unregisterBannerCapture(0x777)
 	})
 
 	chamadas := &[]uint32{}
-	affinitySet = func(_ uintptr, value uint32) bool {
+	affinitySet = func(_ uintptr, value uint32) (bool, error) {
 		*chamadas = append(*chamadas, value)
-		return value == wdaExcludeFromCapture
+		if value == wdaExcludeFromCapture {
+			return true, nil
+		}
+		return false, errTeste
 	}
-	affinityGet = func(uintptr) uint32 { return wdaNone }
+	affinityGet = func(uintptr) (uint32, bool) { return wdaNone, true }
 
 	// Banner ativo, modo já decidido, sem máscara.
 	registerBannerCapture(0x777)

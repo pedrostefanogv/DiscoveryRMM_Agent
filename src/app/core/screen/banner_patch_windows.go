@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"discovery/app/core/winui"
@@ -74,6 +75,12 @@ var (
 	// da criação da janela).
 	bannerModoDecidido atomic.Bool
 
+	// capturerGeracao invalida reavaliações pendentes: cada SetCapturerAtual
+	// incrementa; o callback agendado só age se ainda for a última troca.
+	capturerGeracao atomic.Uint64
+	// reavaliarAtraso é o debounce da reavaliação (0 desliga — usado em teste).
+	reavaliarAtraso = 250 * time.Millisecond
+
 	// emendaConhecida guarda a capacidade do ÚLTIMO capturer criado no processo.
 	// O banner nasce ANTES do capturer da sessão (manager.CreateSession), então
 	// no instante da consulta o registry pode estar vazio; sem esta memória o
@@ -96,6 +103,9 @@ var (
 func registerBannerCapture(hwnd uintptr) {
 	bannerCaptureMu.Lock()
 	bannerCaptureTarget.Store(hwnd)
+	// Banner novo ainda NÃO decidiu o modo: o listener de troca de capturer não
+	// pode agir no meio da criação (respawn com o processo já "quente").
+	bannerModoDecidido.Store(false)
 	bannerCaptureMu.Unlock()
 }
 
@@ -193,6 +203,10 @@ type mascaraRegiao struct {
 	ativa bool
 }
 
+// mascaraMaxPixels limita a área da máscara (4 MP ≈ 16 MB de BGRA). O banner
+// tem ~620x68; o teto existe só como defesa contra handle reciclado.
+const mascaraMaxPixels = 4_000_000
+
 var (
 	mascarasMu sync.Mutex
 	mascaras   = map[uintptr]*mascaraRegiao{}
@@ -213,13 +227,21 @@ func capturarMascaraRegiao(hwnd uintptr) error {
 	if !ok {
 		return fmt.Errorf("janela sem retângulo válido")
 	}
-	// Defensivo: área absurda é sinal de handle reciclado.
-	if rect.W > 32768 || rect.H > 32768 {
-		return fmt.Errorf("área da janela absurda (%dx%d)", rect.W, rect.H)
+	// Defensivo: área absurda é sinal de handle reciclado — e um teto de pixels
+	// evita alocação gigante (a DIB é W*H*4 bytes).
+	if rect.W <= 0 || rect.H <= 0 || rect.W*rect.H > mascaraMaxPixels {
+		return fmt.Errorf("área da janela inválida (%dx%d)", rect.W, rect.H)
 	}
 	px, err := lerPixelsTela(rect)
 	if err != nil {
 		return err
+	}
+	// BitBlt que devolve tudo preto costuma ser captura bloqueada (UAC/lock,
+	// overlay de vídeo). Usar essa máscara pintaria um retângulo PRETO no stream
+	// — exatamente o sintoma que ela veio corrigir. Nesse caso falha e o banner
+	// cai na escada de afinidade.
+	if regiaoTodaPreta(px) {
+		return fmt.Errorf("captura da máscara saiu toda preta")
 	}
 	mascarasMu.Lock()
 	mascaras[hwnd] = &mascaraRegiao{hwnd: hwnd, rect: rect, px: px}
@@ -303,13 +325,62 @@ func removerMascara(hwnd uintptr) {
 	}
 }
 
-// RegionMaskAvailable informa se existe máscara pronta para reescrever a área
-// de algum cartão do agente no frame. Quando existe, o banner NÃO precisa de
-// SetWindowDisplayAffinity: o pipeline esconde a área sem o retângulo preto.
+// RegionMaskAvailable informa se existe máscara ATIVA pronta para reescrever a
+// área de algum cartão do agente no frame. Máscara capturada mas inativa (modo
+// WDA_EXCLUDEFROMCAPTURE) não conta: nesse modo o compositor já remove o cartão.
 func RegionMaskAvailable() bool {
 	mascarasMu.Lock()
 	defer mascarasMu.Unlock()
-	return len(mascaras) > 0
+	for _, m := range mascaras {
+		if m.ativa {
+			return true
+		}
+	}
+	return false
+}
+
+// regiaoTodaPreta informa se o buffer é totalmente preto (amostragem).
+func regiaoTodaPreta(px []byte) bool {
+	if len(px) < 4 {
+		return true
+	}
+	passo := len(px) / 4 / 1024
+	if passo < 1 {
+		passo = 1
+	}
+	for i := 0; i+3 < len(px); i += passo * 4 {
+		if px[i] != 0 || px[i+1] != 0 || px[i+2] != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// mascaraDisponivel informa se ESTA janela tem máscara capturada. Diferente de
+// RegionMaskAvailable (qualquer janela), é o que o banner precisa consultar: a
+// máscara do aviso da bandeja não protege a área do banner.
+func mascaraDisponivel(hwnd uintptr) bool {
+	if hwnd == 0 {
+		return false
+	}
+	mascarasMu.Lock()
+	defer mascarasMu.Unlock()
+	_, ok := mascaras[hwnd]
+	return ok
+}
+
+// emendaDoCapturerDisponivel informa se o capturer ATIVO contorna a região por
+// conta própria (hoje só o GDI), sem depender de máscara.
+func emendaDoCapturerDisponivel() bool {
+	capturerAtualMu.Lock()
+	atual := capturerAtual
+	capturerAtualMu.Unlock()
+	if atual != nil && !capturerNulo(atual) {
+		return capturerSupportsBannerPatching(atual)
+	}
+	// Sem capturer ativo agora (banner criado antes do capturer da sessão):
+	// usa a capacidade do último capturer do processo.
+	return emendaConhecida.Load()
 }
 
 // ativarMascara liga a aplicação da máscara no frame (idempotente).
@@ -371,11 +442,15 @@ func PatchFrameBannerAt(frame *Frame, originX, originY int) {
 		return
 	}
 
+	// Snapshot sob lock: o refresh (banner_mask_refresh_windows.go) troca o
+	// slice de pixels por um novo (copy-on-write). Copiar o cabeçalho do slice
+	// aqui garante que o patcher leia um buffer imutável — sem isso havia
+	// corrida entre a escrita do refresh e a leitura do frame.
 	mascarasMu.Lock()
-	lista := make([]*mascaraRegiao, 0, len(mascaras))
+	lista := make([]mascaraSnapshot, 0, len(mascaras))
 	for _, m := range mascaras {
 		if m.ativa {
-			lista = append(lista, m)
+			lista = append(lista, mascaraSnapshot{hwnd: m.hwnd, rect: m.rect, px: m.px})
 		}
 	}
 	mascarasMu.Unlock()
@@ -408,6 +483,15 @@ func PatchFrameBannerAt(frame *Frame, originX, originY int) {
 			copy(frame.Data[offF:offF+bytesLinha], m.px[offM:offM+bytesLinha])
 		}
 	}
+}
+
+// mascaraSnapshot é uma cópia imutável do que o patcher precisa de uma máscara.
+// O slice de pixels é trocado inteiro pelo refresh (copy-on-write), então este
+// snapshot continua válido mesmo que a máscara seja atualizada no meio do frame.
+type mascaraSnapshot struct {
+	hwnd uintptr
+	rect winui.Rect
+	px   []byte
 }
 
 // PatchFrameBannerIfNeeded aplica a máscara apenas quando o capturer NÃO faz a
@@ -446,15 +530,7 @@ func CaptureExclusionSupported() bool {
 	if RegionMaskAvailable() {
 		return true
 	}
-	capturerAtualMu.Lock()
-	atual := capturerAtual
-	capturerAtualMu.Unlock()
-	if atual != nil && !capturerNulo(atual) {
-		return capturerSupportsBannerPatching(atual)
-	}
-	// Sem capturer ativo agora (banner criado antes do capturer da sessão):
-	// usa a capacidade do último capturer do processo.
-	return emendaConhecida.Load()
+	return emendaDoCapturerDisponivel()
 }
 
 // SetCapturerAtual registra o capturer que o pipeline está usando (aceita nil
@@ -470,11 +546,31 @@ func SetCapturerAtual(c Capturer) {
 	capturerAtual = c
 	capturerAtualMu.Unlock()
 
+	// Descarte (Close de capturer) não é troca: nada a reavaliar.
+	if c == nil || capturerNulo(c) {
+		return
+	}
 	// O capturer pode trocar no meio da sessão (fallback GDI↔DXGI, troca de
 	// desktop, recriação por falha). O modo de exclusão do banner foi decidido
 	// no nascimento; reavaliar aqui evita o cartão vazar VISÍVEL quando o
 	// capturer novo não sabe emendar e nenhuma afinidade foi aplicada.
-	reavaliarBannerNoCapturer()
+	//
+	// DEBOUNCE: o registry é global e também recebe capturers TRANSITÓRIOS
+	// (print de tela, calibração de ordem de canais). Reavaliar na hora faria o
+	// fechamento de um print aplicar afinidade num banner que estava em modo
+	// região. Só reavalia se este capturer continuar sendo o ativo depois do
+	// atraso.
+	geracao := capturerGeracao.Add(1)
+	if reavaliarAtraso <= 0 {
+		reavaliarBannerNoCapturer()
+		return
+	}
+	time.AfterFunc(reavaliarAtraso, func() {
+		if capturerGeracao.Load() != geracao {
+			return
+		}
+		reavaliarBannerNoCapturer()
+	})
 }
 
 // reavaliarBannerNoCapturer reaplica a escada de afinidade quando o capturer
@@ -491,16 +587,23 @@ func reavaliarBannerNoCapturer() {
 		return
 	}
 	hwnd := bannerCaptureTarget.Load()
-	if hwnd == 0 || RegionMaskAvailable() {
+	if hwnd == 0 || mascaraDisponivel(hwnd) {
 		return
 	}
 	capturerAtualMu.Lock()
 	atual := capturerAtual
 	capturerAtualMu.Unlock()
+	// Capturer descartado (Close) não é troca: não mexe na afinidade.
+	if atual == nil || capturerNulo(atual) {
+		return
+	}
 	if capturerSupportsBannerPatching(atual) {
 		return
 	}
-	if displayAffinityAtual(hwnd) != wdaNone {
+	// Só reaplica quando a leitura confirma WDA_NONE. Se GetWindowDisplayAffinity
+	// falhar, não sabemos o estado — mexer às cegas poderia rebaixar um EXCLUDE.
+	afinidade, ok := displayAffinityAtual(hwnd)
+	if !ok || afinidade != wdaNone {
 		return
 	}
 	mode, err := applyDisplayAffinity(hwnd)
@@ -509,8 +612,8 @@ func reavaliarBannerNoCapturer() {
 			capturerName(atual), err)
 		return
 	}
-	log.Printf("[session-banner] capturer trocado (%s): afinidade reaplicada (%s, efetiva=%d)",
-		capturerName(atual), bannerCaptureModeName(mode), displayAffinityAtual(hwnd))
+	log.Printf("[session-banner] capturer trocado (%s): afinidade reaplicada (%s, efetiva=%s)",
+		capturerName(atual), bannerCaptureModeName(mode), afinidadeParaLog(hwnd))
 }
 
 // capturerName devolve o nome do capturer para log (vazio quando nil).

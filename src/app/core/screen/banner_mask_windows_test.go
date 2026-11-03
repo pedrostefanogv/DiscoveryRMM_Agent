@@ -256,6 +256,63 @@ func TestPatchFrameBannerAtUsaOrigemExplicita(t *testing.T) {
 	}
 }
 
+func TestMascaraDisponivelPorJanela(t *testing.T) {
+	limparMascaras(t)
+	m := mascaraDeTeste(0xABC, winui.Rect{X: 0, Y: 0, W: 4, H: 4}, 0x22, true)
+	mascarasMu.Lock()
+	mascaras[m.hwnd] = m
+	mascarasMu.Unlock()
+
+	if !mascaraDisponivel(0xABC) {
+		t.Fatal("mascaraDisponivel deveria ser true para a janela com máscara")
+	}
+	if mascaraDisponivel(0xDEF) {
+		t.Fatal("mascaraDisponivel não pode vazar para outra janela (máscara do aviso não cobre o banner)")
+	}
+	if !RegionMaskAvailable() {
+		t.Fatal("RegionMaskAvailable continua sendo 'existe alguma máscara'")
+	}
+}
+
+// TestPatchFrameBannerConcorrenteComRefresh garante que a troca do buffer de
+// pixels pelo refresh (copy-on-write) não corre com a leitura do patcher.
+// Rode com -race para valer.
+func TestPatchFrameBannerConcorrenteComRefresh(t *testing.T) {
+	limparMascaras(t)
+	m := mascaraDeTeste(0xABC, winui.Rect{X: 0, Y: 0, W: 8, H: 8}, 0x22, true)
+	mascarasMu.Lock()
+	mascaras[m.hwnd] = m
+	mascarasMu.Unlock()
+
+	parar := make(chan struct{})
+	feito := make(chan struct{})
+	go func() {
+		defer close(feito)
+		for {
+			select {
+			case <-parar:
+				return
+			default:
+			}
+			// Simula o refresh: buffer novo + troca do slice sob lock.
+			mascarasMu.Lock()
+			if atual := mascaras[m.hwnd]; atual != nil {
+				novo := make([]byte, len(atual.px))
+				copy(novo, atual.px)
+				atual.px = novo
+			}
+			mascarasMu.Unlock()
+		}
+	}()
+
+	frame := frameDeTeste(32, 32, 0, 0, 0x11)
+	for i := 0; i < 200; i++ {
+		PatchFrameBanner(frame)
+	}
+	close(parar)
+	<-feito
+}
+
 func TestMascaraCicloDeVida(t *testing.T) {
 	limparMascaras(t)
 	if RegionMaskAvailable() {
@@ -265,8 +322,13 @@ func TestMascaraCicloDeVida(t *testing.T) {
 	mascarasMu.Lock()
 	mascaras[m.hwnd] = m
 	mascarasMu.Unlock()
-	if !RegionMaskAvailable() {
-		t.Fatal("máscara capturada deveria habilitar a emenda de região")
+	// Capturada mas INATIVA (modo WDA_EXCLUDEFROMCAPTURE) não conta como emenda
+	// de região disponível — o compositor já remove o cartão nesse modo.
+	if RegionMaskAvailable() {
+		t.Fatal("máscara inativa não deveria contar como emenda de região")
+	}
+	if !mascaraDisponivel(m.hwnd) {
+		t.Fatal("a máscara ESTÁ capturada para esta janela (mascaraDisponivel)")
 	}
 	ativarMascara(m.hwnd)
 	mascarasMu.Lock()
@@ -274,6 +336,9 @@ func TestMascaraCicloDeVida(t *testing.T) {
 	mascarasMu.Unlock()
 	if !ativa {
 		t.Fatal("ativarMascara deveria marcar a máscara como ativa")
+	}
+	if !RegionMaskAvailable() {
+		t.Fatal("máscara ativa deveria habilitar a emenda de região")
 	}
 	removerMascara(m.hwnd)
 	if RegionMaskAvailable() {

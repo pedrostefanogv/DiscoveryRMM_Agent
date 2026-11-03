@@ -360,14 +360,31 @@ func MoveResizeWindow(hwnd uintptr, x, y, width, height int) {
 // WS_VISIBLE). É o que a máscara de captura precisa: os pixels da área do cartão
 // têm de ser lidos ANTES de ele aparecer na tela (ver screen.capturarMascaraRegiao).
 func WindowRect(hwnd uintptr) (Rect, bool) {
-	var win Rect
-	if hwnd == 0 || rectEmpty(procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&win)))) {
+	var nr nativeRect
+	if hwnd == 0 || rectEmpty(procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&nr)))) {
 		return Rect{}, false
 	}
+	win := rectFromNative(nr)
 	if win.W <= 0 || win.H <= 0 {
 		return Rect{}, false
 	}
 	return win, true
+}
+
+// rectFromNative converte o RECT do Win32 (quatro LONG de 32 bits) para Rect.
+//
+// IMPORTANTE: Rect usa quatro int de 64 bits (32 bytes em amd64) enquanto RECT
+// tem 16 bytes. Passar &Rect direto para GetWindowRect/GetClientRect fazia a API
+// escrever os LONGs por cima de X/Y e deixar W/H zerados — VisibleRect/WindowRect
+// devolviam ok=false SEMPRE (a emenda da captura nunca ligava e a máscara do
+// banner nunca era registrada). Ver revisão de 2026-11-03.
+func rectFromNative(nr nativeRect) Rect {
+	return Rect{
+		X: int(nr.Left),
+		Y: int(nr.Top),
+		W: int(nr.Right - nr.Left),
+		H: int(nr.Bottom - nr.Top),
+	}
 }
 
 // VisibleRect devolve o retângulo em que a janela está REALMENTE aparecendo na
@@ -383,17 +400,18 @@ func WindowRect(hwnd uintptr) (Rect, bool) {
 // importam, e elas valem para o popup (sem borda, rect de janela == rect de
 // cliente).
 func VisibleRect(hwnd uintptr) (Rect, bool) {
-	var win Rect
-	if hwnd == 0 || rectEmpty(procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&win)))) {
+	var winNative nativeRect
+	if hwnd == 0 || rectEmpty(procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&winNative)))) {
 		return Rect{}, false
 	}
 	if visible, _, _ := procIsWindowVisible.Call(hwnd); visible == 0 {
 		return Rect{}, false
 	}
 
-	area := win
-	var client Rect
-	if !rectEmpty(procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&client)))) {
+	area := rectFromNative(winNative)
+	var clientNative nativeRect
+	if !rectEmpty(procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&clientNative)))) {
+		client := rectFromNative(clientNative)
 		if client.W > 0 && client.W < area.W {
 			area.W = client.W
 		}
@@ -404,11 +422,11 @@ func VisibleRect(hwnd uintptr) (Rect, bool) {
 
 	root, _, _ := procGetAncestor.Call(hwnd, GaRoot)
 	if root != 0 && root != hwnd {
-		var owner Rect
-		if rectEmpty(procGetWindowRect.Call(root, uintptr(unsafe.Pointer(&owner)))) {
+		var ownerNative nativeRect
+		if rectEmpty(procGetWindowRect.Call(root, uintptr(unsafe.Pointer(&ownerNative)))) {
 			return Rect{}, false
 		}
-		area = area.Intersect(owner)
+		area = area.Intersect(rectFromNative(ownerNative))
 	}
 
 	if area.W <= 0 || area.H <= 0 {

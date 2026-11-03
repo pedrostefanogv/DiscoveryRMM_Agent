@@ -86,19 +86,24 @@ var (
 	// affinitySet/affinityGet são os pontos de injeção dos testes: a escada de
 	// afinidade é a parte mais delicada do banner (o bug do retângulo preto
 	// nasceu dela) e precisa de teste de regressão sem janela real.
-	affinitySet = func(hwnd uintptr, value uint32) bool {
-		ok, _, _ := procSetWindowDisplayAffinity.Call(hwnd, uintptr(value))
-		return ok != 0
+	affinitySet = func(hwnd uintptr, value uint32) (bool, error) {
+		ok, _, callErr := procSetWindowDisplayAffinity.Call(hwnd, uintptr(value))
+		if ok == 0 {
+			return false, fmt.Errorf("%v (errno=%d)", describeErr(callErr), errnoOf(callErr))
+		}
+		return true, nil
 	}
-	affinityGet = func(hwnd uintptr) uint32 {
+	affinityGet = func(hwnd uintptr) (uint32, bool) {
 		var value uint32
 		if hwnd == 0 {
-			return 0
+			return 0, false
 		}
 		if ok, _, _ := procGetWindowDisplayAffinity.Call(hwnd, uintptr(unsafe.Pointer(&value))); ok == 0 {
-			return 0
+			// Falha ≠ WDA_NONE: quem chama precisa distinguir "sem afinidade" de
+			// "não consegui ler" (o listener não deve reaplicar às cegas).
+			return 0, false
 		}
-		return value
+		return value, true
 	}
 )
 
@@ -149,7 +154,12 @@ func hideBannerFromCapture(hwnd uintptr) (bannerCaptureMode, error) {
 	// Degrau 1: o próprio pipeline de captura contorna o banner. É o único
 	// caminho em que o cartão fica íntegro na tela física E fora do stream
 	// mesmo sem afinidade de display.
-	if CaptureExclusionSupported() {
+	//
+	// A checagem é POR JANELA (mascaraDisponivel): a máscara do aviso da bandeja
+	// não cobre a área do banner. Antes, qualquer máscara no processo fazia o
+	// banner escolher "região" sem ter máscara própria — e ele vazava visível
+	// quando o capturer era DXGI.
+	if mascaraDisponivel(hwnd) || emendaDoCapturerDisponivel() {
 		return bannerCaptureRegiao, nil
 	}
 	mode, err := applyDisplayAffinity(hwnd)
@@ -180,14 +190,17 @@ func hideBannerFromCapture(hwnd uintptr) (bannerCaptureMode, error) {
 // reportado no log mentia ("WDA_EXCLUDEFROMCAPTURE" com a janela em MONITOR).
 func applyDisplayAffinity(hwnd uintptr) (bannerCaptureMode, error) {
 	// Degrau 1: WDA_EXCLUDEFROMCAPTURE (Win10 2004+). Sucesso = fim.
-	if affinitySet(hwnd, wdaExcludeFromCapture) {
+	ok, excludeErr := affinitySet(hwnd, wdaExcludeFromCapture)
+	if ok {
 		return bannerCaptureExcluded, nil
 	}
-	excludeErr := fmt.Errorf("WDA_EXCLUDEFROMCAPTURE recusado pelo Windows")
+	if excludeErr == nil {
+		excludeErr = fmt.Errorf("WDA_EXCLUDEFROMCAPTURE recusado pelo Windows")
+	}
 	// Degrau 2: WDA_MONITOR (Win7+). A API só troca para MONITOR a partir de
 	// WDA_NONE (o EXCLUDE recusado pode ter deixado estado pendente).
 	affinitySet(hwnd, wdaNone)
-	if affinitySet(hwnd, wdaMonitor) {
+	if ok, _ := affinitySet(hwnd, wdaMonitor); ok {
 		return bannerCaptureBlack, nil
 	}
 	return bannerCaptureVisible, excludeErr
@@ -206,8 +219,17 @@ func mascaraAtivaPara(captureMode bannerCaptureMode, maskErr error) bool {
 
 // displayAffinityAtual lê a afinidade EFETIVA da janela (diagnóstico em campo:
 // o log precisa mostrar o que o Windows realmente aplicou, não o que pedimos).
-func displayAffinityAtual(hwnd uintptr) uint32 {
+func displayAffinityAtual(hwnd uintptr) (uint32, bool) {
 	return affinityGet(hwnd)
+}
+
+// afinidadeParaLog formata a afinidade efetiva; "?" quando a leitura falhou.
+func afinidadeParaLog(hwnd uintptr) string {
+	value, ok := displayAffinityAtual(hwnd)
+	if !ok {
+		return "?"
+	}
+	return fmt.Sprintf("%d", value)
 }
 
 // BannerOptions descreve o banner a criar. Não há botão: a desconexão é feita
@@ -445,7 +467,10 @@ func NewSessionBanner(opts BannerOptions) (*SessionBanner, error) {
 		// A decisão vem DEPOIS da máscara: com máscara pronta o modo é sempre
 		// "emenda de região" e nenhuma afinidade é aplicada (nada de preto).
 		captureMode, captureErr := hideBannerFromCapture(hwnd)
-		emenda := CaptureExclusionSupported()
+		// Critério POR JANELA: a emenda/máscara do aviso da bandeja não protege
+		// a área do banner (antes o log podia dizer "emenda de região" olhando
+		// só para a capacidade global do processo).
+		emenda := mascaraDisponivel(hwnd) || emendaDoCapturerDisponivel()
 		// A máscara entra em ação sempre que o cartão NÃO foi removido pelo
 		// compositor (modo != WDA_EXCLUDEFROMCAPTURE) e a captura da região deu
 		// certo. Isso cobre três casos:
@@ -467,18 +492,18 @@ func NewSessionBanner(opts BannerOptions) (*SessionBanner, error) {
 		bannerModoDecidido.Store(true)
 		switch {
 		case captureMode == bannerCaptureRegiao && maskErr == nil:
-			log.Printf("[session-banner] banner fora da captura via %s (máscara de região pronta, afinidade=%d)",
-				bannerCaptureModeName(captureMode), displayAffinityAtual(hwnd))
+			log.Printf("[session-banner] banner fora da captura via %s (máscara de região pronta, afinidade=%s)",
+				bannerCaptureModeName(captureMode), afinidadeParaLog(hwnd))
 		case captureMode == bannerCaptureRegiao:
 			log.Printf("[session-banner] banner fora da captura via %s (máscara indisponível: %v)", bannerCaptureModeName(captureMode), maskErr)
 		case captureMode == bannerCaptureExcluded:
-			log.Printf("[session-banner] banner fora da captura via %s (afinidade efetiva=%d)",
-				bannerCaptureModeName(captureMode), displayAffinityAtual(hwnd))
+			log.Printf("[session-banner] banner fora da captura via %s (afinidade efetiva=%s)",
+				bannerCaptureModeName(captureMode), afinidadeParaLog(hwnd))
 		case maskErr == nil:
 			// Afinidade degradada (MONITOR = preto) ou ausente: a máscara é o
 			// que mantém o stream limpo.
-			log.Printf("[session-banner] banner fora da captura via %s + máscara de região (afinidade efetiva=%d)",
-				bannerCaptureModeName(captureMode), displayAffinityAtual(hwnd))
+			log.Printf("[session-banner] banner fora da captura via %s + máscara de região (afinidade efetiva=%s)",
+				bannerCaptureModeName(captureMode), afinidadeParaLog(hwnd))
 		case emenda:
 			log.Printf("[session-banner] banner fora da captura via captura com emenda de região (afinidade recusada: %v)", captureErr)
 		default:

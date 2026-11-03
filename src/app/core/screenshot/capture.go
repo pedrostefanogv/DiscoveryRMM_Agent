@@ -316,8 +316,16 @@ func captureRegionFrameHDR(x, y, w, h int) (*screen.Frame, bool) {
 }
 
 func encodeResult(frame *screen.Frame, mode string, monitor, quality, maxDim int, format string) (*CaptureResult, error) {
-	frame = toneMapIfHDR(frame)
+	// A origem física é lida ANTES do tone mapping: ToneMapHDRToSDR recria o
+	// Frame e zera OriginX/OriginY (o resultado saía com origem 0 em monitor HDR).
 	originX, originY := frame.OriginX, frame.OriginY
+	frame = toneMapIfHDR(frame)
+	// Máscara do banner/aviso DEPOIS do tone mapping: em HDR o frame só vira
+	// BGRA aqui, e antes disso o patcher ignora (8 bytes/px). Para capturas SDR
+	// isto é idempotente com o que o capturer já fez.
+	if frame != nil && frame.ColorSpace == 0 {
+		screen.PatchFrameBannerAt(frame, originX, originY)
+	}
 	if maxDim == 0 {
 		maxDim = defaultMaxDimension
 	}

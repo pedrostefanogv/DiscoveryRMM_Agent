@@ -46,7 +46,7 @@ var (
 	procGetTopWindow    = user32.NewProc("GetTopWindow")
 	procGetWindow       = user32.NewProc("GetWindow")
 	procIsWindowVisible = user32.NewProc("IsWindowVisible")
-	procGetWindowRect   = user32.NewProc("GetWindowRect")
+	procIsHungAppWindow = user32.NewProc("IsHungAppWindow")
 	procPrintWindow     = user32.NewProc("PrintWindow")
 
 	mascaraRefreshMu   sync.Mutex
@@ -55,19 +55,23 @@ var (
 	mascaraRefreshAtivo = true
 )
 
+// mascaraRefreshMaxPixels limita o tamanho da janela impressa (12 MP ≈ 48 MB).
+// Janela maior que isso (8K) não compensa o custo: mantém a máscara congelada.
+const mascaraRefreshMaxPixels = 12_000_000
+
 // iniciarRefreshMascaras liga o loop de atualização (idempotente).
 func iniciarRefreshMascaras() {
-	if !mascaraRefreshAtivo {
-		return
-	}
 	mascaraRefreshMu.Lock()
 	defer mascaraRefreshMu.Unlock()
-	if mascaraRefreshStop != nil {
+	if !mascaraRefreshAtivo || mascaraRefreshStop != nil {
 		return
 	}
 	stop := make(chan struct{})
 	mascaraRefreshStop = stop
 	go func() {
+		// Buffer do PrintWindow é DA GERAÇÃO: quando o loop é reiniciado com
+		// outro ainda preso em PrintWindow, os dois não compartilham memória.
+		var buf []byte
 		ticker := time.NewTicker(mascaraRefreshIntervalo)
 		defer ticker.Stop()
 		for {
@@ -75,12 +79,22 @@ func iniciarRefreshMascaras() {
 			case <-stop:
 				return
 			case <-ticker.C:
-				if !atualizarMascarasAoVivo() {
+				if !atualizarMascarasAoVivo(&buf) {
 					mascaraRefreshMu.Lock()
-					if mascaraRefreshStop == stop {
+					encerrou := mascaraRefreshStop == stop
+					if encerrou {
 						mascaraRefreshStop = nil
 					}
 					mascaraRefreshMu.Unlock()
+					if encerrou {
+						// Corrida de reativação: uma máscara pode ter sido ativada
+						// entre a checagem e o encerramento (ativarMascara viu o
+						// stop ainda não-nulo e não abriu um loop novo). Se ainda
+						// há máscara ativa, reabre.
+						if RegionMaskAvailable() {
+							iniciarRefreshMascaras()
+						}
+					}
 					return
 				}
 			}
@@ -101,7 +115,7 @@ func pararRefreshMascaras() {
 
 // atualizarMascarasAoVivo atualiza todas as máscaras ativas e devolve true
 // enquanto houver pelo menos uma (o loop usa isso para se encerrar).
-func atualizarMascarasAoVivo() bool {
+func atualizarMascarasAoVivo(buf *[]byte) bool {
 	mascarasMu.Lock()
 	alvos := make([]*mascaraRegiao, 0, len(mascaras))
 	for _, m := range mascaras {
@@ -118,24 +132,24 @@ func atualizarMascarasAoVivo() bool {
 		if !mascaraVisivel(m.hwnd) {
 			continue
 		}
-		atualizarMascaraAoVivo(m)
+		atualizarMascaraAoVivo(m, buf)
 	}
 	return true
 }
 
 // atualizarMascaraAoVivo tenta substituir os pixels de UMA máscara pelo conteúdo
 // atual da janela que está atrás do cartão. Falha silenciosa: mantém a máscara.
-func atualizarMascaraAoVivo(m *mascaraRegiao) {
+func atualizarMascaraAoVivo(m *mascaraRegiao, buf *[]byte) {
 	centroX := m.rect.X + m.rect.W/2
 	centroY := m.rect.Y + m.rect.H/2
 	janela := janelaSobPonto(centroX, centroY)
 	if janela == 0 {
-		logMascaraRefreshFalha("nenhuma janela sob o cartão")
+		logMascaraRefreshFalha(m.hwnd, "nenhuma janela sob o cartão")
 		return
 	}
-	janelaRect, pixels, ok := imprimirJanela(janela)
+	janelaRect, pixels, ok := imprimirJanela(janela, buf)
 	if !ok {
-		logMascaraRefreshFalha("PrintWindow recusado")
+		logMascaraRefreshFalha(m.hwnd, "PrintWindow recusado")
 		return
 	}
 	inter := m.rect.Intersect(janelaRect)
@@ -145,10 +159,10 @@ func atualizarMascaraAoVivo(m *mascaraRegiao) {
 	// Recorta a interseção do bitmap impresso e valida antes de aceitar.
 	recorte := recortarRegiao(pixels, janelaRect.W, inter.X-janelaRect.X, inter.Y-janelaRect.Y, inter.W, inter.H)
 	if !regiaoUtil(recorte) {
-		logMascaraRefreshFalha("bitmap vazio/preto")
+		logMascaraRefreshFalha(m.hwnd, "bitmap vazio/preto")
 		return
 	}
-	logMascaraRefreshSucesso()
+	logMascaraRefreshSucesso(m.hwnd)
 
 	mascarasMu.Lock()
 	atual := mascaras[m.hwnd]
@@ -156,6 +170,11 @@ func atualizarMascaraAoVivo(m *mascaraRegiao) {
 		mascarasMu.Unlock()
 		return
 	}
+	// COPY-ON-WRITE: monta um buffer novo e troca o slice sob lock. O patcher
+	// (PatchFrameBanner) lê o slice antigo sem lock — trocar o conteúdo no lugar
+	// seria uma corrida de dados (pixels rasgados no stream).
+	novo := make([]byte, len(atual.px))
+	copy(novo, atual.px)
 	// Escreve só a interseção: o resto da máscara (fora da janela impressa)
 	// continua com o conteúdo congelado.
 	destX := inter.X - atual.rect.X
@@ -163,17 +182,14 @@ func atualizarMascaraAoVivo(m *mascaraRegiao) {
 	for y := 0; y < inter.H; y++ {
 		offDst := (destY+y)*atual.rect.W*4 + destX*4
 		offSrc := y * inter.W * 4
-		if offDst+inter.W*4 > len(atual.px) || offSrc+inter.W*4 > len(recorte) {
+		if offDst+inter.W*4 > len(novo) || offSrc+inter.W*4 > len(recorte) {
 			break
 		}
-		copy(atual.px[offDst:offDst+inter.W*4], recorte[offSrc:offSrc+inter.W*4])
+		copy(novo[offDst:offDst+inter.W*4], recorte[offSrc:offSrc+inter.W*4])
 	}
+	atual.px = novo
 	mascarasMu.Unlock()
 }
-
-// rectVazio indica que GetWindowRect falhou (o chamador trata como inválido).
-// Recebe os três retornos de LazyProc.Call para poder ser usado direto.
-func rectVazio(callReturn uintptr, _ uintptr, _ error) bool { return callReturn == 0 }
 
 // janelaSobPonto devolve a primeira janela VISÍVEL na ordem Z que contém o ponto
 // e NÃO é um dos cartões do agente (banner/aviso). 0 quando não encontra.
@@ -183,8 +199,7 @@ func janelaSobPonto(x, y int) uintptr {
 	hwnd, _, _ := procGetTopWindow.Call(0)
 	for hwnd != 0 {
 		if visivel, _, _ := procIsWindowVisible.Call(hwnd); visivel != 0 {
-			var r winui.Rect
-			if !rectVazio(procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))) &&
+			if r, ok := winui.WindowRect(hwnd); ok &&
 				r.Contains(x, y) && !ehCartaoDoAgente(hwnd, alvo, extras) {
 				return hwnd
 			}
@@ -213,12 +228,17 @@ func ehCartaoDoAgente(hwnd, alvo uintptr, extras []uintptr) bool {
 // imprimirJanela renderiza a janela num DIB BGRA top-down e devolve o retângulo
 // da janela + os pixels. ok=false quando o Windows recusa ou a janela é grande
 // demais para o custo valer a pena.
-func imprimirJanela(hwnd uintptr) (winui.Rect, []byte, bool) {
-	var r winui.Rect
-	if hwnd == 0 || rectVazio(procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))) {
+func imprimirJanela(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool) {
+	r, ok := winui.WindowRect(hwnd)
+	if hwnd == 0 || !ok {
 		return winui.Rect{}, nil, false
 	}
-	if r.W <= 0 || r.H <= 0 || r.W > 16384 || r.H > 16384 {
+	if r.W <= 0 || r.H <= 0 || r.W*r.H > mascaraRefreshMaxPixels {
+		return winui.Rect{}, nil, false
+	}
+	// App travado (não responde a mensagens): PrintWindow bloquearia a goroutine
+	// de refresh para sempre. Melhor manter a máscara congelada.
+	if travada, _, _ := procIsHungAppWindow.Call(hwnd); travada != 0 {
 		return winui.Rect{}, nil, false
 	}
 
@@ -255,19 +275,23 @@ func imprimirJanela(hwnd uintptr) (winui.Rect, []byte, bool) {
 		return winui.Rect{}, nil, false
 	}
 	prev, _, _ := procSelectObject.Call(memDC, hbm)
-	ok, _, _ := procPrintWindow.Call(hwnd, memDC, pwRenderFullContent)
-	if ok == 0 {
+	impresso, _, _ := procPrintWindow.Call(hwnd, memDC, pwRenderFullContent)
+	if impresso == 0 {
 		// Fallback: PrintWindow clássico (alguns apps antigos só respondem a ele).
-		ok, _, _ = procPrintWindow.Call(hwnd, memDC, 0)
+		impresso, _, _ = procPrintWindow.Call(hwnd, memDC, 0)
 	}
 	procGdiFlush.Call()
-	out := make([]byte, r.W*r.H*4)
-	if ok != 0 {
-		copy(out, unsafe.Slice((*byte)(bits), len(out)))
+	tamanho := r.W * r.H * 4
+	if cap(*buf) < tamanho {
+		*buf = make([]byte, tamanho)
+	}
+	out := (*buf)[:tamanho]
+	if impresso != 0 {
+		copy(out, unsafe.Slice((*byte)(bits), tamanho))
 	}
 	procSelectObject.Call(memDC, prev)
 	procDeleteObject.Call(hbm)
-	if ok == 0 {
+	if impresso == 0 {
 		return winui.Rect{}, nil, false
 	}
 	return r, out, true
@@ -291,16 +315,25 @@ func recortarRegiao(pixels []byte, largura, x, y, w, h int) []byte {
 }
 
 // regiaoUtil descarta resultados suspeitos: bitmap todo preto (PrintWindow
-// recusado por app UWP/GPU) ou uniforme (render vazio). Amostra 1 a cada 97
-// pixels para manter o custo baixo. Região legítima e uniforme (barra de título
-// lisa) é rejeitada — nesse caso a máscara congelada já é o mesmo conteúdo.
+// recusado por app UWP/GPU) ou uniforme (render vazio). Região legítima e
+// uniforme (barra de título lisa) é rejeitada — nesse caso a máscara congelada
+// já é o mesmo conteúdo.
+//
+// A amostragem é proporcional ao tamanho (até ~1024 amostras): com passo fixo de
+// 97 pixels uma interseção pequena (ex.: 80 px de largura) era amostrada em 1
+// ponto só e SEMPRE rejeitada, desligando o refresh justamente no caso comum de
+// janela estreita sob o cartão.
 func regiaoUtil(pixels []byte) bool {
 	if len(pixels) < 4 {
 		return false
 	}
+	passoPixels := (len(pixels) / 4) / 1024
+	if passoPixels < 1 {
+		passoPixels = 1
+	}
 	minR, maxR := byte(0xFF), byte(0)
 	naoPreto := false
-	for i := 0; i+3 < len(pixels); i += 97 * 4 {
+	for i := 0; i+3 < len(pixels); i += passoPixels * 4 {
 		r := pixels[i+2]
 		if r < minR {
 			minR = r
@@ -316,26 +349,27 @@ func regiaoUtil(pixels []byte) bool {
 }
 
 // logMascaraRefresh registra o resultado do refresh uma única vez por mudança de
-// estado (não polui o log a cada 2s).
+// estado E POR JANELA (o banner pode falhar e o aviso da bandeja funcionar; um
+// estado global faria as duas linhas se alternarem para sempre).
 var (
 	mascaraRefreshLogMu   sync.Mutex
-	mascaraRefreshLogErro bool
+	mascaraRefreshLogErro = map[uintptr]bool{}
 )
 
-func logMascaraRefreshFalha(motivo string) {
+func logMascaraRefreshFalha(hwnd uintptr, motivo string) {
 	mascaraRefreshLogMu.Lock()
-	primeiro := !mascaraRefreshLogErro
-	mascaraRefreshLogErro = true
+	primeiro := !mascaraRefreshLogErro[hwnd]
+	mascaraRefreshLogErro[hwnd] = true
 	mascaraRefreshLogMu.Unlock()
 	if primeiro {
 		log.Printf("[session-banner] refresh da máscara indisponível (%s) — mantendo o quadro congelado", motivo)
 	}
 }
 
-func logMascaraRefreshSucesso() {
+func logMascaraRefreshSucesso(hwnd uintptr) {
 	mascaraRefreshLogMu.Lock()
-	estavaComErro := mascaraRefreshLogErro
-	mascaraRefreshLogErro = false
+	estavaComErro := mascaraRefreshLogErro[hwnd]
+	delete(mascaraRefreshLogErro, hwnd)
 	mascaraRefreshLogMu.Unlock()
 	if estavaComErro {
 		log.Printf("[session-banner] refresh da máscara voltou a funcionar (conteúdo ao vivo atrás do cartão)")
