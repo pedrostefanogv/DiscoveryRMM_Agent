@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -40,6 +41,25 @@ func (scope natsCommandRouteScope) isFanout() bool {
 }
 
 // â”€â”€â”€ NATS Session â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+// authFailureNotify guarda o último aviso de falha de autorização (loop de
+// reconexão com credencial revogada é silencioso por design do cliente NATS).
+var (
+	authFailureMu       sync.Mutex
+	authFailureLastWarn time.Time
+)
+
+// logAuthFailureThrottled registra falha de autorização no máximo 1x/5min.
+func (r *Runtime) logAuthFailureThrottled(err error) {
+	authFailureMu.Lock()
+	defer authFailureMu.Unlock()
+	now := time.Now()
+	if now.Sub(authFailureLastWarn) < 5*time.Minute {
+		return
+	}
+	authFailureLastWarn = now
+	r.logf("[nats][auth] FALHA DE AUTORIZACAO recorrente: %v — verificando credencial/token do agente; reconexão continua em loop (IgnoreAuthErrorAbort + MaxReconnects=-1)", err)
+}
 
 func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transportLabel string, connectTimeout time.Duration) error {
 	if !guidPattern.MatchString(strings.TrimSpace(cfg.AgentID)) {
@@ -82,6 +102,12 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 			// Erros assíncronos do NATS (ex: Permissions Violation em subscribes
 			// de remote session, publish negado, etc.) — loga para diagnóstico.
 			r.logf("[nats][error] %v", err)
+			// Credencial revogada/expirada: com IgnoreAuthErrorAbort + MaxReconnects(-1)
+			// o cliente fica em loop silencioso de reconexao. Loga com destaque, no
+			// maximo uma vez a cada 5 min por processo, para o operador diagnosticar.
+			if err != nil && strings.Contains(strings.ToLower(err.Error()), "authorization") {
+				r.logAuthFailureThrottled(err)
+			}
 		}),
 	}
 	if wsProxyPath != "" {
@@ -557,7 +583,8 @@ func fanoutDedupeKey(env natsCommandEnvelope) string {
 }
 
 // agentCommandDedupePrefix marca as chaves de dedupe de comando endereçado a
-// UM agente — as únicas persistidas entre reboots (ver persistCommandDedupe).
+// UM agente. Fan-out e unicast compartilham o mesmo store; a persistência em
+// disco é aplicada a TODAS as chaves (ver persistCommandDedupe).
 const agentCommandDedupePrefix = "agent-cmd:"
 
 // agentCommandDedupeKey identifica um comando endereçado a um único agente.
@@ -655,14 +682,16 @@ func (r *Runtime) ensureDedupeLoadedLocked(now time.Time) {
 }
 
 // persistCommandDedupe grava uma entrada de dedupe, quando o app injetou o
-// hook. Só comandos endereçados a UM agente (prefixo "agent-cmd:") são
-// persistidos: são os que a reentrega do servidor repete por CommandId após o
-// reboot. Artifacts de fan-out continuam só em memória/JetStream.
+// hook. Persiste TANTO comandos endereçados a UM agente (prefixo "agent-cmd:",
+// reentrega por CommandId) QUANTO chaves de fan-out (idempotencyKey|dispatchId):
+// sem persistir o fan-out, um reboot dentro da janela de dedupe (30 min padrão)
+// fazia o JetStream reentregar e o comando REEXECUTAR após o reboot — cenário
+// do incidente de reboot loop. O teto de 500 entradas do store limita o disco.
 func (r *Runtime) persistCommandDedupe(dedupeKey string, expiresAt time.Time, result *natsResultEnvelope) {
 	if r.opts.PersistCommandDedupe == nil {
 		return
 	}
-	if !strings.HasPrefix(dedupeKey, agentCommandDedupePrefix) {
+	if strings.TrimSpace(dedupeKey) == "" {
 		return
 	}
 

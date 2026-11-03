@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -268,8 +269,17 @@ func normalizeTLSTarget(apiServer string) (string, string, error) {
 
 // validateTransportSecurity enforces secure transport in non-local endpoints.
 // A local dev override exists via DISCOVERY_ALLOW_INSECURE_TRANSPORT.
+// insecureTransportWarned garante UM aviso por processo: o override desliga o
+// guard de https-only e o operador precisa saber disso com destaque, sem
+// poluir o log a cada ciclo de reconexao.
+var insecureTransportWarned bool
+
 func validateTransportSecurity(cfg Config) error {
 	if allowInsecureTransport() {
+		if !insecureTransportWarned {
+			insecureTransportWarned = true
+			log.Printf("[SEGURANCA] DISCOVERY_ALLOW_INSECURE_TRANSPORT ativo: guard de transporte seguro (https-only) DESLIGADO — use apenas em ambiente de desenvolvimento controlado")
+		}
 		return nil
 	}
 

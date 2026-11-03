@@ -56,11 +56,14 @@ func TestCommandDedupePersistidoSobreviveAoReboot(t *testing.T) {
 	}
 }
 
-func TestCommandDedupeNaoPersisteChaveDeFanout(t *testing.T) {
-	writes := 0
+// Regressão do reboot com fan-out: sem persistir a chave idempotencyKey|dispatchId,
+// um reboot dentro da janela de dedupe (30 min padrão) fazia o JetStream
+// reentregar e o comando reexecutar após o reboot.
+func TestCommandDedupeFanoutPersistidoSobreviveAoReboot(t *testing.T) {
+	var persisted []CommandDedupeEntry
 	r := NewRuntime(Options{
-		PersistCommandDedupe: func(CommandDedupeEntry) error {
-			writes++
+		PersistCommandDedupe: func(entry CommandDedupeEntry) error {
+			persisted = append(persisted, entry)
 			return nil
 		},
 	})
@@ -69,8 +72,15 @@ func TestCommandDedupeNaoPersisteChaveDeFanout(t *testing.T) {
 	if _, shouldExecute := r.reserveFanoutDispatch(fanoutKey, commandFanoutDedupeDefaultTTL); !shouldExecute {
 		t.Fatal("primeira entrega de fan-out deve executar")
 	}
-	if writes != 0 {
-		t.Fatalf("chave de fan-out não deve ser persistida (gravações=%d)", writes)
+	if len(persisted) != 1 || persisted[0].Key != fanoutKey {
+		t.Fatalf("reserva de fan-out deve ser persistida, veio %+v", persisted)
+	}
+
+	restarted := NewRuntime(Options{
+		LoadCommandDedupe: func() []CommandDedupeEntry { return persisted },
+	})
+	if _, shouldExecute := restarted.reserveFanoutDispatch(fanoutKey, commandFanoutDedupeDefaultTTL); shouldExecute {
+		t.Fatal("após o reboot a reentrega de fan-out não pode reexecutar o comando")
 	}
 }
 

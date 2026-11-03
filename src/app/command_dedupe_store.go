@@ -174,7 +174,10 @@ func (s *commandDedupeStore) pruneLocked(now time.Time) {
 	for key := range s.entries {
 		keys = append(keys, key)
 	}
-	// Descarta as entradas que expiram primeiro.
+	// Descarta as entradas que expiram primeiro: é a evição de menor risco.
+	// Uma entrada quase expirando perdeu quase toda a utilidade (a janela de
+	// dedupe acabaria naturalmente em segundos); a de expiração distante ainda
+	// protege uma janela longa (até 24h) contra reentrega/reexecução.
 	sort.Slice(keys, func(i, j int) bool {
 		return s.entries[keys[i]].ExpiresAt < s.entries[keys[j]].ExpiresAt
 	})
