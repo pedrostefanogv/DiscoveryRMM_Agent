@@ -220,13 +220,21 @@ func applyDisplayAffinity(hwnd uintptr) (bannerCaptureMode, error) {
 
 // mascaraAtivaPara decide se a máscara de região deve entrar no frame.
 //
-// Só NÃO entra quando o compositor já removeu o cartão (WDA_EXCLUDEFROMCAPTURE):
-// nesse caso a área aparece AO VIVO e reescrever com o quadro congelado criaria
-// artefato. Em todos os outros modos (região, WDA_MONITOR = preto, ou sem
-// afinidade) a máscara é o que mantém o stream limpo — inclusive no caso em que
-// o EXCLUDE é recusado mas o MONITOR é aceito.
-func mascaraAtivaPara(captureMode bannerCaptureMode, maskErr error) bool {
-	return captureMode != bannerCaptureExcluded && maskErr == nil
+// A máscara entra SEMPRE que foi capturada, inclusive no modo
+// WDA_EXCLUDEFROMCAPTURE. Motivo medido em 2026-11-03 (teste
+// TestJanelaExcluidaApareceNaDuplicacao): o **Desktop Duplication (DXGI) NÃO
+// respeita SetWindowDisplayAffinity** — uma janela com EXCLUDEFROMCAPTURE
+// continua inteira no frame do DDA. Como o pipeline desta versão usa DDA
+// (go-d3d), desativar a máscara porque "o compositor já removeu o cartão" era
+// exatamente o que deixava o banner aparecer no visualizador.
+//
+// No caminho GDI a máscara não é aplicada de qualquer forma
+// (PatchFrameBannerIfNeeded ignora quem tem emenda própria), então ativar
+// sempre não gera artefato lá. Onde o EXCLUDE é honrado por outra API de
+// captura, a área mascarada fica com o quadro congelado — efeito aceitável e
+// invisível na prática (o conteúdo é o que estava atrás do cartão).
+func mascaraAtivaPara(_ bannerCaptureMode, maskErr error) bool {
+	return maskErr == nil
 }
 
 // displayAffinityAtual lê a afinidade EFETIVA da janela (diagnóstico em campo:
@@ -483,17 +491,9 @@ func NewSessionBanner(opts BannerOptions) (*SessionBanner, error) {
 		// a área do banner (antes o log podia dizer "emenda de região" olhando
 		// só para a capacidade global do processo).
 		emenda := mascaraDisponivel(hwnd) || emendaDoCapturerDisponivel()
-		// A máscara entra em ação sempre que o cartão NÃO foi removido pelo
-		// compositor (modo != WDA_EXCLUDEFROMCAPTURE) e a captura da região deu
-		// certo. Isso cobre três casos:
-		//   • modo região (sem afinidade): é o caminho normal;
-		//   • WDA_MONITOR aceito (EXCLUDE recusado): o frame vem PRETO e a
-		//     máscara é o que evita o retângulo preto no stream;
-		//   • sem afinidade nenhuma: o cartão vazaria visível e a máscara o
-		//     esconde.
-		// Com WDA_EXCLUDEFROMCAPTURE o compositor já remove o cartão e a área
-		// aparece AO VIVO — sobrescrever com o quadro congelado da máscara
-		// criaria um artefato gratuito.
+		// A máscara entra em ação sempre que a captura da região deu certo —
+		// inclusive com WDA_EXCLUDEFROMCAPTURE, porque o Desktop Duplication
+		// (capturer usado nesta versão) ignora a afinidade e mostraria o cartão.
 		if mascaraAtivaPara(captureMode, maskErr) {
 			ativarMascara(hwnd)
 		} else {

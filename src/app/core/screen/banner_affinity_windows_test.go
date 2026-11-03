@@ -134,7 +134,9 @@ func TestMascaraAtivaPara(t *testing.T) {
 		{"regiao com mascara", bannerCaptureRegiao, nil, true},
 		{"monitor com mascara", bannerCaptureBlack, nil, true},
 		{"sem afinidade com mascara", bannerCaptureVisible, nil, true},
-		{"exclude nao mascara", bannerCaptureExcluded, nil, false},
+		// DDA (DXGI) ignora WDA_EXCLUDEFROMCAPTURE, então a máscara TAMBÉM entra
+		// nesse modo — é o que tira o banner do visualizador nesta versão.
+		{"exclude com mascara", bannerCaptureExcluded, nil, true},
 		{"regiao sem mascara", bannerCaptureRegiao, errTeste, false},
 	}
 	for _, c := range casos {
