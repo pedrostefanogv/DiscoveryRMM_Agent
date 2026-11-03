@@ -86,6 +86,44 @@ func TestApplyDisplayAffinitySemAfinidade(t *testing.T) {
 	}
 }
 
+// TestHideBannerFromCapturePrefereExclude garante a correção da regressão de
+// 2026-11-03: o WDA_EXCLUDEFROMCAPTURE tem de ser tentado ANTES da máscara/emenda.
+// Quando ele é aceito, nada mais pode ser aplicado (nem máscara nem MONITOR) —
+// é o único mecanismo que o compositor garante em qualquer captura.
+func TestHideBannerFromCapturePrefereExclude(t *testing.T) {
+	limparMascaras(t)
+	chamadas := injetarAfinidade(t, func(value uint32) bool { return value == wdaExcludeFromCapture })
+	anteriorDecidido := bannerModoDecidido.Load()
+	anteriorAtraso := reavaliarAtraso
+	reavaliarAtraso = 0
+	t.Cleanup(func() {
+		bannerModoDecidido.Store(anteriorDecidido)
+		reavaliarAtraso = anteriorAtraso
+		SetCapturerAtual(nil)
+	})
+
+	// Cenário do bug: máscara pronta E capturer GDI (emenda) disponíveis. Mesmo
+	// assim o EXCLUDE precisa ser o primeiro caminho.
+	m := mascaraDeTeste(0x321, winui.Rect{X: 0, Y: 0, W: 4, H: 4}, 0x22, true)
+	mascarasMu.Lock()
+	mascaras[m.hwnd] = m
+	mascarasMu.Unlock()
+	SetCapturerAtual(capturerComEmenda{})
+	registerBannerCapture(0x321)
+	defer unregisterBannerCapture(0x321)
+
+	mode, err := hideBannerFromCapture(0x321)
+	if err != nil {
+		t.Fatalf("EXCLUDE aceito não deveria devolver erro: %v", err)
+	}
+	if mode != bannerCaptureExcluded {
+		t.Fatalf("modo = %d (%s), esperado bannerCaptureExcluded", mode, bannerCaptureModeName(mode))
+	}
+	if len(*chamadas) != 1 || (*chamadas)[0] != wdaExcludeFromCapture {
+		t.Fatalf("chamadas de afinidade = %v, esperado somente [0x11] (nada de máscara/MONITOR depois do EXCLUDE)", *chamadas)
+	}
+}
+
 func TestMascaraAtivaPara(t *testing.T) {
 	casos := []struct {
 		nome  string

@@ -151,32 +151,44 @@ func bannerCaptureModeName(mode bannerCaptureMode) string {
 // topo do arquivo). Antes disso, a falha cancelava o banner inteiro — o usuário
 // acessado ficava sem qualquer aviso. Nunca deixa a sessão sem indicador.
 func hideBannerFromCapture(hwnd uintptr) (bannerCaptureMode, error) {
-	// Degrau 1: o próprio pipeline de captura contorna o banner. É o único
-	// caminho em que o cartão fica íntegro na tela física E fora do stream
-	// mesmo sem afinidade de display.
+	// ORDEM CORRIGIDA (2026-11-03, 2ª rodada): WDA_EXCLUDEFROMCAPTURE PRIMEIRO.
 	//
-	// A checagem é POR JANELA (mascaraDisponivel): a máscara do aviso da bandeja
-	// não cobre a área do banner. Antes, qualquer máscara no processo fazia o
-	// banner escolher "região" sem ter máscara própria — e ele vazava visível
-	// quando o capturer era DXGI.
+	// Até o commit eb607ad (02/11) a exclusão nativa era o único mecanismo; a
+	// emenda por região foi promovida a "degrau 1" para contornar o Win10/VM que
+	// recusa o WDA por completo. Efeito colateral: em máquina onde a emenda/
+	// máscara NÃO consegue cobrir a área (capturer DXGI, falha de captura da
+	// máscara, VisibleRect indisponível), o banner deixava de ser excluído pelo
+	// compositor e passava a APARECER no viewer. Era exatamente a regressão
+	// relatada ("antes não aparecia; começou depois dos ajustes de Win10").
+	//
+	// Agora o caminho nativo volta a ser preferido: ele é o único que o
+	// compositor garante em QUALQUER captura (DXGI, BitBlt, gravação), sem
+	// depender de o pipeline reescrever a região. A emenda/máscara continua como
+	// degrau seguinte, para as máquinas que recusam o WDA.
+	ok, excludeErr := affinitySet(hwnd, wdaExcludeFromCapture)
+	if ok {
+		return bannerCaptureExcluded, nil
+	}
+	if excludeErr == nil {
+		excludeErr = fmt.Errorf("WDA_EXCLUDEFROMCAPTURE recusado pelo Windows")
+	}
+
+	// Degrau 2: o próprio pipeline de captura contorna a área do banner. A
+	// checagem é POR JANELA (mascaraDisponivel) — a máscara do aviso da bandeja
+	// não cobre a área do banner.
 	if mascaraDisponivel(hwnd) || emendaDoCapturerDisponivel() {
 		return bannerCaptureRegiao, nil
 	}
-	mode, err := applyDisplayAffinity(hwnd)
-	if err == nil || mode != bannerCaptureVisible {
-		return mode, err
-	}
-	// A afinidade falhou por completo. Se o último capturer do processo sabia
-	// emendar, a captura desta sessão deve ser do mesmo tipo (mesma máquina,
-	// mesmo driver) e o cartão continua fora do stream — reportar "sem
-	// exclusão" aqui só confundiria o diagnóstico em campo.
-	if emendaConhecida.Load() {
-		return bannerCaptureRegiao, nil
+	// Degrau 3: WDA_MONITOR (o cartão aparece preto no stream). A API só troca
+	// para MONITOR a partir de WDA_NONE.
+	affinitySet(hwnd, wdaNone)
+	if ok, _ := affinitySet(hwnd, wdaMonitor); ok {
+		return bannerCaptureBlack, nil
 	}
 	// Nem afinidade nem emenda: o cartão vai aparecer no stream, mas o usuário
 	// acessado PRECISA saber que a sessão existe. Melhor avisar (com o erro no
 	// log) do que sumir com o banner.
-	return bannerCaptureVisible, err
+	return bannerCaptureVisible, excludeErr
 }
 
 // applyDisplayAffinity aplica SetWindowDisplayAffinity na ordem de preferência
