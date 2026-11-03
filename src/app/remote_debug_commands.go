@@ -33,6 +33,11 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		return a.handleP2pPreloadCommand(parent, payload)
 	}
 
+	// Sensores: coleta imediata ("executar agora" do console).
+	if isRunSensorsCommandType(cmdType) {
+		return a.handleRunSensorsCommand(parent, payload)
+	}
+
 	if cmdType == "update" || cmdType == "selfupdate" {
 		if a.SelfUpdater != nil {
 			updateCmd, parseErr := parseAgentUpdateCommand(payload)

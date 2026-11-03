@@ -224,6 +224,18 @@ var (
 	diskIONativeLastRespMs float64 = -1
 )
 
+// CollectDiskIONativePercent expõe o coletor PDH de disco deste pacote para
+// outros pacotes (sensor DiskIo em app/core/automation), evitando duplicar a
+// lista de contadores PDH. Exportação mínima e sem efeito colateral: o heartbeat
+// continua usando collectHeartbeatDiskIOWindowsNative como antes.
+//
+// Devolve (busyPercent, readPercent, writePercent, latencyMs, ok). A PRIMEIRA
+// chamada de uma janela só semeia a baseline e devolve ok=false — quem chamar
+// precisa amostrar duas vezes com uma espera entre elas.
+func CollectDiskIONativePercent() (float64, float64, float64, float64, bool) {
+	return collectDiskIONativePercent()
+}
+
 // collectHeartbeatDiskIOWindowsNative coleta métricas de disco I/O via PDH nativo.
 // Substitui collectHeartbeatDiskIOWindowsCached (PowerShell + cache 30s).
 func collectHeartbeatDiskIOWindowsNative(metrics *agentconn.AgentHeartbeatMetrics) {

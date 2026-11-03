@@ -2,6 +2,7 @@ package automation
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
 
@@ -16,7 +17,15 @@ func newWatchdogService(t *testing.T, tasks []AutomationTask, fingerprint string
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		_ = db.Close()
+		// Windows: o driver SQLite pode manter handles de -wal/-shm vivos até o
+		// GC rodar, e o RemoveAll do t.TempDir falha com "directory is not empty"
+		// (flake intermitente desta suíte). Forçar a coleta e dar um instante
+		// para o finalizer rodar deixa o diretório limpo de forma determinística.
+		runtime.GC()
+		time.Sleep(20 * time.Millisecond)
+	})
 
 	svc := NewService(func() RuntimeConfig { return RuntimeConfig{AgentID: "agent-1"} }, nil)
 	svc.SetDB(db)

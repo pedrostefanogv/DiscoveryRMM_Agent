@@ -335,6 +335,67 @@ func ParseAnyMap(v any) map[string]any {
 	return nil
 }
 
+// ── Run Sensors Commands ──
+
+// RunSensorsCommand é o payload do comando "executar agora" dos sensores.
+// sensorIds vazio = todos os sensores da policy local.
+type RunSensorsCommand struct {
+	SensorIDs []string `json:"sensorIds"`
+	ForceSync bool     `json:"forceSync"`
+}
+
+// IsRunSensorsCommandType reconhece o comando de coleta imediata de sensores.
+func IsRunSensorsCommandType(cmdType string) bool {
+	switch strings.ToLower(strings.TrimSpace(cmdType)) {
+	case "runsensors", "runsensor":
+		return true
+	default:
+		return false
+	}
+}
+
+// ParseRunSensorsPayload parseia {sensorIds, forceSync} tolerando payload
+// double-encoded, nulo e chaves em camelCase.
+func ParseRunSensorsPayload(payload any) RunSensorsCommand {
+	if payload == nil {
+		return RunSensorsCommand{}
+	}
+	var raw []byte
+	switch typed := payload.(type) {
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return RunSensorsCommand{}
+		}
+		raw = []byte(trimmed)
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return RunSensorsCommand{}
+		}
+		raw = encoded
+	}
+
+	var command RunSensorsCommand
+	if err := json.Unmarshal(raw, &command); err != nil {
+		return RunSensorsCommand{}
+	}
+
+	// Normaliza: ids vazios/duplicados não podem gerar coleta duas vezes.
+	seen := make(map[string]bool, len(command.SensorIDs))
+	ids := make([]string, 0, len(command.SensorIDs))
+	for _, id := range command.SensorIDs {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		ids = append(ids, trimmed)
+	}
+	command.SensorIDs = ids
+	return command
+}
+
 // ── SystemInfo Helpers ──
 
 // NormalizePayloadJSON normaliza um payload para map[string]any.

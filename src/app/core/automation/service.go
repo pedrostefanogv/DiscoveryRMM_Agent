@@ -151,6 +151,34 @@ type Service struct {
 	// registra o instante agendado sem mudar a API pública. Nil na produção:
 	// o agendamento real (scheduleDeferRetry) roda.
 	deferRetryHook func(agentID string, task AutomationTask, sourceType AutomationExecutionSourceType, triggerType TriggerType, at time.Time)
+
+	// ── Sensores (monitoramento periódico) ──
+	// Mutex próprio (sensorMu) para NÃO disputar com o mutex da automação: o
+	// sync/coleta de sensores roda em paralelo ao policy-sync e um lock
+	// compartilhado criaria contenção (e risco de ordem de locks).
+	sensorMu sync.Mutex
+	// sensors é a policy efetiva de sensores vinda do sync próprio.
+	sensors []SensorConfig
+	// sensorFingerprint evita baixar a policy inteira a cada ciclo de 5 min.
+	sensorFingerprint string
+	// sensorLastRun guarda o último disparo por sensor|alvo. Chave com alvo
+	// vazio = agenda do sensor; alvo preenchido = último resultado do alvo.
+	sensorLastRun map[string]time.Time
+	// sensorSem limita coletas concorrentes (4).
+	sensorSem chan struct{}
+	// sensorWake acorda o loop no run-now, sem esperar o ticker.
+	sensorWake chan struct{}
+	// sensorPending é o buffer de amostras aguardando entrega.
+	sensorPending []SensorResult
+	// sensorFlushMu serializa a entrega de lotes (loop + run-now + shutdown).
+	sensorFlushMu sync.Mutex
+	// sensorDisabled desliga o motor quando o servidor não tem o endpoint de
+	// sensores (404): sem isso cada ciclo faria um POST inútil.
+	sensorDisabled         bool
+	sensorNotFoundLogged   bool
+	sensorSyncBackoffUntil time.Time
+	sensorLastSyncAt       time.Time
+	sensorPolicyLoaded     bool
 }
 
 // policyPreloadRetriggerInterval é o intervalo mínimo para reacionar a MESMA
@@ -172,6 +200,9 @@ func NewService(getConfig func() RuntimeConfig, logger func(string)) *Service {
 		notifDedup:       make(map[string]automationNotifDedupState),
 		processStartAt:   time.Now().UTC(),
 		cfCache:          make(map[string]*ExecutionCustomFieldCtx),
+		sensorLastRun:    make(map[string]time.Time),
+		sensorSem:        make(chan struct{}, sensorMaxConcurrency),
+		sensorWake:       make(chan struct{}, 1),
 	}
 }
 
@@ -375,6 +406,9 @@ func (s *Service) Run(ctx context.Context, onBeat func()) {
 	defer s.stopCron()
 
 	go s.runCallbackLoop(ctx, onBeat)
+	// Motor de sensores: loop próprio, independente do ciclo da automação (o
+	// sync de sensores tem fingerprint e backoff próprios).
+	go s.runSensorsLoop(ctx, onBeat)
 
 	s.loadPersistedForCurrentAgent()
 
@@ -611,6 +645,11 @@ func (s *Service) refreshPolicy(ctx context.Context, includeScriptContent bool) 
 	// Pré-carga P2P pedida pelo servidor no próprio policy-sync: antes o campo era
 	// ignorado (struct Go sem PreloadPackages) e só o comando p2ppreload baixava.
 	s.dispatchPreloadPackages(resp.PreloadPackages)
+	// Sensores: sync próprio (endpoint e fingerprint separados do policy). Roda
+	// DEPOIS de a policy estar aplicada e em goroutine própria: sensores são
+	// best-effort e uma falha/lentidão deles NUNCA pode atrasar nem derrubar a
+	// automação (inclusive o RefreshPolicy chamado pela UI).
+	go s.refreshSensors(ctx, false)
 	s.logf("automacao: policy sync concluido (tasks=%d upToDate=%t)", len(effectiveTasks), resp.UpToDate)
 	return s.GetState(), nil
 }
@@ -1317,11 +1356,25 @@ func (s *Service) sendOrQueueCallback(ctx context.Context, agentID, executionID,
 			return err
 		}
 		callbackErr = s.client.ReportExecutionResult(ctx, cfg, commandID, req, correlationID)
+	case CallbackTypeSensorSamples:
+		// Lote de sensores: command_id da fila carrega o runId/lote (não existe
+		// execução de automação associada).
+		var req SensorResultBatch
+		if err := json.Unmarshal(body, &req); err != nil {
+			return err
+		}
+		_, callbackErr = s.client.ReportSensorSamples(ctx, cfg, req, correlationID)
 	default:
 		callbackErr = fmt.Errorf("callbackType invalido")
 	}
 	if callbackErr == nil {
 		return nil
+	}
+	// Lote REJEITADO pelo conteúdo (400) não é retentável: enfileirar viraria
+	// poison pill (reenvio idêntico a cada backoff, para sempre). O lote é
+	// descartado e o erro volta para o chamador logar.
+	if isSensorBatchRejected(callbackErr) {
+		return callbackErr
 	}
 	if s.db == nil {
 		return callbackErr
@@ -1601,6 +1654,11 @@ func (s *Service) collectValidMarkerKeys(current State) []string {
 	// Marcador de sistema: userLoginHandled da sessão atual.
 	keys = append(keys, "_sys:userlogin:handled:"+s.processStartAt.Format(time.RFC3339))
 
+	// Sensores: último disparo por sensor/alvo (sensor:lastrun:<sensorId>:<targetKey>).
+	// Sem registrar estas chaves, o cleanupOrphanedMarkers as apagava a cada
+	// policy-sync e TODOS os sensores rodariam de novo a cada ~5 min.
+	keys = append(keys, s.sensorMarkerKeys()...)
+
 	return keys
 }
 
@@ -1668,6 +1726,16 @@ func (s *Service) processCallbackQueue(ctx context.Context) {
 			} else {
 				callbackErr = s.client.ReportExecutionResult(ctx, cfg, entry.CommandID, req, entry.CorrelationID)
 			}
+		case CallbackTypeSensorSamples:
+			var req SensorResultBatch
+			if err := json.Unmarshal([]byte(entry.PayloadJSON), &req); err != nil {
+				callbackErr = err
+			} else {
+				if strings.TrimSpace(req.AgentID) == "" {
+					req.AgentID = agentID
+				}
+				_, callbackErr = s.client.ReportSensorSamples(ctx, cfg, req, entry.CorrelationID)
+			}
 		default:
 			callbackErr = fmt.Errorf("callbackType desconhecido")
 		}
@@ -1676,7 +1744,13 @@ func (s *Service) processCallbackQueue(ctx context.Context) {
 			errutil.LogIfErr(s.db.DeleteAutomationCallback(entry.ID), "automation: remover callback processado")
 			continue
 		}
-
+		// Lote de sensores recusado pelo CONTEÚDO (400): reenviar é inútil e
+		// viraria poison pill (reagendado para sempre). Descarta.
+		if isSensorBatchRejected(callbackErr) {
+			s.logf("sensores: lote recusado pelo servidor, descartado: %v", callbackErr)
+			errutil.LogIfErr(s.db.DeleteAutomationCallback(entry.ID), "automation: remover callback de sensores rejeitado")
+			continue
+		}
 		attempts := entry.Attempts + 1
 		errutil.LogIfErr(s.db.RescheduleAutomationCallback(entry.ID, attempts, time.Now().Add(callbackBackoff(attempts)), callbackErr.Error()), "automation: reagendar callback")
 		if strings.Contains(strings.ToLower(callbackErr.Error()), "404") {

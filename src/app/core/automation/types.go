@@ -216,6 +216,10 @@ type CallbackType string
 const (
 	CallbackTypeAck    CallbackType = "ack"
 	CallbackTypeResult CallbackType = "result"
+	// CallbackTypeSensorSamples: lote de amostras de SENSORES. Reusa a outbox
+	// durável da automação (automation_callback_queue): mesmo retry/backoff,
+	// sem tabela nova. O command_id da fila carrega o id do lote (runId).
+	CallbackTypeSensorSamples CallbackType = "sensor-samples"
 )
 
 type TriggerType string

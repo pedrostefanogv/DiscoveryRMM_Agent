@@ -332,6 +332,17 @@ func (db *DB) initializeCurrent() error {
 		-- de 30 dias.
 		CREATE INDEX IF NOT EXISTS idx_automation_execution_agent_status_started ON automation_execution_history(agent_id, status, started_at);
 
+		-- Snapshot local da policy de SENSORES (fingerprint próprio, separado da
+		-- automação). Espelho de automation_policy_state: permite retomar o
+		-- monitoramento logo após um restart, antes do primeiro sync. Aditivo:
+		-- CREATE IF NOT EXISTS não exige bump de schema.
+		CREATE TABLE IF NOT EXISTS sensor_config_state (
+			agent_id TEXT PRIMARY KEY,
+			fingerprint TEXT NOT NULL,
+			updated_at INTEGER NOT NULL,
+			payload_json TEXT NOT NULL
+		);
+
 		CREATE TABLE IF NOT EXISTS automation_callback_queue (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			agent_id TEXT NOT NULL,

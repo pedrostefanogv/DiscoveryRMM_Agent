@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // scriptTask monta uma task RunScript com referência de script.
@@ -114,8 +115,22 @@ func TestCircuitBreakerAbreParaFalhaReal(t *testing.T) {
 func TestRefreshPolicyAutoRecuperaConteudoDeScript(t *testing.T) {
 	const scriptContent = "Write-Output 'anydesk-id'"
 	var calls int32
+	// refreshPolicy dispara o sync de SENSORES em goroutine própria (best-effort,
+	// feature independente do policy). Este teste não quer o sensor sync — ele
+	// persistiria no SQLite concorrendo com o cleanup do TempDir (flaky no
+	// Windows: "directory is not empty"). Respondemos 404 e esperamos a goroutine
+	// terminar antes do teste retornar.
+	sensorSyncSeen := make(chan struct{}, 1)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/sensors/sync") {
+			select {
+			case sensorSyncSeen <- struct{}{}:
+			default:
+			}
+			http.NotFound(w, r)
+			return
+		}
 		atomic.AddInt32(&calls, 1)
 
 		var got struct {
@@ -161,6 +176,29 @@ func TestRefreshPolicyAutoRecuperaConteudoDeScript(t *testing.T) {
 
 	if _, err := svc.refreshPolicy(context.Background(), false); err != nil {
 		t.Fatalf("refreshPolicy: %v", err)
+	}
+
+	// A goroutine de sensores usa o httptest do teste: espera ela terminar antes
+	// do cleanup fechar o DB/TempDir. O 404 é tratado por handleSensorSyncError,
+	// que é a última coisa que a goroutine faz — então o backoff preenchido e o
+	// loop desabilitado provam que ela terminou.
+	select {
+	case <-sensorSyncSeen:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sync de sensores em goroutine nao executou")
+	}
+	sensorSettled := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		svc.sensorMu.Lock()
+		sensorSettled = svc.sensorDisabled && !svc.sensorSyncBackoffUntil.IsZero()
+		svc.sensorMu.Unlock()
+		if sensorSettled {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !sensorSettled {
+		t.Fatal("sync de sensores em goroutine nao terminou antes do cleanup")
 	}
 
 	if got := atomic.LoadInt32(&calls); got != 2 {
