@@ -164,14 +164,14 @@ func showTrayBalloonWindow(message string, anchorX, anchorY int, anchorOk bool) 
 	b := &sessionBalloon{
 		die:       make(chan struct{}),
 		prolongar: make(chan struct{}, 1),
-		title:   trayBalloonTitle,
-		message: message,
-		since:   time.Now(),
-		width:   width,
-		height:  height,
-		radius:  scalePx(trayBalloonRadius, scale),
-		scale:   scale,
-		theme:   bannerThemeLoader(),
+		title:     trayBalloonTitle,
+		message:   message,
+		since:     time.Now(),
+		width:     width,
+		height:    height,
+		radius:    scalePx(trayBalloonRadius, scale),
+		scale:     scale,
+		theme:     bannerThemeLoader(),
 		fonts: bannerFonts{
 			primary:   winui.CreateFont(scalePx(trayBalloonFontPx, scale), 600),
 			secondary: winui.CreateFont(scalePx(trayBalloonSubPx, scale), 400),
@@ -203,14 +203,29 @@ func showTrayBalloonWindow(message string, anchorX, anchorY int, anchorOk bool) 
 
 	winui.SetLayeredAlpha(hwnd, trayBalloonAlpha)
 	winui.SetRoundedRegion(hwnd, width, height, b.radius)
+
+	// Máscara da região ANTES de mostrar: os pixels de baixo viram o conteúdo
+	// que o pipeline reescreve no frame (ver banner_patch_windows.go). Sem isso
+	// o aviso apareceria no stream em capturers que não emendam (DXGI).
+	// O aviso fica no canto oposto ao banner, então a máscara não captura o
+	// cartão da sessão.
+	if err := capturarMascaraRegiao(hwnd); err != nil {
+		log.Printf("[session-tray] aviso sem máscara de captura: %v", err)
+	} else {
+		// O aviso nunca aplica afinidade (WDA_*): sem máscara ativa ele vaza
+		// visível para o stream nos capturers que não emendam (DXGI).
+		ativarMascara(hwnd)
+	}
+
+	// Registra como janela extra da emenda do GDI: o cartão fica na tela física e
+	// sai do stream igual ao banner. O histórico NÃO é invalidado de propósito
+	// (ver registerCapturaExtra): o quadro anterior foi capturado antes de o
+	// cartão aparecer, então já é o conteúdo limpo que a emenda precisa.
+	registerCapturaExtra(hwnd)
+
 	winui.ShowWindow(hwnd, winui.SwShowNormal)
 	winui.UpdateWindow(hwnd)
 	winui.SetTimer(hwnd, trayBalloonTextID, trayBalloonRefreshMS)
-
-	// Registra como janela extra da emenda: o cartão fica na tela física e sai do
-	// stream igual ao banner (registerCapturaExtra invalida o histórico porque o
-	// quadro anterior ainda não tinha este cartão).
-	registerCapturaExtra(hwnd)
 
 	if anterior != nil {
 		anterior.requestClose()

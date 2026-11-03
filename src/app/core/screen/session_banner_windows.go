@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -34,15 +35,23 @@ import (
 // O banner continua escondido da captura: o viewer e a gravação não podem vê-lo.
 // Ordem de preferência (ver hideBannerFromCapture):
 //
-//  1. CaptureExclusionSupported (capturer GDI): a captura contorna a área do
-//     banner — o cartão aparece íntegro na tela FÍSICA e não aparece de forma
-//     alguma no stream. É o único caminho que funciona em Win10/VM onde
-//     SetWindowDisplayAffinity devolve ERROR_NOT_ENOUGH_MEMORY (8) para TODOS
-//     os valores.
-//  2. WDA_EXCLUDEFROMCAPTURE (Win10 2004+): o compositor remove a janela.
-//  3. WDA_MONITOR (Win7+): o cartão aparece preto no stream.
-//  4. Nada disso: o banner é exibido sem exclusão em vez de simplesmente não
+//  1. Máscara de região (banner_patch_windows.go): os pixels da área do cartão
+//     são lidos ANTES do ShowWindow e o pipeline reescreve essa área em TODO
+//     frame, de QUALQUER capturer (inclui DXGI). Cartão íntegro na tela FÍSICA,
+//     nada dele no stream e NADA de retângulo preto. Funciona mesmo em Win10/VM
+//     onde SetWindowDisplayAffinity devolve ERROR_NOT_ENOUGH_MEMORY (8).
+//  2. Emenda do capturer GDI (SupportsBannerPatch): contorna a área no BitBlt.
+//  3. WDA_EXCLUDEFROMCAPTURE (Win10 2004+): o compositor remove a janela da
+//     captura (área fica transparente — vê-se o conteúdo de baixo).
+//  4. WDA_MONITOR (Win7+): o cartão aparece PRETO no stream — último recurso
+//     com afinidade, só quando não há máscara nem emenda.
+//  5. Nada disso: o banner é exibido sem exclusão em vez de simplesmente não
 //     existir — o usuário local PRECISA saber que está sendo acessado.
+//
+// IMPORTANTE: quando WDA_EXCLUDEFROMCAPTURE é aceito, a afinidade NÃO pode ser
+// tocada de novo. O bug do "retângulo preto no topo da tela remota" (2026-11-03)
+// era exatamente isso: o degrau do WDA_MONITOR rodava depois do EXCLUDE ter
+// dado certo e rebaixava a janela para MONITOR (preto em toda captura).
 
 const (
 	// wdaNone/WdaMonitor/WdaExcludeFromCapture são os valores de
@@ -70,7 +79,28 @@ const (
 	bannerAlpha = 242
 )
 
-var procSetWindowDisplayAffinity = user32DLL.NewProc("SetWindowDisplayAffinity")
+var (
+	procSetWindowDisplayAffinity = user32DLL.NewProc("SetWindowDisplayAffinity")
+	procGetWindowDisplayAffinity = user32DLL.NewProc("GetWindowDisplayAffinity")
+
+	// affinitySet/affinityGet são os pontos de injeção dos testes: a escada de
+	// afinidade é a parte mais delicada do banner (o bug do retângulo preto
+	// nasceu dela) e precisa de teste de regressão sem janela real.
+	affinitySet = func(hwnd uintptr, value uint32) bool {
+		ok, _, _ := procSetWindowDisplayAffinity.Call(hwnd, uintptr(value))
+		return ok != 0
+	}
+	affinityGet = func(hwnd uintptr) uint32 {
+		var value uint32
+		if hwnd == 0 {
+			return 0
+		}
+		if ok, _, _ := procGetWindowDisplayAffinity.Call(hwnd, uintptr(unsafe.Pointer(&value))); ok == 0 {
+			return 0
+		}
+		return value
+	}
+)
 
 // bannerCaptureMode descreve como o banner se esconde da captura de tela.
 type bannerCaptureMode int
@@ -140,27 +170,44 @@ func hideBannerFromCapture(hwnd uintptr) (bannerCaptureMode, error) {
 }
 
 // applyDisplayAffinity aplica SetWindowDisplayAffinity na ordem de preferência
-// e devolve o modo obtido + erro acumulado.
+// e devolve o modo EFETIVO obtido + erro acumulado.
+//
+// REGRA DE OURO: quando WDA_EXCLUDEFROMCAPTURE é aceito, a afinidade NÃO pode
+// ser tocada de novo. Qualquer chamada seguinte (WDA_NONE/WDA_MONITOR) desfaz a
+// exclusão e a janela passa a ser pintada de PRETO na captura — era exatamente
+// esse o bug do "retângulo preto no topo da tela remota" (2026-11-03): o degrau
+// do WDA_MONITOR rodava mesmo depois de o EXCLUDE ter dado certo, e o modo
+// reportado no log mentia ("WDA_EXCLUDEFROMCAPTURE" com a janela em MONITOR).
 func applyDisplayAffinity(hwnd uintptr) (bannerCaptureMode, error) {
-	var (
-		mode       = bannerCaptureExcluded
-		excludeErr error
-	)
-	if ok, _, callErr := procSetWindowDisplayAffinity.Call(hwnd, wdaExcludeFromCapture); ok == 0 {
-		excludeErr = fmt.Errorf("WDA_EXCLUDEFROMCAPTURE falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
-		mode = bannerCaptureBlack
+	// Degrau 1: WDA_EXCLUDEFROMCAPTURE (Win10 2004+). Sucesso = fim.
+	if affinitySet(hwnd, wdaExcludeFromCapture) {
+		return bannerCaptureExcluded, nil
 	}
-	if mode != bannerCaptureVisible {
-		// WDA_NONE antes do WDA_MONITOR: a API só troca para WDA_MONITOR a
-		// partir de WDA_NONE, e o EXCLUDEFROMCAPTURE pode ter deixado o estado
-		// pendente.
-		procSetWindowDisplayAffinity.Call(hwnd, wdaNone)
-		if ok, _, _ := procSetWindowDisplayAffinity.Call(hwnd, wdaMonitor); ok != 0 {
-			return mode, nil
-		}
-		mode = bannerCaptureVisible
+	excludeErr := fmt.Errorf("WDA_EXCLUDEFROMCAPTURE recusado pelo Windows")
+	// Degrau 2: WDA_MONITOR (Win7+). A API só troca para MONITOR a partir de
+	// WDA_NONE (o EXCLUDE recusado pode ter deixado estado pendente).
+	affinitySet(hwnd, wdaNone)
+	if affinitySet(hwnd, wdaMonitor) {
+		return bannerCaptureBlack, nil
 	}
-	return mode, excludeErr
+	return bannerCaptureVisible, excludeErr
+}
+
+// mascaraAtivaPara decide se a máscara de região deve entrar no frame.
+//
+// Só NÃO entra quando o compositor já removeu o cartão (WDA_EXCLUDEFROMCAPTURE):
+// nesse caso a área aparece AO VIVO e reescrever com o quadro congelado criaria
+// artefato. Em todos os outros modos (região, WDA_MONITOR = preto, ou sem
+// afinidade) a máscara é o que mantém o stream limpo — inclusive no caso em que
+// o EXCLUDE é recusado mas o MONITOR é aceito.
+func mascaraAtivaPara(captureMode bannerCaptureMode, maskErr error) bool {
+	return captureMode != bannerCaptureExcluded && maskErr == nil
+}
+
+// displayAffinityAtual lê a afinidade EFETIVA da janela (diagnóstico em campo:
+// o log precisa mostrar o que o Windows realmente aplicou, não o que pedimos).
+func displayAffinityAtual(hwnd uintptr) uint32 {
+	return affinityGet(hwnd)
 }
 
 // BannerOptions descreve o banner a criar. Não há botão: a desconexão é feita
@@ -366,27 +413,6 @@ func NewSessionBanner(opts BannerOptions) (*SessionBanner, error) {
 		// de hideBannerFromCapture, que consulta CaptureExclusionSupported.
 		registerBannerCapture(hwnd)
 
-		// Fora da captura (degradando quando o Windows não suporta). O banner é
-		// exibido mesmo no pior caso: sem aviso o usuário acessado não sabe que
-		// há uma sessão aberta (regressão observada no Win10).
-		// O banner é registrado para a emenda ANTES desta decisão (linha acima), e a
-		// emenda roda na captura independentemente do modo escolhido aqui. O log
-		// precisa refletir isso: no Win10 a afinidade falha sempre (errno=8) e o
-		// cartão continua fora do stream pela emenda.
-		captureMode, captureErr := hideBannerFromCapture(hwnd)
-		emenda := CaptureExclusionSupported()
-		switch {
-		case captureErr == nil && captureMode == bannerCaptureRegiao:
-			log.Printf("[session-banner] banner fora da captura via %s", bannerCaptureModeName(captureMode))
-		case captureErr == nil:
-			log.Printf("[session-banner] banner fora da captura via %s (emenda de região também registrada)",
-				bannerCaptureModeName(captureMode))
-		case emenda:
-			log.Printf("[session-banner] banner fora da captura via captura com emenda de região (afinidade recusada: %v)", captureErr)
-		default:
-			log.Printf("[session-banner] AVISO exclusão da captura indisponível, banner exibido sem exclusão: %v", captureErr)
-		}
-
 		// DPI efetivo do monitor compartilhado. Com manifest PerMonitorV2 o
 		// Windows não escala a janela sozinho: sem isto o cartão ficava menor
 		// que o resto da UI em telas a 125%/150%.
@@ -405,6 +431,60 @@ func NewSessionBanner(opts BannerOptions) (*SessionBanner, error) {
 		// Transparência uniforme (a janela é layered por causa do click-through).
 		winui.SetLayeredAlpha(hwnd, bannerAlpha)
 		winui.SetRoundedRegion(hwnd, width, height, radius)
+
+		// Máscara da região: os pixels da área do cartão são lidos AGORA, com a
+		// janela ainda oculta (ShowWindow vem abaixo). É o que permite ao
+		// pipeline reescrever a área em qualquer capturer (DXGI inclusive) sem
+		// SetWindowDisplayAffinity — que no Desktop Duplication deixa um
+		// retângulo PRETO no stream (regressão de 2026-11-03).
+		maskErr := capturarMascaraRegiao(hwnd)
+
+		// Fora da captura (degradando quando o Windows não suporta). O banner é
+		// exibido mesmo no pior caso: sem aviso o usuário acessado não sabe que
+		// há uma sessão aberta (regressão observada no Win10).
+		// A decisão vem DEPOIS da máscara: com máscara pronta o modo é sempre
+		// "emenda de região" e nenhuma afinidade é aplicada (nada de preto).
+		captureMode, captureErr := hideBannerFromCapture(hwnd)
+		emenda := CaptureExclusionSupported()
+		// A máscara entra em ação sempre que o cartão NÃO foi removido pelo
+		// compositor (modo != WDA_EXCLUDEFROMCAPTURE) e a captura da região deu
+		// certo. Isso cobre três casos:
+		//   • modo região (sem afinidade): é o caminho normal;
+		//   • WDA_MONITOR aceito (EXCLUDE recusado): o frame vem PRETO e a
+		//     máscara é o que evita o retângulo preto no stream;
+		//   • sem afinidade nenhuma: o cartão vazaria visível e a máscara o
+		//     esconde.
+		// Com WDA_EXCLUDEFROMCAPTURE o compositor já remove o cartão e a área
+		// aparece AO VIVO — sobrescrever com o quadro congelado da máscara
+		// criaria um artefato gratuito.
+		if mascaraAtivaPara(captureMode, maskErr) {
+			ativarMascara(hwnd)
+		} else {
+			removerMascara(hwnd)
+		}
+		// A partir daqui o listener de troca de capturer pode reavaliar o modo
+		// (ver reavaliarBannerNoCapturer).
+		bannerModoDecidido.Store(true)
+		switch {
+		case captureMode == bannerCaptureRegiao && maskErr == nil:
+			log.Printf("[session-banner] banner fora da captura via %s (máscara de região pronta, afinidade=%d)",
+				bannerCaptureModeName(captureMode), displayAffinityAtual(hwnd))
+		case captureMode == bannerCaptureRegiao:
+			log.Printf("[session-banner] banner fora da captura via %s (máscara indisponível: %v)", bannerCaptureModeName(captureMode), maskErr)
+		case captureMode == bannerCaptureExcluded:
+			log.Printf("[session-banner] banner fora da captura via %s (afinidade efetiva=%d)",
+				bannerCaptureModeName(captureMode), displayAffinityAtual(hwnd))
+		case maskErr == nil:
+			// Afinidade degradada (MONITOR = preto) ou ausente: a máscara é o
+			// que mantém o stream limpo.
+			log.Printf("[session-banner] banner fora da captura via %s + máscara de região (afinidade efetiva=%d)",
+				bannerCaptureModeName(captureMode), displayAffinityAtual(hwnd))
+		case emenda:
+			log.Printf("[session-banner] banner fora da captura via captura com emenda de região (afinidade recusada: %v)", captureErr)
+		default:
+			log.Printf("[session-banner] AVISO exclusão da captura indisponível, banner exibido sem exclusão: %v", captureErr)
+		}
+
 		banner.theme = bannerThemeLoader()
 		banner.fonts = bannerFonts{
 			primary:   winui.CreateFont(scalePx(bannerFontPx, scale), 600),

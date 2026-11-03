@@ -4,6 +4,7 @@ package screen
 
 import (
 	"fmt"
+	"log"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -67,6 +68,12 @@ var (
 	// bannerCapturePrimed liga a emenda: só quando já existe um quadro anterior
 	// completo (o primeiro frame depois de registrar o banner é sempre inteiro).
 	bannerCapturePrimed atomic.Bool
+	// bannerModoDecidido indica que o banner ativo já escolheu como se esconder
+	// da captura. O listener de troca de capturer só age depois disso — antes,
+	// quem decide é o próprio NewSessionBanner (evita aplicar afinidade no meio
+	// da criação da janela).
+	bannerModoDecidido atomic.Bool
+
 	// emendaConhecida guarda a capacidade do ÚLTIMO capturer criado no processo.
 	// O banner nasce ANTES do capturer da sessão (manager.CreateSession), então
 	// no instante da consulta o registry pode estar vazio; sem esta memória o
@@ -102,9 +109,12 @@ func unregisterBannerCapture(hwnd uintptr) {
 	if bannerCaptureTarget.Load() == hwnd {
 		bannerCaptureTarget.Store(0)
 		bannerCapturePrimed.Store(false)
+		// Sem banner ativo não há modo a reavaliar na troca de capturer.
+		bannerModoDecidido.Store(false)
 	}
 	bannerCaptureMu.Unlock()
 	removerCapturaExtra(hwnd)
+	removerMascara(hwnd)
 }
 
 // registerCapturaExtra registra uma janela do agente (além do banner) cuja área
@@ -153,6 +163,273 @@ func capturaExtras() []uintptr {
 	return out
 }
 
+// ── Máscara de região: o quadro limpo anterior ao cartão ──
+//
+// A emenda do GDI (acima) só existe porque o capturer GDI monta o quadro a
+// partir do BitBlt e pode preencher o buraco com o quadro anterior. O DXGI
+// (Desktop Duplication) não dá esse controle: o frame chega pronto do
+// compositor e, com WDA_EXCLUDEFROMCAPTURE/WDA_MONITOR, a área do cartão vem
+// PRETA — o operador via um retângulo preto no topo da tela (regressão de
+// 2026-11-03, máquina com GPU onde o capturer é go-d3d/DXGI).
+//
+// Solução: guardar, ANTES de o cartão aparecer, os pixels da área dele na tela
+// física (BitBlt de uma DIB pequena) e reescrever essa área em TODO frame, de
+// QUALQUER capturer. O cartão continua 100% visível na tela física e o stream
+// recebe o conteúdo que estava ali antes dele — sem preto e sem o cartão.
+//
+// O conteúdo da região fica congelado enquanto o cartão existir (mesmo
+// comportamento da emenda do GDI). Ao fechar o cartão a máscara é descartada e
+// a área volta a ser capturada ao vivo.
+
+// mascaraRegiao guarda os pixels da área de uma janela do agente, lidos antes
+// de ela ser exibida. `ativa` controla se a máscara entra no frame: capturar os
+// pixels é inofensivo, mas aplicar só faz sentido quando NENHUMA afinidade
+// (WDA_*) cuida da exclusão — com EXCLUDEFROMCAPTURE o compositor já tira o
+// cartão do frame e reescrever a área criaria um artefato congelado.
+type mascaraRegiao struct {
+	hwnd  uintptr
+	rect  winui.Rect // coordenadas físicas do desktop virtual
+	px    []byte     // BGRA top-down, rect.W*4 por linha
+	ativa bool
+}
+
+var (
+	mascarasMu sync.Mutex
+	mascaras   = map[uintptr]*mascaraRegiao{}
+	// mascaraVisivel diz se o cartão ainda está na tela. Var para os testes
+	// poderem usar HWNDs sintéticos (sem janela real).
+	mascaraVisivel = func(hwnd uintptr) bool {
+		_, ok := winui.VisibleRect(hwnd)
+		return ok
+	}
+)
+
+// capturarMascaraRegiao lê os pixels da área da janela na tela física e guarda
+// como máscara. DEVE ser chamada com a janela ainda NÃO visível (antes de
+// ShowWindow): é isso que garante que a máscara contenha o conteúdo de baixo,
+// não o próprio cartão.
+func capturarMascaraRegiao(hwnd uintptr) error {
+	rect, ok := winui.WindowRect(hwnd)
+	if !ok {
+		return fmt.Errorf("janela sem retângulo válido")
+	}
+	// Defensivo: área absurda é sinal de handle reciclado.
+	if rect.W > 32768 || rect.H > 32768 {
+		return fmt.Errorf("área da janela absurda (%dx%d)", rect.W, rect.H)
+	}
+	px, err := lerPixelsTela(rect)
+	if err != nil {
+		return err
+	}
+	mascarasMu.Lock()
+	mascaras[hwnd] = &mascaraRegiao{hwnd: hwnd, rect: rect, px: px}
+	mascarasMu.Unlock()
+	return nil
+}
+
+// lerPixelsTela copia os pixels de uma região da tela física para um buffer
+// BGRA top-down. Usa DIB section (pixels em memória de sistema) para não
+// depender de GetDIBits, que já falhou em campo (ver capturer_gdi.go).
+func lerPixelsTela(r winui.Rect) ([]byte, error) {
+	if r.Empty() {
+		return nil, fmt.Errorf("região vazia")
+	}
+	screenDC, _, _ := procGetDC.Call(0)
+	if screenDC == 0 {
+		return nil, fmt.Errorf("GetDC falhou")
+	}
+	defer procReleaseDC.Call(0, screenDC)
+
+	memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
+	if memDC == 0 {
+		return nil, fmt.Errorf("CreateCompatibleDC falhou")
+	}
+	defer procDeleteDC.Call(memDC)
+
+	// BITMAPINFO de 40 bytes, biHeight negativo = top-down (mesma ordem do
+	// Frame entregue ao pipeline).
+	var bi [40]byte
+	bi[0] = 40
+	*(*int32)(unsafe.Pointer(&bi[4])) = int32(r.W)
+	*(*int32)(unsafe.Pointer(&bi[8])) = -int32(r.H)
+	*(*uint16)(unsafe.Pointer(&bi[12])) = 1
+	*(*uint16)(unsafe.Pointer(&bi[14])) = 32
+	*(*uint32)(unsafe.Pointer(&bi[16])) = BI_RGB
+
+	var bits unsafe.Pointer
+	hbm, _, _ := procCreateDIBSection.Call(
+		screenDC,
+		uintptr(unsafe.Pointer(&bi[0])),
+		DIB_RGB_COLORS,
+		uintptr(unsafe.Pointer(&bits)),
+		0,
+		0,
+	)
+	if hbm == 0 || bits == nil {
+		return nil, fmt.Errorf("CreateDIBSection falhou (%dx%d)", r.W, r.H)
+	}
+	prev, _, _ := procSelectObject.Call(memDC, hbm)
+	ret, _, _ := procBitBlt.Call(
+		memDC, 0, 0,
+		uintptr(r.W), uintptr(r.H),
+		screenDC, uintptr(r.X), uintptr(r.Y),
+		SRCCOPY,
+	)
+	procGdiFlush.Call()
+	out := make([]byte, r.W*r.H*4)
+	if ret != 0 {
+		copy(out, unsafe.Slice((*byte)(bits), len(out)))
+	}
+	procSelectObject.Call(memDC, prev)
+	procDeleteObject.Call(hbm)
+	if ret == 0 {
+		return nil, fmt.Errorf("BitBlt da máscara falhou (%dx%d em %d,%d)", r.W, r.H, r.X, r.Y)
+	}
+	return out, nil
+}
+
+// removerMascara descarta a máscara de uma janela (idempotente).
+func removerMascara(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	mascarasMu.Lock()
+	delete(mascaras, hwnd)
+	restantes := len(mascaras)
+	mascarasMu.Unlock()
+	if restantes == 0 {
+		// Sem máscara não há o que atualizar: encerra o loop de refresh.
+		pararRefreshMascaras()
+	}
+}
+
+// RegionMaskAvailable informa se existe máscara pronta para reescrever a área
+// de algum cartão do agente no frame. Quando existe, o banner NÃO precisa de
+// SetWindowDisplayAffinity: o pipeline esconde a área sem o retângulo preto.
+func RegionMaskAvailable() bool {
+	mascarasMu.Lock()
+	defer mascarasMu.Unlock()
+	return len(mascaras) > 0
+}
+
+// ativarMascara liga a aplicação da máscara no frame (idempotente).
+func ativarMascara(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	mascarasMu.Lock()
+	ativou := false
+	if m := mascaras[hwnd]; m != nil {
+		m.ativa = true
+		ativou = true
+	}
+	mascarasMu.Unlock()
+	if ativou {
+		// Conteúdo ao vivo atrás do cartão (PrintWindow), em vez de congelado.
+		iniciarRefreshMascaras()
+	}
+}
+
+// PatchFrameBanner reescreve, no frame, as áreas dos cartões do agente com a
+// máscara capturada antes de eles aparecerem. É o equivalente DXGI da emenda do
+// GDI: o cartão fica na tela física e o stream recebe o conteúdo de baixo.
+//
+// Só atua em frame BGRA 32bpp (o contrato do pipeline). Frame HDR
+// (R16G16B16A16_FLOAT) é ignorado: a máscara é BGRA e converter aqui duplicaria
+// o tone mapping. Em sessão HDR o pipeline chama PatchFrameBannerAt DEPOIS do
+// tone mapping, passando a origem física guardada antes da conversão.
+func PatchFrameBanner(frame *Frame) {
+	if frame == nil {
+		return
+	}
+	PatchFrameBannerAt(frame, frame.OriginX, frame.OriginY)
+}
+
+// PatchFrameBannerAt é PatchFrameBanner com a origem física EXPLÍCITA. Existe
+// porque o tone mapping HDR (ToneMapHDRToSDR) recria o Frame e zera
+// OriginX/OriginY: sem passar a origem original, a máscara cairia no canto
+// errado em monitor secundário.
+func PatchFrameBannerAt(frame *Frame, originX, originY int) {
+	if frame == nil || frame.Width <= 0 || frame.Height <= 0 || len(frame.Data) == 0 {
+		return
+	}
+	if frame.ColorSpace != 0 {
+		return
+	}
+	stride := frame.Stride
+	if stride <= 0 {
+		stride = frame.Width * 4
+	}
+	if stride < frame.Width*4 {
+		return
+	}
+	altura := len(frame.Data) / stride
+	if altura > frame.Height {
+		altura = frame.Height
+	}
+	if altura <= 0 {
+		return
+	}
+
+	mascarasMu.Lock()
+	lista := make([]*mascaraRegiao, 0, len(mascaras))
+	for _, m := range mascaras {
+		if m.ativa {
+			lista = append(lista, m)
+		}
+	}
+	mascarasMu.Unlock()
+	if len(lista) == 0 {
+		return
+	}
+
+	quadro := winui.Rect{X: originX, Y: originY, W: frame.Width, H: altura}
+	for _, m := range lista {
+		// Cartão oculto (fim de sessão, desktop bloqueado, janela escondida):
+		// não reescreve nada — a área deve voltar a ser capturada ao vivo.
+		if !mascaraVisivel(m.hwnd) {
+			continue
+		}
+		inter := quadro.Intersect(m.rect)
+		if inter.Empty() {
+			continue
+		}
+		mx := inter.X - m.rect.X
+		my := inter.Y - m.rect.Y
+		fx := inter.X - originX
+		fy := inter.Y - originY
+		bytesLinha := inter.W * 4
+		for y := 0; y < inter.H; y++ {
+			offM := (my+y)*m.rect.W*4 + mx*4
+			offF := (fy+y)*stride + fx*4
+			if offM+bytesLinha > len(m.px) || offF+bytesLinha > len(frame.Data) {
+				break
+			}
+			copy(frame.Data[offF:offF+bytesLinha], m.px[offM:offM+bytesLinha])
+		}
+	}
+}
+
+// PatchFrameBannerIfNeeded aplica a máscara apenas quando o capturer NÃO faz a
+// emenda por conta própria. Hoje só o GDI contorna a região durante o BitBlt
+// (SupportsBannerPatch); DXGI (go-d3d e manual) entrega o frame pronto e precisa
+// desta reescrita.
+func PatchFrameBannerIfNeeded(c Capturer, frame *Frame) {
+	if frame == nil {
+		return
+	}
+	PatchFrameBannerIfNeededAt(c, frame, frame.OriginX, frame.OriginY)
+}
+
+// PatchFrameBannerIfNeededAt é PatchFrameBannerIfNeeded com origem explícita
+// (usado depois do tone mapping HDR, que zera OriginX/OriginY).
+func PatchFrameBannerIfNeededAt(c Capturer, frame *Frame, originX, originY int) {
+	if c != nil && capturerSupportsBannerPatching(c) {
+		return
+	}
+	PatchFrameBannerAt(frame, originX, originY)
+}
+
 // CaptureExclusionSupported informa se o caminho de captura ATUAL sabe manter o
 // banner fora do stream sem SetWindowDisplayAffinity. Nesse caso o banner
 // prefere esse degrau: fica íntegro na tela física (o operador não vê o cartão,
@@ -162,6 +439,13 @@ func capturaExtras() []uintptr {
 // capturer no meio da sessão (ver incidente GDI/DXGI em capturer_gdi.go), por
 // isso a resposta considera apenas o capturer ATIVO no momento da consulta.
 func CaptureExclusionSupported() bool {
+	// Máscara de região pronta: o pipeline reescreve a área do cartão em
+	// QUALQUER capturer (ver PatchFrameBannerIfNeeded). É o caminho preferido
+	// porque não depende de SetWindowDisplayAffinity — que no DXGI deixa a área
+	// PRETA no stream.
+	if RegionMaskAvailable() {
+		return true
+	}
 	capturerAtualMu.Lock()
 	atual := capturerAtual
 	capturerAtualMu.Unlock()
@@ -185,6 +469,56 @@ func SetCapturerAtual(c Capturer) {
 	capturerAtualMu.Lock()
 	capturerAtual = c
 	capturerAtualMu.Unlock()
+
+	// O capturer pode trocar no meio da sessão (fallback GDI↔DXGI, troca de
+	// desktop, recriação por falha). O modo de exclusão do banner foi decidido
+	// no nascimento; reavaliar aqui evita o cartão vazar VISÍVEL quando o
+	// capturer novo não sabe emendar e nenhuma afinidade foi aplicada.
+	reavaliarBannerNoCapturer()
+}
+
+// reavaliarBannerNoCapturer reaplica a escada de afinidade quando o capturer
+// ativo muda e o banner ficaria sem proteção.
+//
+// Só age quando TODAS as condições valem:
+//   - o banner já decidiu o modo (bannerModoDecidido);
+//   - não existe máscara de região (a máscara vale para qualquer capturer);
+//   - o capturer novo NÃO emenda por conta própria (DXGI);
+//   - a janela está sem afinidade (WDA_NONE) — se já há EXCLUDE/MONITOR, nada a
+//     fazer (e reaplicar EXCLUDE depois de MONITOR não é permitido pela API).
+func reavaliarBannerNoCapturer() {
+	if !bannerModoDecidido.Load() {
+		return
+	}
+	hwnd := bannerCaptureTarget.Load()
+	if hwnd == 0 || RegionMaskAvailable() {
+		return
+	}
+	capturerAtualMu.Lock()
+	atual := capturerAtual
+	capturerAtualMu.Unlock()
+	if capturerSupportsBannerPatching(atual) {
+		return
+	}
+	if displayAffinityAtual(hwnd) != wdaNone {
+		return
+	}
+	mode, err := applyDisplayAffinity(hwnd)
+	if err != nil {
+		log.Printf("[session-banner] capturer trocado (%s) e sem máscara: afinidade indisponível (%v) — cartão pode aparecer no stream",
+			capturerName(atual), err)
+		return
+	}
+	log.Printf("[session-banner] capturer trocado (%s): afinidade reaplicada (%s, efetiva=%d)",
+		capturerName(atual), bannerCaptureModeName(mode), displayAffinityAtual(hwnd))
+}
+
+// capturerName devolve o nome do capturer para log (vazio quando nil).
+func capturerName(c Capturer) string {
+	if c == nil || capturerNulo(c) {
+		return "nenhum"
+	}
+	return c.Name()
 }
 
 // atualCapturerEh informa se c ainda é o capturer publicado como ativo.
@@ -319,22 +653,25 @@ func (c *gdiCapturer) captureFrameAvoidingBanner(screenDC uintptr) error {
 	}
 	if !bannerCapturePrimed.Load() || c.semBannerHistorico() {
 		// Primeira captura depois de uma janela aparecer (ou histórico de outro
-		// tamanho): quadro completo, que também alimenta o histórico.
-		return c.bitbltFullFrame(screenDC)
+		// tamanho): quadro completo. A máscara é aplicada ANTES de o quadro
+		// virar histórico — sem isso o cartão entrava no histórico e a emenda o
+		// repetia para sempre (vazamento de 1 quadro que, na prática, era
+		// permanente quando o banner nascia antes do capturer).
+		return c.bitbltFullFrameComMascara(screenDC)
 	}
 
 	regioes := c.regioesForaDaCaptura(alvo)
 	if len(regioes) == 0 {
 		// Janelas invisíveis agora (minimizadas, tela bloqueada, monitor
 		// trocado): nada a esconder neste quadro.
-		return c.bitbltFullFrame(screenDC)
+		return c.bitbltFullFrameComMascara(screenDC)
 	}
 
 	plano, ok := planoBannerMulti(frame, regioes)
 	if !ok {
 		// Janelas cobrindo o monitor inteiro ou fora dele: não há caminho sem
 		// elas. Mantém o histórico atualizado para a próxima emenda.
-		return c.bitbltFullFrame(screenDC)
+		return c.bitbltFullFrameComMascara(screenDC)
 	}
 
 	procGdiFlush.Call()
@@ -349,6 +686,42 @@ func (c *gdiCapturer) captureFrameAvoidingBanner(screenDC uintptr) error {
 	for i := 0; i < plano.nBuracos; i++ {
 		c.fillBannerHole(plano.buracos[i])
 	}
+	// Cinto e suspensório: a máscara (quando ativa) garante a área do cartão
+	// limpa mesmo que o histórico esteja contaminado por um quadro antigo.
+	c.aplicarMascaraNoDIB()
+	c.rememberFrame()
+	return nil
+}
+
+// aplicarMascaraNoDIB reescreve as áreas mascaradas direto na DIB do capturer.
+// Chamado com bannerCaptureMu tomado (mesma ordem de lock do unregister).
+func (c *gdiCapturer) aplicarMascaraNoDIB() {
+	if c.dibBits == nil || c.width <= 0 || c.height <= 0 {
+		return
+	}
+	frame := &Frame{
+		Data:    unsafe.Slice((*byte)(c.dibBits), c.width*c.height*4),
+		Width:   c.width,
+		Height:  c.height,
+		Stride:  c.width * 4,
+		OriginX: c.offsetX,
+		OriginY: c.offsetY,
+	}
+	PatchFrameBanner(frame)
+}
+
+// bitbltFullFrameComMascara copia o quadro inteiro, aplica a máscara e só então
+// registra o histórico — o cartão nunca entra no histórico da emenda.
+func (c *gdiCapturer) bitbltFullFrameComMascara(screenDC uintptr) error {
+	if err := c.bitbltRegion(
+		screenDC,
+		winui.Rect{X: 0, Y: 0, W: c.width, H: c.height},
+		0, 0,
+	); err != nil {
+		return err
+	}
+	procGdiFlush.Call()
+	c.aplicarMascaraNoDIB()
 	c.rememberFrame()
 	return nil
 }

@@ -85,6 +85,21 @@ func SetCapturerAtual(c Capturer) {}
 // CaptureExclusionSupported é sempre falso em plataformas não-Windows.
 func CaptureExclusionSupported() bool { return false }
 
+// RegionMaskAvailable é sempre falso em plataformas não-Windows.
+func RegionMaskAvailable() bool { return false }
+
+// PatchFrameBanner não faz nada em plataformas não-Windows.
+func PatchFrameBanner(frame *Frame) {}
+
+// PatchFrameBannerAt não faz nada em plataformas não-Windows.
+func PatchFrameBannerAt(frame *Frame, originX, originY int) {}
+
+// PatchFrameBannerIfNeeded não faz nada em plataformas não-Windows.
+func PatchFrameBannerIfNeeded(c Capturer, frame *Frame) {}
+
+// PatchFrameBannerIfNeededAt não faz nada em plataformas não-Windows.
+func PatchFrameBannerIfNeededAt(c Capturer, frame *Frame, originX, originY int) {}
+
 // NewCapturer retorna erro em plataformas não-Windows.
 func NewCapturer(monitorIndex int) (Capturer, error) {
 	return nil, errNotSupported

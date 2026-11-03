@@ -355,6 +355,21 @@ func MoveResizeWindow(hwnd uintptr, x, y, width, height int) {
 		uintptr(width), uintptr(height), swpNoZOrder|swpNoActivate)
 }
 
+// WindowRect devolve o retângulo da janela em pixels físicos do desktop virtual
+// MESMO quando ela ainda não foi exibida (GetWindowRect não depende de
+// WS_VISIBLE). É o que a máscara de captura precisa: os pixels da área do cartão
+// têm de ser lidos ANTES de ele aparecer na tela (ver screen.capturarMascaraRegiao).
+func WindowRect(hwnd uintptr) (Rect, bool) {
+	var win Rect
+	if hwnd == 0 || rectEmpty(procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&win)))) {
+		return Rect{}, false
+	}
+	if win.W <= 0 || win.H <= 0 {
+		return Rect{}, false
+	}
+	return win, true
+}
+
 // VisibleRect devolve o retângulo em que a janela está REALMENTE aparecendo na
 // tela física: parte de GetWindowRect, recorta pelo cliente (as janelas do
 // agente não têm borda), pela janela top-level dona (Popup filho de ninguém

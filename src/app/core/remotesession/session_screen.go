@@ -555,6 +555,18 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			ownsFrame = true
 		}
 
+		// ── Máscara das janelas do agente (banner/aviso) ──
+		// Capturers que NÃO contornam a região por conta própria (DXGI go-d3d e
+		// DXGI manual) entregam o frame com o cartão já composto — e, com
+		// SetWindowDisplayAffinity, com um retângulo PRETO no lugar dele. Aqui a
+		// área é reescrita com os pixels lidos antes de o cartão aparecer, então
+		// o operador vê o conteúdo de baixo (nada de preto e nada do cartão).
+		// Roda DEPOIS do tone mapping (o frame HDR vira BGRA e pode ser
+		// mascarado) e ANTES da escala/dirty detection: a máscara está em pixels
+		// físicos, então passamos a origem guardada do frame original — o
+		// tone mapping zera OriginX/OriginY.
+		screen.PatchFrameBannerIfNeededAt(cap, frame, inputOriginX, inputOriginY)
+
 		// ── Aplica escala (se necessario) ──
 		scaleFactor := q.ScaleFactor
 		if scaleFactor > 0 && scaleFactor < 1.0 {

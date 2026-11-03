@@ -110,6 +110,10 @@ func captureWithCapturer(c screen.Capturer) (*screen.Frame, error) {
 		ColorSpace: frame.ColorSpace,
 	}
 	c.ReleaseFrame()
+	// Print de tela também não pode mostrar o banner/aviso da sessão remota: o
+	// capturer GDI já contorna a região, o DXGI não — a máscara reescreve a área
+	// com os pixels lidos antes de o cartão aparecer (ver screen.PatchFrameBanner).
+	screen.PatchFrameBannerIfNeeded(c, copyFrame)
 	return copyFrame, nil
 }
 
