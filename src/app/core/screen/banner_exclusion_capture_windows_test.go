@@ -173,6 +173,7 @@ func TestJanelaSemTratamentoApareceNaCaptura(t *testing.T) {
 	}
 	hwnd := janelaMagenta(t, 60, 60)
 	defer winui.DestroyWindow(hwnd)
+	t.Cleanup(func() { SetCapturerAtual(nil) })
 
 	winui.ShowWindow(hwnd, winui.SwShowNormal)
 	winui.UpdateWindow(hwnd)
@@ -197,7 +198,7 @@ func TestMascaraRemoveCartaoDaCaptura(t *testing.T) {
 	// Posição longe do teste de controle (evita conteúdo residual do DWM).
 	hwnd := janelaMagenta(t, 700, 420)
 	defer winui.DestroyWindow(hwnd)
-	t.Cleanup(func() { removerMascara(hwnd) })
+	t.Cleanup(func() { removerMascara(hwnd); SetCapturerAtual(nil) })
 
 	// Dá tempo do DWM assentar o estado anterior antes de ler a máscara.
 	time.Sleep(300 * time.Millisecond)

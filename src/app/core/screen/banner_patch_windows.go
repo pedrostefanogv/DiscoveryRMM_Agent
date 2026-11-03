@@ -192,10 +192,11 @@ func capturaExtras() []uintptr {
 // a área volta a ser capturada ao vivo.
 
 // mascaraRegiao guarda os pixels da área de uma janela do agente, lidos antes
-// de ela ser exibida. `ativa` controla se a máscara entra no frame: capturar os
-// pixels é inofensivo, mas aplicar só faz sentido quando NENHUMA afinidade
-// (WDA_*) cuida da exclusão — com EXCLUDEFROMCAPTURE o compositor já tira o
-// cartão do frame e reescrever a área criaria um artefato congelado.
+// de ela ser exibida. `ativa` controla se a máscara entra no frame. Ela fica
+// ATIVA sempre que a captura funcionou, inclusive no modo
+// WDA_EXCLUDEFROMCAPTURE: o Desktop Duplication (DXGI) IGNORA a afinidade, então
+// sem a máscara o cartão apareceria no viewer (medido em
+// banner_exclusion_capture_windows_test.go).
 type mascaraRegiao struct {
 	hwnd  uintptr
 	rect  winui.Rect // coordenadas físicas do desktop virtual
@@ -238,10 +239,13 @@ func capturarMascaraRegiao(hwnd uintptr) error {
 	}
 	// BitBlt que devolve tudo preto costuma ser captura bloqueada (UAC/lock,
 	// overlay de vídeo). Usar essa máscara pintaria um retângulo PRETO no stream
-	// — exatamente o sintoma que ela veio corrigir. Nesse caso falha e o banner
-	// cai na escada de afinidade.
-	if regiaoTodaPreta(px) {
-		return fmt.Errorf("captura da máscara saiu toda preta")
+	// — exatamente o sintoma que ela veio corrigir. MAS uma área escura legítima
+	// (app de fundo preto, vídeo, tema escuro) também é "toda preta": para não
+	// jogar o banner no recuo preto sem necessidade, sonda uma faixa fora da
+	// janela; se a tela toda estiver preta é bloqueio, se só a área for preta é
+	// conteúdo legítimo e a máscara é aceita.
+	if regiaoTodaPreta(px) && telaTambemPreta(rect) {
+		return fmt.Errorf("captura da máscara saiu toda preta (tela bloqueada?)")
 	}
 	mascarasMu.Lock()
 	mascaras[hwnd] = &mascaraRegiao{hwnd: hwnd, rect: rect, px: px}
@@ -326,8 +330,9 @@ func removerMascara(hwnd uintptr) {
 }
 
 // RegionMaskAvailable informa se existe máscara ATIVA pronta para reescrever a
-// área de algum cartão do agente no frame. Máscara capturada mas inativa (modo
-// WDA_EXCLUDEFROMCAPTURE) não conta: nesse modo o compositor já remove o cartão.
+// área de algum cartão do agente no frame. A máscara fica ativa sempre que foi
+// capturada (o Desktop Duplication ignora o WDA — ver mascaraAtivaPara em
+// session_banner_windows.go).
 func RegionMaskAvailable() bool {
 	mascarasMu.Lock()
 	defer mascarasMu.Unlock()
@@ -337,6 +342,25 @@ func RegionMaskAvailable() bool {
 		}
 	}
 	return false
+}
+
+// telaTambemPreta sonda uma faixa FORA da área do cartão para distinguir
+// captura bloqueada (tela inteira preta) de área escura legítima (app/vídeo de
+// fundo preto). Sem sonda confiável devolve true (comportamento conservador).
+func telaTambemPreta(area winui.Rect) bool {
+	sonda := winui.Rect{X: 0, Y: 0, W: 480, H: 270}
+	if !sonda.Intersect(area).Empty() {
+		if area.Y >= 278 {
+			sonda = winui.Rect{X: area.X, Y: area.Y - 278, W: 480, H: 270}
+		} else {
+			sonda = winui.Rect{X: area.X, Y: area.Bottom() + 8, W: 480, H: 270}
+		}
+	}
+	px, err := lerPixelsTela(sonda)
+	if err != nil {
+		return true
+	}
+	return regiaoTodaPreta(px)
 }
 
 // regiaoTodaPreta informa se o buffer é totalmente preto (amostragem).
@@ -612,7 +636,13 @@ func reavaliarBannerNoCapturer() {
 			capturerName(atual), err)
 		return
 	}
-	log.Printf("[session-banner] capturer trocado (%s): afinidade reaplicada (%s, efetiva=%s)",
+	// O DDA (DXGI) ignora o WDA: com EXCLUDE aceito e SEM máscara o cartão
+	// apareceria inteiro. Recua para MONITOR (preto) — mesmo recuo de
+	// garantirProtecaoSemMascara no nascimento do banner.
+	if mode == bannerCaptureExcluded {
+		mode = garantirProtecaoSemMascara(hwnd, mode, fmt.Errorf("sem máscara de região"))
+	}
+	log.Printf("[session-banner] capturer trocado (%s): modo efetivo %s (afinidade=%s)",
 		capturerName(atual), bannerCaptureModeName(mode), afinidadeParaLog(hwnd))
 }
 

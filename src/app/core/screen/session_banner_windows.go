@@ -35,17 +35,19 @@ import (
 // O banner continua escondido da captura: o viewer e a gravação não podem vê-lo.
 // Ordem de preferência (ver hideBannerFromCapture):
 //
-//  1. Máscara de região (banner_patch_windows.go): os pixels da área do cartão
+//  1. WDA_EXCLUDEFROMCAPTURE (Win10 2004+): a afinidade cobre TODAS as APIs de
+//     captura que a respeitam (BitBlt, Windows Graphics Capture, apps externos).
+//  2. Máscara de região (banner_patch_windows.go) + emenda do capturer GDI:
+//     a máscara é OBRIGATÓRIA quando a captura é Desktop Duplication (DXGI
+//     go-d3d), porque o DDA **ignora** a afinidade (medido em
+//     banner_exclusion_capture_windows_test.go). Os pixels da área do cartão
 //     são lidos ANTES do ShowWindow e o pipeline reescreve essa área em TODO
-//     frame, de QUALQUER capturer (inclui DXGI). Cartão íntegro na tela FÍSICA,
-//     nada dele no stream e NADA de retângulo preto. Funciona mesmo em Win10/VM
-//     onde SetWindowDisplayAffinity devolve ERROR_NOT_ENOUGH_MEMORY (8).
-//  2. Emenda do capturer GDI (SupportsBannerPatch): contorna a área no BitBlt.
-//  3. WDA_EXCLUDEFROMCAPTURE (Win10 2004+): o compositor remove a janela da
-//     captura (área fica transparente — vê-se o conteúdo de baixo).
-//  4. WDA_MONITOR (Win7+): o cartão aparece PRETO no stream — último recurso
-//     com afinidade, só quando não há máscara nem emenda.
-//  5. Nada disso: o banner é exibido sem exclusão em vez de simplesmente não
+//     frame. Funciona mesmo em Win10/VM onde SetWindowDisplayAffinity devolve
+//     ERROR_NOT_ENOUGH_MEMORY (8).
+//  3. WDA_MONITOR (Win7+): o cartão aparece PRETO no stream — recuo de
+//     segurança (garantirProtecaoSemMascara) quando não há máscara e o capturer
+//     ignora o WDA; é preferível a expor o operador.
+//  4. Nada disso: o banner é exibido sem exclusão em vez de simplesmente não
 //     existir — o usuário local PRECISA saber que está sendo acessado.
 //
 // IMPORTANTE: quando WDA_EXCLUDEFROMCAPTURE é aceito, a afinidade NÃO pode ser
@@ -235,6 +237,32 @@ func applyDisplayAffinity(hwnd uintptr) (bannerCaptureMode, error) {
 // invisível na prática (o conteúdo é o que estava atrás do cartão).
 func mascaraAtivaPara(_ bannerCaptureMode, maskErr error) bool {
 	return maskErr == nil
+}
+
+// garantirProtecaoSemMascara cobre a lacuna que sobrou da correção de
+// 2026-11-03: com WDA_EXCLUDEFROMCAPTURE aceito mas SEM máscara capturada, o
+// Desktop Duplication (que ignora a afinidade) mostraria o cartão INTEIRO — com
+// o nome do operador no stream. Nesse caso, e quando o capturer também não sabe
+// emendar, é preferível rebaixar para WDA_MONITOR (área preta): protege a
+// informação, mesmo com o custo visual já conhecido.
+//
+// Devolve o modo efetivo (o mesmo, ou bannerCaptureBlack após o recuo).
+func garantirProtecaoSemMascara(hwnd uintptr, mode bannerCaptureMode, maskErr error) bannerCaptureMode {
+	if maskErr == nil || mode != bannerCaptureExcluded {
+		return mode
+	}
+	if emendaDoCapturerDisponivel() {
+		// GDI contorna a região no BitBlt: o cartão sai do stream sem afinidade.
+		return mode
+	}
+	// A API só troca para MONITOR a partir de WDA_NONE.
+	affinitySet(hwnd, wdaNone)
+	if ok, _ := affinitySet(hwnd, wdaMonitor); ok {
+		log.Printf("[session-banner] AVISO máscara de região indisponível e capturer ignora o WDA: cartão será PRETO no stream (melhor que expor o operador)")
+		return bannerCaptureBlack
+	}
+	log.Printf("[session-banner] AVISO sem máscara e sem afinidade: o cartão pode aparecer no stream (%v)", maskErr)
+	return bannerCaptureVisible
 }
 
 // displayAffinityAtual lê a afinidade EFETIVA da janela (diagnóstico em campo:
@@ -487,6 +515,11 @@ func NewSessionBanner(opts BannerOptions) (*SessionBanner, error) {
 		// A decisão vem DEPOIS da máscara: com máscara pronta o modo é sempre
 		// "emenda de região" e nenhuma afinidade é aplicada (nada de preto).
 		captureMode, captureErr := hideBannerFromCapture(hwnd)
+		// Recuo de segurança: EXCLUDE aceito + máscara indisponível + capturer
+		// que ignora o WDA (DXGI/DDA) mostraria o cartão inteiro no viewer.
+		if captureMode == bannerCaptureExcluded && maskErr != nil {
+			captureMode = garantirProtecaoSemMascara(hwnd, captureMode, maskErr)
+		}
 		// Critério POR JANELA: a emenda/máscara do aviso da bandeja não protege
 		// a área do banner (antes o log podia dizer "emenda de região" olhando
 		// só para a capacidade global do processo).
@@ -508,6 +541,11 @@ func NewSessionBanner(opts BannerOptions) (*SessionBanner, error) {
 				bannerCaptureModeName(captureMode), afinidadeParaLog(hwnd))
 		case captureMode == bannerCaptureRegiao:
 			log.Printf("[session-banner] banner fora da captura via %s (máscara indisponível: %v)", bannerCaptureModeName(captureMode), maskErr)
+		case captureMode == bannerCaptureExcluded && maskErr == nil:
+			// Caminho normal: a afinidade cobre as APIs que a respeitam e a
+			// máscara cobre o Desktop Duplication, que ignora o WDA.
+			log.Printf("[session-banner] banner fora da captura via %s + máscara de região (afinidade efetiva=%s)",
+				bannerCaptureModeName(captureMode), afinidadeParaLog(hwnd))
 		case captureMode == bannerCaptureExcluded:
 			log.Printf("[session-banner] banner fora da captura via %s (afinidade efetiva=%s)",
 				bannerCaptureModeName(captureMode), afinidadeParaLog(hwnd))

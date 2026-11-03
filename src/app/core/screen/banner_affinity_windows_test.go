@@ -124,6 +124,54 @@ func TestHideBannerFromCapturePrefereExclude(t *testing.T) {
 	}
 }
 
+// TestGarantirProtecaoSemMascara cobre a lacuna residual: EXCLUDE aceito mas
+// máscara indisponível e capturer que ignora o WDA (DDA) → recua para MONITOR
+// (preto) em vez de expor o cartão inteiro no stream.
+func TestGarantirProtecaoSemMascara(t *testing.T) {
+	limparMascaras(t)
+	anteriorAtraso := reavaliarAtraso
+	reavaliarAtraso = 0
+	t.Cleanup(func() {
+		reavaliarAtraso = anteriorAtraso
+		SetCapturerAtual(nil)
+		emendaConhecida.Store(false)
+	})
+
+	// Sem máscara, capturer DXGI (não emenda) → recuo para MONITOR.
+	chamadas := injetarAfinidade(t, func(value uint32) bool { return true })
+	SetCapturerAtual(capturerSemEmenda{})
+	emendaConhecida.Store(false)
+
+	mode := garantirProtecaoSemMascara(0x999, bannerCaptureExcluded, errTeste)
+	if mode != bannerCaptureBlack {
+		t.Fatalf("modo = %s, esperado bannerCaptureBlack (recuo)", bannerCaptureModeName(mode))
+	}
+	esperado := []uint32{wdaNone, wdaMonitor}
+	if len(*chamadas) != len(esperado) || (*chamadas)[0] != esperado[0] || (*chamadas)[1] != esperado[1] {
+		t.Fatalf("chamadas = %v, esperado %v", *chamadas, esperado)
+	}
+
+	// Com capturer que emenda (GDI) → não recua: a emenda cobre a região.
+	*chamadas = nil
+	SetCapturerAtual(capturerComEmenda{})
+	if got := garantirProtecaoSemMascara(0x999, bannerCaptureExcluded, errTeste); got != bannerCaptureExcluded {
+		t.Fatalf("com emenda próprio o modo deveria continuar EXCLUDE, veio %s", bannerCaptureModeName(got))
+	}
+	if len(*chamadas) != 0 {
+		t.Fatalf("não deveria mexer na afinidade com emenda disponível (chamadas=%v)", *chamadas)
+	}
+
+	// Com máscara capturada (maskErr nil) → nada a fazer.
+	*chamadas = nil
+	SetCapturerAtual(capturerSemEmenda{})
+	if got := garantirProtecaoSemMascara(0x999, bannerCaptureExcluded, nil); got != bannerCaptureExcluded {
+		t.Fatalf("com máscara disponível o modo deveria continuar EXCLUDE, veio %s", bannerCaptureModeName(got))
+	}
+	if len(*chamadas) != 0 {
+		t.Fatalf("não deveria mexer na afinidade com máscara disponível (chamadas=%v)", *chamadas)
+	}
+}
+
 func TestMascaraAtivaPara(t *testing.T) {
 	casos := []struct {
 		nome  string

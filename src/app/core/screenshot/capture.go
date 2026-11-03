@@ -192,12 +192,22 @@ func CaptureDesktopFrame(x, y, w, h int) (*screen.Frame, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A origem física é lida ANTES do tone mapping (ToneMapHDRToSDR recria o
+	// Frame e zera OriginX/OriginY).
+	originX, originY := frame.OriginX, frame.OriginY
 	// Monitor HDR/Advanced Color: o capturer devolve scRGB float (8 bytes/px) e
 	// TODO o pipeline do overlay (encode do frame congelado, recorte geométrico,
 	// miniatura e imagem anotada) assume BGRA 8-bit — sem o tone mapping aqui o
 	// print do overlay saía com cores corrompidas. O caminho de captura direta
 	// já fazia isso em encodeResult; o overlay ficou sem.
-	return toneMapIfHDR(frame), nil
+	frame = toneMapIfHDR(frame)
+	// Máscara do banner/aviso DEPOIS do tone mapping: em HDR o frame só vira
+	// BGRA aqui, e antes disso o patcher ignora (8 bytes/px). Faltava isso no
+	// overlay e o banner aparecia no print congelado em monitor HDR.
+	if frame != nil && frame.ColorSpace == 0 {
+		screen.PatchFrameBannerAt(frame, originX, originY)
+	}
+	return frame, nil
 }
 
 // CaptureDesktopFrameGDI força o frame do desktop pelo caminho GDI (BitBlt).
@@ -217,8 +227,13 @@ func CaptureDesktopFrameGDI(x, y, w, h int) (*screen.Frame, error) {
 	if err != nil {
 		return nil, err
 	}
+	originX, originY := frame.OriginX, frame.OriginY
 	// Mesmo tone mapping do caminho normal: a política/consumidores esperam BGRA.
-	return toneMapIfHDR(frame), nil
+	frame = toneMapIfHDR(frame)
+	if frame != nil && frame.ColorSpace == 0 {
+		screen.PatchFrameBannerAt(frame, originX, originY)
+	}
+	return frame, nil
 }
 
 // FrameIsBlank informa se o frame é uniforme e escuro (tudo preto/praticamente
