@@ -1307,6 +1307,20 @@ export function GetScreenshotPolicy() {
 }
 
 /**
+ * GetSensorDebugSnapshot devolve o snapshot do motor de sensores para o painel
+ * de debug (GET /api/GetSensorDebugSnapshot).
+ * 
+ * Com o serviço de automação indisponível NÃO devolve erro: devolve um snapshot
+ * vazio, porém válido e legível, com o motivo em Engine.LastError — é o painel
+ * que o operador abre justamente quando algo está errado, e um 500 o deixaria
+ * sem nenhuma informação.
+ * @returns {$CancellablePromise<any>}
+ */
+export function GetSensorDebugSnapshot() {
+    return $Call.ByID(3340677215);
+}
+
+/**
  * @returns {$CancellablePromise<{ [_ in string]?: any }>}
  */
 export function GetServiceHealth() {
@@ -2109,6 +2123,19 @@ export function RefreshPeerArtifactIndex(source) {
 }
 
 /**
+ * RefreshSensorPolicyDebug relê a policy de sensores e reagenda TODOS eles
+ * (POST /api/RefreshSensorPolicyDebug). É o "aplicar agora" do operador: ele
+ * edita o sensor no console e quer ver o efeito sem esperar o próximo ciclo.
+ * 
+ * ids=nil agenda todos; forceSync=true garante o sync da policy antes de marcar
+ * os sensores como devidos.
+ * @returns {$CancellablePromise<any>}
+ */
+export function RefreshSensorPolicyDebug() {
+    return $Call.ByID(392740684);
+}
+
+/**
  * @returns {$CancellablePromise<models$0.SoftwareItem[]>}
  */
 export function RefreshSoftware() {
@@ -2347,6 +2374,23 @@ export function RunOsqueryQueryJSON(sql, limit) {
  */
 export function RunPowerAction(action, delaySeconds, message) {
     return $Call.ByID(11236734, action, delaySeconds, message);
+}
+
+/**
+ * RunSensorsNowDebug agenda a coleta imediata de sensores a partir do painel de
+ * debug (POST /api/RunSensorsNowDebug).
+ * 
+ * O parâmetro único é uma STRING (o bridge desembrulha as quotes do JSON):
+ * aceita "", "[]", um array de ids ou {"ids":[...],"forceSync":bool} — ver
+ * parseSensorDebugRunPayload. Assim como o comando "runsensors"
+ * (agent_commands_sensors.go), apenas AGENDA: o motor roda no loop de sensores.
+ * forceSync=true sincroniza a policy de sensores ANTES de agendar, que é o que
+ * o operador quer logo depois de editar um sensor no console.
+ * @param {string} idsJSON
+ * @returns {$CancellablePromise<any>}
+ */
+export function RunSensorsNowDebug(idsJSON) {
+    return $Call.ByID(2884021829, idsJSON);
 }
 
 /**

@@ -184,9 +184,15 @@ func TestApplySensorPolicyAndRunNow(t *testing.T) {
 		t.Fatalf("sensor pedido deveria estar devido (zero), got %v (presente=%t)", value, ok)
 	}
 
-	// Id inexistente não agenda nada.
-	if _, err := service.RunSensorsNow(t.Context(), []string{"inexistente"}, false); err == nil {
-		t.Fatal("run-now com id inexistente deveria falhar")
+	// Id inexistente não agenda nada — e NÃO é erro: agendar zero sensores é um
+	// resultado válido (o motivo é da camada de apresentação). Regressão do 500
+	// em /api/RunSensorsNowDebug com ids fora da policy local.
+	count, err = service.RunSensorsNow(t.Context(), []string{"inexistente"}, false)
+	if err != nil {
+		t.Fatalf("run-now com id inexistente nao deveria falhar: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("count com id inexistente = %d, want 0", count)
 	}
 }
 

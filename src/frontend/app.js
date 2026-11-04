@@ -158,6 +158,14 @@ function setActiveTab(tab) {
     stopAgentStatusPoll();
   }
 
+  // Para o poll da seção "Sensores (monitoramento)" ao sair da aba de debug.
+  // Fica aqui (e não em cada handler de aba) porque setActiveTab é o único
+  // ponto por onde toda troca de aba passa — inclusive as chamadas de outros
+  // módulos (chat, store, suporte).
+  if (tab !== 'debug' && typeof stopSensorDebugPoll === 'function') {
+    stopSensorDebugPoll();
+  }
+
   if (tab === 'status' && typeof startStatusPoll === 'function') {
     if (isAppWindowVisible()) startStatusPoll();
   }

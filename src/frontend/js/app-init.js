@@ -181,6 +181,14 @@ function initAppBindings() {
     tabDebugBtn.addEventListener("click", function () {
       setActiveTab("debug");
       loadDebugConfig();
+      // Seção "Sensores (monitoramento)": carrega o snapshot ao entrar na aba.
+      // O poll de 5 s só liga se o checkbox de auto-atualização estiver marcado.
+      if (typeof loadSensorDebugSnapshot === "function") {
+        loadSensorDebugSnapshot();
+      }
+      if (typeof startSensorDebugPoll === "function") {
+        startSensorDebugPoll();
+      }
     });
   }
 

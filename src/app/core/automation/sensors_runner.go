@@ -429,6 +429,13 @@ func (s *Service) handleSensorSyncError(err error) {
 	}
 }
 
+// SetSensorPolicyForTesting aplica uma policy de sensores SEM passar pela rede
+// (uso exclusivo de teste, junto de SetStateForTesting) — permite exercitar o
+// run-now a partir do pacote app sem expor o sync HTTP.
+func (s *Service) SetSensorPolicyForTesting(agentID string, response *SensorSyncResponse) {
+	s.applySensorPolicy(agentID, response, false)
+}
+
 // applySensorPolicy troca a policy local pelos sensores recebidos no sync.
 func (s *Service) applySensorPolicy(agentID string, response *SensorSyncResponse, persist bool) {
 	if response == nil {
@@ -668,6 +675,7 @@ func (s *Service) runSensor(parent context.Context, cfg SensorConfig) {
 			s.recordSensorTargetRun(sensorID, targetKey, finished)
 		}
 	}
+	s.recordSensorHistory(results)
 	s.enqueueSensorResults(results)
 
 	// Log só de erro: um sensor de disco com 6 volumes geraria 6 linhas por
@@ -752,6 +760,14 @@ func (s *Service) flushSensorSamples(ctx context.Context) {
 // RunSensorsNow força a coleta imediata dos sensores informados (ids vazio =
 // todos), com sync opcional antes (o console acabou de editar o sensor).
 // Devolve quantos sensores foram agendados.
+//
+// Agendar ZERO sensores NÃO é falha: é resultado válido. Isso acontece nos
+// casos mais comuns do operador — policy ainda não sincronizada (s.sensors
+// vazio) ou ids que não existem na policy local. Devolver erro aqui virava
+// HTTP 500 no painel de debug e no comando "runsensors"; o motivo concreto é
+// responsabilidade da camada de apresentação, que já monta a mensagem PT-BR
+// ("0 de N id(s) encontrados na policy local") a partir da contagem.
+// O erro fica reservado para indisponibilidade real (serviço nulo).
 func (s *Service) RunSensorsNow(ctx context.Context, ids []string, forceSync bool) (int, error) {
 	if s == nil {
 		return 0, fmt.Errorf("servico de automacao indisponivel")
@@ -762,7 +778,9 @@ func (s *Service) RunSensorsNow(ctx context.Context, ids []string, forceSync boo
 	}
 	count := s.markSensorsDue(ids)
 	if count == 0 {
-		return 0, fmt.Errorf("nenhum sensor para executar")
+		// Nada a acordar: o loop não tem sensor devido. Retorno explícito para
+		// deixar claro que a contagem 0 é intencional.
+		return 0, nil
 	}
 	s.signalSensorWake()
 	return count, nil

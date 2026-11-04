@@ -179,6 +179,14 @@ type Service struct {
 	sensorSyncBackoffUntil time.Time
 	sensorLastSyncAt       time.Time
 	sensorPolicyLoaded     bool
+	// sensorHistoryMu protege o ring de histórico de amostras exibido no painel
+	// de diagnóstico. Mutex próprio: o histórico é lido pela UI enquanto a
+	// coleta (sensorMu) segue rodando — um lock compartilhado criaria contenção
+	// desnecessária entre leitura de diagnóstico e agenda de sensores.
+	sensorHistoryMu sync.Mutex
+	// sensorHistory é o ring FIFO (teto sensorDebugHistoryMax) das últimas
+	// amostras coletadas por QUALQUER sensor, em ordem cronológica de chegada.
+	sensorHistory []sensorHistoryEntry
 }
 
 // policyPreloadRetriggerInterval é o intervalo mínimo para reacionar a MESMA
