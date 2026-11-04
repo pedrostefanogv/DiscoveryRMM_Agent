@@ -149,77 +149,9 @@
       </div>
     </div>
 
-    <div class="debug-sensors-wrap">
-      <h2 data-i18n="debug.sensorsTitle">Sensores (monitoramento)</h2>
-      <p class="debug-sensors-subtitle" data-i18n="debug.sensorsSubtitle">Estado do motor de sensores, próxima coleta e
-        últimos resultados coletados neste agente.</p>
-
-      <div class="statusbar page-bar debug-sensors-bar">
-        <!-- Ações agrupadas: o CSS controla o alinhamento; aqui só separamos
-             o grupo de ações do grupo de estado (contagem + auto-refresh). -->
-        <div class="debug-sensors-actions" role="group" aria-label="Ações de sensores">
-          <button id="sensorDebugRefreshBtn" class="btn subtle" data-i18n="debug.sensorsRefresh"
-            title="Recarregar o estado do motor e a lista de sensores" aria-label="Atualizar sensores">Atualizar</button>
-          <button id="sensorDebugRunAllBtn" class="btn subtle" data-i18n="debug.sensorsRunAll"
-            title="Agendar coleta de todos os sensores da policy local"
-            aria-label="Coletar todos os sensores agora">Coletar todos agora</button>
-          <button id="sensorDebugResyncBtn" class="btn subtle" data-i18n="debug.sensorsResync"
-            title="Baixar a policy de sensores do servidor e reagendar as coletas"
-            aria-label="Ressincronizar a policy de sensores">Ressincronizar policy</button>
-        </div>
-        <div class="debug-sensors-meta">
-          <span id="sensorDebugCount" class="debug-sensors-count">0</span>
-          <label class="debug-sensors-auto-toggle">
-            <input id="sensorDebugAutoEl" type="checkbox" />
-            <span data-i18n="debug.sensorsAuto">Atualizar a cada 5 s</span>
-          </label>
-        </div>
-      </div>
-
-      <div id="sensorDebugStatus" class="debug-status" aria-live="polite"></div>
-
-      <h3 data-i18n="debug.sensorsEngineTitle">Motor de sensores</h3>
-      <div id="sensorDebugEngine" class="debug-sensors-engine"></div>
-
-      <div id="sensorDebugEmpty" class="debug-sensors-empty hidden"></div>
-
-      <div id="sensorDebugTableWrap" class="debug-sensors-table-wrap hidden">
-        <table id="sensorDebugTable" class="debug-sensors-table">
-          <thead>
-            <tr>
-              <th data-i18n="debug.sensorsColName">Nome</th>
-              <th data-i18n="debug.sensorsColKey">Chave</th>
-              <th data-i18n="debug.sensorsColType">Tipo</th>
-              <th data-i18n="debug.sensorsColTarget">Alvo</th>
-              <th data-i18n="debug.sensorsColInterval">Intervalo</th>
-              <th data-i18n="debug.sensorsColNext">Próxima</th>
-              <th data-i18n="debug.sensorsColLast">Última</th>
-              <th data-i18n="debug.sensorsColScript">Script</th>
-              <th data-i18n="debug.sensorsColChannels">Canais</th>
-              <th data-i18n="debug.sensorsColActions" title="Ações disponíveis para o sensor">Ações</th>
-            </tr>
-          </thead>
-          <tbody id="sensorDebugTableBody"></tbody>
-        </table>
-      </div>
-
-      <div id="sensorDebugHistoryWrap" class="debug-sensors-history-wrap hidden">
-        <div class="debug-sensors-history-head">
-          <h3 data-i18n="debug.sensorsHistoryTitle">Últimas coletas</h3>
-          <span id="sensorDebugHistoryTotal" class="debug-sensors-history-total"></span>
-        </div>
-        <!-- Cabeçalho de colunas: reaproveita as chaves da tabela principal,
-             porque são exatamente as mesmas seis informações por coleta. -->
-        <div class="sensor-history-header" aria-hidden="true">
-          <span data-i18n="debug.sensorsColName">Nome</span>
-          <span data-i18n="debug.sensorsColTarget">Alvo</span>
-          <span data-i18n="debug.sensorsHistoryWhen">Quando</span>
-          <span data-i18n="debug.sensorsHistoryDuration">Duração</span>
-          <span data-i18n="debug.sensorsColChannels">Canais</span>
-          <span data-i18n="debug.sensorsColError">Erro</span>
-        </div>
-        <div id="sensorDebugHistoryBody" class="debug-sensors-history-body" role="list"></div>
-      </div>
-    </div>
+    <!-- O painel de sensores saiu daqui: agora é uma aba dedicada (#sensorView,
+         partials/views/sensorView.html), visível só em modo de debug. Manter os
+         dois blocos no DOM duplicaria os 14 ids sensorDebug* e getElementById
+         passaria a operar no nó errado, quebrando o painel em silêncio. -->
   </section>
 </main>

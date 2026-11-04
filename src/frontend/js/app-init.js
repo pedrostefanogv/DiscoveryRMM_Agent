@@ -181,8 +181,19 @@ function initAppBindings() {
     tabDebugBtn.addEventListener("click", function () {
       setActiveTab("debug");
       loadDebugConfig();
-      // Seção "Sensores (monitoramento)": carrega o snapshot ao entrar na aba.
-      // O poll de 5 s só liga se o checkbox de auto-atualização estiver marcado.
+      // O painel de sensores NÃO vive mais nesta aba: ele tem página dedicada
+      // (aba "Sensores"), que é a única dona dos ids sensorDebug*. Carregar
+      // aqui criaria um segundo conjunto de ids no DOM.
+    });
+  }
+
+  // Aba dedicada de Sensores (só-de-debug) — ÚNICA dona do painel de sensores
+  // desde que ele saiu da aba Debug. Ativa a aba, carrega o snapshot e liga o
+  // poll (que só roda de fato se o checkbox de auto-atualização estiver
+  // marcado).
+  if (tabSensorsBtn) {
+    tabSensorsBtn.addEventListener("click", function () {
+      setActiveTab("sensors");
       if (typeof loadSensorDebugSnapshot === "function") {
         loadSensorDebugSnapshot();
       }

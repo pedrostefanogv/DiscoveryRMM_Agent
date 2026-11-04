@@ -232,10 +232,14 @@ const exportLogsBtn = document.getElementById('exportLogsBtn');
 const logsLineCountEl = document.getElementById('logsLineCount');
 const logsSearchInputEl = document.getElementById('logsSearchInput');
 const tabDebugBtn = document.getElementById('tabDebug');
+// Aba dedicada de Sensores: só-de-debug, como P2P/Zero-Touch. Fica ao lado de
+// tabDebug porque nasceu do painel que hoje vive dentro daquela aba.
+const tabSensorsBtn = document.getElementById('tabSensors');
 const tabPSADTBtn = document.getElementById('tabPSADT');
 const tabP2PBtn = document.getElementById('tabP2P');
 const tabZeroTouchConfigBtn = document.getElementById('tabZeroTouchConfig');
 const debugViewEl = document.getElementById('debugView');
+const sensorViewEl = document.getElementById('sensorView');
 const psadtViewEl = document.getElementById('psadtView');
 const p2pViewEl = document.getElementById('p2pView');
 const zeroTouchConfigViewEl = document.getElementById('zeroTouchConfigView');
@@ -387,7 +391,7 @@ function isRuntimeTabAllowed(tab) {
     return true;
   }
   // In normal mode we hide tabs/views that are only relevant for debugging.
-  return tab !== 'logs' && tab !== 'debug' && tab !== 'psadt' && tab !== 'automation' && tab !== 'p2p' && tab !== 'inventory' && tab !== 'zeroTouchConfig';
+  return tab !== 'logs' && tab !== 'debug' && tab !== 'sensors' && tab !== 'psadt' && tab !== 'automation' && tab !== 'p2p' && tab !== 'inventory' && tab !== 'zeroTouchConfig';
 }
 
 function applyRuntimeTabVisibility() {
@@ -396,6 +400,8 @@ function applyRuntimeTabVisibility() {
   if (tabInventoryBtn) tabInventoryBtn.classList.toggle('hidden', hiddenInNormal);
   if (tabLogsBtn) tabLogsBtn.classList.toggle('hidden', hiddenInNormal);
   if (tabDebugBtn) tabDebugBtn.classList.toggle('hidden', hiddenInNormal);
+  // Aba de sensores: mesmo gate dos demais itens só-de-debug.
+  if (tabSensorsBtn) tabSensorsBtn.classList.toggle('hidden', hiddenInNormal);
   if (tabPSADTBtn) tabPSADTBtn.classList.toggle('hidden', hiddenInNormal);
   if (tabAutomationBtn) tabAutomationBtn.classList.toggle('hidden', hiddenInNormal);
   if (chatMemoriesBtn) chatMemoriesBtn.classList.toggle('hidden', hiddenInNormal);
@@ -410,6 +416,7 @@ function applyRuntimeTabVisibility() {
     if (inventoryViewEl) inventoryViewEl.classList.add('hidden');
     if (logsViewEl) logsViewEl.classList.add('hidden');
     if (debugViewEl) debugViewEl.classList.add('hidden');
+    if (sensorViewEl) sensorViewEl.classList.add('hidden');
     if (psadtViewEl) psadtViewEl.classList.add('hidden');
     if (automationViewEl) automationViewEl.classList.add('hidden');
     if (p2pViewEl) p2pViewEl.classList.add('hidden');

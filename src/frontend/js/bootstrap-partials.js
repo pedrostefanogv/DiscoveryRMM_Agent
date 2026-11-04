@@ -28,6 +28,9 @@
       path: "partials/views/automationView.html",
     },
     { mountId: "debugViewMount", path: "partials/views/debugView.html" },
+    // Página dedicada de sensores (aba só-de-debug). Mantém a ordem do menu:
+    // Debug -> Sensores -> Notificações.
+    { mountId: "sensorViewMount", path: "partials/views/sensorView.html" },
     { mountId: "psadtViewMount", path: "partials/views/psadtView.html" },
     { mountId: "p2pViewMount", path: "partials/views/p2pView.html" },
     {

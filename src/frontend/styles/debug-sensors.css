@@ -217,12 +217,19 @@
    abaixo ja explica tudo (titulo + texto + proximo passo). Ocorre que
    .debug-status (responsive-part-b.css:1541) reserva min-height:1.4em e
    padding:.4rem 0 — com texto vazio isso vira um vao morto entre a barra de
-   acoes e o titulo do motor, ainda somado ao gap do wrap.
+   acoes e o titulo do motor, ainda somado ao gap do container.
 
    :empty casa apenas quando NAO ha nenhum filho nem texto, que e exatamente o
    caso de textContent = ''. Quando ha mensagem, a regra nao se aplica e o status
-   se comporta como sempre. */
-.debug-sensors-wrap .debug-status:empty {
+   se comporta como sempre.
+
+   DOIS contextos, e por isso os dois seletores: o painel vivia em
+   .debug-sensors-wrap (aba Debug) e agora vive em .sensor-page-body (pagina
+   dedicada). Escopar so num deles deixaria o vao morto reaparecer no outro —
+   foi o que a medicao no Chromium pegou: no #sensorView o status seguia com
+   19px de altura. */
+.debug-sensors-wrap .debug-status:empty,
+.sensor-page-body > .debug-status:empty {
   display: none;
 }
 
@@ -717,3 +724,134 @@
     padding: 8px 9px;
   }
 }
+
+/* ================================================================
+   PAGINA DEDICADA DE SENSORES (#sensorView)
+   ================================================================
+   O painel de sensores deixou a aba Debug e virou uma aba propria, com
+   pagina propria (partials/views/sensorView.html). As classes abaixo sao
+   as NOVAS dessa pagina; tudo o mais que ela usa (.debug-sensors-bar,
+   .debug-sensors-actions, .debug-sensors-table, .sensor-engine-grid,
+   .sensor-history-*, .debug-status...) ja esta estilizado acima e segue
+   valendo.
+
+   IMPORTANTE - o que NAO redefinimos:
+   #sensorView carrega class="page-content", definida em base.css:487
+   (flex:1, padding 20px 22px 28px, overflow-y:auto) e o filho direto
+   <section> ja herda `.page-content > section` (base.css:493:
+   display:flex; flex-direction:column; gap:16px). Portanto o corpo da
+   pagina NAO precisa de layout proprio: repetir aqui criaria duas fontes
+   de verdade para o mesmo espacamento. So complementamos o que falta.
+   ================================================================ */
+
+/* #sensorView herda TUDO de .page-content (base.css:487): padding, scroll,
+   flex:1. Nao repetimos nada disso aqui — duas fontes de verdade para o mesmo
+   espacamento e como o layout passa a divergir. O que complementamos e so o
+   que a pagina dedicada acrescenta:
+
+   - min-width 0: a tabela de 10 colunas e a grade do motor podem ser mais
+     largas que a viewport em telas pequenas; sem isto o flex column estoura
+     em vez de deixar o scroll horizontal agir. */
+#sensorView {
+  min-width: 0;
+}
+
+#sensorView > section {
+  min-width: 0;
+}
+
+/* O corpo da pagina e o <section> filho de .page-content; ele ja e o flex
+   column com gap de 16px. Garantimos apenas o eixo vertical caso a pagina
+   seja algum dia montada fora de .page-content. */
+.sensor-page-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* -------- Cabecalho: titulo/subtitulo + barra de acoes -------- */
+
+.sensor-page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: calc(var(--gap) * 1.25);
+}
+
+.sensor-page-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* Cresce para empurrar a barra de acoes para a direita, mas cede espaco
+     antes de apertar o subtitulo. */
+  flex: 1 1 360px;
+  min-width: 0;
+}
+
+.sensor-page-heading h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* A barra de acoes do painel ja existe (.debug-sensors-bar); aqui so
+   garantimos que ela nao estique na linha do cabecalho da pagina. */
+.sensor-page-header .debug-sensors-bar {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* -------- Cartoes de secao --------
+   Cada bloco da pagina (motor, lista, historico) e um <section class="sensor-card">
+   com um <h3>. O cartao da borda/raio/fundo; o h3 da a hierarquia. */
+
+.sensor-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2);
+}
+
+.sensor-card > h3 {
+  margin: 0;
+  font-size: .9rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* O cartao 3 embrulha o .debug-sensors-history-wrap, que JA tem borda, raio e
+   fundo proprios - aninhar os dois criaria um cartao dentro de outro com
+   moldura dupla. Aqui o wrap vira conteudo interno, sem repetir a moldura. */
+.sensor-card .debug-sensors-history-wrap {
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+/* Mesmo raciocinio para o estado vazio: ja tem moldura tracejada propria e
+   fica DENTRO do cartao, que ja tem a sua. */
+.sensor-card .debug-sensors-empty {
+  background: transparent;
+}
+
+/* Em telas estreitas o cabecalho vira uma coluna: titulo acima, acoes abaixo. */
+@media (max-width: 960px) {
+  .sensor-page-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sensor-page-heading {
+    flex: 1 1 auto;
+  }
+
+  .sensor-card {
+    padding: 12px;
+  }
+}
+

@@ -89,6 +89,7 @@ function setActiveTab(tab) {
     supportChat: supportChatViewEl,
     automation: automationViewEl,
     debug: debugViewEl,
+    sensors: sensorViewEl,
     psadt: psadtViewEl,
     p2p: p2pViewEl,
     zeroTouchConfig: zeroTouchConfigViewEl,
@@ -105,6 +106,7 @@ function setActiveTab(tab) {
     supportChat: tabSupportChatBtn,
     automation: tabAutomationBtn,
     debug: tabDebugBtn,
+    sensors: tabSensorsBtn,
     psadt: tabPSADTBtn,
     p2p: tabP2PBtn,
     zeroTouchConfig: tabZeroTouchConfigBtn,
@@ -158,11 +160,15 @@ function setActiveTab(tab) {
     stopAgentStatusPoll();
   }
 
-  // Para o poll da seção "Sensores (monitoramento)" ao sair da aba de debug.
-  // Fica aqui (e não em cada handler de aba) porque setActiveTab é o único
-  // ponto por onde toda troca de aba passa — inclusive as chamadas de outros
-  // módulos (chat, store, suporte).
-  if (tab !== 'debug' && typeof stopSensorDebugPoll === 'function') {
+  // Para o poll da seção "Sensores (monitoramento)" ao sair das abas que o
+  // exibem. Fica aqui (e não em cada handler de aba) porque setActiveTab é o
+  // único ponto por onde toda troca de aba passa — inclusive as chamadas de
+  // outros módulos (chat, store, suporte).
+  //
+  // São DUAS abas: 'debug' (painel embutido) e 'sensors' (página dedicada).
+  // O poll só para quando a aba ativa não é nenhuma das duas — sem isto, entrar
+  // na aba dedicada mataria o refresh de 5s que ela acabou de iniciar.
+  if (tab !== 'debug' && tab !== 'sensors' && typeof stopSensorDebugPoll === 'function') {
     stopSensorDebugPoll();
   }
 
