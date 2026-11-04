@@ -12,6 +12,12 @@
        modais e comentários do chamado). Sem este link a view perdia TODAS as
        classes .sc-* e as mensagens saíam como texto puro, sem destaque. -->
   <link rel="stylesheet" href="support-chat.css" />
+  <!-- Painel de sensores do agente (aba Debug). Folha dedicada porque as
+       classes .debug-sensors-* / .sensor-* nao tinham estilo nenhum e o
+       painel saia como HTML cru, com rotulo e valor colados. Carregada
+       DEPOIS de styles.css de proposito: vence empates de especificidade
+       com as parciais de responsivo (que trazem .debug-panel). -->
+  <link rel="stylesheet" href="styles/debug-sensors.css" />
 </head>
 
 <body>

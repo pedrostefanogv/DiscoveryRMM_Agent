@@ -1,0 +1,719 @@
+/* ================================================================
+   SENSORES (MONITORAMENTO) — painel de debug do agente
+   ================================================================
+   Folha dedicada da secao "Sensores (monitoramento)" da view de Debug
+   (partials/views/debugView.html + controller js/app-debug.js).
+
+   Por que existe: as classes .debug-sensors-* / .sensor-* nasceram sem
+   estilo nenhum, entao rotulo e valor saiam colados no HTML cru
+   ("Fingerprint da policy2635eccd2b3e..."). Aqui a regra central e o
+   par rotulo/valor SEMPRE separado por grid de duas colunas.
+
+   Regras desta folha:
+   - SOMENTE tokens ja existentes (:root / [data-theme="dark"] de base.css).
+     Nenhuma cor fixa: o tema escuro herda de graca porque os tokens viram
+     outros valores dentro de [data-theme="dark"].
+   - Nada de !important (o .hidden global de base.css ja e !important e vence).
+   - Comentarios em PT-BR.
+
+   ORDEM DE CARGA: styles.css importa esta folha por ultimo, para vencer
+   eventuais empates de especificidade com as parciais de responsivo.
+   ================================================================ */
+
+/* -------- 1. Estrutura da secao -------- */
+
+.debug-sensors-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--gap) * 1.25);
+  /* Linha divisoria separa esta secao dos blocos de debug acima. */
+  margin-top: calc(var(--gap) * 1.5);
+  padding-top: calc(var(--gap) * 1.5);
+  border-top: 1px solid var(--border);
+}
+
+/* O h2/h3 convivem com os demais titulos do painel de debug. */
+.debug-sensors-wrap h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--fg);
+}
+
+.debug-sensors-wrap h3 {
+  font-size: .9rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--fg);
+}
+
+.debug-sensors-subtitle {
+  margin: 0;
+  font-size: .82rem;
+  line-height: 1.5;
+  color: var(--fg);
+  opacity: .7;
+  max-width: 70ch;
+}
+
+/* -------- 2. Barra de acoes + estado -------- */
+
+.debug-sensors-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+}
+
+.debug-sensors-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Botoes nunca quebram o texto no meio. */
+.debug-sensors-actions .btn {
+  white-space: nowrap;
+}
+
+.debug-sensors-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap);
+  margin-left: auto;
+}
+
+.debug-sensors-count {
+  font-size: .78rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  min-width: 2ch;
+  text-align: center;
+}
+
+.debug-sensors-auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .8rem;
+  color: var(--fg);
+  opacity: .85;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.debug-sensors-auto-toggle input {
+  cursor: pointer;
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+/* -------- 3. Bloco do MOTOR (rotulo/valor) --------
+   DEFEITO CENTRAL: rotulo e valor colados. A correcao e o grid de duas
+   colunas abaixo — coluna 1 de largura fixa para o rotulo, coluna 2 com
+   flex para o valor. Vale para a forma NOVA (.sensor-engine-*) e para a
+   ANTIGA (.kv > .k/.v), que segue no ar durante a transicao. */
+
+.sensor-engine-grid {
+  display: grid;
+  /* Piso de 260px: com 240px o par rotulo/valor ficava apertado no print
+     (rotulos como "Fingerprint da policy" quebravam em varias linhas). Com
+     auto-fit o numero de colunas se ajusta sozinho a largura disponivel. */
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.sensor-engine-item,
+.debug-sensors-engine .kv {
+  display: grid;
+  /* minmax(0,1fr) e o que permite o valor encolher e quebrar em vez de
+     estourar a celula do grid. */
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg2);
+}
+
+/* Rotulo: menor, discreto e de peso 600 — nunca colado no valor. */
+.sensor-engine-label,
+.debug-sensors-engine .kv .k {
+  font-size: .76rem;
+  font-weight: 600;
+  color: var(--fg);
+  opacity: .7;
+  line-height: 1.35;
+  min-width: 0;
+  /* Rotulo longo nao empurra o valor para fora. */
+  overflow-wrap: anywhere;
+}
+
+/* Valor: cor cheia do tema e quebra de palavra. */
+.sensor-engine-value,
+.debug-sensors-engine .kv .v {
+  font-size: .84rem;
+  font-weight: 500;
+  color: var(--fg);
+  line-height: 1.35;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Item em alerta: realce de perigo + borda lateral (nao so cor). */
+.sensor-engine-item.alert,
+.debug-sensors-engine .kv.alert {
+  border-left: 3px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, var(--bg2));
+}
+
+.sensor-engine-item.alert .sensor-engine-label,
+.sensor-engine-item.alert .sensor-engine-value,
+.debug-sensors-engine .kv.alert .k,
+.debug-sensors-engine .kv.alert .v {
+  color: var(--debug-error-text);
+}
+
+/* lastError ocupa a linha inteira do grid.
+
+   As trilhas do grid sao EXPLICITAS (repeat(auto-fit, minmax(240px,1fr))), e um
+   item com grid-column: 1 / -1 ocupa a linha inteira do container. A colocacao
+   automatica nao o encaixa numa celula vaga: como ele precisa da linha toda
+   livre, ele abre uma linha nova sozinho — nao e preciso forcar grid-row.
+
+   O defeito do print nao era o posicionamento, era o item manter as DUAS
+   colunas internas (rotulo | valor) de .sensor-engine-item: em largura total a
+   coluna "auto" do rotulo rouba largura do texto longo do erro, que e
+   exatamente o conteudo deste item. Por isso ele passa a empilhar. */
+.sensor-engine-item.wide {
+  grid-column: 1 / -1;
+  /* Rotulo ACIMA do valor, ocupando a largura toda. */
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sensor-engine-item.wide .sensor-engine-label {
+  margin-bottom: 2px;
+}
+
+.sensor-engine-item.wide .sensor-engine-value {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: .8rem;
+}
+
+/* -------- 3b. Status quando vazio --------
+   O controller limpa o status no ramo "sem sensores", porque o estado vazio logo
+   abaixo ja explica tudo (titulo + texto + proximo passo). Ocorre que
+   .debug-status (responsive-part-b.css:1541) reserva min-height:1.4em e
+   padding:.4rem 0 — com texto vazio isso vira um vao morto entre a barra de
+   acoes e o titulo do motor, ainda somado ao gap do wrap.
+
+   :empty casa apenas quando NAO ha nenhum filho nem texto, que e exatamente o
+   caso de textContent = ''. Quando ha mensagem, a regra nao se aplica e o status
+   se comporta como sempre. */
+.debug-sensors-wrap .debug-status:empty {
+  display: none;
+}
+
+/* -------- 4. Estado vazio -------- */
+
+.debug-sensors-empty {
+  padding: 14px 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2);
+}
+
+/* Estado vazio: o marcador atual e .sensor-empty-state > title/text/hint.
+   A regra abaixo cobre as duas formas (a antiga <p> e a nova) para o painel
+   nao voltar a renderizar texto cru durante a transicao de marcacao. */
+.sensor-empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.debug-sensors-empty p,
+.sensor-empty-text {
+  margin: 0;
+  font-size: .84rem;
+  color: var(--fg);
+  opacity: .75;
+}
+
+.sensor-empty-title {
+  font-size: .88rem;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 4px;
+}
+
+/* Dica secundaria: menor e mais discreta que o texto principal. */
+.sensor-empty-hint {
+  font-size: .76rem;
+  line-height: 1.45;
+  color: var(--fg);
+  opacity: .6;
+}
+
+/* -------- 5. TABELA de sensores -------- */
+
+.debug-sensors-table-wrap {
+  /* Escolha da responsividade (requisito 10): SCROLL HORIZONTAL, nao
+     cartoes empilhados. A tabela tem 10 colunas e virar cartao perderia a
+     leitura comparativa entre sensores, que e o uso principal da tela. */
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+}
+
+.debug-sensors-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .8rem;
+}
+
+.debug-sensors-table th {
+  text-align: left;
+  font-size: .74rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--fg);
+  opacity: .75;
+  background: var(--bg2);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.debug-sensors-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  /* Alinhamento vertical no topo: linhas de altura diferente continuam
+     legiveis lado a lado. */
+  vertical-align: top;
+  line-height: 1.45;
+}
+
+.debug-sensors-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.debug-sensors-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+/* Primeira coluna (nome do sensor) com peso maior: e a chave de leitura. */
+.debug-sensors-table td.name {
+  font-weight: 600;
+  min-width: 12ch;
+}
+
+/* Celulas tecnicas em monoespacada, quebrando a palavra se preciso. */
+.debug-sensors-table td.mono,
+.debug-sensors-table td .mono {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: .76rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.debug-sensors-table td.actions {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.debug-sensors-table td.actions .btn {
+  white-space: nowrap;
+}
+
+/* Sinaliza que ha acoes: o wrapper nao fica vazio sem explicacao. */
+.debug-sensors-table td.actions {
+  min-width: 14ch;
+}
+
+/* -------- 6. ESTADOS DE ALERTA POR LINHA --------
+   Nao dependem so de cor: cada estado tambem pinta a BORDA ESQUERDA, o que
+   mantem o aviso perceptivel em daltonismo e em tema claro/escuro. */
+
+.debug-sensors-table tr.overdue td {
+  background: color-mix(in srgb, var(--accent-2) 10%, transparent);
+}
+
+.debug-sensors-table tr.overdue td:first-child {
+  border-left: 3px solid var(--accent-2);
+}
+
+.debug-sensors-table tr.nocache td {
+  background: color-mix(in srgb, var(--accent-2) 6%, transparent);
+}
+
+.debug-sensors-table tr.nocache td:first-child {
+  border-left: 3px solid var(--accent-2);
+}
+
+.debug-sensors-table tr.disabled td {
+  opacity: .6;
+}
+
+.debug-sensors-table tr.disabled td:first-child {
+  border-left: 3px solid var(--muted);
+}
+
+/* -------- 7. BADGE .sensor-flag -------- */
+
+.sensor-flag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: .68rem;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  vertical-align: middle;
+  /* Cor de aviso derivada dos tokens: legivel nos dois temas. */
+  color: var(--warning-strong);
+  background: color-mix(in srgb, var(--accent-2) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 45%, transparent);
+}
+
+/* -------- 8. DETALHE (canais / resultados) -------- */
+
+.sensor-detail-row td {
+  padding: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+}
+
+.sensor-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.sensor-detail.hidden {
+  display: none;
+}
+
+.sensor-detail-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  padding: 10px 12px;
+}
+
+.sensor-detail-block h4 {
+  margin: 0 0 6px;
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--fg);
+  opacity: .7;
+}
+
+/* Lista de canais sem marcador de lista. */
+.sensor-detail-channels {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sensor-detail-channels li {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: .74rem;
+  color: var(--fg);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 7px;
+}
+
+/* Uma amostra (result) por cartao. */
+.sensor-result {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.sensor-result:last-child {
+  margin-bottom: 0;
+}
+
+.sensor-result-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.sensor-result-status {
+  font-size: .72rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--context-success-text);
+  background: var(--context-success-bg);
+  border: 1px solid var(--context-success-border);
+}
+
+.sensor-result-status.err {
+  color: var(--context-error-text);
+  background: var(--context-error-bg);
+  border: 1px solid var(--context-error-border);
+}
+
+.sensor-result-channels {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: .74rem;
+  color: var(--fg);
+  opacity: .85;
+  overflow-wrap: anywhere;
+  margin-top: 4px;
+}
+
+/* JSON do measure: fundo distinto, monoespacada e com scroll proprio. */
+.sensor-result-measure {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  background: var(--terminal-bg-alt);
+  color: var(--terminal-fg-alt);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: .74rem;
+  line-height: 1.5;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.muted,
+.sensor-detail .muted {
+  color: var(--fg);
+  opacity: .55;
+  font-style: italic;
+}
+
+.err,
+.sensor-detail .err {
+  color: var(--debug-error-text);
+  font-weight: 600;
+}
+
+/* -------- 9. HISTORICO -------- */
+
+.debug-sensors-history-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+  padding: 12px 14px;
+}
+
+.debug-sensors-history-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Corpo do historico: empilha as linhas (sensor-history-item) e tambem
+   carrega os avisos de vazio/erro que o controller injeta. */
+.debug-sensors-history-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+/* O controller esconde o wrap inteiro quando nao ha historico; garantir que
+   a regra tambem cubra o proprio body, caso ele seja ocultado direto. */
+.debug-sensors-history-body.hidden {
+  display: none;
+}
+
+.debug-sensors-history-total {
+  font-size: .74rem;
+  opacity: .7;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Cabecalho de colunas do historico: MESMO grid das linhas, senao as
+   colunas nao alinham entre o cabecalho e os itens.
+
+   A lista de trilhas vive em --sensor-history-cols (token LOCAL desta folha —
+   nao e design token do tema) e e consumida pelo par abaixo.
+
+   Definida UMA unica vez, em todas as larguras: o layout estreito NAO reflui
+   (ver o @media de 960px, que da scroll horizontal em vez de mudar as trilhas).
+   Antes a lista aparecia duplicada aqui e no @media, e editar um grupo sem o
+   outro desalinhava cabecalho e itens em silencio. */
+.sensor-history-header,
+.sensor-history-item {
+  --sensor-history-cols: minmax(10ch, 1.2fr) minmax(8ch, 1fr) minmax(12ch, 1fr) minmax(7ch, .6fr) minmax(10ch, 1.4fr) minmax(10ch, 1.2fr);
+  display: grid;
+  grid-template-columns: var(--sensor-history-cols);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.sensor-history-header {
+  font-size: .7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--fg);
+  opacity: .65;
+  padding: 0 8px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sensor-history-item {
+  font-size: .76rem;
+  color: var(--fg);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sensor-history-item:last-child {
+  border-bottom: none;
+}
+
+.sensor-history-item > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sensor-history-sensor {
+  font-weight: 600;
+}
+
+.sensor-history-item.err {
+  color: var(--debug-error-text);
+}
+
+/* Colunas tecnicas do historico: alvo sai em monoespacada e o erro na cor de
+   perigo. As regras da tabela (.debug-sensors-table td.mono) nao alcancam
+   este grid, entao repetimos aqui de forma escopada. */
+.sensor-history-item .mono {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: .72rem;
+}
+
+.sensor-history-item .err {
+  color: var(--debug-error-text);
+  font-weight: 600;
+}
+
+/* -------- 10. RESPONSIVO --------
+   Abaixo de 960px: a tabela continua com scroll horizontal (a .wrap ja tem
+   overflow-x), as grades do motor caem para uma coluna e o historico passa de
+   6 para 3 colunas, mantendo o cabecalho alinhado. */
+
+@media (max-width: 960px) {
+  .debug-sensors-bar {
+    align-items: flex-start;
+  }
+
+  .debug-sensors-meta {
+    margin-left: 0;
+  }
+
+  .sensor-engine-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Decisao (requisito 10): manter UMA linha por coleta e dar scroll horizontal
+     ao inves de deixar as 6 colunas refluirem para 2 linhas.
+
+     Por que: com 3 trilhas, os 6 <span> do item quebram em 2 linhas
+     (nome|alvo|quando / duracao|canais|erro). O cabecalho reflui igual PORQUE os
+     dois tem exatamente 6 filhos — ou seja, o alinhamento passa a depender de as
+     duas listas continuarem do mesmo tamanho. Se alguem adicionar uma coluna so
+     no header (ou so no item), a reflow pareia ROTULO ERRADO com VALOR ERRADO em
+     silencio. Com linha unica, header e itens seguem sendo o mesmo grid de 6
+     trilhas em qualquer largura, entao esse modo de falha nao existe.
+
+     Scroll horizontal em vez de espremer 6 colunas: e o mesmo criterio que adotei
+     na tabela principal (comparacao lado a lado vale mais que caber tudo).
+
+     O scroll fica no WRAP, nao no body: no HTML o .sensor-history-header (:213) e
+     IRMAO do #sensorDebugHistoryBody (:221). Se so o body rolasse, o cabecalho
+     ficaria parado enquanto os itens passassem por baixo — desalinhando na
+     horizontal, que e justamente o que este bloco existe para impedir. Com o
+     scroll no ancestral comum, cabecalho e itens rolam JUNTOS. */
+  .debug-sensors-history-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    /* O wrap e flex-COLUMN, entao o eixo transversal e o HORIZONTAL: quem manda
+       na largura dos filhos e o align-items, nao o flex-basis. Com flex-start os
+       filhos dimensionam pelo conteudo (as 6 trilhas do grid) em vez de
+       esticarem/encolherem para a viewport — e e isso que da o que rolar. O
+       token --sensor-history-cols segue intacto: NAO ha reflow. */
+    align-items: flex-start;
+  }
+
+  /* min-width:0 na base existe para o texto poder quebrar no layout largo; aqui
+     ele brigaria com a largura minima que o grid precisa para nao colapsar.
+     Sobrescrever no breakpoint e necessario — sem isto as colunas espremem e o
+     min-width nao surte efeito. */
+  .debug-sensors-history-body {
+    min-width: 640px;
+  }
+
+  /* O cabecalho PERMANECE visivel de proposito.
+     Escondendo-o, o operador passaria a ver 6 valores sem nenhum rotulo — pior
+     do que um cabecalho miudo. Nao da para rotular via ::before reaproveitando
+     o texto traduzido: applyTranslations (app-utils.js:1968) escreve em
+     textContent, nunca em atributo, e content: attr() so le atributo. Um rotulo
+     fixo em PT-BR quebraria o locale en-us. Entao mantemos o proprio header,
+     que ja e traduzido por data-i18n, apenas menor. */
+  .sensor-history-header {
+    /* Mesma largura base do body: e irmao dele e precisa alinhar coluna a
+       coluna dentro do MESMO container de scroll. */
+    min-width: 640px;
+    font-size: .62rem;
+    letter-spacing: 0;
+    padding-bottom: 4px;
+  }
+}
+
+@media (max-width: 640px) {
+  .debug-sensors-table th,
+  .debug-sensors-table td {
+    padding: 8px 9px;
+  }
+}

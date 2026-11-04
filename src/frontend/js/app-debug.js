@@ -345,6 +345,13 @@ function sensorDebugEl(id) {
 function sensorDebugSetStatus(message, type) {
   var el = sensorDebugEl('sensorDebugStatus');
   if (!el) return;
+  // Mensagem vazia limpa o status de verdade. Sem este caso, o rodapé ficaria
+  // com um carimbo de hora solto — "  (20:11:34)" — sem dizer nada.
+  if (!message) {
+    el.textContent = '';
+    el.className = 'debug-status';
+    return;
+  }
   var stamp = new Date().toLocaleTimeString();
   el.textContent = message + '  (' + stamp + ')';
   el.className = 'debug-status' + (type ? ' ' + type : '');
@@ -416,28 +423,66 @@ function sensorDebugRenderEngine(snap) {
   var engine = (snap && snap.engine) || {};
   var rows = [];
 
-  function row(label, value, alert) {
+  // Item da grade rótulo/valor. 'alert' destaca os estados que exigem ação do
+  // operador; 'wide' ocupa a linha inteira (usado no último erro, que é texto
+  // longo). A grade em si é posicionada pelo CSS do painel.
+  function item(label, value, options) {
+    var opts = options || {};
+    var cls = 'sensor-engine-item';
+    if (opts.alert) cls += ' alert';
+    if (opts.wide) cls += ' wide';
     rows.push(
-      '<div class="kv' + (alert ? ' alert' : '') + '">' +
-      '<span class="k">' + sensorDebugEscape(label) + '</span>' +
-      '<span class="v">' + sensorDebugEscape(value) + '</span>' +
+      '<div class="' + cls + '">' +
+      '<span class="sensor-engine-label">' + sensorDebugEscape(label) + '</span>' +
+      '<span class="sensor-engine-value">' + sensorDebugEscape(value) + '</span>' +
       '</div>'
     );
   }
 
-  row(translate('debug.sensorsEngineFingerprint'), sensorDebugDash(engine.fingerprintShort || engine.fingerprint));
-  row(translate('debug.sensorsEngineLastSync'), sensorDebugTime(engine.lastSyncAt));
-  row(translate('debug.sensorsEngineBackoff'), engine.backoffActive
+  item(translate('debug.sensorsEngineFingerprint'), sensorDebugDash(engine.fingerprintShort || engine.fingerprint));
+  item(translate('debug.sensorsEngineLastSync'), sensorDebugTime(engine.lastSyncAt));
+  item(translate('debug.sensorsEngineBackoff'), engine.backoffActive
     ? translate('debug.sensorsEngineBackoffOn') + ' ' + sensorDebugTime(engine.backoffUntil)
-    : translate('debug.sensorsEngineBackoffOff'), !!engine.backoffActive);
-  row(translate('debug.sensorsEngineDisabled'), engine.disabled ? translate('common.yes') : translate('common.no'), !!engine.disabled);
-  row(translate('debug.sensorsEnginePolicyLoaded'), engine.policyLoaded ? translate('common.yes') : translate('common.no'), !engine.policyLoaded);
-  row(translate('debug.sensorsEngineInFlight'), engine.inFlight ? translate('common.yes') : translate('common.no'));
-  row(translate('debug.sensorsEngineConcurrency'), sensorDebugDash(engine.maxConcurrency) + ' / pendentes: ' + sensorDebugDash(engine.pendingSamples));
-  row(translate('debug.sensorsEngineTick'), sensorDebugDash(engine.scheduleTickSeconds) + 's  |  flush: ' + sensorDebugDash(engine.flushIntervalSeconds) + 's  |  padrão: ' + sensorDebugDash(engine.defaultIntervalSeconds) + 's');
-  row(translate('debug.sensorsEngineLastError'), engine.lastError ? String(engine.lastError) : '—', !!engine.lastError);
+    : translate('debug.sensorsEngineBackoffOff'), { alert: !!engine.backoffActive });
+  item(translate('debug.sensorsEngineDisabled'), engine.disabled ? translate('common.yes') : translate('common.no'), { alert: !!engine.disabled });
+  item(translate('debug.sensorsEnginePolicyLoaded'), engine.policyLoaded ? translate('common.yes') : translate('common.no'), { alert: !engine.policyLoaded });
+  item(translate('debug.sensorsEngineInFlight'), engine.inFlight ? translate('common.yes') : translate('common.no'));
 
-  wrap.innerHTML = rows.join('');
+  // Concorrência: antes a barra separadora e o rótulo de pendentes eram
+  // concatenados em PT-BR dentro do JS. Agora os dois números viram itens
+  // próprios da grade, e TODO o texto vem de chaves i18n.
+  item(translate('debug.sensorsEngineConcurrency'), sensorDebugDash(engine.maxConcurrency));
+  item(translate('debug.sensorsEnginePending'), sensorDebugDash(engine.pendingSamples));
+
+  // Cadência: três itens (cadência / flush / padrão) em vez de uma string
+  // concatenada com separadores — os literais PT-BR somem por construção.
+  item(translate('debug.sensorsEngineTick'), sensorDebugSeconds(engine.scheduleTickSeconds));
+  item(translate('debug.sensorsEngineFlush'), sensorDebugSeconds(engine.flushIntervalSeconds));
+  item(translate('debug.sensorsEngineDefault'), sensorDebugSeconds(engine.defaultIntervalSeconds));
+
+  item(translate('debug.sensorsEngineLastError'), engine.lastError ? String(engine.lastError) : '—',
+    { alert: !!engine.lastError, wide: true });
+
+  wrap.innerHTML = '<div class="sensor-engine-grid">' + rows.join('') + '</div>';
+}
+
+// Estado vazio do painel: um beco sem saída não ajuda o operador. Além do
+// título e da explicação, apontamos o PRÓXIMO PASSO concreto, escolhido pelo
+// estado do motor:
+//   - policy ainda não carregada -> o servidor não entregou a lista, então a
+//     ação certa é "Ressincronizar policy";
+//   - policy carregada e lista vazia -> o servidor decidiu que não há sensor
+//     para este agente, então a ação é forçar uma coleta.
+// O painel continua sem decidir severidade: só descreve o que o motor informou.
+function sensorDebugEmptyState(snap) {
+  var engine = (snap && snap.engine) || {};
+  var hintKey = engine.policyLoaded ? 'debug.sensorsEmptyHintLoaded' : 'debug.sensorsEmptyHintUnloaded';
+  var hintLabelKey = engine.policyLoaded ? 'debug.sensorsRunAll' : 'debug.sensorsResync';
+  return '<div class="sensor-empty-state">' +
+    '<p class="sensor-empty-title">' + sensorDebugEscape(translate('debug.sensorsEmptyTitle')) + '</p>' +
+    '<p class="sensor-empty-text">' + sensorDebugEscape(translate('debug.sensorsEmpty')) + '</p>' +
+    '<p class="sensor-empty-hint">' + sensorDebugEscape(translate(hintKey, { action: translate(hintLabelKey) })) + '</p>' +
+    '</div>';
 }
 
 function sensorDebugRenderRows(snap) {
@@ -451,7 +496,7 @@ function sensorDebugRenderRows(snap) {
     tbody.innerHTML = '';
     wrap.classList.add('hidden');
     empty.classList.remove('hidden');
-    empty.innerHTML = '<p data-i18n="debug.sensorsEmpty">' + sensorDebugEscape(translate('debug.sensorsEmpty')) + '</p>';
+    empty.innerHTML = sensorDebugEmptyState(snap);
     return;
   }
 
@@ -488,14 +533,26 @@ function sensorDebugRenderRows(snap) {
       '<td>' + sensorDebugEscape(sensorDebugTime(sensor.lastRunAt)) + '</td>' +
       '<td>' + sensorDebugEscape(script) +
       (!sensor.scriptCached ? ' <span class="sensor-flag">' + sensorDebugEscape(translate('debug.sensorsResyncHint')) + '</span>' : '') + '</td>' +
-      '<td>' + sensorDebugEscape(sensorDebugChannelsText(sensor)) + '</td>' +
+      // Célula de canais: sensorDebugChannelsText pode devolver vazio quando a
+      // policy declara canais sem chave; o '—' evita a célula em branco, que o
+      // operador lê como falha de renderização.
+      '<td>' + sensorDebugEscape(sensorDebugDash(sensorDebugChannelsText(sensor))) + '</td>' +
       '<td class="actions">' +
-      '<button type="button" class="btn subtle" data-sensor-run="' + sensorDebugEscape(sensor.sensorId) + '" data-i18n="debug.sensorsRunNow">' + sensorDebugEscape(translate('debug.sensorsRunNow')) + '</button>' +
-      '<button type="button" class="btn subtle" data-sensor-details="' + detailsId + '" data-i18n="debug.sensorsDetails">' + sensorDebugEscape(translate('debug.sensorsDetails')) + '</button>' +
+      '<button type="button" class="btn subtle" data-sensor-run="' + sensorDebugEscape(sensor.sensorId) + '"' +
+      ' data-i18n="debug.sensorsRunNow"' +
+      ' title="' + sensorDebugEscape(translate('debug.sensorsRunNowHint')) + '"' +
+      ' aria-label="' + sensorDebugEscape(translate('debug.sensorsRunNowHint')) + '">' +
+      sensorDebugEscape(translate('debug.sensorsRunNow')) + '</button>' +
+      '<button type="button" class="btn subtle" data-sensor-details="' + detailsId + '"' +
+      ' data-i18n="debug.sensorsDetails"' +
+      ' aria-expanded="false" aria-controls="' + detailsId + '"' +
+      ' title="' + sensorDebugEscape(translate('debug.sensorsDetailsHint')) + '"' +
+      ' aria-label="' + sensorDebugEscape(translate('debug.sensorsDetailsHint')) + '">' +
+      sensorDebugEscape(translate('debug.sensorsDetails')) + '</button>' +
       '</td>' +
       '</tr>' +
       '<tr class="sensor-detail-row"><td colspan="10">' +
-      '<div id="' + detailsId + '" class="sensor-detail hidden">' + sensorDebugRenderSensorDetail(sensor) + '</div>' +
+      '<div id="' + detailsId + '" class="sensor-detail hidden" aria-hidden="true">' + sensorDebugRenderSensorDetail(sensor) + '</div>' +
       '</td></tr>';
   }).join('');
 }
@@ -562,6 +619,7 @@ function sensorDebugRenderSensorDetail(sensor) {
 function sensorDebugRenderHistory(snap) {
   var wrap = sensorDebugEl('sensorDebugHistoryWrap');
   var body = sensorDebugEl('sensorDebugHistoryBody');
+  var totalEl = sensorDebugEl('sensorDebugHistoryTotal');
   if (!wrap || !body) return;
 
   var items = [];
@@ -575,7 +633,14 @@ function sensorDebugRenderHistory(snap) {
   if (!items.length) {
     wrap.classList.add('hidden');
     body.innerHTML = '';
+    if (totalEl) totalEl.textContent = '';
     return;
+  }
+
+  // Total da janela: o backend decide o tamanho da janela (historyWindow) e o
+  // painel só informa quantas coletas vieram nela.
+  if (totalEl) {
+    totalEl.textContent = translate('debug.sensorsHistoryTotal', { count: String(items.length) });
   }
 
   // Mais recente primeiro: a janela vem do backend (historyWindow) e aqui só
@@ -598,7 +663,7 @@ function sensorDebugRenderHistory(snap) {
         if (res.channels[k] !== null && res.channels[k] !== undefined) collected++;
       });
     }
-    return '<div class="sensor-history-item' + (res.error ? ' err' : '') + '">' +
+    return '<div class="sensor-history-item' + (res.error ? ' err' : '') + '" role="listitem">' +
       '<span class="sensor-history-sensor">' + sensorDebugEscape(sensorDebugDash(sensor.name || sensor.key)) + '</span>' +
       '<span class="mono">' + sensorDebugEscape(sensorDebugDash(res.targetKey)) + '</span>' +
       '<span>' + sensorDebugEscape(sensorDebugTime(res.startedAt)) + '</span>' +
@@ -627,13 +692,35 @@ function sensorDebugApi(method, args) {
   return api[method].apply(api, args || []);
 }
 
+// Atualiza o contador do cabeçalho. Fica separado do texto de status porque o
+// status é aria-live: se o número mudasse junto, o leitor de tela anunciaria a
+// mensagem inteira a cada poll de 5 s.
+function sensorDebugSetCount(count) {
+  var el = sensorDebugEl('sensorDebugCount');
+  if (!el) return;
+  el.textContent = String(count);
+  el.setAttribute('title', translate('debug.sensorsCountLabel', { count: String(count) }));
+  el.setAttribute('aria-label', translate('debug.sensorsCountLabel', { count: String(count) }));
+}
+
 function loadSensorDebugSnapshot() {
   try {
     sensorDebugApi('GetSensorDebugSnapshot').then(function (snap) {
       renderSensorDebug(snap);
       var count = (snap && snap.sensors) ? snap.sensors.length : 0;
+      // Contagem como elemento próprio (o texto de status continua sendo o
+      // aria-live da seção; este span é o número destacado do cabeçalho).
+      sensorDebugSetCount(count);
       if (!count) {
-        sensorDebugSetStatus(translate('debug.sensorsStatusEmpty'), '');
+        // Sem sensores quem explica o motivo é o estado vazio, que tem título,
+        // texto e próximo passo. Repetir aqui o mesmo conteúdo em aria-live
+        // fazia o leitor de tela anunciar duas vezes a mesma informação — o
+        // print do painel mostrava exatamente essa duplicação.
+        //
+        // O status continua servindo de aria-live para os casos em que NÃO há
+        // estado vazio visível (erro ao carregar, motor desabilitado, backoff):
+        // ali o status é a única fonte, e por isso o ramo não foi removido.
+        sensorDebugSetStatus('', '');
       } else if (snap && snap.engine && snap.engine.lastError) {
         sensorDebugSetStatus(translate('debug.sensorsStatusEngineError', { error: String(snap.engine.lastError) }), 'error');
       } else if (snap && snap.engine && snap.engine.disabled) {
@@ -645,6 +732,7 @@ function loadSensorDebugSnapshot() {
       }
     }).catch(function (err) {
       renderSensorDebug(null);
+      sensorDebugSetCount(0);
       sensorDebugSetStatus(translate('debug.sensorsStatusError', { error: (err && err.message) || String(err) }), 'error');
     });
   } catch (e) {
@@ -778,7 +866,12 @@ function initSensorDebug() {
         var box = document.getElementById(detailsId);
         if (box) {
           box.classList.toggle('hidden');
-          target.textContent = box.classList.contains('hidden')
+          // O estado precisa existir para leitores de tela, não só na classe
+          // .hidden: aria-expanded no botão e aria-hidden no painel andam juntos.
+          var collapsed = box.classList.contains('hidden');
+          box.setAttribute('aria-hidden', collapsed ? 'true' : 'false');
+          target.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+          target.textContent = collapsed
             ? translate('debug.sensorsDetails')
             : translate('debug.sensorsDetailsHide');
         }
