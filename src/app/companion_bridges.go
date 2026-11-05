@@ -9,6 +9,7 @@ package app
 import (
 	"encoding/json"
 
+	"discovery/app/core/automation"
 	"discovery/app/core/models"
 )
 
@@ -44,6 +45,41 @@ func (a *App) getAutomationStateCompanion() (json.RawMessage, bool) {
 		return nil, false
 	}
 	return json.RawMessage(raw), true
+}
+
+// getSensorDebugSnapshotCompanion busca o retrato do motor de sensores DO
+// SERVIÇO. Retorna (zero, false) quando standalone ou quando o RPC não
+// responde — o caller cai no motor local, como GetAutomationState.
+//
+// Desde a refatoração M5 a UI não roda o loop de sensores: sem este bridge o
+// painel lia um motor que existe mas nunca coleta, e ficava sempre vazio
+// enquanto o serviço coletava normalmente.
+//
+// Desserializa direto para automation.SensorDebugSnapshot: o "data.snapshot"
+// é JSON bruto, sem acoplamento ao tipo da UI.
+func (a *App) getSensorDebugSnapshotCompanion() (automation.SensorDebugSnapshot, bool) {
+	resp, ok := sensorDebugIPCRequest(a, "sensors:debug_snapshot", nil)
+	if !ok {
+		return automation.SensorDebugSnapshot{}, false
+	}
+	data, _ := resp["data"].(map[string]any)
+	if data == nil {
+		return automation.SensorDebugSnapshot{}, false
+	}
+	raw, err := json.Marshal(data["snapshot"])
+	if err != nil {
+		return automation.SensorDebugSnapshot{}, false
+	}
+	var snapshot automation.SensorDebugSnapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return automation.SensorDebugSnapshot{}, false
+	}
+	// O backend manda Sensors não-nil; reforçamos aqui para o painel nunca
+	// precisar tratar null se o contrato evoluir.
+	if snapshot.Sensors == nil {
+		snapshot.Sensors = []automation.SensorDebugView{}
+	}
+	return snapshot, true
 }
 
 // getPendingUpdatesCompanion roda a checagem de updates NO serviço (D2).

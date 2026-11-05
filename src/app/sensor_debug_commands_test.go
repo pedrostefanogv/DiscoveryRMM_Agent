@@ -56,12 +56,14 @@ func TestSensorDebugNilAutomationSvc(t *testing.T) {
 func TestSensorDebugSnapshotIndisponivelValido(t *testing.T) {
 	a := &App{}
 	a.RuntimeFlags.DebugMode = true
+	// RPC mudo: exercita o fallback local (o retorno é o envelope da camada App).
+	stubSensorDebugIPC(t, nil, false)
 
 	snapshot, err := a.GetSensorDebugSnapshot()
 	if err != nil {
 		t.Fatalf("erro inesperado: %v", err)
 	}
-	view, ok := snapshot.(automation.SensorDebugSnapshot)
+	view, ok := snapshot.(sensorDebugSnapshotView)
 	if !ok {
 		t.Fatalf("tipo do snapshot inesperado: %T", snapshot)
 	}
@@ -494,4 +496,224 @@ const sensorDebugPolicyFixture = `{
     "channels": [{"key": "latency_ms", "label": "Latencia", "isPrimary": true}]
   }]
 }`
+
+// ── Origem do snapshot: RPC do serviço vs. motor local (causa raiz M5) ─────
+//
+// O painel ficava SEMPRE vazio porque a UI é companion e não roda o loop de
+// sensores: lia um AutomationSvc que existe mas nunca coleta. Estes testes
+// fixam o roteamento novo — RPC primeiro, local como fallback.
+
+// stubSensorDebugIPC troca o seam do RPC por um fake e restaura no cleanup.
+func stubSensorDebugIPC(t *testing.T, resp map[string]any, ok bool) {
+	t.Helper()
+	anterior := sensorDebugIPCRequest
+	t.Cleanup(func() { sensorDebugIPCRequest = anterior })
+	sensorDebugIPCRequest = func(_ *App, method string, _ map[string]any) (map[string]any, bool) {
+		if method != "sensors:debug_snapshot" {
+			t.Fatalf("método RPC inesperado: %q", method)
+		}
+		return resp, ok
+	}
+}
+
+// snapshotDoServico monta a resposta como ela chega do serviço: o snapshot
+// viaja em data.snapshot como JSON bruto.
+func snapshotDoServico(t *testing.T, snapshot automation.SensorDebugSnapshot) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal do snapshot: %v", err)
+	}
+	return map[string]any{"ok": true, "data": map[string]any{"snapshot": json.RawMessage(raw)}}
+}
+
+// TestSensorDebugSnapshotVemDoServico é o teste da correção: com o RPC
+// respondendo, o painel usa o snapshot DO SERVIÇO — não o motor local, que
+// nesta App de teste está vazio.
+func TestSensorDebugSnapshotVemDoServico(t *testing.T) {
+	a := newSensorDebugAppForRun(t)
+
+	doServico := automation.SensorDebugSnapshot{
+		GeneratedAt: "2026-11-05T00:09:48Z",
+		Engine: automation.SensorEngineStatus{
+			PolicyLoaded: true,
+			LastError:    "backoff de sync", // motivo legítimo do serviço
+		},
+		Sensors: []automation.SensorDebugView{{SensorID: "s1", Name: "Disco C"}},
+	}
+	stubSensorDebugIPC(t, snapshotDoServico(t, doServico), true)
+
+	result, err := a.GetSensorDebugSnapshot()
+	if err != nil {
+		t.Fatalf("GetSensorDebugSnapshot não deve devolver erro: %v", err)
+	}
+	view, ok := result.(sensorDebugSnapshotView)
+	if !ok {
+		t.Fatalf("resultado deveria ser sensorDebugSnapshotView, veio %T", result)
+	}
+	if !view.FromService || view.Origin != sensorDebugOriginService {
+		t.Fatalf("origem deveria ser o serviço: fromService=%t origin=%q", view.FromService, view.Origin)
+	}
+	if len(view.Sensors) != 1 || view.Sensors[0].SensorID != "s1" {
+		t.Fatalf("snapshot deveria ser o do serviço, veio %#v", view.Sensors)
+	}
+	// O LastError do serviço NÃO pode ser trocado por texto local: pode estar
+	// preenchido por um motivo legítimo (backoff de sync, falha de entrega).
+	if view.Engine.LastError != "backoff de sync" {
+		t.Fatalf("LastError do serviço foi sobrescrito: %q", view.Engine.LastError)
+	}
+}
+
+// TestSensorDebugSnapshotFallbackLocal cobre standalone (ou RPC mudo): sem
+// resposta do serviço vale o motor local — comportamento preservado.
+func TestSensorDebugSnapshotFallbackLocal(t *testing.T) {
+	a := newSensorDebugAppForRun(t)
+	stubSensorDebugIPC(t, nil, false) // RPC não respondeu
+
+	result, err := a.GetSensorDebugSnapshot()
+	if err != nil {
+		t.Fatalf("fallback local não deve devolver erro: %v", err)
+	}
+	view, ok := result.(sensorDebugSnapshotView)
+	if !ok {
+		t.Fatalf("resultado deveria ser sensorDebugSnapshotView, veio %T", result)
+	}
+	if view.FromService || view.Origin != sensorDebugOriginLocal {
+		t.Fatalf("origem deveria ser local: fromService=%t origin=%q", view.FromService, view.Origin)
+	}
+}
+
+// TestSensorDebugSnapshotNuncaFalhaComNenhumaVia garante o contrato do painel:
+// sem serviço E sem RPC continua devolvendo snapshot VÁLIDO (nunca erro 500).
+func TestSensorDebugSnapshotNuncaFalhaComNenhumaVia(t *testing.T) {
+	caminhos := []struct {
+		nome string
+		ok   bool
+	}{{"rpc_mudo_sem_motor_local", false}, {"rpc_responde_snapshot_vazio", true}}
+
+	for _, c := range caminhos {
+		t.Run(c.nome, func(t *testing.T) {
+			a := &App{} // nem AutomationSvc nem ipcClient
+			stubSensorDebugIPC(t, snapshotDoServico(t, automation.SensorDebugSnapshot{}), c.ok)
+			result, err := a.GetSensorDebugSnapshot()
+			if err != nil {
+				t.Fatalf("nunca deve devolver erro: %v", err)
+			}
+			view, ok := result.(sensorDebugSnapshotView)
+			if !ok {
+				t.Fatalf("resultado deveria ser sensorDebugSnapshotView, veio %T", result)
+			}
+			if view.Sensors == nil {
+				t.Fatal("Sensors deve ser não-nil para o painel nunca tratar null")
+			}
+			if view.GeneratedAt == "" {
+				t.Fatal("GeneratedAt deve estar preenchido")
+			}
+		})
+	}
+}
+
+// TestSensorDebugRPCLeituraNaoExigeAdmin trava a classificação do gate: o
+// snapshot é LEITURA. Se alguém renomear para um sufixo mutante, isto avisa.
+func TestSensorDebugRPCLeituraNaoExigeAdmin(t *testing.T) {
+	if ipcRequestRequiresAdmin("sensors:debug_snapshot", nil) {
+		t.Fatal("sensors:debug_snapshot é leitura e não deve exigir admin")
+	}
+}
+
+// TestSensorDebugRPCRegistradoNoDispatch garante que o case existe no switch e
+// que o gate não o recusa por engano (leitura pura).
+func TestSensorDebugRPCRegistradoNoDispatch(t *testing.T) {
+	a := newSensorDebugAppForRun(t)
+	resp := a.handleIPCRequest(nil, map[string]any{"method": "sensors:debug_snapshot"})
+	if code, _ := resp["code"].(string); code == "ipc_unauthorized" {
+		t.Fatal("método de leitura não deveria ser recusado pelo gate de admin")
+	}
+	if msg, _ := resp["error"].(string); msg == "método desconhecido" {
+		t.Fatal("sensors:debug_snapshot deve estar registrado no switch de handleIPCRequest")
+	}
+	if resp["ok"] != true {
+		t.Fatalf("com motor presente o RPC deve responder ok=true, veio %#v", resp)
+	}
+	data, _ := resp["data"].(map[string]any)
+	if data == nil || data["snapshot"] == nil {
+		t.Fatalf("resposta deve trazer data.snapshot, veio %#v", resp)
+	}
+}
+// ── Recusa honesta em modo companion (mutantes não roteados) ───────────────
+//
+// Em companion a UI não roda o loop de sensores (M5). Chamar o motor local
+// devolveria "coleta agendada" sem coletar nada — pior que um erro, porque o
+// operador acredita no sucesso. Estes testes fixam a recusa explícita.
+
+// appCompanion marca a App como companion (ipcClient != nil) sem abrir pipe:
+// os métodos mutantes só OLHAM o campo para decidir recusar.
+func appCompanion() *App {
+	return &App{ipcClient: &IPCClient{}}
+}
+
+func TestSensorDebugMutantesRecusamEmCompanion(t *testing.T) {
+	a := appCompanion()
+	a.AutomationSvc = newSensorDebugAppForRun(t).AutomationSvc
+
+	casos := []struct {
+		nome    string
+		call    func() (any, error)
+		palavra string
+	}{
+		{"run_now", func() (any, error) { return a.RunSensorsNowDebug("[]") }, "coleta imediata"},
+		{"refresh_policy", func() (any, error) { return a.RefreshSensorPolicyDebug() }, "ressincronizacao de policy"},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			result, err := c.call()
+			if err != nil {
+				t.Fatalf("recusa nao deve ser erro de transporte (senao vira 500): %v", err)
+			}
+			payload, ok := result.(map[string]any)
+			if !ok {
+				t.Fatalf("resultado deveria ser map[string]any, veio %T", result)
+			}
+			if got := payload["scheduled"]; got != 0 {
+				t.Fatalf("nao deveria agendar nada em companion: scheduled=%v", got)
+			}
+			if routed, _ := payload["routedToService"].(bool); routed {
+				t.Fatal("routedToService deveria ser false (nada foi roteado nesta rodada)")
+			}
+			msg, _ := payload["message"].(string)
+			if !strings.Contains(msg, "DiscoveryAgent") {
+				t.Fatalf("mensagem deveria dizer que roda no servico: %q", msg)
+			}
+			if !strings.Contains(msg, c.palavra) {
+				t.Fatalf("mensagem deveria citar %q: %q", c.palavra, msg)
+			}
+		})
+	}
+}
+
+// Em standalone (sem ipcClient) o caminho local continua valendo: a recusa NAO
+// pode vazar para quem roda o motor de verdade.
+func TestSensorDebugMutantesSeguemLocaisEmStandalone(t *testing.T) {
+	a := newSensorDebugAppForRun(t)
+	if a.ipcClient != nil {
+		t.Fatal("app de teste nao deveria ter ipcClient")
+	}
+
+	result, err := a.RunSensorsNowDebug("[]")
+	if err != nil {
+		t.Fatalf("standalone com policy vazia nao deve devolver erro: %v", err)
+	}
+	payload, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("resultado deveria ser map[string]any, veio %T", result)
+	}
+	if _, temFlag := payload["routedToService"]; temFlag {
+		t.Fatal("standalone nao deve emitir routedToService (isso e da recusa companion)")
+	}
+	msg, _ := payload["message"].(string)
+	if strings.Contains(msg, "DiscoveryAgent") {
+		t.Fatalf("standalone nao deveria recusar: %q", msg)
+	}
+}
 

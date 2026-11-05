@@ -180,6 +180,73 @@ func sensorDebugEmptySnapshot(debugMode bool, lastError string) automation.Senso
 	}
 }
 
+// SensorDebugSnapshotCore monta o snapshot a partir do MOTOR DESTE PROCESSO
+// (o serviço), sem tentar o RPC. É o que o lado serviço expõe em
+// "sensors:debug_snapshot" e o que o painel usa em standalone.
+//
+// Nunca devolve erro: o painel precisa renderizar sempre. Quando o motor não
+// está disponível devolve snapshot vazio e VÁLIDO com o motivo em
+// Engine.LastError.
+func (a *App) SensorDebugSnapshotCore() automation.SensorDebugSnapshot {
+	if a == nil {
+		return sensorDebugEmptySnapshot(false, sensorDebugCoreUnavailable)
+	}
+	debugMode := a.RuntimeFlags.DebugMode
+	if a.AutomationSvc == nil {
+		return sensorDebugEmptySnapshot(debugMode, sensorDebugCoreUnavailable)
+	}
+	snapshot := a.AutomationSvc.SensorDebugSnapshot()
+	snapshot.DebugMode = debugMode
+	return snapshot
+}
+
+// sensorDebugSnapshotView é o envelope que o painel recebe. Ele embute o
+// snapshot do núcleo e acrescenta a ORIGEM do dado.
+//
+// Por que um envelope em vez de um campo dentro de SensorDebugSnapshot: o tipo
+// do núcleo vive em app/core/automation, que está FORA do escopo desta task.
+// O envelope mantém o contrato existente intacto (o frontend lê os mesmos
+// campos, agora um nível abaixo) e não obriga a mudar o núcleo.
+type sensorDebugSnapshotView struct {
+	automation.SensorDebugSnapshot
+	// FromService diz se o retrato veio do motor do SERVIÇO (true) ou do
+	// motor local/standalone (false). Sem isso o operador não distingue
+	// "policy vazia de verdade" de "estou olhando o processo errado".
+	FromService bool `json:"fromService"`
+	// Origin é o rótulo legível da origem ("servico"/"local").
+	Origin string `json:"origin,omitempty"`
+}
+
+// sensorDebugSnapshotView monta o envelope com a origem do dado.
+func (a *App) sensorDebugSnapshotView(snapshot automation.SensorDebugSnapshot, origin string) sensorDebugSnapshotView {
+	// O painel lê GeneratedAt para saber a IDADE do retrato. Um zero-value
+	// passaria como "nunca gerado" mesmo com o motor respondendo, então
+	// preenchemos quando o núcleo não trouxe (contrato: o campo é obrigatório).
+	if strings.TrimSpace(snapshot.GeneratedAt) == "" {
+		snapshot.GeneratedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	return sensorDebugSnapshotView{
+		SensorDebugSnapshot: snapshot,
+		FromService:         origin == sensorDebugOriginService,
+		Origin:              origin,
+	}
+}
+// sensorDebugIPCRequest é o ponto de indireção do RPC do painel.
+//
+// Existe SÓ para teste: ipcRequest exige um *IPCClient ligado a um named pipe
+// real, o que torna o caminho companion inalcançável num teste unitário. Com
+// nil (produção) delega ao ipcRequest normal — custo zero, comportamento igual.
+var sensorDebugIPCRequest = func(a *App, method string, payload map[string]any) (map[string]any, bool) {
+	return a.ipcRequest(method, payload)
+}
+// Rótulos da origem do dado. São constantes para o lado serviço e a UI não
+// divergirem do texto que o teste verifica.
+const (
+	sensorDebugCoreUnavailable = "motor de sensores ainda nao esta pronto (automacao em inicializacao)"
+	sensorDebugOriginService   = "servico"
+	sensorDebugOriginLocal     = "local"
+)
+
 // GetSensorDebugSnapshot devolve o snapshot do motor de sensores para o painel
 // de debug (GET /api/GetSensorDebugSnapshot).
 //
@@ -189,19 +256,47 @@ func sensorDebugEmptySnapshot(debugMode bool, lastError string) automation.Senso
 // sem nenhuma informação.
 func (a *App) GetSensorDebugSnapshot() (any, error) {
 	if a == nil {
-		return sensorDebugEmptySnapshot(false, "servico de automacao indisponivel"), nil
+		return a.sensorDebugSnapshotView(sensorDebugEmptySnapshot(false, "servico de automacao indisponivel"), sensorDebugOriginLocal), nil
 	}
-	debugMode := a.RuntimeFlags.DebugMode
-	if a.AutomationSvc == nil {
-		// Snapshot vazio porém válido: o operador abre este painel justamente
-		// quando algo está errado, e um 500 o deixaria sem informação alguma.
-		return sensorDebugEmptySnapshot(debugMode, "motor de sensores ainda nao esta pronto (automacao em inicializacao)"), nil
+	// CAUSA RAIZ (M5): a UI é companion e NÃO roda o loop de sensores — o
+	// AutomationSvc local existe mas nunca coleta. O motor de verdade roda no
+	// serviço, então o RPC vem PRIMEIRO, exatamente como GetAutomationState
+	// (automation.go:12-25). Sem ele o painel ficava permanentemente vazio
+	// enquanto o serviço coletava normalmente.
+	if snapshot, ok := a.getSensorDebugSnapshotCompanion(); ok {
+		// NÃO sobrescrevemos snapshot.Engine.LastError: o serviço pode tê-lo
+		// preenchido por um motivo legítimo (backoff de sync, falha de
+		// entrega). Trocá-lo por um texto local mostraria erro onde não há.
+		return a.sensorDebugSnapshotView(snapshot, sensorDebugOriginService), nil
 	}
-	snapshot := a.AutomationSvc.SensorDebugSnapshot()
-	snapshot.DebugMode = debugMode
-	return snapshot, nil
+	// Standalone (ou RPC não respondeu): motor local.
+	return a.sensorDebugSnapshotView(a.SensorDebugSnapshotCore(), sensorDebugOriginLocal), nil
 }
 
+// sensorDebugCompanionRefusal devolve uma recusa PT-BR quando o painel roda em
+// modo companion e a ação pedida é MUTANTE.
+//
+// Por que recusar em vez de tentar: em companion a UI não roda o loop de
+// sensores (M5). Chamar o AutomationSvc local "funciona" — devolve uma
+// contagem e uma mensagem de sucesso — mas NÃO coleta nada, porque quem coleta
+// é o serviço. Isso é pior que um erro: o operador clica em "Coletar agora",
+// lê "coleta agendada" e conclui que a coleta foi agendada.
+//
+// Roteá-la por RPC exigiria um método mutante novo, que precisa de entrada
+// explícita em ipcKnownMutatingMethods (ipc_auth.go) para exigir canal admin +
+// token — decisão adiada pelo Lead para uma rodada própria. Até lá, o painel
+// diz a verdade em vez de fingir.
+//
+// Devolve (mensagem, true) quando deve recusar; ("", false) quando pode seguir
+// no caminho local normal.
+func (a *App) sensorDebugCompanionRefusal(acao string) (string, bool) {
+	if a == nil || a.ipcClient == nil {
+		return "", false
+	}
+	return fmt.Sprintf(
+		"%s roda no servico DiscoveryAgent, nao nesta janela. Use o console para disparar agora ou aguarde o proximo ciclo do motor — a coleta continua acontecendo normalmente no servico.",
+		acao), true
+}
 // RunSensorsNowDebug agenda a coleta imediata de sensores a partir do painel de
 // debug (POST /api/RunSensorsNowDebug).
 //
@@ -212,6 +307,15 @@ func (a *App) GetSensorDebugSnapshot() (any, error) {
 // forceSync=true sincroniza a policy de sensores ANTES de agendar, que é o que
 // o operador quer logo depois de editar um sensor no console.
 func (a *App) RunSensorsNowDebug(idsJSON string) (any, error) {
+	// Em companion o motor que coleta é o do SERVIÇO. Não adianta marcar o
+	// motor local: ele nunca roda (M5). Dizemos isso ao operador em vez de
+	// devolver uma mensagem de sucesso vazia.
+	if msg, recusar := a.sensorDebugCompanionRefusal("a coleta imediata"); recusar {
+		if a != nil {
+			a.Logs.Append("[sensores] debug: run-now recusado em modo companion (o motor roda no servico)")
+		}
+		return map[string]any{"scheduled": 0, "message": msg, "routedToService": false}, nil
+	}
 	svc, err := a.sensorDebugService()
 	if err != nil {
 		if a != nil {
@@ -245,6 +349,14 @@ func (a *App) RunSensorsNowDebug(idsJSON string) (any, error) {
 // ids=nil agenda todos; forceSync=true garante o sync da policy antes de marcar
 // os sensores como devidos.
 func (a *App) RefreshSensorPolicyDebug() (any, error) {
+	// Mesmo raciocínio do run-now: em companion o sync de policy roda no
+	// serviço. Recusar com clareza é melhor que "sincronizada" sem efeito.
+	if msg, recusar := a.sensorDebugCompanionRefusal("a ressincronizacao de policy"); recusar {
+		if a != nil {
+			a.Logs.Append("[sensores] debug: refresh de policy recusado em modo companion (o motor roda no servico)")
+		}
+		return map[string]any{"scheduled": 0, "message": msg, "routedToService": false}, nil
+	}
 	svc, err := a.sensorDebugService()
 	if err != nil {
 		if a != nil {

@@ -68,6 +68,12 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCTailLogs(int(count))
 	case "automation:state":
 		return a.ipcRPCAutomationState()
+	// Painel de sensores do modo debug: a UI é companion e NÃO roda o loop de
+	// sensores (M5), então o retrato do motor tem de vir daqui. Sufixo
+	// "_snapshot" não casa nenhum sufixo mutante de isIPCMutatingMethod
+	// (:414-419), logo é LEITURA e não exige admin — igual a automation:state.
+	case "sensors:debug_snapshot":
+		return a.ipcRPCSensorsDebugSnapshot()
 	case "updates:scan":
 		return a.ipcRPCUpdatesScan()
 	// Loja de apps (companion → serviço): a instalação roda no SERVIÇO, que é
@@ -273,6 +279,30 @@ func (a *App) ipcRPCAutomationState() map[string]any {
 		return map[string]any{"ok": false, "error": err.Error()}
 	}
 	return map[string]any{"ok": true, "data": map[string]any{"state": json.RawMessage(raw)}}
+}
+// ipcRPCSensorsDebugSnapshot devolve o retrato do motor de sensores DO SERVIÇO.
+//
+// Existe porque, desde a refatoração M5, a UI companion não inicia o
+// runSensorsLoop (app.go: RunCore retorna antes do runStagedStartup no ramo
+// companion): o AutomationSvc da UI existe mas nunca coleta, e ler só ele
+// deixava o painel permanentemente vazio enquanto o serviço coletava normal.
+//
+// Serializado como JSON bruto pelo mesmo motivo de ipcRPCAutomationState: não
+// acoplar o contrato IPC ao tipo da UI.
+//
+// LEITURA PURA: nunca devolve erro de transporte por ausência de motor — um
+// snapshot vazio e válido é mais útil ao painel que um erro, e o motivo vai em
+// Engine.LastError. Só falha se o marshal do JSON falhar (não deve ocorrer).
+func (a *App) ipcRPCSensorsDebugSnapshot() map[string]any {
+	if a == nil {
+		return map[string]any{"ok": false, "error": "app indisponível"}
+	}
+	snapshot := a.SensorDebugSnapshotCore()
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	return map[string]any{"ok": true, "data": map[string]any{"snapshot": json.RawMessage(raw)}}
 }
 
 // ipcRPCUpdatesScan roda a checagem de atualizações (winget/choco) NO serviço
