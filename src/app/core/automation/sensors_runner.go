@@ -557,10 +557,17 @@ func (s *Service) runSensorsLoop(ctx context.Context, onBeat func()) {
 	flushTicker := time.NewTicker(sensorFlushInterval)
 	defer flushTicker.Stop()
 
-	// Arranque: recupera a policy local (continuidade após restart) e faz o
-	// primeiro sync. Feito DENTRO da goroutine do loop para não atrasar o Run.
+	// Arranque: recupera a policy local (continuidade após restart). O sync com
+	// o servidor NÃO bloqueia a coleta: ele roda em goroutine própria, com o
+	// timeout de rede próprio (sensorSyncTimeout). Antes ele era síncrono aqui e
+	// um servidor lento/inalcançável travava o motor por até 45s ANTES do
+	// primeiro dispatch — com a UI já podendo abrir e mostrar "nenhuma coleta
+	// registrada", mesmo com policy local válida em memória.
+	//
+	// O sync continua sendo disparado; só deixou de ser pré-requisito para o
+	// primeiro ciclo de coleta. O ticker de 15s reavalia o que está devido.
 	s.ensurePersistedSensorsLoaded()
-	s.refreshSensors(ctx, true)
+	go s.refreshSensors(ctx, true)
 	s.dispatchDueSensors(ctx)
 
 	for {
