@@ -488,12 +488,25 @@ a:hover { text-decoration: underline; }
   flex: 1; overflow-y: auto; overflow-x: hidden;
   padding: 20px 22px 28px;
   scroll-behavior: smooth;
+  /* Container de rolagem das abas. Precisa ser FLEX COLUMN para que o <section>
+     filho possa CRESCER e preencher a altura util: numa caixa block as
+     propriedades de flex dos filhos sao inertes. Sem isto o conteudo ocupa so a
+     altura natural e sobra area morta embaixo (defeito medido: 238px no Status,
+     555px nos Sensores, 659px no Suporte, com a janela 808px).
+     min-height:0 permite o filho encolher abaixo do conteudo quando a pagina
+     precisa rolar em vez de esticar. E o mesmo padrao que o #storeView ja usava
+     em components.css:547 (agora redundante, mantido por seguranca). */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .page-content > section {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* flex:1 e o que faz o conteudo ocupar a altura toda em vez de so a natural. */
+  flex: 1;
 }
 
 .page-content::-webkit-scrollbar { width: 6px; }
