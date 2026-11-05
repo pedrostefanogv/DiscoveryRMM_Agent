@@ -461,6 +461,15 @@ a:hover { text-decoration: underline; }
 .main-wrap {
   flex: 1; display: flex; flex-direction: column;
   overflow: hidden; background: transparent;
+  /* Folga para a faixa NATIVA de redimensionamento da janela frameless
+     (WM_NCHITTEST: SM_CXSIZEFRAME 4 + SM_CXPADDEDBORDER 4 = 8 DIP por aresta).
+     Sem folga, a caixa de conteudo encosta na borda da janela e o cursor nunca
+     cai na faixa - o resize fica impossivel nas abas cujo conteudo preenche a
+     altura. A folga fica AQUI no shell (e nao em mount de aba especifica) para
+     TODAS as abas terem a mesma area de visualizacao: margem por aba fazia o
+     conteudo mudar de tamanho ao trocar de aba. */
+  margin-right: 10px;
+  margin-bottom: 8px;
 }
 
 #topbarMount {

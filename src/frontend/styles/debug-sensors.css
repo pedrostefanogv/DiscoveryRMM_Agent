@@ -927,10 +927,14 @@
      aresta inferior; esta e a mais alta do app (3 cartoes + tabela + historico)
      e sempre preenche a altura toda.
 
-     margin (e nao padding) porque precisa mover a CAIXA do #sensorView, que e
-     quem encosta na borda. O valor 10px cobre os 8 DIP da faixa com 2 de folga. */
-  margin-right: 10px;
-  margin-bottom: 8px;
+     margin (e nao padding) porque precisa mover a CAIXA. O valor 10px cobre os 8
+     DIP da faixa com 2 de folga.
+
+     ATUALIZACAO (rodada seguinte): a folga MIGROU para o .main-wrap (base.css) e
+     passou a valer para TODAS as abas. Motivo: margem so no mount desta aba fazia o
+     conteudo de Sensores ficar 10px mais estreito e 8px mais baixo que o das outras
+     abas - o usuario via a area de visualizacao mudar de tamanho ao trocar de aba.
+     Sem as margens aqui, o mount fica identico aos demais e a folga e' unica. */
 }
 
 /* Em telas estreitas o cabecalho vira uma coluna: titulo acima, acoes abaixo. */
