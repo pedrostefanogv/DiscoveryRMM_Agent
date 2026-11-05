@@ -11,11 +11,22 @@ func fixedClock(t0 time.Time) (*time.Time, func() time.Time) {
 	return &cur, func() time.Time { return cur }
 }
 
+// manualGate cria um gate em modo MANUAL com teto fixo — o cenário de um
+// preset escolhido pelo operador. É o modo usado para testar a MECÂNICA do gate
+// (fechar/abrir/histerese), porque nele o teto não se move sozinho.
+func manualGate(ceiling float64, closeAfter int) *BandwidthGate {
+	return NewBandwidthGate(BandwidthGateConfig{
+		Mode:              BandwidthManual,
+		CeilingKbps:       ceiling,
+		CloseAfterWindows: closeAfter,
+	})
+}
+
 func TestBandwidthGateDisabledByDefault(t *testing.T) {
-	// Teto 0 => gate permanentemente aberto (comportamento anterior preservado).
-	g := NewBandwidthGate(BandwidthGateConfig{CeilingKbps: 0})
+	// Default do agent = modo HD, sem teto (comportamento anterior preservado).
+	g := NewBandwidthGate(defaultBandwidthGateConfig())
 	if g.Enabled() {
-		t.Fatal("gate deveria estar desligado com teto 0")
+		t.Fatal("gate deveria estar desligado no default (modo hd)")
 	}
 	for i := 0; i < 10; i++ {
 		g.Observe(999999, 30)
@@ -23,10 +34,13 @@ func TestBandwidthGateDisabledByDefault(t *testing.T) {
 	if g.Paused() {
 		t.Fatal("gate desligado nunca deve pausar a captura")
 	}
+	if g.Mode() != BandwidthHD {
+		t.Fatalf("modo default = %q, want hd", g.Mode())
+	}
 }
 
 func TestBandwidthGateClosesAboveCeiling(t *testing.T) {
-	g := NewBandwidthGate(BandwidthGateConfig{CeilingKbps: 5000, CloseAfterWindows: 1})
+	g := manualGate(5000, 1)
 	g.Observe(6000, 30)
 	if !g.Paused() {
 		t.Fatal("acima do teto com frames chegando deve fechar o gate")
@@ -34,7 +48,7 @@ func TestBandwidthGateClosesAboveCeiling(t *testing.T) {
 }
 
 func TestBandwidthGateStaysOpenBelowCeiling(t *testing.T) {
-	g := NewBandwidthGate(BandwidthGateConfig{CeilingKbps: 5000})
+	g := manualGate(5000, 1)
 	for i := 0; i < 5; i++ {
 		g.Observe(3000, 30)
 	}
@@ -46,7 +60,7 @@ func TestBandwidthGateStaysOpenBelowCeiling(t *testing.T) {
 // Tela ociosa (recvFrames == 0) NÃO é congestionamento: bitrate baixo com a tela
 // parada é o esperado. A janela deve ser ignorada.
 func TestBandwidthGateIgnoresIdleScreen(t *testing.T) {
-	g := NewBandwidthGate(BandwidthGateConfig{CeilingKbps: 5000, CloseAfterWindows: 1})
+	g := manualGate(5000, 1)
 	g.Observe(0, 0) // ocioso, bitrate zero
 	if g.Paused() {
 		t.Fatal("tela ociosa não deve fechar o gate")
@@ -68,6 +82,7 @@ func TestBandwidthGateIgnoresIdleScreen(t *testing.T) {
 func TestBandwidthGateHysteresisReopensOnlyWellBelow(t *testing.T) {
 	// Teto 10000, reabre abaixo de 70% = 7000.
 	g := NewBandwidthGate(BandwidthGateConfig{
+		Mode:              BandwidthManual,
 		CeilingKbps:       10000,
 		ReopenFactor:      0.7,
 		CloseAfterWindows: 1,
@@ -100,7 +115,7 @@ func TestBandwidthGateHysteresisReopensOnlyWellBelow(t *testing.T) {
 }
 
 func TestBandwidthGateCloseAfterWindows(t *testing.T) {
-	g := NewBandwidthGate(BandwidthGateConfig{CeilingKbps: 5000, CloseAfterWindows: 3})
+	g := manualGate(5000, 3)
 	g.Observe(6000, 30)
 	if g.Paused() {
 		t.Fatal("1/3 janelas acima não deve fechar ainda")
@@ -117,7 +132,7 @@ func TestBandwidthGateCloseAfterWindows(t *testing.T) {
 
 // Uma janela boa no meio zera a contagem de excesso (não é "acumulativo").
 func TestBandwidthGateOverCounterResets(t *testing.T) {
-	g := NewBandwidthGate(BandwidthGateConfig{CeilingKbps: 5000, CloseAfterWindows: 2})
+	g := manualGate(5000, 2)
 	g.Observe(6000, 30) // over=1
 	g.Observe(1000, 30) // bom => over=0
 	g.Observe(6000, 30) // over=1
@@ -129,6 +144,7 @@ func TestBandwidthGateOverCounterResets(t *testing.T) {
 func TestBandwidthGateReopenHoldAntiFlap(t *testing.T) {
 	nowPtr, clock := fixedClock(time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC))
 	g := NewBandwidthGate(BandwidthGateConfig{
+		Mode:              BandwidthManual,
 		CeilingKbps:       10000,
 		ReopenFactor:      0.7,
 		CloseAfterWindows: 1,
@@ -166,15 +182,16 @@ func TestBandwidthGateReopenHoldAntiFlap(t *testing.T) {
 func TestBandwidthGateStats(t *testing.T) {
 	nowPtr, clock := fixedClock(time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC))
 	g := NewBandwidthGate(BandwidthGateConfig{
-		CeilingKbps: 5000, ReopenFactor: 0.7, CloseAfterWindows: 1, OpenAfterWindows: 1,
+		Mode: BandwidthManual, CeilingKbps: 5000, ReopenFactor: 0.7,
+		CloseAfterWindows: 1, OpenAfterWindows: 1,
 		ReopenHoldFor: time.Millisecond,
 	})
 	g.SetClock(clock)
 
-	g.Observe(6000, 30)  // fecha
-	g.Observe(1000, 30)  // reabre
+	g.Observe(6000, 30) // fecha
+	g.Observe(1000, 30) // reabre
 	*nowPtr = nowPtr.Add(time.Second)
-	g.Observe(6000, 30)  // fecha de novo
+	g.Observe(6000, 30) // fecha de novo
 
 	closes, opens, last := g.Stats()
 	if closes != 2 {
@@ -189,7 +206,7 @@ func TestBandwidthGateStats(t *testing.T) {
 }
 
 func TestBandwidthGateSetCeilingRuntime(t *testing.T) {
-	g := NewBandwidthGate(BandwidthGateConfig{CeilingKbps: 5000, CloseAfterWindows: 1})
+	g := manualGate(5000, 1)
 	g.Observe(9000, 30)
 	if !g.Paused() {
 		t.Fatal("deveria fechar")
@@ -213,6 +230,7 @@ func TestBandwidthGateSetCeilingRuntime(t *testing.T) {
 func TestBandwidthGateInvalidConfigGetsDefaults(t *testing.T) {
 	// ReopenFactor fora de (0,1) e contadores <=0 devem cair nos defaults.
 	g := NewBandwidthGate(BandwidthGateConfig{
+		Mode:              BandwidthManual,
 		CeilingKbps:       10000,
 		ReopenFactor:      1.5, // inválido
 		CloseAfterWindows: 0,   // inválido

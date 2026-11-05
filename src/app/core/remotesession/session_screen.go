@@ -199,14 +199,14 @@ func NewSessionScreenMonitor(sessionID string, natsStream *NatsStreamHandler, mo
 		inputCtrl:         inputCtrl,
 		// Teto de banda DESLIGADO por padrão (CeilingKbps=0): preserva o
 		// comportamento atual. Ligar exige um limite explícito do operador.
-		bandwidthGate:     NewBandwidthGate(defaultBandwidthGateConfig()),
-		dirtyDetector:     screen.NewDirtyDetector(32),
-		cursorSender:      screen.NewCursorSpriteSender(),
-		cursorStopCh:      make(chan struct{}),
-		stopCh:            make(chan struct{}),
-		doneCh:            make(chan struct{}),
-		lastLogTime:       time.Now(),
-		lastMetricsTime:   time.Now(),
+		bandwidthGate:   NewBandwidthGate(defaultBandwidthGateConfig()),
+		dirtyDetector:   screen.NewDirtyDetector(32),
+		cursorSender:    screen.NewCursorSpriteSender(),
+		cursorStopCh:    make(chan struct{}),
+		stopCh:          make(chan struct{}),
+		doneCh:          make(chan struct{}),
+		lastLogTime:     time.Now(),
+		lastMetricsTime: time.Now(),
 	}, nil
 }
 
@@ -1054,6 +1054,32 @@ func (s *SessionScreen) ResetAutoToProfile() {
 	s.quality.ResetAutoToProfile()
 }
 
+// ConfigureBandwidth aplica a política de teto de banda em runtime (comando
+// "bandwidth" do canal .control). Os limites (AutoMin/Max/Step/ServerMax) são
+// atualizados ANTES do modo, porque a troca de modo já os consulta para
+// clampar o teto. Campo numérico <= 0 significa "preservar o corrente".
+func (s *SessionScreen) ConfigureBandwidth(cfg BandwidthGateConfig) {
+	if s.bandwidthGate == nil {
+		return
+	}
+	if cfg.AutoMinKbps > 0 || cfg.AutoMaxKbps > 0 || cfg.AutoStepKbps > 0 || cfg.ServerMaxKbps > 0 {
+		s.bandwidthGate.SetLimits(cfg.AutoMinKbps, cfg.AutoMaxKbps, cfg.AutoStepKbps, cfg.ServerMaxKbps)
+	}
+	ceiling := cfg.CeilingKbps
+	if ceiling < 0 {
+		ceiling = 0
+	}
+	s.bandwidthGate.SetMode(cfg.Mode, ceiling)
+}
+
+// BandwidthSnapshot devolve o estado atual do gate de banda (log/UI).
+func (s *SessionScreen) BandwidthSnapshot() BandwidthSnapshot {
+	if s.bandwidthGate == nil {
+		return BandwidthSnapshot{}
+	}
+	return s.bandwidthGate.Snapshot()
+}
+
 // consumeRecoveryFrame decide se este frame deve ser um RECOVERY FRAME: um
 // frame COMPLETO em alta qualidade, enviado uma vez após a qualidade voltar ao
 // topo, para limpar o artefato que ficou na tela do viewer enquanto esteve
@@ -1078,8 +1104,14 @@ func (s *SessionScreen) publishMetrics(width, height int, framesSent, framesSkip
 		avgEncodeMs = float64(encodeTimeTotal.Milliseconds()) / float64(framesSent)
 	}
 
+	// Estado do teto de banda (kbps): no modo AUTO o teto se move sozinho, e o
+	// viewer mostra o valor corrente. Vai junto das métricas (mesmo evento) para
+	// não criar um subject novo por um dado que já é periódico.
+	bandwidth := s.BandwidthSnapshot()
+
 	metrics := map[string]any{
 		"eventType":        "metrics",
+		"bandwidth":        bandwidth,
 		"effectiveFps":     q.EffectiveFps(),
 		"profileFps":       q.Fps,
 		"quality":          s.quality.Profile(),

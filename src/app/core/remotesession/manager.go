@@ -175,6 +175,8 @@ func (m *Manager) HandleCommand(ctx context.Context, payload map[string]any) (bo
 		return m.handleStop(ctx, payload)
 	case "quality":
 		return m.handleQuality(ctx, payload)
+	case "bandwidth":
+		return m.handleBandwidth(payload)
 	case "recording_start":
 		return m.handleRecordingStart(ctx, payload)
 	case "recording_stop":
@@ -466,6 +468,71 @@ func (m *Manager) handleStop(_ context.Context, payload map[string]any) (bool, s
 		}
 		return false, "sessao nao encontrada"
 	}
+	return true, ""
+}
+
+// handleBandwidth aplica a POLÍTICA DE TETO DE BANDA vinda do servidor/viewer
+// no canal .control (ação "bandwidth"). É o controle em RUNTIME do gate de
+// captura — separado da qualidade, que apenas muda a compressão.
+//
+// Payload:
+//
+//	{ "action":"bandwidth", "sessionId":"...",
+//	  "mode":"auto"|"hd"|"manual",
+//	  "ceilingKbps": 8000,        // modo manual (0 = sem limite)
+//	  "autoMinKbps": 1000, "autoMaxKbps": 30000, "autoStepKbps": 2000,
+//	  "serverMaxKbps": 0 }        // teto absoluto do servidor (qualquer modo)
+//
+// Todos os campos numéricos são OPCIONAIS: o que não vier preserva o valor
+// corrente, para o viewer poder trocar só o modo sem reenviar a política toda.
+func (m *Manager) handleBandwidth(payload map[string]any) (bool, string) {
+	sessionID := toString(payload["sessionId"])
+	mode := toString(payload["mode"])
+	if sessionID == "" {
+		return false, "payload sem sessionId"
+	}
+	if mode == "" {
+		return false, "payload sem mode"
+	}
+	switch BandwidthMode(mode) {
+	case BandwidthAuto, BandwidthHD, BandwidthManual:
+	default:
+		return false, fmt.Sprintf("modo de banda invalido: %s", mode)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Valida que a sessão existe (a política só se aplica a sessão viva).
+	if _, ok := m.sessions[sessionID]; !ok {
+		return false, "sessao nao encontrada"
+	}
+
+	screen, ok := m.screenSessions[sessionID]
+	if !ok {
+		// Sessão sem stream de tela (terminal/arquivos): a política não se
+		// aplica. Não é erro — o viewer pode enviar antes de a tela subir.
+		return true, "sessao sem stream de tela: politica de banda ignorada"
+	}
+
+	// Campos opcionais: -1/ausente = preserva o corrente.
+	autoMin := toFloat(payload["autoMinKbps"], -1)
+	autoMax := toFloat(payload["autoMaxKbps"], -1)
+	autoStep := toFloat(payload["autoStepKbps"], -1)
+	serverMax := toFloat(payload["serverMaxKbps"], -1)
+	ceiling := toFloat(payload["ceilingKbps"], -1)
+
+	screen.ConfigureBandwidth(BandwidthGateConfig{
+		Mode:          BandwidthMode(mode),
+		CeilingKbps:   ceiling,
+		AutoMinKbps:   autoMin,
+		AutoMaxKbps:   autoMax,
+		AutoStepKbps:  autoStep,
+		ServerMaxKbps: serverMax,
+	})
+
+	log.Printf("[remote-session] bandwidth: sessionId=%s mode=%s ceilingKbps=%.0f",
+		sessionID, mode, screen.BandwidthSnapshot().CeilingKbps)
 	return true, ""
 }
 
@@ -884,6 +951,51 @@ func (m *Manager) sendControl(session *Session, typ string, payload map[string]a
 
 // ── Stream runners (iniciados em goroutines pelo handleStart) ──
 
+// applyBandwidthPolicy lê o bloco "bandwidth" do start (Meta) e configura o
+// teto de banda da sessão de tela.
+//
+// Bloco esperado (todos os campos opcionais):
+//
+//	"bandwidth": { "mode":"auto|hd|manual", "ceilingKbps":8000,
+//	               "autoMinKbps":1000, "autoMaxKbps":30000,
+//	               "autoStepKbps":2000, "serverMaxKbps":0 }
+//
+// Ausente ou inválido: mantém o default do agent (modo hd, sem teto) e apenas
+// registra no log — uma política malformada não pode derrubar a sessão.
+func applyBandwidthPolicy(screenSession *SessionScreen, session *Session) {
+	raw, ok := session.Meta["bandwidth"]
+	if !ok || raw == nil {
+		return // sem política: default do agent (sem teto)
+	}
+	block, ok := raw.(map[string]any)
+	if !ok {
+		log.Printf("[remote-session] bandwidth: bloco invalido (tipo %T) — usando default\n", raw)
+		return
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(toString(block["mode"])))
+	switch BandwidthMode(mode) {
+	case BandwidthAuto, BandwidthHD, BandwidthManual:
+	default:
+		log.Printf("[remote-session] bandwidth: modo %q invalido — usando default\n", mode)
+		return
+	}
+
+	cfg := BandwidthGateConfig{
+		Mode:          BandwidthMode(mode),
+		CeilingKbps:   toFloat(block["ceilingKbps"], -1),
+		AutoMinKbps:   toFloat(block["autoMinKbps"], -1),
+		AutoMaxKbps:   toFloat(block["autoMaxKbps"], -1),
+		AutoStepKbps:  toFloat(block["autoStepKbps"], -1),
+		ServerMaxKbps: toFloat(block["serverMaxKbps"], -1),
+	}
+	screenSession.ConfigureBandwidth(cfg)
+
+	snap := screenSession.BandwidthSnapshot()
+	log.Printf("[remote-session] bandwidth aplicado: mode=%s ceilingKbps=%.0f serverMax=%.0f\n",
+		snap.Mode, snap.CeilingKbps, cfg.ServerMaxKbps)
+}
+
 func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	defer close(session.doneCh)
 
@@ -968,6 +1080,12 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	}
 	screenSession.SetTileMode(tileMode)
 	log.Printf("[remote-session-screen] tile-mode=%v para sessao %s\n", tileMode, session.ID)
+
+	// ── Política de TETO DE BANDA (opcional, vinda do servidor no start) ──
+	// Ausente = default do agent (sem teto): preserva o comportamento anterior.
+	// A política pode ser trocada em runtime pelo canal .control (ação
+	// "bandwidth"), que é como a janela do visualizador alterna Auto/HD/Manual.
+	applyBandwidthPolicy(screenSession, session)
 
 	// Cursor separado (P2) — ATIVADO POR PADRÃO: frame sem cursor + subject .cursor.
 	// Desligar via Meta["cursorSeparate"]:false.
@@ -1522,6 +1640,16 @@ func toInt(v any, defaultVal int) int {
 	default:
 		return defaultVal
 	}
+}
+
+// toFloat converte um valor JSON em float64, devolvendo defaultVal quando o
+// campo está ausente ou não é numérico. Usado pelos campos OPCIONAIS do
+// comando de banda: ausente = preserva o valor corrente (-1 por convenção).
+func toFloat(v any, defaultVal float64) float64 {
+	if f, ok := toFloat64(v); ok {
+		return f
+	}
+	return defaultVal
 }
 
 func toFloat64(v any) (float64, bool) {
