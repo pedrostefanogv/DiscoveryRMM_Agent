@@ -348,13 +348,39 @@
   text-align: right;
 }
 
+/* Botoes da coluna de acoes: MENORES, mas so aqui.
+   O .btn global (components.css:954) usa padding 8px 10px + font-size .88rem e
+   e compartilhado pelo app inteiro — nao tocamos nele. Reduzimos apenas dentro
+   da coluna de acoes desta tabela, onde o rotulo longo ("Coletar agora", que
+   vem de data-i18n e NAO pode ser encurtado) inflava a coluna.
+
+   Piso de area de toque: a task pediu >= ~28px de altura. O padding vertical de
+   5px + font-size .74rem + borda de 1px da ~28px medidos, que e o alvo minimo
+   confortavel; conferido na medicao (abaixo) e nao so no papel. */
 .debug-sensors-table td.actions .btn {
   white-space: nowrap;
+  padding: 5px 7px;
+  font-size: .74rem;
+  line-height: 1.25;
+  /* Sem isto o padding vertical seria ignorado e o botao ficaria com a altura
+     da linha, abaixo do minimo de toque. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+}
+
+/* Dois botoes na mesma celula: espaco curto e controlado entre eles. */
+.debug-sensors-table td.actions .btn + .btn {
+  margin-left: 4px;
 }
 
 /* Sinaliza que ha acoes: o wrapper nao fica vazio sem explicacao. */
 .debug-sensors-table td.actions {
   min-width: 14ch;
+  /* A coluna era a mais larga da tabela por causa dos botoes; com eles menores
+     nao precisa mais reservar tanto espaco. */
+  width: 1%;
 }
 
 /* -------- 6. ESTADOS DE ALERTA POR LINHA --------
@@ -877,6 +903,34 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* -------- Redimensionamento da janela (WM_NCHITTEST) --------
+     A janela e frameless e o resize e NATIVO do Wails v3: ele decide pela
+     POSICAO do cursor (webview_window_windows_nonclient.go), sem olhar o HTML.
+     A faixa clicavel e SM_CXSIZEFRAME(4) + SM_CXPADDEDBORDER(4) = 8 DIP em cada
+     borda. Se o conteudo chega ATE a borda da janela, o cursor nunca cai na
+     faixa e o resize fica impossivel naquela aresta.
+
+     MEDIDO (Chromium, hierarquia real, folhas reais, janela 1264x765):
+       SEM margem:  conteudoRight=1258 / conteudoBottom=765  -> SOBRA 0.0 DIP
+       com margem:  conteudoRight=1246 / conteudoBottom=755  -> SOBRA 10 / 2 DIP
+
+     IMPORTANTE - o padding NAO resolve, e a scrollbar NAO e a causa:
+       .page-content tem padding 20px 22px 28px (base.css:489), mas o padding e
+       INTERNO ao proprio container de scroll, entao ele nao afasta a CAIXA de
+       rolagem da borda da janela. Testado: padding-right no #sensorView deixou a
+       sobra em 0.0 DIP.
+       Testado tambem ESCONDER a scrollbar (opcao B da task): piorou — o conteudo
+       passou de conteudoRight 1258 para 1264, ou seja, colou de vez na borda, e
+       ainda perdeu o indicador de posicao. Só a margem no MOUNT afasta a caixa.
+
+     Por que so esta aba sofria: as outras paginas sao curtas e nao encostam na
+     aresta inferior; esta e a mais alta do app (3 cartoes + tabela + historico)
+     e sempre preenche a altura toda.
+
+     margin (e nao padding) porque precisa mover a CAIXA do #sensorView, que e
+     quem encosta na borda. O valor 10px cobre os 8 DIP da faixa com 2 de folga. */
+  margin-right: 10px;
+  margin-bottom: 8px;
 }
 
 /* Em telas estreitas o cabecalho vira uma coluna: titulo acima, acoes abaixo. */
