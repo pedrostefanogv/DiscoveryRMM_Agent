@@ -405,6 +405,15 @@
 
 /* -------- 8. DETALHE (canais / resultados) -------- */
 
+/* A linha que hospeda o painel de detalhe nasce com .hidden (o controller poe a
+   classe na PROPRIA <tr>, nao so no <div>). Sem isso, a <td> abaixo — que tem
+   borda e fundo — ficava no fluxo como uma faixa vazia de 1px por sensor.
+   O .hidden global (base.css:643) ja e display:none !important; declaramos aqui
+   apenas para deixar a intencao explicita junto da regra que criava o defeito. */
+.sensor-detail-row.hidden {
+  display: none;
+}
+
 .sensor-detail-row td {
   padding: 0;
   border-bottom: 1px solid var(--border);
@@ -837,6 +846,37 @@
    fica DENTRO do cartao, que ja tem a sua. */
 .sensor-card .debug-sensors-empty {
   background: transparent;
+}
+
+/* -------- Container da pagina: defeito do scroll --------
+   CAUSA RAIZ MEDIDA (nao deduzida): #sensorViewMount era um <div> sem NENHUMA
+   regra. Sem flex:1 ele nao encolhe, entao crescia ate a altura do conteudo
+   (~1004px) dentro de um .main-wrap de 860px. Em cadeia:
+     - #sensorView herdava essa altura solta (clientH == scrollH), entao o
+       overflow-y:auto dele NUNCA disparava — nao havia contra o que rolar;
+     - quem transbordava era o .main-wrap (scrollH 1034 > clientH 860), e ele
+       tem overflow:hidden de proposito (base.css:463) -> CORTAVA o conteudo.
+   Sintoma do usuario: pagina cortada embaixo, sem como rolar ate o fim.
+
+   Correcao: dar ao mount a altura contida que ele nao tinha, com o MESMO
+   idioma que .page-content ja usa (flex:1 + overflow). O min-height:0 NAO e
+   opcional: sem ele o flex item se recusa a encolher abaixo do proprio
+   conteudo (min-height:auto) e o defeito volta inteiro.
+
+   Fica no MEU escopo porque #sensorViewMount e o container desta pagina.
+   .main-wrap e base.css NAO foram tocados: o overflow:hidden dele e correto e
+   compartilhado por todas as abas.
+
+   Medicao ANTES -> DEPOIS (Chromium, hierarquia real, folhas reais, 1264x765):
+     .main-wrap        scrollH 1034 > clientH 860  ->  scrollH 860 == clientH 860
+     #sensorView       scrollH 1004 == clientH 1004 (nao rolava)
+                    -> scrollH 1004 >  clientH 830  (ROLA)
+     #sensorViewMount  display block, altura 1004  ->  flex, clientH 830, min-height 0 */
+#sensorViewMount {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Em telas estreitas o cabecalho vira uma coluna: titulo acima, acoes abaixo. */

@@ -551,7 +551,10 @@ function sensorDebugRenderRows(snap) {
       sensorDebugEscape(translate('debug.sensorsDetails')) + '</button>' +
       '</td>' +
       '</tr>' +
-      '<tr class="sensor-detail-row"><td colspan="10">' +
+      // A classe hidden vai na PROPRIA <tr>: esconder so o <div> deixava a
+      // linha e a celula no fluxo, e a <td> tem borda/fundo — virava uma faixa
+      // vazia de 1px por sensor logo abaixo da coluna "Ações".
+      '<tr class="sensor-detail-row hidden"><td colspan="10">' +
       '<div id="' + detailsId + '" class="sensor-detail hidden" aria-hidden="true">' + sensorDebugRenderSensorDetail(sensor) + '</div>' +
       '</td></tr>';
   }).join('');
@@ -865,10 +868,17 @@ function initSensorDebug() {
       if (detailsId) {
         var box = document.getElementById(detailsId);
         if (box) {
-          box.classList.toggle('hidden');
+          // Uma única decisão governa os três estados, para não saírem de sincronia:
+          // a classe .hidden do painel, a .hidden da LINHA que o contém (senão a
+          // <tr> vazia ocupa espaço e aparece a faixa) e os ARIA de leitor de tela.
+          var collapsed = !box.classList.contains('hidden');
+          box.classList.toggle('hidden', collapsed);
+          var row = box.closest ? box.closest('.sensor-detail-row') : null;
+          if (row) {
+            row.classList.toggle('hidden', collapsed);
+          }
           // O estado precisa existir para leitores de tela, não só na classe
           // .hidden: aria-expanded no botão e aria-hidden no painel andam juntos.
-          var collapsed = box.classList.contains('hidden');
           box.setAttribute('aria-hidden', collapsed ? 'true' : 'false');
           target.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
           target.textContent = collapsed
