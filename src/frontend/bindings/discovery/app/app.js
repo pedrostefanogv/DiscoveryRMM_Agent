@@ -26,6 +26,9 @@ import * as automation$0 from "./automation/models.js";
 import * as agentconn$0 from "./core/agentconn/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as automation$1 from "./core/automation/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as consent$0 from "./core/consent/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -2546,6 +2549,22 @@ export function SendTestHeartbeat() {
 }
 
 /**
+ * SensorDebugSnapshotCore monta o snapshot a partir do MOTOR DESTE PROCESSO
+ * (o serviço), sem tentar o RPC. É o que o lado serviço expõe em
+ * "sensors:debug_snapshot" e o que o painel usa em standalone.
+ * 
+ * Nunca devolve erro: o painel precisa renderizar sempre. Quando o motor não
+ * está disponível devolve snapshot vazio e VÁLIDO com o motivo em
+ * Engine.LastError.
+ * @returns {$CancellablePromise<automation$1.SensorDebugSnapshot>}
+ */
+export function SensorDebugSnapshotCore() {
+    return $Call.ByID(3612081968).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType87($result);
+    }));
+}
+
+/**
  * SetChatConfig updates and persists the LLM API settings.
  * @param {$models.ChatConfig} cfg
  * @returns {$CancellablePromise<void>}
@@ -2829,7 +2848,7 @@ export function SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, su
  */
 export function SupportChatRefresh() {
     return $Call.ByID(277848266).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType87($result);
+        return $$createType88($result);
     }));
 }
 
@@ -3169,4 +3188,5 @@ const $$createType83 = $Create.Array($$createType82);
 const $$createType84 = models$0.StartupItem.createFrom;
 const $$createType85 = $Create.Array($$createType84);
 const $$createType86 = $models.NativePreflightResult.createFrom;
-const $$createType87 = supportchat$0.State.createFrom;
+const $$createType87 = automation$1.SensorDebugSnapshot.createFrom;
+const $$createType88 = supportchat$0.State.createFrom;
