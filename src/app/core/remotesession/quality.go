@@ -77,6 +77,18 @@ type QualityManager struct {
 	recvFrames     int
 	netstatsSeen   bool
 	lastNetstatsAt time.Time
+
+	// ── Recovery frame (padrão ControlR, FrameBasedCapturer.cs) ──
+	// sentQuality: qualidade com que o ÚLTIMO frame foi efetivamente enviado.
+	// degraded: true quando houve pelo menos um envio em qualidade MENOR que a
+	// atual — ou seja, alguma região da tela do viewer está comprimida demais.
+	// Quando a qualidade sobe de volta, a região degradada continua com o
+	// artefato antigo até algo mudar naquele pedaço da tela. O recovery frame
+	// reenvia a tela inteira UMA vez em alta qualidade para limpar o resíduo,
+	// sem depender de o usuário mexer naquela área.
+	sentQuality   int
+	degraded      bool
+	recoveryArmed bool
 }
 
 // Profiles padrao — alinhados com QualityProfileMapping.cs do backend.
@@ -337,6 +349,19 @@ func (qm *QualityManager) RecordFrame(bytes int, ts time.Time) {
 	qm.frameCount++
 	qm.bytesLastSec += bytes
 
+	// Marca se este envio saiu em qualidade degradada. A comparação é com a
+	// qualidade EFETIVA corrente; se já houve envio em qualidade menor que a
+	// máxima observada, alguma região pode ter ficado com artefato.
+	if q := qm.current.EffectiveJpegQuality(); q < imageQualityMax {
+		// Nova degradação REARMA o recovery: o próximo retorno ao topo da
+		// escada deve limpar o novo artefato.
+		if !qm.degraded {
+			qm.recoveryArmed = false
+		}
+		qm.degraded = true
+	}
+	qm.sentQuality = qm.current.EffectiveJpegQuality()
+
 	// Adapta a cada 2 segundos
 	if ts.Sub(qm.lastAdaptTime) >= 2*time.Second {
 		qm.adapt()
@@ -344,6 +369,39 @@ func (qm *QualityManager) RecordFrame(bytes int, ts time.Time) {
 		qm.bytesLastSec = 0
 		qm.lastAdaptTime = ts
 	}
+}
+
+// ConsumeRecoveryFrame informa se um frame de RECUPERAÇÃO deve ser enviado
+// AGORA. Consome o sinal (retorna true uma única vez por recuperação).
+//
+// Quando devolve true, o chamador deve enviar um frame COMPLETO em qualidade
+// alta, ignorando dirty rects/tiles — exatamente como um key frame. O objetivo
+// NÃO é corrigir perda de pacote (isso é papel do key frame por reconexão), e
+// sim limpar o artefato de compressão que ficou na tela do viewer quando a
+// qualidade esteve baixa: sem isso, a área degradada permanece borrada até que
+// algo mude naquele pedaço da tela.
+//
+// Dispara apenas quando: (a) houve degradação real, (b) a qualidade voltou ao
+// topo da escada, e (c) não há outro recovery pendente (anti-repetição).
+func (qm *QualityManager) ConsumeRecoveryFrame() bool {
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
+
+	if !qm.degraded {
+		return false
+	}
+	// Só recupera quando a qualidade está de volta ao TOPO da escada: recuperar
+	// no meio do caminho reintroduziria o artefato logo em seguida.
+	if qm.current.EffectiveJpegQuality() < imageQualityMax {
+		return false
+	}
+	// Anti-repetição: arma o disparo uma vez e só rearma após nova degradação.
+	if qm.recoveryArmed {
+		return false
+	}
+	qm.recoveryArmed = true
+	qm.degraded = false
+	return true
 }
 
 // UpdateNetworkMetrics recebe as métricas de rede medidas no VIEWER

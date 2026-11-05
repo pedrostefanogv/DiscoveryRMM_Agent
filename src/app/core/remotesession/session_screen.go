@@ -74,6 +74,11 @@ type SessionScreen struct {
 	channelGateExpired bool // já logou/passou do deadline deste capturer
 	channelGateBlocked bool // frames estão sendo segurados agora
 
+	// bandwidthGate: teto DURO de banda que PAUSA a captura (não é qualidade).
+	// Complementa a escada AUTO: a escada reduz a compressão, mas sem frear a
+	// produção a fila ainda cresce. Ver bandwidth_gate.go.
+	bandwidthGate *BandwidthGate
+
 	// Cursor separado: frame não contém cursor; posição/estado via subject .cursor
 	cursorSeparate bool
 	cursorSender   *screen.CursorSpriteSender
@@ -192,6 +197,9 @@ func NewSessionScreenMonitor(sessionID string, natsStream *NatsStreamHandler, mo
 		codecSel:          codecSel,
 		recording:         recording,
 		inputCtrl:         inputCtrl,
+		// Teto de banda DESLIGADO por padrão (CeilingKbps=0): preserva o
+		// comportamento atual. Ligar exige um limite explícito do operador.
+		bandwidthGate:     NewBandwidthGate(defaultBandwidthGateConfig()),
 		dirtyDetector:     screen.NewDirtyDetector(32),
 		cursorSender:      screen.NewCursorSpriteSender(),
 		cursorStopCh:      make(chan struct{}),
@@ -382,6 +390,10 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 
 	// ── Producer loop (captura rapida, sem bloqueio de encode) ──
 	var totalSent, totalSkipped, totalIdle int64
+	// gateWaits/totalGateWaits: voltas do loop em que a captura foi PAUSADA
+	// pelo teto de banda (observabilidade — distingue "rede freou" de
+	// "máquina lenta"/"tela ociosa" no log de métricas).
+	var gateWaits, totalGateWaits int64
 	var sent, skipped int64
 	var rawBytes, encBytes int64
 	var encodeTimeTotal time.Duration
@@ -393,8 +405,8 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[remote-session-screen] ctx cancelado: %d env, %d skip, %d idle\n",
-				totalSent, totalSkipped, totalIdle)
+			log.Printf("[remote-session-screen] ctx cancelado: %d env, %d skip, %d idle, %d gate\n",
+				totalSent, totalSkipped, totalIdle, totalGateWaits)
 			s.natsStream.PublishEvent(s.sessionID, "screen_stopped",
 				map[string]string{"reason": "context_cancelled"})
 			close(encodeChan)
@@ -405,8 +417,8 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			return ctx.Err()
 
 		case <-s.stopCh:
-			log.Printf("[remote-session-screen] stop: %d env, %d skip, %d idle\n",
-				totalSent, totalSkipped, totalIdle)
+			log.Printf("[remote-session-screen] stop: %d env, %d skip, %d idle, %d gate\n",
+				totalSent, totalSkipped, totalIdle, totalGateWaits)
 			s.natsStream.PublishEvent(s.sessionID, "screen_stopped",
 				map[string]string{"reason": "stopped"})
 			close(encodeChan)
@@ -464,10 +476,11 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 					avgDirtyMs = dirtyMsTotal / float64(sent)
 					avgCopyMs = copyMsTotal / float64(sent)
 				}
-				log.Printf("[remote-session-screen] %d env, %d idle | comp %.1f:1 | cap=%.1fms dirty=%.1fms copy=%.1fms enc=%.1fms | fps=%d\n",
-					sent, totalIdle, compRatio, avgCapMs, avgDirtyMs, avgCopyMs, avgEncMs, curFps)
+				log.Printf("[remote-session-screen] %d env, %d idle, %d gate | comp %.1f:1 | cap=%.1fms dirty=%.1fms copy=%.1fms enc=%.1fms | fps=%d\n",
+					sent, totalIdle, gateWaits, compRatio, avgCapMs, avgDirtyMs, avgCopyMs, avgEncMs, curFps)
 				s.lastLogTime = time.Now()
 				sent, skipped = 0, 0
+				gateWaits = 0
 				rawBytes, encBytes = 0, 0
 				encodeTimeTotal = 0
 				captureMsTotal, dirtyMsTotal, copyMsTotal = 0, 0, 0
@@ -492,9 +505,34 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			s.useDirtyRect = false
 		}
 
+		// Recovery frame: depois de a qualidade voltar ao topo, envia UM frame
+		// completo para limpar o artefato de compressão que ficou na tela do
+		// viewer. Reseta o dirty detector (o próximo frame é integral) sem
+		// desligar o tile-mode de forma permanente.
+		if s.consumeRecoveryFrame() {
+			s.dirtyDetector.Reset()
+			s.forceKeyFrame.Store(true)
+			s.useDirtyRect = false
+			log.Printf("[remote-session-screen] recovery frame: qualidade recuperada, reenviando tela completa\n")
+		}
+
 		// Backpressure: nao captura se encoder estiver ocupado (buffer=1 cheio)
 		if len(encodeChan) >= 1 {
 			time.Sleep(time.Millisecond)
+			continue
+		}
+
+		// ── Teto de banda: PAUSA a produção de frames (não é qualidade) ──
+		// Complementa o backpressure do encoder acima. Aquele protege contra a
+		// CPU (encoder ocupado); este protege contra a REDE (link não escoa).
+		// Sem ele, baixar a qualidade não impede a fila de crescer: o frame
+		// entregue fica cada vez mais velho.
+		// A espera é limitada por idleDelay e reeavaliada a cada volta — o
+		// gate reabre sozinho quando o viewer reporta banda recuperada.
+		if s.bandwidthGate != nil && s.bandwidthGate.Paused() {
+			gateWaits++
+			totalGateWaits++
+			time.Sleep(idleDelay)
 			continue
 		}
 
@@ -1002,12 +1040,30 @@ func (s *SessionScreen) SetManualMode(manual bool) {
 // (netstats via .input) e alimenta a escada adaptativa do modo auto.
 func (s *SessionScreen) UpdateNetworkMetrics(rttMs, recvKbps float64, recvFrames int) {
 	s.quality.UpdateNetworkMetrics(rttMs, recvKbps, recvFrames)
+
+	// Alimenta o teto de banda. É um controle SEPARADO da qualidade: a escada
+	// reduz a compressão, o gate PAUSA a produção quando o link não escoa.
+	if s.bandwidthGate != nil {
+		s.bandwidthGate.Observe(recvKbps, recvFrames)
+	}
 }
 
 // ResetAutoToProfile volta à qualidade do perfil e re-semeia a escada
 // automática (usado quando o viewer retorna ao modo auto sem override).
 func (s *SessionScreen) ResetAutoToProfile() {
 	s.quality.ResetAutoToProfile()
+}
+
+// consumeRecoveryFrame decide se este frame deve ser um RECOVERY FRAME: um
+// frame COMPLETO em alta qualidade, enviado uma vez após a qualidade voltar ao
+// topo, para limpar o artefato que ficou na tela do viewer enquanto esteve
+// degradada (padrão ControlR, FrameBasedCapturer.cs). Sem isso, uma região
+// degradada permanece borrada até algo mudar naquele pedaço da tela.
+func (s *SessionScreen) consumeRecoveryFrame() bool {
+	if s.quality == nil {
+		return false
+	}
+	return s.quality.ConsumeRecoveryFrame()
 }
 
 // publishMetrics publica metricas de streaming no subject .event para o viewer.

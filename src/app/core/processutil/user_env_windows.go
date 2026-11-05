@@ -53,20 +53,40 @@ func parseEnvBlock(block *uint16) []string {
 	if block == nil {
 		return nil
 	}
-	// Map block as a large read-only slice; we break out on the double-null
-	// well before exhausting the artificial cap.
-	all := (*[1 << 20]uint16)(unsafe.Pointer(block))[:]
+	// Percorre o bloco com aritmética de ponteiro, avançando UMA palavra por
+	// vez e parando no terminador de duplo nulo.
+	//
+	// NÃO converter o bloco para um array grande (ex.: *[1<<20]uint16): essa
+	// conversão DECLARA 2 MB de memória a partir de um ponteiro que pode
+	// apontar para uma alocação de poucos bytes. Isso é comportamento
+	// indefinido (leitura fora dos limites) e o runtime o detecta sob
+	// -race: "checkptr: converted pointer straddles multiple allocations"
+	// (reproduzido em TestParseEnvBlock_EmptyBlock, com bloco vazio).
 	var entries []string
-	for i := 0; i < len(all); {
-		j := i
-		for j < len(all) && all[j] != 0 {
-			j++
+	// maxEnvWords limita a varredura: um bloco corrompido sem duplo nulo não
+	// pode fazer o laço percorrer memória indefinidamente.
+	const maxEnvWords = 1 << 20
+	for w := 0; w < maxEnvWords; {
+		// Coleta uma string terminada em nulo a partir de block[w].
+		start := w
+		for {
+			ch := *(*uint16)(unsafe.Add(unsafe.Pointer(block), uintptr(w)*unsafe.Sizeof(uint16(0))))
+			if ch == 0 {
+				break
+			}
+			w++
 		}
-		if j == i {
-			break // double-null terminator = end of block
+		if w == start {
+			break // duplo nulo = fim do bloco
 		}
-		entries = append(entries, string(utf16.Decode(all[i:j])))
-		i = j + 1 // skip past null terminator
+		// Constrói a string UTF-16 sem materializar uma slice do array inteiro:
+		// copia só o trecho desta entrada.
+		unit := make([]uint16, w-start)
+		for k := range unit {
+			unit[k] = *(*uint16)(unsafe.Add(unsafe.Pointer(block), uintptr(start+k)*unsafe.Sizeof(uint16(0))))
+		}
+		entries = append(entries, string(utf16.Decode(unit)))
+		w++ // pula o terminador da entrada
 	}
 	return entries
 }

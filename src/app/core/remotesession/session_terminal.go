@@ -40,6 +40,18 @@ const (
 	// R9: publica o heartbeat de .stats mesmo sem mudança a cada N ticks.
 	termStatsIdleTicks = 5
 
+	// termProtocolVersion é a versão do protocolo do canal de terminal
+	// (handshake term.in / canal term.out). O viewer envia "pv" no hello.
+	//
+	// Regra: um viewer com pv AUSENTE (0) é tratado como compatível — são os
+	// clientes anteriores à introdução do campo, que não podem ser quebrados.
+	// Um viewer com pv MAIOR que este valor pede algo que o agente não
+	// implementa e recebe erro explícito, em vez de degradar em silêncio.
+	//
+	// Incremente ao mudar o significado de um campo existente (não ao apenas
+	// adicionar um campo opcional, que é retrocompatível por construção).
+	termProtocolVersion = 1
+
 	// Teto do buffer do coalescer: saída intensa (ex.: type de arquivo grande)
 	// não pode crescer sem limite entre flushes — o rate limit segura o
 	// dispatch e o buffer acumularia memória/lag indefinidamente. Ao atingir
@@ -1307,6 +1319,29 @@ func (st *SessionTerminal) DisableRecording() {
 	st.recordingEnabled = false
 }
 
+// publishProtocolMismatch publica um erro EXPLÍCITO no canal de saída quando o
+// viewer usa uma versão de protocolo mais nova que a suportada por este agente.
+//
+// Motivo: sem isso o viewer ficaria esperando um comportamento inexistente e a
+// falha seria silenciosa — o modo de falha observado no TacticalRMM, onde o
+// cliente chamava uma rota que o backend não expunha e a mensagem era
+// descartada sem aviso. Publica o frame no MESMO canal que o viewer assina
+// (term.out), com error=true, que o front já converte em banner de erro.
+func (st *SessionTerminal) publishProtocolMismatch(viewerPv int) {
+	payload, err := json.Marshal(map[string]any{
+		"error":  true,
+		"code":   "protocol_version_mismatch",
+		"reason": fmt.Sprintf("viewer protocol v%d is newer than agent v%d; update the agent", viewerPv, termProtocolVersion),
+		"pv":     termProtocolVersion,
+	})
+	if err != nil {
+		return
+	}
+	if pubErr := st.natsStream.PublishTermOut(st.sessionID, string(payload)); pubErr != nil {
+		log.Printf("[session-terminal] falha ao publicar erro de versao de protocolo: %v", pubErr)
+	}
+}
+
 // Start inicia o console unico com output coalescing, rate limiting e subjects fixos
 // (term.out para saida, term.in para entrada), herdando a identidade do agente.
 func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKind, cols, rows int) (*TerminalSession, error) {
@@ -1639,9 +1674,27 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 			Rows    int    `json:"rows"`
 			Hello   bool   `json:"hello"`
 			LastSeq *int64 `json:"lastSeq"`
+			// Pv = versão do protocolo do viewer (aditivo). Ausente/0 = viewer
+			// antigo (pré-versão): tratado como compatível, para não quebrar
+			// clientes já em produção. Acima do nosso máximo = incompatível e
+			// recusado com erro EXPLÍCITO no canal de saída — em vez de falhar
+			// silenciosamente como aconteceu no TacticalRMM (o cliente Flutter
+			// chamava uma rota que o backend não expunha e a mensagem era
+			// descartada em silêncio: terminal_service.dart:152-154).
+			Pv int `json:"pv"`
 		}
 		if err := json.Unmarshal(data, &req); err != nil {
 			log.Printf("[session-terminal] term.in JSON invalido: %v\n", err)
+			return
+		}
+
+		// Versão de protocolo: recusa explícita de cliente mais NOVO que este
+		// agente. Sem isso, um campo desconhecido seria ignorado e o viewer
+		// ficaria esperando um comportamento que este agente não tem.
+		if req.Pv > termProtocolVersion {
+			log.Printf("[session-terminal] versao de protocolo incompativel: viewer pv=%d, agente pv=%d (sessao %s)",
+				req.Pv, termProtocolVersion, st.sessionID)
+			st.publishProtocolMismatch(req.Pv)
 			return
 		}
 
