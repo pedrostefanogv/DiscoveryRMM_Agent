@@ -170,6 +170,10 @@ type Service struct {
 	sensorWake chan struct{}
 	// sensorPending é o buffer de amostras aguardando entrega.
 	sensorPending []SensorResult
+	// sensorPendingIDs guarda o id da linha persistida de cada amostra em
+	// sensorPending (MESMA ordem). Permite apagar do banco exatamente o lote
+	// entregue. Vazio quando a persistência está desligada (db == nil).
+	sensorPendingIDs []int64
 	// sensorFlushMu serializa a entrega de lotes (loop + run-now + shutdown).
 	sensorFlushMu sync.Mutex
 	// sensorDisabled desliga o motor quando o servidor não tem o endpoint de

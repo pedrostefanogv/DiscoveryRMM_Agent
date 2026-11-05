@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/core/database"
+
 	"github.com/google/uuid"
 )
 
@@ -60,6 +62,18 @@ const (
 	// sensorSyncBackoffNotFound é o retry quando o servidor não tem o endpoint
 	// (backend anterior ao recurso) — backoff longo, log único.
 	sensorSyncBackoffNotFound = 15 * time.Minute
+
+	// Retenção do buffer DURÁVEL de amostras pendentes (sensor_pending_samples).
+	//
+	// sensorPendingRetentionDays = 7 espelha o SensorRawSampleRetentionDays do
+	// servidor (RetentionSettings.cs:63, podado por DataRetentionJob.cs:185):
+	// guardar mais que isso produz dado que o servidor já descarta — só ocupa
+	// disco no agente.
+	sensorPendingRetentionDays = 7
+	// sensorPendingMaxSamples = 20000 é teto de disco, não política de negócio:
+	// protege o agente de um servidor inalcançável por muito tempo (7 dias de um
+	// sensor de disco com vários volumes já passa disso).
+	sensorPendingMaxSamples = 20000
 )
 
 // ── Agendamento ──
@@ -284,6 +298,97 @@ func (s *Service) markSensorsDue(ids []string) int {
 		count++
 	}
 	return count
+}
+
+// ── Buffer durável (recuperação no boot) ──
+
+// restorePendingSensorSamples recupera para a memória o buffer que ficou no banco
+// (queda de energia/crash/kill na janela de flush). Sem isso, um restart perderia
+// as coletas que ainda não tinham sido entregues.
+//
+// Roda ANTES do primeiro flush. É IDEMPOTENTE sem precisar de flag: a dedup por
+// RunID (único por coleta) garante que chamar duas vezes não duplica amostra —
+// mais robusto que um marcador "já rodei", que falharia se o primeiro boot
+// abortasse no meio.
+//
+// As amostras recuperadas entram COM O ID REAL da linha: a leitura é FIFO por id
+// e o pareamento payload↔linha é posicional (mesma ordem), então o id é confiável
+// e permite apagar exatamente o que for entregue. Sem isso a amostra recuperada
+// ficaria com id 0, seria entregue e a linha NUNCA sairia do banco — o buffer
+// cresceria para sempre até a poda por idade.
+func (s *Service) restorePendingSensorSamples() {
+	if s == nil {
+		return
+	}
+	if s.db == nil || s.getConfig == nil {
+		return
+	}
+	agentID := strings.TrimSpace(s.getConfig().AgentID)
+	if agentID == "" {
+		return
+	}
+	rows, err := s.db.ListPendingSensorSamples(agentID, sensorPendingMaxSamples)
+	if err != nil {
+		s.logf("sensores: falha ao recuperar buffer persistido: %v", err)
+		return
+	}
+	if len(rows) == 0 {
+		// Mesmo sem nada a recuperar, a poda roda no boot.
+		s.prunePendingSensorSamples(agentID)
+		return
+	}
+	// Payload e id são pareados posicionalmente: a leitura é FIFO por id e cada
+	// linha vira exatamente um SensorResult. Manter os dois slices juntos aqui é o
+	// que permite apagar depois só o que foi entregue.
+	restored := make([]SensorResult, 0, len(rows))
+	restoredIDs := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		var result SensorResult
+		if err := json.Unmarshal(row.Payload, &result); err != nil {
+			s.logf("sensores: amostra persistida ilegivel (id=%d), descartada: %v", row.ID, err)
+			// Linha corrompida: remove para não travar a fila a cada boot.
+			if delErr := s.db.DeletePendingSensorSamples([]int64{row.ID}); delErr != nil {
+				s.logf("sensores: falha ao remover amostra ilegivel (id=%d): %v", row.ID, delErr)
+			}
+			continue
+		}
+		restored = append(restored, result)
+		restoredIDs = append(restoredIDs, row.ID)
+	}
+	if len(restored) == 0 {
+		s.prunePendingSensorSamples(agentID)
+		return
+	}
+
+	s.sensorMu.Lock()
+	// Dedup por RunID contra o que já está em memória (idempotência sem flag).
+	// Os ids acompanham: só entram os pares que sobreviveram ao filtro.
+	known := make(map[string]bool, len(s.sensorPending))
+	for _, pending := range s.sensorPending {
+		known[pending.RunID] = true
+	}
+	fresh := make([]SensorResult, 0, len(restored))
+	freshIDs := make([]int64, 0, len(restoredIDs))
+	for i, result := range restored {
+		if result.RunID != "" && known[result.RunID] {
+			continue
+		}
+		fresh = append(fresh, result)
+		freshIDs = append(freshIDs, restoredIDs[i])
+	}
+	if len(fresh) == 0 {
+		s.sensorMu.Unlock()
+		s.prunePendingSensorSamples(agentID)
+		return
+	}
+	// FIFO: as recuperadas são as MAIS ANTIGAS, então vão para a frente, com os
+	// ids na mesma ordem.
+	s.sensorPending = append(fresh, s.sensorPending...)
+	s.sensorPendingIDs = append(freshIDs, s.sensorPendingIDs...)
+	s.sensorMu.Unlock()
+
+	s.prunePendingSensorSamples(agentID)
+	s.logf("sensores: %d amostra(s) recuperada(s) do buffer persistido", len(fresh))
 }
 
 // ── Policy (sync) ──
@@ -567,6 +672,9 @@ func (s *Service) runSensorsLoop(ctx context.Context, onBeat func()) {
 	// O sync continua sendo disparado; só deixou de ser pré-requisito para o
 	// primeiro ciclo de coleta. O ticker de 15s reavalia o que está devido.
 	s.ensurePersistedSensorsLoaded()
+	// Recupera o buffer durável ANTES do primeiro dispatch/flush: o que ficou
+	// preso de uma execução anterior volta a ser entregue neste boot.
+	s.restorePendingSensorSamples()
 	go s.refreshSensors(ctx, true)
 	s.dispatchDueSensors(ctx)
 
@@ -697,35 +805,150 @@ func (s *Service) runSensor(parent context.Context, cfg SensorConfig) {
 
 // ── Entrega (buffer + outbox) ──
 
-// enqueueSensorResults adiciona amostras ao buffer de envio.
+// enqueueSensorResults adiciona amostras ao buffer de envio, PERSISTINDO-as
+// antes para sobreviver a queda de energia/crash.
+//
+// INVARIANTE CRÍTICA: sensorPending e sensorPendingIDs andam SEMPRE juntos e na
+// mesma ordem, e só são mutados na MESMA seção crítica (sensorMu). Um append que
+// entrasse num slice sem entrar no outro desalinharia os pares e a remoção
+// pós-entrega apagaria a linha ERRADA — trocando perda silenciosa de dado por
+// CORRUPÇÃO silenciosa, que é pior.
+//
+// Por isso a persistência acontece ANTES do lock: o lote de ids só é calculado a
+// partir do que realmente entrou no banco. Falha de persistência é best-effort
+// (não pode derrubar a coleta): a amostra segue só em memória, com id 0, e não
+// será apagada do banco por engano (não há linha para apagar).
 func (s *Service) enqueueSensorResults(results []SensorResult) {
-	if len(results) == 0 {
+	if s == nil || len(results) == 0 {
 		return
 	}
+
+	// Fora do lock: a persistência pode ser I/O e não deve segurar sensorMu.
+	ids := s.persistPendingSensorSamples(results)
+
 	s.sensorMu.Lock()
 	defer s.sensorMu.Unlock()
 	s.sensorPending = append(s.sensorPending, results...)
+	if len(ids) == len(results) {
+		s.sensorPendingIDs = append(s.sensorPendingIDs, ids...)
+	} else {
+		// Persistência total/parcialmente falhou. Preenche as posições com 0 para
+		// MANTER O ALINHAMENTO: o id 0 significa "sem linha no banco" e nunca é
+		// enviado a DeletePendingSensorSamples.
+		for range results {
+			s.sensorPendingIDs = append(s.sensorPendingIDs, 0)
+		}
+	}
 }
 
-// takeSensorBatch remove até limit amostras do buffer (FIFO).
-func (s *Service) takeSensorBatch(limit int) []SensorResult {
+// persistPendingSensorSamples grava o lote no buffer durável e devolve os ids das
+// linhas na MESMA ordem de results. Devolve nil (ou um slice de tamanho diferente)
+// quando a persistência falha — o chamador trata isso mantendo o alinhamento.
+//
+// A poda roda junto: o buffer durável não pode crescer sem teto.
+func (s *Service) persistPendingSensorSamples(results []SensorResult) []int64 {
+	if s == nil || s.db == nil || s.getConfig == nil || len(results) == 0 {
+		return nil
+	}
+	agentID := strings.TrimSpace(s.getConfig().AgentID)
+	if agentID == "" {
+		return nil
+	}
+	samples := make([]database.SensorPendingSample, 0, len(results))
+	for _, result := range results {
+		payload, err := json.Marshal(result)
+		if err != nil {
+			s.logf("sensores: amostra descartada da persistencia (sensor=%q): %v", result.SensorID, err)
+			continue
+		}
+		samples = append(samples, database.SensorPendingSample{
+			SensorID:  result.SensorID,
+			Payload:   payload,
+			CreatedAt: time.Now(),
+		})
+	}
+	if len(samples) != len(results) {
+		// Lote incompleto: não persiste parcial, senão o alinhamento com results
+		// seria ambíguo. As amostras seguem em memória e serão reenviadas no
+		// próximo ciclo se o servidor estiver acessível.
+		s.logf("sensores: lote nao persistido por completo (%d de %d serializadas)", len(samples), len(results))
+		return nil
+	}
+	if err := s.db.SavePendingSensorSamples(agentID, samples); err != nil {
+		s.logf("sensores: falha ao persistir %d amostra(s) pendente(s): %v", len(samples), err)
+		return nil
+	}
+	// Poda após persistir (retenção por idade e por tamanho).
+	s.prunePendingSensorSamples(agentID)
+
+	// Relê o que acabou de entrar para obter os ids reais, restrito ao lote
+	// recém-gravado: o maior id do agente menos o tamanho do lote.
+	stored, err := s.db.ListPendingSensorSamples(agentID, 0)
+	if err != nil {
+		// Sem os ids não é possível apagar com precisão depois. Mantém em memória
+		// (id 0) e deixa a poda por idade recolher as linhas órfãs.
+		s.logf("sensores: falha ao reler ids do buffer persistido: %v", err)
+		return nil
+	}
+	if len(stored) < len(samples) {
+		return nil
+	}
+	ids := make([]int64, 0, len(samples))
+	for _, row := range stored[len(stored)-len(samples):] {
+		ids = append(ids, row.ID)
+	}
+	if len(ids) != len(results) {
+		return nil
+	}
+	return ids
+}
+
+// prunePendingSensorSamples aplica a retenção do buffer durável (7 dias e 20000
+// amostras, o que estourar primeiro). Best-effort: falha aqui é log, não erro.
+func (s *Service) prunePendingSensorSamples(agentID string) {
+	if s == nil || s.db == nil || strings.TrimSpace(agentID) == "" {
+		return
+	}
+	cutoff := time.Now().Add(-time.Duration(sensorPendingRetentionDays) * 24 * time.Hour)
+	removed, err := s.db.PrunePendingSensorSamples(agentID, cutoff, sensorPendingMaxSamples)
+	if err != nil {
+		s.logf("sensores: falha ao podar buffer persistido: %v", err)
+		return
+	}
+	if removed > 0 {
+		s.logf("sensores: poda removeu %d amostra(s) pendente(s) antigas", removed)
+	}
+}
+
+// takeSensorBatch remove até limit amostras do buffer (FIFO) e devolve TAMBÉM os
+// ids das linhas persistidas correspondentes (0 = sem linha).
+//
+// Os dois slices são consumidos na MESMA seção crítica, pelo mesmo tamanho — é
+// isso que garante o alinhamento prometido em enqueueSensorResults.
+func (s *Service) takeSensorBatch(limit int) ([]SensorResult, []int64) {
 	if limit <= 0 {
 		limit = sensorResultBatchSize
 	}
 	s.sensorMu.Lock()
 	defer s.sensorMu.Unlock()
 	if len(s.sensorPending) == 0 {
-		return nil
+		return nil, nil
 	}
 	if len(s.sensorPending) <= limit {
 		batch := s.sensorPending
+		ids := s.sensorPendingIDs
 		s.sensorPending = nil
-		return batch
+		s.sensorPendingIDs = nil
+		return batch, ids
 	}
 	batch := make([]SensorResult, limit)
 	copy(batch, s.sensorPending[:limit])
 	s.sensorPending = append([]SensorResult(nil), s.sensorPending[limit:]...)
-	return batch
+
+	ids := make([]int64, limit)
+	copy(ids, s.sensorPendingIDs[:limit])
+	s.sensorPendingIDs = append([]int64(nil), s.sensorPendingIDs[limit:]...)
+	return batch, ids
 }
 
 // flushSensorSamples entrega o buffer em lotes de até 100. Falha de entrega cai
@@ -745,7 +968,7 @@ func (s *Service) flushSensorSamples(ctx context.Context) {
 		return
 	}
 	for {
-		batch := s.takeSensorBatch(sensorResultBatchSize)
+		batch, ids := s.takeSensorBatch(sensorResultBatchSize)
 		if len(batch) == 0 {
 			return
 		}
@@ -755,10 +978,81 @@ func (s *Service) flushSensorSamples(ctx context.Context) {
 			CorrelationID: correlationID,
 			Samples:       batch,
 		}
-		if err := s.sendOrQueueCallback(ctx, agentID, correlationID, correlationID, CallbackTypeSensorSamples, payload, correlationID); err != nil {
-			s.logf("sensores: falha ao entregar lote de %d amostra(s): %v", len(batch), err)
+		err := s.sendOrQueueCallback(ctx, agentID, correlationID, correlationID, CallbackTypeSensorSamples, payload, correlationID)
+		if err != nil {
+			// Retentável JÁ enfileirado na outbox durável (sendOrQueueCallback
+			// devolve erro mas gravou a entrada): a posse passou para a fila, então
+			// as linhas do buffer podem sair. Rejeição definitiva (poison pill) é
+			// descartada de propósito — retê-la seria reenviar lixo para sempre.
+			if isSensorBatchRejected(err) {
+				s.logf("sensores: lote de %d amostra(s) rejeitado pelo servidor, descartado: %v", len(batch), err)
+				s.deletePendingSensorSamples(ids)
+				continue
+			}
+			if !s.sensorBatchHandedOff(agentID, correlationID) {
+				// O lote NÃO chegou à outbox durável (sem banco, ou o próprio
+				// enfileiramento falhou). As linhas PERMANECEM no banco: é o que
+				// garante que a coleta sobreviva ao restart. Apagá-las aqui seria
+				// perder a amostra para sempre.
+				s.logf("sensores: lote de %d amostra(s) nao entregue nem enfileirado: %v", len(batch), err)
+				return
+			}
+			s.deletePendingSensorSamples(ids)
+			s.logf("sensores: lote de %d amostra(s) ficou na outbox para reenvio: %v", len(batch), err)
 			return
 		}
+		// Sucesso: a entrega aconteceu, a posse das linhas acabou.
+		s.deletePendingSensorSamples(ids)
+	}
+}
+
+// sensorBatchHandedOff confirma que o lote está REALMENTE sob posse da outbox
+// durável antes de liberar as linhas do buffer.
+//
+// Existe banco não basta: sendOrQueueCallback devolve o MESMO tipo de erro tanto
+// quando enfileirou (posse transferida) quanto quando o próprio enfileiramento
+// falhou (posse NÃO transferida). Apagar as linhas no segundo caso perderia a
+// amostra para sempre. Então confirmamos consultando a fila pela correlationID
+// do lote — que é o commandID usado no enfileiramento.
+func (s *Service) sensorBatchHandedOff(agentID, correlationID string) bool {
+	if s == nil || s.db == nil || strings.TrimSpace(correlationID) == "" {
+		return false
+	}
+	entries, err := s.db.ListDueAutomationCallbacks(agentID, time.Now().Add(24*time.Hour), 200)
+	if err != nil {
+		// Incerteza: assume o pior (não transferiu) e mantém as linhas. Um reenvio
+		// duplicado é preferível a perder a coleta.
+		s.logf("sensores: nao foi possivel confirmar a outbox: %v", err)
+		return false
+	}
+	for _, entry := range entries {
+		if entry.CommandID == correlationID {
+			return true
+		}
+	}
+	return false
+}
+
+// deletePendingSensorSamples apaga do buffer durável as linhas já entregues
+// (ou sob posse da outbox). Ids 0 são ignorados: significam "amostra que nunca
+// foi persistida" (persistência desligada ou falha best-effort).
+func (s *Service) deletePendingSensorSamples(ids []int64) {
+	if s == nil || s.db == nil || len(ids) == 0 {
+		return
+	}
+	present := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id > 0 {
+			present = append(present, id)
+		}
+	}
+	if len(present) == 0 {
+		return
+	}
+	if err := s.db.DeletePendingSensorSamples(present); err != nil {
+		// Não é fatal: a linha fica e será reenviada/podada. Log para não
+		// esconder um crescimento de disco.
+		s.logf("sensores: falha ao remover %d amostra(s) entregues do buffer persistido: %v", len(present), err)
 	}
 }
 

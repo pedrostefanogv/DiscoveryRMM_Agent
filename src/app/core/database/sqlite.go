@@ -343,6 +343,27 @@ func (db *DB) initializeCurrent() error {
 			payload_json TEXT NOT NULL
 		);
 
+		-- Buffer de amostras de sensores PENDENTES de entrega. sensorPending vive
+		-- só em RAM (automation/service.go) e a outbox durável só recebe a amostra
+		-- DEPOIS que um envio falha — então queda de energia/crash/kill na janela
+		-- de até sensorFlushInterval (10s) PERDIA as coletas. Esta tabela é o
+		-- espelho durável do buffer: 1 SensorResult por linha (payload_json), e o
+		-- lote é remontado na leitura. Uma linha por amostra evita reescrever um
+		-- blob grande a cada coleta. Aditivo: CREATE IF NOT EXISTS não exige bump
+		-- de schema (mesma convenção de sensor_config_state acima).
+		CREATE TABLE IF NOT EXISTS sensor_pending_samples (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id TEXT NOT NULL,
+			sensor_id TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		);
+
+		-- Leitura FIFO por agente e poda por idade/tamanho: sem este índice a
+		-- recuperação no boot vira full scan com ORDER BY em tabela que retém
+		-- até 20000 linhas por agente.
+		CREATE INDEX IF NOT EXISTS idx_sensor_pending_agent_id ON sensor_pending_samples(agent_id, id);
+
 		CREATE TABLE IF NOT EXISTS automation_callback_queue (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			agent_id TEXT NOT NULL,
