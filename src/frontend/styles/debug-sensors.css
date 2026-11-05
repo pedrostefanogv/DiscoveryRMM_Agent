@@ -70,12 +70,18 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
-/* Botoes nunca quebram o texto no meio. */
+/* Botoes nunca quebram o texto no meio. Compactos (mesma linguagem visual da
+   coluna de acoes da tabela): padding 5px 7px + .74rem para o cabecalho nao
+   ficar maior que o conteudo que ele controla. */
 .debug-sensors-actions .btn {
   white-space: nowrap;
+  padding: 5px 9px;
+  font-size: .74rem;
+  line-height: 1.25;
+  min-height: 28px;
 }
 
 .debug-sensors-meta {
@@ -874,68 +880,20 @@
   background: transparent;
 }
 
-/* -------- Container da pagina: defeito do scroll --------
-   CAUSA RAIZ MEDIDA (nao deduzida): #sensorViewMount era um <div> sem NENHUMA
-   regra. Sem flex:1 ele nao encolhe, entao crescia ate a altura do conteudo
-   (~1004px) dentro de um .main-wrap de 860px. Em cadeia:
-     - #sensorView herdava essa altura solta (clientH == scrollH), entao o
-       overflow-y:auto dele NUNCA disparava — nao havia contra o que rolar;
-     - quem transbordava era o .main-wrap (scrollH 1034 > clientH 860), e ele
-       tem overflow:hidden de proposito (base.css:463) -> CORTAVA o conteudo.
-   Sintoma do usuario: pagina cortada embaixo, sem como rolar ate o fim.
-
-   Correcao: dar ao mount a altura contida que ele nao tinha, com o MESMO
-   idioma que .page-content ja usa (flex:1 + overflow). O min-height:0 NAO e
-   opcional: sem ele o flex item se recusa a encolher abaixo do proprio
-   conteudo (min-height:auto) e o defeito volta inteiro.
-
-   Fica no MEU escopo porque #sensorViewMount e o container desta pagina.
-   .main-wrap e base.css NAO foram tocados: o overflow:hidden dele e correto e
-   compartilhado por todas as abas.
-
-   Medicao ANTES -> DEPOIS (Chromium, hierarquia real, folhas reais, 1264x765):
-     .main-wrap        scrollH 1034 > clientH 860  ->  scrollH 860 == clientH 860
-     #sensorView       scrollH 1004 == clientH 1004 (nao rolava)
-                    -> scrollH 1004 >  clientH 830  (ROLA)
-     #sensorViewMount  display block, altura 1004  ->  flex, clientH 830, min-height 0 */
-#sensorViewMount {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  /* -------- Redimensionamento da janela (WM_NCHITTEST) --------
-     A janela e frameless e o resize e NATIVO do Wails v3: ele decide pela
-     POSICAO do cursor (webview_window_windows_nonclient.go), sem olhar o HTML.
-     A faixa clicavel e SM_CXSIZEFRAME(4) + SM_CXPADDEDBORDER(4) = 8 DIP em cada
-     borda. Se o conteudo chega ATE a borda da janela, o cursor nunca cai na
-     faixa e o resize fica impossivel naquela aresta.
-
-     MEDIDO (Chromium, hierarquia real, folhas reais, janela 1264x765):
-       SEM margem:  conteudoRight=1258 / conteudoBottom=765  -> SOBRA 0.0 DIP
-       com margem:  conteudoRight=1246 / conteudoBottom=755  -> SOBRA 10 / 2 DIP
-
-     IMPORTANTE - o padding NAO resolve, e a scrollbar NAO e a causa:
-       .page-content tem padding 20px 22px 28px (base.css:489), mas o padding e
-       INTERNO ao proprio container de scroll, entao ele nao afasta a CAIXA de
-       rolagem da borda da janela. Testado: padding-right no #sensorView deixou a
-       sobra em 0.0 DIP.
-       Testado tambem ESCONDER a scrollbar (opcao B da task): piorou — o conteudo
-       passou de conteudoRight 1258 para 1264, ou seja, colou de vez na borda, e
-       ainda perdeu o indicador de posicao. Só a margem no MOUNT afasta a caixa.
-
-     Por que so esta aba sofria: as outras paginas sao curtas e nao encostam na
-     aresta inferior; esta e a mais alta do app (3 cartoes + tabela + historico)
-     e sempre preenche a altura toda.
-
-     margin (e nao padding) porque precisa mover a CAIXA. O valor 10px cobre os 8
-     DIP da faixa com 2 de folga.
-
-     ATUALIZACAO (rodada seguinte): a folga MIGROU para o .main-wrap (base.css) e
-     passou a valer para TODAS as abas. Motivo: margem so no mount desta aba fazia o
-     conteudo de Sensores ficar 10px mais estreito e 8px mais baixo que o das outras
-     abas - o usuario via a area de visualizacao mudar de tamanho ao trocar de aba.
-     Sem as margens aqui, o mount fica identico aos demais e a folga e' unica. */
-}
+/* -------- Container da pagina: padronizacao com as demais abas --------
+   Historico: este mount chegou a precisar de flex proprio para o scroll
+   funcionar (sem regra nenhuma ele crescia ate cortar o conteudo no
+   .main-wrap — medido: mount block 1004px dentro de main-wrap 860px, e o
+   overflow-y:auto do #sensorView nunca disparava porque scrollH==clientH).
+   A correcao definitiva foi incluir #sensorViewMount na lista display:contents
+   de base.css, junto dos outros 15 mounts: o <main class="page-content"> vira
+   filho direto do flex container e o mount invisivel nao ocupa espaco NENHUM.
+   Antes, o mount com flex proprio ficava SEMPRE presente no DOM (os 16 mounts
+   coexistem) e dividia a altura com a aba visivel — ambos flex:1 — entao cada
+   pagina perdia metade da area util e sobrava espaco morto (sintoma relatado:
+   "espaco acima" na aba ativa, paginas com tamanhos diferentes).
+   A folga de resize tambem e unica: .main-wrap (base.css) cobre a faixa nativa
+   de 8 DIP da janela frameless para todas as abas. */
 
 /* Em telas estreitas o cabecalho vira uma coluna: titulo acima, acoes abaixo. */
 @media (max-width: 960px) {

@@ -323,7 +323,8 @@ a:hover { text-decoration: underline; }
 #statusViewMount, #storeViewMount, #updatesViewMount, #inventoryViewMount,
 #logsViewMount, #chatViewMount, #supportViewMount, #knowledgeViewMount,
 #supportChatViewMount,
-#automationViewMount, #p2pViewMount, #debugViewMount, #psadtViewMount, #zeroTouchConfigViewMount {
+#automationViewMount, #p2pViewMount, #debugViewMount, #psadtViewMount, #zeroTouchConfigViewMount,
+#sensorViewMount {
   display: contents;
 }
 
@@ -495,7 +496,10 @@ a:hover { text-decoration: underline; }
    ================================================================ */
 .page-content {
   flex: 1; overflow-y: auto; overflow-x: hidden;
-  padding: 20px 22px 28px;
+  /* 16/18/24: mais area util pedida pelo usuario (era 20/22/28). O scroll da
+     faixa nativa de resize da janela frameless ja esta garantido pela folga do
+     .main-wrap, entao o padding pode ser menor sem bloquear o arrasto. */
+  padding: 16px 18px 24px;
   scroll-behavior: smooth;
   /* Container de rolagem das abas. Precisa ser FLEX COLUMN para que o <section>
      filho possa CRESCER e preencher a altura util: numa caixa block as
