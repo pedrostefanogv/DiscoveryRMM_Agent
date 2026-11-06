@@ -137,19 +137,27 @@ func atualizarMascarasAoVivo(buf *[]byte) bool {
 	return true
 }
 
+// mascaraFalhasParaDescartar é o número de refreshes consecutivos sem conteúdo
+// válido a partir do qual a máscara é DESCARTADA. Com o intervalo de 2s isso dá
+// ~6s: tempo de sobra para o caso normal (janela em transição) e curto o
+// bastante para o fantasma não ficar preso na tela de forma perceptível.
+const mascaraFalhasParaDescartar = 3
+
 // atualizarMascaraAoVivo tenta substituir os pixels de UMA máscara pelo conteúdo
-// atual da janela que está atrás do cartão. Falha silenciosa: mantém a máscara.
+// atual da janela que está atrás do cartão. Em falha, mantém a máscara — até
+// mascaraFalhasParaDescartar falhas consecutivas; depois disso descarta a máscara
+// e devolve a área à captura ao vivo (ver registrarFalhaMascara).
 func atualizarMascaraAoVivo(m *mascaraRegiao, buf *[]byte) {
 	centroX := m.rect.X + m.rect.W/2
 	centroY := m.rect.Y + m.rect.H/2
 	janela := janelaSobPonto(centroX, centroY)
 	if janela == 0 {
-		logMascaraRefreshFalha(m.hwnd, "nenhuma janela sob o cartão")
+		registrarFalhaMascara(m, "nenhuma janela sob o cartão")
 		return
 	}
-	janelaRect, pixels, ok := imprimirJanela(janela, buf)
+	janelaRect, pixels, ok, motivo := imprimirJanela(janela, buf)
 	if !ok {
-		logMascaraRefreshFalha(m.hwnd, "PrintWindow recusado")
+		registrarFalhaMascara(m, motivo)
 		return
 	}
 	inter := m.rect.Intersect(janelaRect)
@@ -159,9 +167,10 @@ func atualizarMascaraAoVivo(m *mascaraRegiao, buf *[]byte) {
 	// Recorta a interseção do bitmap impresso e valida antes de aceitar.
 	recorte := recortarRegiao(pixels, janelaRect.W, inter.X-janelaRect.X, inter.Y-janelaRect.Y, inter.W, inter.H)
 	if !regiaoUtil(recorte) {
-		logMascaraRefreshFalha(m.hwnd, "bitmap vazio/preto")
+		registrarFalhaMascara(m, "bitmap vazio/preto")
 		return
 	}
+	m.falhasConsecutivas = 0
 	logMascaraRefreshSucesso(m.hwnd)
 
 	mascarasMu.Lock()
@@ -227,30 +236,38 @@ func ehCartaoDoAgente(hwnd, alvo uintptr, extras []uintptr) bool {
 
 // imprimirJanela renderiza a janela num DIB BGRA top-down e devolve o retângulo
 // da janela + os pixels. ok=false quando o Windows recusa ou a janela é grande
-// demais para o custo valer a pena.
-func imprimirJanela(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool) {
+// demais para o custo valer a pena; motivo diz QUAL foi a falha.
+//
+// O motivo existe porque a versão anterior colapsava CINCO causas distintas num
+// único bool e o chamador registrava sempre "PrintWindow recusado" — mesmo
+// quando a falha real era janela travada, DC indisponível ou área absurda. Num
+// diagnóstico de campo isso levou a investigar a API errada.
+func imprimirJanela(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool, string) {
 	r, ok := winui.WindowRect(hwnd)
 	if hwnd == 0 || !ok {
-		return winui.Rect{}, nil, false
+		return winui.Rect{}, nil, false, "janela sem retângulo (destruída ou handle inválido)"
 	}
-	if r.W <= 0 || r.H <= 0 || r.W*r.H > mascaraRefreshMaxPixels {
-		return winui.Rect{}, nil, false
+	if r.W <= 0 || r.H <= 0 {
+		return winui.Rect{}, nil, false, "janela com área inválida"
+	}
+	if r.W*r.H > mascaraRefreshMaxPixels {
+		return winui.Rect{}, nil, false, "janela maior que o teto de pixels"
 	}
 	// App travado (não responde a mensagens): PrintWindow bloquearia a goroutine
 	// de refresh para sempre. Melhor manter a máscara congelada.
 	if travada, _, _ := procIsHungAppWindow.Call(hwnd); travada != 0 {
-		return winui.Rect{}, nil, false
+		return winui.Rect{}, nil, false, "app travado (não responde)"
 	}
 
 	screenDC, _, _ := procGetDC.Call(0)
 	if screenDC == 0 {
-		return winui.Rect{}, nil, false
+		return winui.Rect{}, nil, false, "GetDC da tela falhou"
 	}
 	defer procReleaseDC.Call(0, screenDC)
 
 	memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
 	if memDC == 0 {
-		return winui.Rect{}, nil, false
+		return winui.Rect{}, nil, false, "CreateCompatibleDC falhou"
 	}
 	defer procDeleteDC.Call(memDC)
 
@@ -272,7 +289,7 @@ func imprimirJanela(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool) {
 		0,
 	)
 	if hbm == 0 || bits == nil {
-		return winui.Rect{}, nil, false
+		return winui.Rect{}, nil, false, "CreateDIBSection falhou"
 	}
 	prev, _, _ := procSelectObject.Call(memDC, hbm)
 	impresso, _, _ := procPrintWindow.Call(hwnd, memDC, pwRenderFullContent)
@@ -292,9 +309,9 @@ func imprimirJanela(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool) {
 	procSelectObject.Call(memDC, prev)
 	procDeleteObject.Call(hbm)
 	if impresso == 0 {
-		return winui.Rect{}, nil, false
+		return winui.Rect{}, nil, false, "PrintWindow recusado"
 	}
-	return r, out, true
+	return r, out, true, ""
 }
 
 // recortarRegiao extrai um retângulo de um bitmap BGRA top-down.
@@ -314,10 +331,19 @@ func recortarRegiao(pixels []byte, largura, x, y, w, h int) []byte {
 	return out
 }
 
-// regiaoUtil descarta resultados suspeitos: bitmap todo preto (PrintWindow
-// recusado por app UWP/GPU) ou uniforme (render vazio). Região legítima e
-// uniforme (barra de título lisa) é rejeitada — nesse caso a máscara congelada
-// já é o mesmo conteúdo.
+// regiaoUtil informa se uma captura do PrintWindow é CONTEÚDO VÁLIDO.
+//
+// Só descarta captura INVÁLIDA: bitmap todo preto (PrintWindow recusado por app
+// UWP/GPU) ou buffer zerado. Região uniforme NÃO é inválida.
+//
+// A versão anterior exigia variação de cor (maxR-minR >= 2) e por isso rejeitava
+// toda região uniforme — inclusive branco chapado de página em branco, cinza
+// liso de barra de título e área escura lisa de papel de parede. O comentário
+// original supunha que "região uniforme congelada já é o mesmo conteúdo", o que
+// é FALSO quando a janela de trás mudou: ao fechar o navegador, a área sob o
+// cartão vira papel de parede liso, o refresh é rejeitado e a máscara mantém
+// para sempre os pixels da janela já fechada — o fantasma relatado em campo
+// (faixa branca de 480x76 com resíduo da UI do navegador sobre o wallpaper).
 //
 // A amostragem é proporcional ao tamanho (até ~1024 amostras): com passo fixo de
 // 97 pixels uma interseção pequena (ex.: 80 px de largura) era amostrada em 1
@@ -331,21 +357,34 @@ func regiaoUtil(pixels []byte) bool {
 	if passoPixels < 1 {
 		passoPixels = 1
 	}
-	minR, maxR := byte(0xFF), byte(0)
 	naoPreto := false
 	for i := 0; i+3 < len(pixels); i += passoPixels * 4 {
-		r := pixels[i+2]
-		if r < minR {
-			minR = r
-		}
-		if r > maxR {
-			maxR = r
-		}
 		if pixels[i] != 0 || pixels[i+1] != 0 || pixels[i+2] != 0 {
 			naoPreto = true
+			break
 		}
 	}
-	return naoPreto && maxR-minR >= 2
+	return naoPreto
+}
+
+// registrarFalhaMascara contabiliza um refresh sem conteúdo válido. Enquanto o
+// contador estiver abaixo do limite, mantém o quadro congelado (comportamento
+// histórico). Ao atingir mascaraFalhasParaDescartar, DESCARTA a máscara: é melhor
+// mostrar a área ao vivo (mesmo que o cartão do agente apareça nela) do que
+// deixar um retângulo de conteúdo morto na tela indefinidamente.
+//
+// Sem isso o fantasma só desaparece quando alguma janela com conteúdo variado
+// passa a ficar sob o cartão — ou seja, pode durar a sessão inteira.
+func registrarFalhaMascara(m *mascaraRegiao, motivo string) {
+	m.falhasConsecutivas++
+	if m.falhasConsecutivas < mascaraFalhasParaDescartar {
+		logMascaraRefreshFalha(m.hwnd, motivo)
+		return
+	}
+	// Descarta ANTES de logar: removerMascara pode encerrar o loop de refresh.
+	hwnd := m.hwnd
+	log.Printf("[session-banner] refresh da máscara falhou %d vezes seguidas (%s) — descartando a máscara e voltando à captura ao vivo", m.falhasConsecutivas, motivo)
+	removerMascara(hwnd)
 }
 
 // logMascaraRefresh registra o resultado do refresh uma única vez por mudança de

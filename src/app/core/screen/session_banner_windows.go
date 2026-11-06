@@ -710,12 +710,27 @@ func (b *SessionBanner) RequestClose() {
 	b.mu.Unlock()
 
 	if hwnd != 0 {
-		winui.PostMessage(hwnd, winui.MsgClose, 0, 0)
+		// O retorno era IGNORADO. Se a fila de mensagens da thread da janela
+		// estiver cheia/saturada o PostMessage falha e o WM_CLOSE nunca chega:
+		// a janela fica viva para sempre, o WM_DESTROY nunca roda, a máscara
+		// nunca é removida (unregisterBannerCapture) e o cartão permanece
+		// congelado na região do topo — o "fantasma agarrado" relatado em campo.
+		if !winui.PostMessageOK(hwnd, winui.MsgClose, 0, 0) {
+			log.Printf("[session-banner] PostMessage(WM_CLOSE) falhou — forçando DestroyWindow")
+			winui.DestroyWindow(hwnd)
+		}
 	}
 }
 
 // Close encerra a janela e espera a thread dona destruí-la (até 2s). Use
 // RequestClose quando o chamador não puder bloquear (ex.: segurando um mutex).
+//
+// Watchdog: se a thread da janela não destruir em bannerCloseTimeout, força a
+// destruição. Sem isso uma thread bloqueada (PrintWindow de um app travado,
+// UAC, troca de desktop) deixaria a janela viva E a máscara registrada — a
+// área do cartão continuaria sendo reescrita com pixels mortos na sessão
+// seguinte. Forçar DestroyWindow é seguro: se a janela já morreu, a chamada é
+// no-op; se ainda existe, o WM_DESTROY dispara o unregister normalmente.
 func (b *SessionBanner) Close() {
 	if b == nil {
 		return
@@ -727,6 +742,32 @@ func (b *SessionBanner) Close() {
 	}
 	select {
 	case <-b.doneCh:
-	case <-time.After(2 * time.Second):
+		return
+	case <-time.After(bannerCloseTimeout):
+	}
+
+	// A thread da janela não respondeu: garante o encerramento e a remoção da
+	// máscara sem esperar por ela.
+	b.mu.Lock()
+	hwnd := b.hwnd
+	b.mu.Unlock()
+	if hwnd == 0 {
+		return
+	}
+	if _, visivel := winui.VisibleRect(hwnd); visivel {
+		log.Printf("[session-banner] janela não destruiu em %v — forçando DestroyWindow", bannerCloseTimeout)
+		winui.DestroyWindow(hwnd)
+	}
+	// Independente do DestroyWindow: a máscara não pode sobreviver ao banner.
+	unregisterBannerCapture(hwnd)
+	// Espera curta pelo WM_DESTROY do DestroyWindow forçado.
+	select {
+	case <-b.doneCh:
+	case <-time.After(500 * time.Millisecond):
+		log.Printf("[session-banner] thread da janela ainda não encerrou após destruição forçada")
 	}
 }
+
+// bannerCloseTimeout é o tempo que Close() espera pela thread da janela antes de
+// forçar a destruição. 2s era o valor histórico do select; mantido.
+const bannerCloseTimeout = 2 * time.Second

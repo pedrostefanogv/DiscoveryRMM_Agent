@@ -202,6 +202,11 @@ type mascaraRegiao struct {
 	rect  winui.Rect // coordenadas físicas do desktop virtual
 	px    []byte     // BGRA top-down, rect.W*4 por linha
 	ativa bool
+	// falhasConsecutivas conta refreshes seguidos que não conseguiram capturar
+	// conteúdo ao vivo. Depois de mascaraFalhasParaDescartar o refresh descarta a
+	// máscara em vez de manter o quadro congelado para sempre (rede de segurança
+	// contra fantasma permanente em casos não previstos).
+	falhasConsecutivas int
 }
 
 // mascaraMaxPixels limita a área da máscara (4 MP ≈ 16 MB de BGRA). O banner

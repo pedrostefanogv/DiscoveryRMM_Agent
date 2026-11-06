@@ -506,9 +506,20 @@ func TrackMouseLeave(hwnd uintptr) {
 
 // PostMessage enfileira uma mensagem para a janela (seguro de outras threads).
 func PostMessage(hwnd uintptr, message uint32, wparam, lparam uintptr) {
-	if hwnd != 0 {
-		procPostMessageW.Call(hwnd, uintptr(message), wparam, lparam)
+	PostMessageOK(hwnd, message, wparam, lparam)
+}
+
+// PostMessageOK é PostMessage devolvendo o resultado da API. false significa que
+// a mensagem NÃO foi enfileirada (fila saturada, janela já destruída, thread
+// bloqueada). Chamadores que dependem da mensagem para encerrar algo devem usar
+// esta variante e ter um caminho alternativo: um WM_CLOSE perdido deixa a janela
+// viva indefinidamente.
+func PostMessageOK(hwnd uintptr, message uint32, wparam, lparam uintptr) bool {
+	if hwnd == 0 {
+		return false
 	}
+	ret, _, _ := procPostMessageW.Call(hwnd, uintptr(message), wparam, lparam)
+	return ret != 0
 }
 
 // SetCapture prende o mouse à janela (arrastar/clicar).
