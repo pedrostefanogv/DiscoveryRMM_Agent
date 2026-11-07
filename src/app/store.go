@@ -68,10 +68,15 @@ func (a *App) refreshCatalogFromAppStore(ctx context.Context) (models.Catalog, e
 	return a.markCustomInstalledInCatalog(ctx, catalog), nil
 }
 
-// markCustomInstalledInCatalog preenche AppItem.Installed dos pacotes custom com
-// detecção por inventário usando UMA coleta do inventário local por montagem do
-// catálogo (contrato §4.6). Nunca falha a listagem da loja: sem inventário, os
-// itens apenas ficam com Installed=false.
+// markCustomInstalledInCatalog preenche AppItem.Installed dos itens da loja
+// usando UMA coleta por fonte e por montagem do catálogo (contrato §4.6):
+//
+//   - custom com detecção InventoryLink → inventário local;
+//   - Winget/Chocolatey → pacotes instalados reconhecidos pelo gerenciador
+//     (`winget list` / `choco list`).
+//
+// Nunca falha a listagem da loja: sem as fontes, os itens apenas ficam com
+// Installed=false.
 func (a *App) markCustomInstalledInCatalog(ctx context.Context, catalog models.Catalog) models.Catalog {
 	if a == nil || a.InventorySvc == nil {
 		return catalog

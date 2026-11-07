@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"discovery/app/core/models"
 )
 
 // Regressão 1: a pasta do executável (Program Files) vinha primeiro e exigia
@@ -109,4 +111,14 @@ func TestExportDirCandidatesPrefersExistingPersonalDirs(t *testing.T) {
 	if dirs[0] != want {
 		t.Fatalf("primeiro candidato = %q, want %q (Desktop do OneDrive é o que existe)", dirs[0], want)
 	}
+}
+
+// ParseInstalledListOutputForTest expõe o parser de produção do "winget list"
+// para os testes de integração de OUTROS pacotes (ex.: a montagem do catálogo da
+// loja precisa provar de ponta a ponta que um app instalado é reconhecido).
+//
+// O nome do arquivo termina em _test.go de propósito: é o padrão do Go para
+// expor internos apenas em tempo de teste, sem entrar no binário de produção.
+func ParseInstalledListOutputForTest(raw string) []models.InstalledPackage {
+	return parseInstalledListOutput(raw)
 }

@@ -1303,6 +1303,17 @@ func normalizeSoftwareUpdateSource(source string) string {
 // de sincronização (startup + pós-bootstrap).
 const installedPackagesCacheTTL = 10 * time.Minute
 
+// safeLogf registra uma linha sem panic quando o Service foi criado sem logger.
+// loadInstalledPackages é chamado também pela montagem do catálogo da loja, que
+// em testes/uso isolado pode não ter logger injetado — um panic aqui derrubaria
+// a listagem da loja, contrariando o fail-safe.
+func (s *Service) safeLogf(message string) {
+	if s == nil || s.logf == nil {
+		return
+	}
+	s.logf(message)
+}
+
 // loadInstalledPackages consulta o "winget list" de forma best-effort e com
 // cache curto, reutilizando a última lista em falha transitória (indexar o
 // inventário com uma lista vazia perderia a correlação pelo Id do winget).
@@ -1325,9 +1336,9 @@ func (s *Service) loadInstalledPackages(ctx context.Context) []models.InstalledP
 	hadGoodScan := len(cached) > 0 && !goodAt.IsZero()
 	items, err := s.installedPackages(ctx)
 	if err != nil {
-		s.logf("[agent-sync] aviso: falha ao listar pacotes instalados (winget list): " + err.Error())
+		s.safeLogf("[agent-sync] aviso: falha ao listar pacotes instalados (winget list): " + err.Error())
 		if hadGoodScan {
-			s.logf("[agent-sync] reutilizando ultima lista de instalados conhecida para nao limpar o servidor")
+			s.safeLogf("[agent-sync] reutilizando ultima lista de instalados conhecida para nao limpar o servidor")
 			return cached
 		}
 		return nil
@@ -1336,7 +1347,7 @@ func (s *Service) loadInstalledPackages(ctx context.Context) []models.InstalledP
 	// Mesma proteção do scan de updates: uma lista vazia transitória do
 	// "winget list" zeraria updatePackageId de todo o inventário no servidor.
 	if len(items) == 0 && hadGoodScan && time.Since(goodAt) < emptyScanGraceTTL {
-		s.logf("[agent-sync] winget list vazio suspeito; mantendo ultima lista conhecida para nao limpar o servidor")
+		s.safeLogf("[agent-sync] winget list vazio suspeito; mantendo ultima lista conhecida para nao limpar o servidor")
 		return cached
 	}
 
