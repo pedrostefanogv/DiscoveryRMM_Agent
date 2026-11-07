@@ -107,6 +107,9 @@ func registerBannerCapture(hwnd uintptr) {
 	// pode agir no meio da criação (respawn com o processo já "quente").
 	bannerModoDecidido.Store(false)
 	bannerCaptureMu.Unlock()
+	// O handle pode ter sido reciclado de um cartão anterior cuja máscara foi
+	// descartada em vida: um cartão NOVO tem direito à máscara própria.
+	esquecerMascaraDescartada(hwnd)
 }
 
 // unregisterBannerCapture desmarca hwnd (janela destruída / fim da sessão).
@@ -238,6 +241,33 @@ func capturarMascaraRegiao(hwnd uintptr) error {
 	if rect.W <= 0 || rect.H <= 0 || rect.W*rect.H > mascaraMaxPixels {
 		return fmt.Errorf("área da janela inválida (%dx%d)", rect.W, rect.H)
 	}
+	// ── As duas travas que impedem a máscara de conter o PRÓPRIO CARTÃO ──
+	//
+	// O BitBlt abaixo lê a tela FÍSICA. Se o cartão já estiver desenhado nela, o
+	// que for gravado como "conteúdo de baixo" é o próprio cartão — e o pipeline
+	// o reescreve em TODO frame, vazando-o para o operador. Como o cartão é o
+	// dado mais sensível da sessão (nome do operador), a checagem é dupla e as
+	// duas precisam passar:
+	//
+	// 1. A janela tem de estar OCULTA agora. É a garantia REAL da invariante
+	//    "capturar antes do ShowWindow" que o comentário desta função sempre
+	//    afirmou — antes ele afirmava sem que nada no código verificasse. Como
+	//    IsWindowVisible é consultado no INSTANTE da captura, a checagem vale
+	//    mesmo que um chamador futuro reative a máscara de um cartão em tela.
+	// 2. A janela não pode ter tido a máscara descartada em vida (ver
+	//    removerMascara). Um descarte significa que o refresh já desistiu de
+	//    manter aquela área viva; recapturar por outro caminho reabriria o
+	//    buraco que o descarte fechou.
+	//
+	// A ordem importa para o diagnóstico: a visibilidade é a causa mais provável
+	// (e mais fácil de entender no log) quando alguém tentar recapturar com o
+	// cartão na tela.
+	if visivel, _, _ := procIsWindowVisible.Call(hwnd); visivel != 0 {
+		return fmt.Errorf("janela já visível: a captura leria o próprio cartão")
+	}
+	if mascaraFoiDescartada(hwnd) {
+		return fmt.Errorf("máscara já descartada para esta janela (recaptura reabriria o fantasma)")
+	}
 	px, err := lerPixelsTela(rect)
 	if err != nil {
 		return err
@@ -320,6 +350,16 @@ func lerPixelsTela(r winui.Rect) ([]byte, error) {
 }
 
 // removerMascara descarta a máscara de uma janela (idempotente).
+//
+// POR QUE UMA MÁSCARA DESCARTADA NÃO PODE VOLTAR: quem descarta (o refresh, ao
+// achar a faixa do cartão parcialmente coberta, ou ao esgotar as falhas de
+// captura) o faz justamente porque não consegue mais manter aquela área com
+// conteúdo vivo. Recapturar depois seria lido da tela FÍSICA — onde o cartão
+// está desenhado — e a máscara passaria a conter o PRÓPRIO CARTÃO, que então
+// seria reescrito em todo frame: o cartão vazando para o operador. A área volta
+// a ser capturada ao vivo e, sem máscara, quem protege o stream é a escada de
+// afinidade (garantirProtecaoSemMascara/applyDisplayAffinity) e a emenda do
+// capturer GDI. Por isso existe o registro de descartadas abaixo.
 func removerMascara(hwnd uintptr) {
 	if hwnd == 0 {
 		return
@@ -328,10 +368,74 @@ func removerMascara(hwnd uintptr) {
 	delete(mascaras, hwnd)
 	restantes := len(mascaras)
 	mascarasMu.Unlock()
+	marcarMascaraDescartada(hwnd)
 	if restantes == 0 {
 		// Sem máscara não há o que atualizar: encerra o loop de refresh.
 		pararRefreshMascaras()
 	}
+	// Último passo, e FORA de todos os locks: o hook pode chamar
+	// SetWindowDisplayAffinity (e, no futuro, capturar) — segurar mascarasMu
+	// aqui travaria o patcher por frame e poderia deadlockar.
+	//
+	// O retorno (modo efetivo) é ignorado de propósito: ver o comentário da var.
+	if aoDescartarMascara != nil {
+		_ = aoDescartarMascara(hwnd)
+	}
+}
+
+// aoDescartarMascara é chamado DEPOIS que uma máscara é descartada em runtime.
+//
+// Existe para o recuo de afinidade: sem máscara, a área do cartão volta a ser
+// capturada ao vivo e o Desktop Duplication (que ignora o WDA) mostraria o
+// cartão no stream. session_banner_windows.go preenche este hook com
+// reaplicarProtecaoAposDescarteMascara, que rebaixa a janela para WDA_MONITOR
+// (área preta) quando não há emenda do capturer. Nil = nenhum tratamento.
+//
+// POR QUE O HOOK DEVOLVE bannerCaptureMode E AQUI O RETORNO É IGNORADO: o modo
+// efetivo (EXCLUDE mantido, MONITOR aplicado, ou nada) só é conhecido por quem
+// conhece a escada de afinidade — isto é, pelo preenchedor do hook, que também é
+// quem LOGa esse valor no ponto em que a informação nasce. Devolver o modo e não
+// usá-lo aqui mantém este arquivo alheio à escada de afinidade: o descarte só
+// precisa notificar "esta janela perdeu a máscara", e o que fazer com isso é
+// decisão de session_banner_windows.go.
+var aoDescartarMascara func(hwnd uintptr) bannerCaptureMode
+
+// mascarasDescartadas guarda os HWNDs cuja máscara foi DESCARTADA em vida (não
+// removida por fim de sessão). É um conjunto pequeno (um por cartão do agente) e
+// serve de trava de segurança para capturarMascaraRegiao: sem ela, uma segunda
+// captura da MESMA janela — que já está na tela, com o cartão pintado — gravaria
+// o cartão dentro da máscara e o pipeline o reescreveria em todo frame.
+var (
+	mascarasDescartadasMu sync.Mutex
+	mascarasDescartadas   = map[uintptr]bool{}
+)
+
+func marcarMascaraDescartada(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	mascarasDescartadasMu.Lock()
+	mascarasDescartadas[hwnd] = true
+	mascarasDescartadasMu.Unlock()
+}
+
+func mascaraFoiDescartada(hwnd uintptr) bool {
+	mascarasDescartadasMu.Lock()
+	defer mascarasDescartadasMu.Unlock()
+	return mascarasDescartadas[hwnd]
+}
+
+// esquecerMascaraDescartada libera a trava quando a janela é REGISTRADA de novo
+// (registerBannerCapture). O Windows recicla HWNDs: sem o esquecimento, um
+// cartão novo que herdasse o handle de um cartão antigo nasceria sem máscara e
+// cairia na escada de afinidade — degradação gratuita e difícil de diagnosticar.
+func esquecerMascaraDescartada(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	mascarasDescartadasMu.Lock()
+	delete(mascarasDescartadas, hwnd)
+	mascarasDescartadasMu.Unlock()
 }
 
 // RegionMaskAvailable informa se existe máscara ATIVA pronta para reescrever a
@@ -413,9 +517,41 @@ func emendaDoCapturerDisponivel() bool {
 }
 
 // ativarMascara liga a aplicação da máscara no frame (idempotente).
+//
+// Se a máscara desta janela foi DESCARTADA em vida (ver removerMascara), a
+// ativação solta a trava e tenta recapturar os pixels UMA vez: um cartão sem
+// reescrita vaza para o operador.
+//
+// A recaptura NÃO depende da boa vontade do chamador — capturarMascaraRegiao
+// recusa a captura quando a janela está VISÍVEL (checa IsWindowVisible no
+// instante do BitBlt) e quando a trava de descarte está posta. Com a janela em
+// tela, que é o caso em que a captura leria o próprio cartão, a recaptura falha,
+// a trava é recolocada e a área segue protegida pela afinidade (ver
+// aoDescartarMascara, o recuo de afinidade disparado no próprio descarte).
+//
+// Nota histórica: este comentário já disse que a recaptura servia ao "cartão
+// reafirmado no topo pelo SetWindowPos do topmost, no timer de 1s". Isso é
+// FALSO — reafirmarBannerTopmost só chama SetWindowPos e nunca reexibe a janela
+// nem chama ativarMascara. A frase foi removida para não induzir a erro em campo.
+// sem máscara e com afinidade indisponível ele vazaria para o operador. A
+// recaptura aqui é legítima porque capturaMascaraRegiao exige a janela OCULTA,
+// e o cartão acabou de voltar a ser ocultado (hideBannerFromCapture).
+//
+// Quando não há máscara nenhuma para o handle, nada acontece: quem protege o
+// stream nesse caso é a afinidade (garantirProtecaoSemMascara).
 func ativarMascara(hwnd uintptr) {
 	if hwnd == 0 {
 		return
+	}
+	if mascaraFoiDescartada(hwnd) {
+		// Solta a trava e tenta recapturar. Se a janela NÃO estiver oculta (o caso
+		// perigoso: o cartão já está pintado na tela) ou se a captura falhar, a
+		// trava volta e a área segue sem máscara — protegida pela afinidade.
+		esquecerMascaraDescartada(hwnd)
+		if err := capturarMascaraRegiao(hwnd); err != nil {
+			log.Printf("[session-banner] recaptura da máscara falhou (%v) — a área do cartão volta a depender da afinidade", err)
+			marcarMascaraDescartada(hwnd)
+		}
 	}
 	mascarasMu.Lock()
 	ativou := false

@@ -19,6 +19,7 @@ import (
 //   - remote session           → agent_commands_remotesession.go
 //   - remote debug             → core/remotedebug
 //   - nats.reconnect           → agent_commands_natsreconnect.go (transferência de site)
+//   - servicecontrol           → service_commands.go (guard fail-closed em core/sysctrl)
 //
 // Retorna (handled, exitCode, output, errText) no contrato do agentconn.
 func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
@@ -380,6 +381,13 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 	// Gerenciador de patches do Windows (WUA): scan/install/hide/policy.
 	if IsWindowsUpdateCommandType(cmdType) {
 		return a.handleWindowsUpdateCommand(parent, payload)
+	}
+
+	// Controle de serviços (F7): start/stop/restart COM guard fail-closed.
+	// Ver service_commands.go — a execução passa obrigatoriamente por
+	// sysctrl.EvaluateServiceAction, que recusa por padrão.
+	if IsServiceControlCommandType(cmdType) {
+		return a.handleServiceControlCommand(parent, payload)
 	}
 
 	// Delega comandos de inventário sob demanda (SystemInfo)

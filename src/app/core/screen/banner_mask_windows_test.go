@@ -16,21 +16,50 @@ import (
 // só máscara ATIVA é aplicada, o recorte respeita a origem do frame e frame HDR
 // não é tocado.
 
+// mascaraVisivelOriginal guarda o valor de mascaraVisivel definido em
+// PRODUÇÃO, capturado uma única vez na carga do pacote — antes que qualquer
+// teste possa ter mexido nele.
+//
+// POR QUE ISSO IMPORTA (achado do verifier): a versão anterior deste helper
+// fazia `anterior := mascaraVisivel` e restaurava esse valor no t.Cleanup. Parece
+// correto, mas não é: se OUTRO helper/teste já tinha sobrescrito a var e não a
+// restaurou (era o caso de TestPatchFrameBannerIgnoraCartaoOculto, que deixava
+// mascaraVisivel = sempre-falso), o "anterior" capturado aqui era o valor
+// CONTAMINADO daquele teste. Limpar restaurava o lixo e a contaminação se
+// propagava pela suíte inteira, fazendo o resultado depender da ORDEM de
+// execução — um teste que passa por acidente é pior do que um que falha sempre,
+// porque destrói a confiança em toda a suíte.
+//
+// Restaurar sempre o valor de produção (e não o que estava lá) torna cada teste
+// independente da ordem.
+var mascaraVisivelOriginal = mascaraVisivel
+
 // limparMascaras zera o registry global entre testes e faz todo HWND sintético
 // contar como visível (os testes não criam janela real).
 func limparMascaras(t *testing.T) {
 	t.Helper()
-	anterior := mascaraVisivel
 	mascaraVisivel = func(uintptr) bool { return true }
 	mascarasMu.Lock()
 	mascaras = map[uintptr]*mascaraRegiao{}
 	mascarasMu.Unlock()
 	t.Cleanup(func() {
-		mascaraVisivel = anterior
+		// Restaura o valor de PRODUÇÃO, não o que estivesse pendurado de outro teste.
+		mascaraVisivel = mascaraVisivelOriginal
 		mascarasMu.Lock()
 		mascaras = map[uintptr]*mascaraRegiao{}
 		mascarasMu.Unlock()
 	})
+}
+
+// mascaraInvisivel força todos os cartões a parecerem ocultos (ou devolve ao
+// estado padrão com visivel=false/true) e RESTAURA no fim do teste.
+//
+// Existe para nenhum teste mais escrever direto em mascaraVisivel sem cleanup —
+// foi exatamente essa escrita direta e sem restauração que contaminou a suíte.
+func mascaraInvisivel(t *testing.T, valor bool) {
+	t.Helper()
+	mascaraVisivel = func(uintptr) bool { return valor }
+	t.Cleanup(func() { mascaraVisivel = mascaraVisivelOriginal })
 }
 
 // mascaraDeTeste monta uma máscara com todos os pixels iguais a valor.
@@ -193,7 +222,9 @@ func TestPatchFrameBannerIfNeededPulaCapturerComEmenda(t *testing.T) {
 
 func TestPatchFrameBannerIgnoraCartaoOculto(t *testing.T) {
 	limparMascaras(t)
-	mascaraVisivel = func(uintptr) bool { return false }
+	// Restaura no fim: escrever direto aqui era o vazamento que contaminava os
+	// testes seguintes (ver o comentário de mascaraVisivelOriginal).
+	mascaraInvisivel(t, false)
 	frame := frameDeTeste(100, 50, 0, 0, 0x11)
 	m := mascaraDeTeste(0xABC, winui.Rect{X: 10, Y: 5, W: 20, H: 10}, 0x22, true)
 	mascarasMu.Lock()
@@ -344,4 +375,19 @@ func TestMascaraCicloDeVida(t *testing.T) {
 	if RegionMaskAvailable() {
 		t.Fatal("removerMascara deveria limpar o registry")
 	}
+}
+
+// limparMascarasDescartadas zera a trava de recaptura entre testes. A trava é
+// global por HWND e um teste não pode herdar o estado do outro (os testes usam
+// HWNDs sintéticos e fixos).
+func limparMascarasDescartadas(t *testing.T) {
+	t.Helper()
+	mascarasDescartadasMu.Lock()
+	mascarasDescartadas = map[uintptr]bool{}
+	mascarasDescartadasMu.Unlock()
+	t.Cleanup(func() {
+		mascarasDescartadasMu.Lock()
+		mascarasDescartadas = map[uintptr]bool{}
+		mascarasDescartadasMu.Unlock()
+	})
 }

@@ -83,11 +83,30 @@ func collectSensor(ctx context.Context, cfg *SensorConfig) []sensorCollection {
 	case SensorTypeSmartStatus:
 		return collectSmartStatusSamples(ctx, cfg)
 	case SensorTypeCertificate:
+		// Dois caminhos de evidência, escolhidos pelo ALVO (F6):
+		//   - alvo local ("local", "-" ou vazio) → cert store da PRÓPRIA máquina
+		//     + bindings HTTPS do IIS;
+		//   - qualquer outro (host / host:porta) → endpoint TLS remoto, que é o
+		//     comportamento original e continua sendo o default quando há alvo.
+		//
+		// O alvo vazio antes caía no caminho remoto e virava erro "sensor de
+		// certificado sem alvo". Com o store local ele passa a ter um significado
+		// útil (a própria máquina), SEM alterar quem já configura host/porta: a
+		// detecção exige um marcador explícito, então "10.0.0.5" e "host:443"
+		// seguem idênticos ao que eram.
+		if alvoEhCertStoreLocal(cfg.Policy.Target) {
+			return []sensorCollection{collectLocalCertificateSample(ctx, cfg)}
+		}
 		return []sensorCollection{collectCertificateExpirySample(ctx, cfg)}
 	case SensorTypeDefenderStatus:
 		return []sensorCollection{collectDefenderSample(ctx)}
 	case SensorTypeBitLocker:
 		return collectBitLockerSamples(cfg)
+	case SensorTypeADConsistency:
+		// F5: 1 amostra (targetKey vazio) — a consistência é do DC inteiro, não
+		// de um alvo por linha. Em cliente/servidor membro o coletor devolve
+		// coleta vazia SEM erro (não é falha, o sensor não se aplica).
+		return []sensorCollection{CollectADConsistency(ctx, cfg)}
 	default:
 		return []sensorCollection{{Err: fmt.Sprintf("sensor tipo %q nao suportado pelo agente", cfg.Policy.SensorType)}}
 	}

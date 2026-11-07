@@ -47,6 +47,9 @@ const (
 	SensorTypeCertificate    SensorType = "CertificateExpiry"
 	SensorTypeDefenderStatus SensorType = "DefenderStatus"
 	SensorTypeBitLocker      SensorType = "BitLocker"
+	// SensorTypeADConsistency = F5 (SensorType.ADConsistency = 19 no servidor).
+	// Só se aplica a controlador de domínio; fora dele a coleta volta vazia.
+	SensorTypeADConsistency SensorType = "ADConsistency"
 )
 
 // sensorTypeByNumber espelha a ordem do enum SensorType do servidor.
@@ -70,6 +73,7 @@ var sensorTypeByNumber = map[int]SensorType{
 	16: SensorTypeCertificate,
 	17: SensorTypeDefenderStatus,
 	18: SensorTypeBitLocker,
+	19: SensorTypeADConsistency,
 }
 
 // UnmarshalJSON aceita o nome ("DiskSpace") e o valor numérico (0).
@@ -231,6 +235,19 @@ type SensorMeasure struct {
 	// BitLocker (BitLocker)
 	BitLockerStatus            *string  `json:"bitLockerStatus,omitempty"`
 	BitLockerEncryptionPercent *float64 `json:"bitLockerEncryptionPercent,omitempty"`
+
+	// Consistência de AD (ADConsistency)
+	//
+	// Espelha os canais abaixo em campos explícitos: o servidor deriva os canais
+	// preferindo estes campos e caindo para o mapa Channels quando faltarem
+	// (compatibilidade com agentes antigos que só mandavam Channels).
+	AdCollectOK         *bool    `json:"adCollectOk,omitempty"`
+	AdReplicationFailures *int   `json:"adReplicationFailures,omitempty"`
+	AdReplicationOK     *bool    `json:"adReplicationOk,omitempty"`
+	AdDcdiagFailedTests *int     `json:"adDcdiagFailedTests,omitempty"`
+	AdDcdiagOK          *bool    `json:"adDcdiagOk,omitempty"`
+	AdTimeOffsetSeconds *float64 `json:"adTimeOffsetSeconds,omitempty"`
+	AdClockOK           *bool    `json:"adClockOk,omitempty"`
 
 	// Serviço: reinício automático (restartIfStopped)
 	RestartAttempted *bool `json:"restartAttempted,omitempty"`

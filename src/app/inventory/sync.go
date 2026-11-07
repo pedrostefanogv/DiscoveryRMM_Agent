@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"discovery/app/core/chocolatey"
+	"discovery/app/core/inventory/native"
+	"discovery/app/core/logger"
 	"discovery/app/core/models"
 	"discovery/app/core/winget"
 	"discovery/app/debug"
@@ -119,10 +121,29 @@ type agentHardwareInfo struct {
 	OSEdition               string  `json:"osEdition,omitempty"`
 	OSBuild                 string  `json:"osBuild"`
 	OSArchitecture          string  `json:"osArchitecture"`
-	TpmEkHash               string  `json:"tpmEk,omitempty"`
-	SmbiosUuid              string  `json:"smbiosUuid,omitempty"`
-	CollectedAt             string  `json:"collectedAt"`
-	UpdatedAt               string  `json:"updatedAt"`
+	// ── Windows Server / domínio (F1 + F4) ──
+	// Identificam se a máquina é Windows Server (membro ou DC) e a que
+	// domínio/grupo de trabalho pertence. OsProductType carrega o valor
+	// canônico do registry ("WinNT" | "ServerNT" | "LanmanNT" | "unknown").
+	OSIsServer     bool   `json:"osIsServer"`
+	OSProductType  string `json:"osProductType,omitempty"`
+	OSDomain       string `json:"osDomain,omitempty"`
+	OSWorkgroup    string `json:"osWorkgroup,omitempty"`
+	OSPartOfDomain bool   `json:"osPartOfDomain"`
+	// ── Inventário específico de Windows Server (F3/F10/F11/F12/F14) ──
+	// Cada coletor é CONDICIONAL: só produz dado quando o recurso existe na
+	// máquina (role instalada / serviço presente). Em cliente Windows ficam
+	// vazios e o custo é uma consulta ao SCM. Falha de coleta é não-fatal: o
+	// campo simplesmente não vai, e o servidor trata como "não reportado".
+	OSRoles        []native.WindowsRole        `json:"osRoles,omitempty"`
+	ServerHardware *native.ServerHardware      `json:"serverHardware,omitempty"`
+	HyperV         *native.HyperVInventory     `json:"hyperV,omitempty"`
+	Cluster        *native.ClusterInventory    `json:"cluster,omitempty"`
+	StorageRDS     *native.StorageRDSInventory `json:"storageRds,omitempty"`
+	TpmEkHash      string                      `json:"tpmEk,omitempty"`
+	SmbiosUuid     string                      `json:"smbiosUuid,omitempty"`
+	CollectedAt    string                      `json:"collectedAt"`
+	UpdatedAt      string                      `json:"updatedAt"`
 }
 
 type agentDiskInfo struct {
@@ -239,7 +260,7 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
 
-	hardwarePayload := buildAgentHardwareEnvelope(report, s.version, s.commitHash, s.hardwareIdentity)
+	hardwarePayload := buildAgentHardwareEnvelope(ctx, report, s.version, s.commitHash, s.hardwareIdentity)
 	hardwarePayload.AgentID = strings.TrimSpace(cfg.AgentID)
 	hardwareBody, err := json.Marshal(hardwarePayload)
 	if err != nil {
@@ -1454,7 +1475,24 @@ func computeMachineScore(report models.InventoryReport) int {
 	return int(math.Round(math.Max(score, 1)))
 }
 
-func buildAgentHardwareEnvelope(report models.InventoryReport, version, commitHash string, hwIdentity func() hardwareid.Info) agentHardwareEnvelope {
+// collectServerRoles coleta as roles/features instaladas e devolve apenas a
+// lista para o payload.
+//
+// A coleta devolve WindowsRolesResult (lista + motivo de erro) porque o
+// servidor precisa distinguir "servidor sem roles instaladas" de "não
+// conseguimos perguntar". Aqui, porém, o payload carrega só a lista: o erro
+// vira lista vazia + registro no log, para não poluir o contrato JSON com um
+// campo que o servidor ainda não consome. Se um dia for necessário distinguir
+// os dois casos no servidor, é só passar a enviar o result inteiro.
+func collectServerRoles(ctx context.Context) []native.WindowsRole {
+	result := native.CollectWindowsRoles(ctx)
+	if result.Error != "" {
+		logger.Warn("coleta de roles do Windows Server falhou", "erro", result.Error)
+	}
+	return result.Roles
+}
+
+func buildAgentHardwareEnvelope(ctx context.Context, report models.InventoryReport, version, commitHash string, hwIdentity func() hardwareid.Info) agentHardwareEnvelope {
 	collected := strings.TrimSpace(report.CollectedAt)
 	if collected == "" {
 		collected = time.Now().UTC().Format(time.RFC3339)
@@ -1623,6 +1661,11 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version, commitHa
 		OSEdition:               trimToMaxLen(strings.TrimSpace(report.OS.Edition), 100),
 		OSBuild:                 trimToMaxLen(strings.TrimSpace(report.OS.Build), 100),
 		OSArchitecture:          trimToMaxLen(strings.TrimSpace(report.OS.Architecture), 100),
+		OSIsServer:              report.OS.IsServer,
+		OSProductType:           trimToMaxLen(strings.TrimSpace(report.OS.ProductType), 20),
+		OSDomain:                trimToMaxLen(strings.TrimSpace(report.OS.Domain), 100),
+		OSWorkgroup:             trimToMaxLen(strings.TrimSpace(report.OS.Workgroup), 100),
+		OSPartOfDomain:          report.OS.PartOfDomain,
 		CollectedAt:             collected,
 		UpdatedAt:               updated,
 	}
@@ -1632,6 +1675,31 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version, commitHa
 		hw := hwIdentity()
 		hwInfo.TpmEkHash = trimToMaxLen(strings.TrimSpace(hw.TPMEK), 64)
 		hwInfo.SmbiosUuid = trimToMaxLen(strings.TrimSpace(hw.SMBIOSUUID), 64)
+	}
+
+	// ── Inventário específico de Windows Server (F3/F10/F11/F12/F14) ──
+	//
+	// Só faz sentido consultar em Windows Server: em cliente as roles e os
+	// recursos (Hyper-V, cluster, Storage Spaces/RDS) não existem. O portão
+	// evita pagar o custo de SCM/PowerShell em toda a frota de estações.
+	//
+	// Todas as chamadas são NÃO-FATAIS por construção (devolvem struct por
+	// valor, nunca error): uma falha de coleta deixa o campo vazio em vez de
+	// derrubar o sync — o servidor trata ausência como "não reportado".
+	if report.OS.IsServer {
+		hwInfo.OSRoles = collectServerRoles(ctx)
+
+		sh := native.CollectServerHardware(ctx)
+		hwInfo.ServerHardware = &sh
+
+		hv := native.CollectHyperVInventario(ctx)
+		hwInfo.HyperV = &hv
+
+		cl := native.CollectClusterInventario(ctx)
+		hwInfo.Cluster = &cl
+
+		sr := native.CollectStorageRDSInventario(ctx)
+		hwInfo.StorageRDS = &sr
 	}
 
 	hwJSON, _ := json.Marshal(hwInfo)

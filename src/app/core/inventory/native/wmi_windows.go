@@ -259,6 +259,29 @@ func wmiFloat(row map[string]any, key string) float64 {
 	}
 }
 
+// wmiBool retorna o valor booleano de um campo de linha. É tolerante ao
+// formato: o COM pode entregar bool, ou o número 0/1, ou a string "True".
+// Campo ausente devolve false (nunca erro), como os demais helpers wmi*.
+func wmiBool(row map[string]any, key string) bool {
+	v, ok := row[key]
+	if !ok || v == nil {
+		return false
+	}
+	switch t := v.(type) {
+	case bool:
+		return t
+	case int64:
+		return t != 0
+	case float64:
+		return t != 0
+	case string:
+		s := strings.ToLower(strings.TrimSpace(t))
+		return s == "true" || s == "1" || s == "yes"
+	default:
+		return false
+	}
+}
+
 // utf16Ptr is a small helper to build a *uint16 from a string.
 func utf16Ptr(s string) *uint16 {
 	return syscall.StringToUTF16Ptr(s)

@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ func TestBuildAgentHardwareEnvelope_UsesStringStatusAndStringHardwareRawInventor
 		},
 	}
 
-	env := buildAgentHardwareEnvelope(report, "dev", "", nil)
+	env := buildAgentHardwareEnvelope(context.Background(), report, "dev", "", nil)
 	body, err := json.Marshal(env)
 	if err != nil {
 		t.Fatalf("marshal envelope: %v", err)
@@ -84,7 +85,7 @@ func TestBuildAgentHardwareEnvelope_FiltersInvalidRequiredComponents(t *testing.
 		},
 	}
 
-	env := buildAgentHardwareEnvelope(report, "dev", "", nil)
+	env := buildAgentHardwareEnvelope(context.Background(), report, "dev", "", nil)
 
 	// Components agora é json.RawMessage; deserializar para acessar campos
 	var comps agentHardwareComponents
@@ -119,7 +120,7 @@ func TestBuildAgentHardwareEnvelope_IncludesPrimaryLoggedUser(t *testing.T) {
 		},
 	}
 
-	env := buildAgentHardwareEnvelope(report, "dev", "", nil)
+	env := buildAgentHardwareEnvelope(context.Background(), report, "dev", "", nil)
 	if env.LoggedUser != "CORP\\pedro" {
 		t.Fatalf("loggedUser = %q, esperado %q", env.LoggedUser, "CORP\\pedro")
 	}
@@ -143,7 +144,7 @@ func TestBuildAgentHardwareEnvelope_OmitsLoggedUserWithoutSession(t *testing.T) 
 		Hardware:    models.HardwareInfo{Hostname: "PC-123"},
 	}
 
-	env := buildAgentHardwareEnvelope(report, "dev", "", nil)
+	env := buildAgentHardwareEnvelope(context.Background(), report, "dev", "", nil)
 	if env.LoggedUser != "" {
 		t.Fatalf("loggedUser = %q, esperado vazio", env.LoggedUser)
 	}
@@ -324,7 +325,7 @@ func TestBuildAgentHardwareEnvelope_IncludesPrintersInComponents(t *testing.T) {
 		},
 	}
 
-	env := buildAgentHardwareEnvelope(report, "dev", "", nil)
+	env := buildAgentHardwareEnvelope(context.Background(), report, "dev", "", nil)
 
 	// Components agora é json.RawMessage; deserializar para acessar campos
 	var comps agentHardwareComponents

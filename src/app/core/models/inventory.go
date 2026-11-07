@@ -171,6 +171,22 @@ type OperatingSystem struct {
 	DisplayVersion string `json:"displayVersion,omitempty"`
 	Build          string `json:"build"`
 	Architecture   string `json:"architecture"`
+
+	// IsServer indica Windows Server (membro ou controlador de domínio).
+	// Derivado de ProductType, não de string de exibição.
+	IsServer bool `json:"isServer,omitempty"`
+	// ProductType é o tipo de produto canônico do Windows
+	// (HKLM\SYSTEM\CurrentControlSet\Control\ProductOptions\ProductType):
+	// "WinNT" (cliente) | "ServerNT" (servidor membro) | "LanmanNT" (DC)
+	// | "unknown" (não foi possível ler). Ver native.ProductType*.
+	ProductType string `json:"productType,omitempty"`
+	// Domain é o domínio (AD/Entra) ao qual a máquina pertence. Fica vazio
+	// em máquinas fora de domínio — nesse caso o nome vai em Workgroup.
+	Domain string `json:"domain,omitempty"`
+	// Workgroup é o grupo de trabalho, preenchido apenas fora de domínio.
+	Workgroup string `json:"workgroup,omitempty"`
+	// PartOfDomain indica se a máquina é membro de um domínio.
+	PartOfDomain bool `json:"partOfDomain,omitempty"`
 }
 
 type SoftwareItem struct {

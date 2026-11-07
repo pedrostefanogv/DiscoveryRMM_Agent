@@ -4,18 +4,18 @@ package windowsupdate
 
 import (
 	"errors"
-	"strings"
 	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/registry"
+
+	"discovery/app/core/inventory/native"
 )
 
 // Valores de RESTOREPOINTINFO (srrestoreptapi.h).
 const (
-	srpEventBeginSystemChange = 0
-	srpEventEndSystemChange   = 1
+	srpEventBeginSystemChange         = 0
+	srpEventEndSystemChange           = 1
 	srpRestorePointApplicationInstall = 1
 	restorePointDescriptionMax        = 256
 )
@@ -35,24 +35,16 @@ var (
 	procSRSetRestorePointW = srclientDLL.NewProc("SRSetRestorePointW")
 )
 
-// isWindowsServer informa se a edição é Server (InstallationType/ProductName).
+// isWindowsServer informa se a máquina roda Windows Server.
+//
+// A decisão é DELEGADA à detecção canônica do inventário
+// (native.IsWindowsServer), que consulta ProductType em
+// HKLM\SYSTEM\CurrentControlSet\Control\ProductOptions — fonte estável e
+// independente do idioma. A heurística antiga (substring "server" em
+// InstallationType/ProductName) foi removida daqui para existir uma única
+// definição de "é servidor" no agente.
 func isWindowsServer() bool {
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE,
-		`SOFTWARE\Microsoft\Windows NT\CurrentVersion`, registry.QUERY_VALUE)
-	if err != nil {
-		return false
-	}
-	defer key.Close()
-
-	if installationType, _, err := key.GetStringValue("InstallationType"); err == nil &&
-		strings.Contains(strings.ToLower(installationType), "server") {
-		return true
-	}
-	if productName, _, err := key.GetStringValue("ProductName"); err == nil &&
-		strings.Contains(strings.ToLower(productName), "server") {
-		return true
-	}
-	return false
+	return native.IsWindowsServer()
 }
 
 // createRestorePoint cria UM checkpoint de sistema antes da instalacao.

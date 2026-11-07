@@ -3,6 +3,7 @@
 package screen
 
 import (
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -48,8 +49,37 @@ func exclusionWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	return winui.DefWindowProc(hwnd, msg, wparam, lparam)
 }
 
+// janelaMagenta cria a janela de teste OCULTA (sem ShowWindow) e PRENDE a
+// goroutine do teste a uma thread do SO.
+//
+// ── POR QUE O LockOSThread É OBRIGATÓRIO AQUI (flake real, 1 em 3 na suíte) ──
+//
+// Uma janela Win32 pertence à THREAD que a criou: só ela pode bombear as
+// mensagens dela. CreateWindow roda na goroutine do teste, e uma goroutine do Go
+// NÃO tem thread fixa — depois de um time.Sleep (ou de qualquer ponto de
+// preempção) o runtime pode movê-la para outra thread do SO.
+//
+// Medido: com um sleep de 300ms entre a criação e o ShowWindow, o GetCurrentThreadId
+// mudou de 25480 para 31012. O ShowWindow seguinte entrega WM_SHOWWINDOW/WM_PAINT
+// de forma SINCRONA para a thread DONA da janela — que agora é outra e não está
+// bombeando mensagens — e a chamada BLOQUEIA PARA SEMPRE.
+//
+// Era exatamente esse o flake: o teste do controle (sem sleep antes do ShowWindow)
+// nunca travava; o TestMascaraRemoveCartaoDaCaptura (com sleep de 300ms para o DWM
+// assentar) travava às vezes, conforme o runtime mantivesse ou não a goroutine na
+// mesma thread. Um panic de timeout de 25s, não uma falha de asserção.
+//
+// LockOSThread no helper resolve na raiz para TODOS os testes que usam a janela:
+// a goroutine fica na mesma thread do início ao fim, então ShowWindow/UpdateWindow/
+// DestroyWindow sempre rodam na thread dona. O UnlockOSThread no Cleanup evita
+// vazar a thread presa (o Go a descarta ao terminar a goroutine, mas devolvê-la
+// explicitamente mantém o pool sadio entre testes).
 func janelaMagenta(t *testing.T, x, y int) uintptr {
 	t.Helper()
+	// Precisa vir ANTES do CreateWindow: é a thread no momento da criação que
+	// passa a ser a dona da janela.
+	runtime.LockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
 	exclusionClassOnce.Do(func() {
 		exclusionClassErr = winui.RegisterWindowClass(
 			"DiscoveryExclusionCaptureTest",
@@ -199,6 +229,38 @@ func TestMascaraRemoveCartaoDaCaptura(t *testing.T) {
 	hwnd := janelaMagenta(t, 700, 420)
 	defer winui.DestroyWindow(hwnd)
 	t.Cleanup(func() { removerMascara(hwnd); SetCapturerAtual(nil) })
+
+	// ── POR QUE O REFRESH PRECISA FICAR DESLIGADO AQUI ──
+	//
+	// Este teste mede a máscara CONGELADA no instante anterior ao cartão: ele
+	// liga a máscara, mostra a janela magenta e então verifica que o patch a
+	// remove do frame. Se o refresh ao vivo estiver rodando, ele faz exatamente
+	// o que deveria fazer em produção — e isso DESTRÓI a premissa do teste:
+	//
+	//   - ativarMascara inicia o loop; com custo baixo o intervalo é
+	//     mascaraRefreshIntervaloRapido (500ms);
+	//   - o teste mostra a janela magenta e espera 400ms antes de capturar;
+	//   - o refresh dispara DENTRO dessa janela, procura a janela atrás do
+	//     cartão, ENCONTRA a janela magenta (ela está visível, contém o ponto e
+	//     não é cartão do agente — não há como excluí-la), imprime MAGENTA e
+	//     grava isso na máscara;
+	//   - o PatchFrameBannerAt do teste copia MAGENTA para o frame e a asserção
+	//     falha.
+	//
+	// O PRODUTO ESTÁ CERTO nesse ponto: compor com a janela que está atrás do
+	// cartão é o propósito do refresh ao vivo. O defeito é do TESTE, que deixou
+	// um refresh concorrente disputando a máscara com uma janela que é o próprio
+	// objeto da medição. Daí desligar o refresh aqui, e não mexer na asserção:
+	// com a máscara congelada antes do cartão, o patch DEVE remover o magenta.
+	//
+	// mascaraRefreshAtivo é o gancho documentado para "testes/diagnóstico" e é
+	// lido por iniciarRefreshMascaras sob mascaraRefreshMu: desligá-lo ANTES de
+	// ativarMascara impede o loop de nascer. O restore tem de rodar DEPOIS do
+	// DestroyWindow (t.Cleanup roda depois do defer), senão o loop poderia
+	// reabrir sobre uma janela já destruída.
+	refreshAnterior := mascaraRefreshAtivo
+	mascaraRefreshAtivo = false
+	t.Cleanup(func() { mascaraRefreshAtivo = refreshAnterior })
 
 	// Dá tempo do DWM assentar o estado anterior antes de ler a máscara.
 	time.Sleep(300 * time.Millisecond)

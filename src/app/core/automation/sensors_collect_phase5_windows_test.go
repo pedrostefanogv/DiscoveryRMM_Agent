@@ -32,6 +32,8 @@ func TestSensorTypeByNumberFase5(t *testing.T) {
 		{16, SensorTypeCertificate},
 		{17, SensorTypeDefenderStatus},
 		{18, SensorTypeBitLocker},
+		// F5: ADConsistency = 19 no servidor (SensorType.ADConsistency).
+		{19, SensorTypeADConsistency},
 	}
 	for _, testCase := range cases {
 		got, ok := sensorTypeByNumber[testCase.number]

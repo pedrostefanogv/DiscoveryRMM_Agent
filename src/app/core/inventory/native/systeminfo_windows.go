@@ -103,6 +103,11 @@ func collectSystemInfoNative(ctx context.Context) (models.HardwareInfo, models.O
 	// Architecture via GetNativeSystemInfo.
 	osInfo.Architecture = getArchitecture()
 
+	// Tipo de produto (cliente x servidor x DC) e participação em domínio.
+	// São lidos de fontes canônicas (registry ProductType e WMI
+	// Win32_ComputerSystem) — nunca de heurística de string de exibição.
+	fillWindowsServerFields(&osInfo)
+
 	// CPU brand and core counts via registry (HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0).
 	cpuBrand, physicalCores, logicalCores := getCPUInfoFromRegistry()
 	hw.CPU = cpuBrand
@@ -115,6 +120,30 @@ func collectSystemInfoNative(ctx context.Context) (models.HardwareInfo, models.O
 	}
 
 	return hw, osInfo, nil
+}
+
+// fillWindowsServerFields preenche no modelo de SO o tipo de produto
+// (cliente x servidor membro x controlador de domínio) e a participação em
+// domínio, a partir das fontes canônicas:
+//
+//   - ProductType do registry (ProductOptions) para IsServer/ProductType;
+//   - Win32_ComputerSystem (WMI nativo) para Domain/Workgroup/PartOfDomain.
+//
+// Best-effort: qualquer falha vira ProductType "unknown" e campos de domínio
+// vazios — o inventário continua sendo entregue.
+func fillWindowsServerFields(osInfo *models.OperatingSystem) {
+	if osInfo == nil {
+		return
+	}
+
+	productType := detectProductType()
+	osInfo.ProductType = productType
+	osInfo.IsServer = isServerProductType(productType)
+
+	state := detectDomainState()
+	osInfo.Domain = state.Domain
+	osInfo.Workgroup = state.Workgroup
+	osInfo.PartOfDomain = state.PartOfDomain
 }
 
 func getComputerName() string {

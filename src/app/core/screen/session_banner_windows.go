@@ -32,6 +32,17 @@ import (
 // (screen.SessionTray): o usuário local encerra a sessão sem que nenhuma janela
 // fique por cima dos apps.
 //
+// Z-ORDER (bug "cartão atrás do menu Iniciar"): WS_EX_TOPMOST no CreateWindowEx
+// posiciona a janela na banda topmost apenas NO MOMENTO em que ela é mostrada.
+// O menu Iniciar, o Action Center e o UAC vivem em banda SUPERIOR: quando abrem,
+// empurram o cartão para trás, e como o banner é WS_EX_NOACTIVATE ele nunca
+// ganha foco para voltar sozinho. Por isso o topmost é REAFIRMADO a cada tique
+// do timer de 1s (bannerTimerID) com SetWindowPos(HWND_TOPMOST,
+// SWP_NOACTIVATE|SWP_NOMOVE|SWP_NOSIZE|SWP_NOOWNERZORDER) — sem roubar foco e
+// sem tocar na geometria. Ver o bloco "Reafirmação do topmost" logo abaixo da
+// lista de constantes para o racional completo e a limitação aceita (enquanto o
+// menu Iniciar estiver aberto o cartão continua atrás, por definição do shell).
+//
 // O banner continua escondido da captura: o viewer e a gravação não podem vê-lo.
 // Ordem de preferência (ver hideBannerFromCapture):
 //
@@ -54,6 +65,13 @@ import (
 // tocada de novo. O bug do "retângulo preto no topo da tela remota" (2026-11-03)
 // era exatamente isso: o degrau do WDA_MONITOR rodava depois do EXCLUDE ter
 // dado certo e rebaixava a janela para MONITOR (preto em toda captura).
+//
+// A ÚNICA exceção a essa regra é o DESCARTE da máscara em tempo de execução
+// (reaplicarProtecaoAposDescarteMascara): quando a máscara de região é jogada
+// fora e o capturer ignora o WDA (Desktop Duplication), manter o EXCLUDE "puro"
+// deixaria o cartão VISÍVEL no stream — a afinidade deixa de proteger na prática
+// e o recuo para MONITOR (preto) é o mal menor. Ver o bloco "Recuo de afinidade
+// no DESCARTE da máscara" no fim deste arquivo.
 
 const (
 	// wdaNone/WdaMonitor/WdaExcludeFromCapture são os valores de
@@ -81,9 +99,147 @@ const (
 	bannerAlpha = 242
 )
 
+// ── Reafirmação do topmost (bug do cartão ATRÁS do menu Iniciar) ──
+//
+// WS_EX_TOPMOST no CreateWindowEx NÃO é uma promessa permanente: ele coloca a
+// janela na banda "topmost" da ordem Z **no momento em que ela é mostrada**.
+// A partir daí o gerenciador de janelas do shell pode reordenar a banda inteira
+// — o menu Iniciar, o Action Center (Win+A), o seletor de tarefas, o UAC e o
+// flyout de rede são janelas de banda SUPERIOR (acima de qualquer topmost) e,
+// quando abrem, empurram o cartão para trás. Como o banner tem
+// WS_EX_NOACTIVATE, ele nunca ganha foco e portanto nunca é "trazido para
+// frente" de novo pelo próprio Windows: ficava atrás até a sessão terminar.
+//
+// Correção: reafirmar a posição na banda topmost de tempos em tempos, com
+// SetWindowPos(HWND_TOPMOST, SWP_NOACTIVATE|SWP_NOMOVE|SWP_NOSIZE|
+// SWP_NOOWNERZORDER). O HWND_TOPMOST reinsere a janela no TOPO da banda
+// topmost — não é um simples "restaurar" da posição anterior.
+//
+// Por que no TIMER de 1s (bannerRefreshMS) e não em WM_WINDOWPOSCHANGED:
+//
+//  1. WM_WINDOWPOSCHANGED chega também para as mudanças que NÓS provocamos
+//     (MoveResizeWindow na criação, SetLayeredAlpha, SetRoundedRegion). Reagir
+//     ali significaria chamar SetWindowPos de dentro do processamento do
+//     próprio SetWindowPos — reentrância desnecessária e um vetor de laço.
+//  2. O timer já existe para repintar o relógio, então a reafirmação não custa
+//     thread, timer nem wakeup novo: é um SetWindowPos por segundo.
+//  3. O período de 1s é curto o bastante para o cartão reaparecer assim que o
+//     menu Iniciar/UAC fecha, e longo o bastante para não disputar a ordem Z a
+//     cada frame — disputar a ordem Z a cada frame é o que produz piscada.
+//
+// LIMITAÇÃO CONHECIDA E ACEITA: enquanto o menu Iniciar (ou o UAC seguro, ou o
+// Action Center) estiver ABERTO, o cartão continua atrás — essas janelas são de
+// banda superior e nenhum topmost fica acima delas. O objetivo desta correção é
+// o cartão VOLTAR ao topo assim que elas fecharem, e não sobrepor o menu.
+const (
+	// bannerTopmostMotivoAtivacao/bannerTopmostMotivoReafirmacao nomeiam, no log
+	// e nos testes, de onde veio a reafirmação: a criação (mostrar a janela) ou
+	// o timer periódico.
+	bannerTopmostMotivoAtivacao    = "ativação"
+	bannerTopmostMotivoReafirmacao = "reafirmação periódica"
+)
+
+// bannerTopmostLogado evita repetir a mesma linha de log a cada segundo. Sem
+// isso o arquivo de log da sessão ganharia ~3600 linhas por hora de sessão com
+// uma mensagem idêntica — o sintoma de campo (cartão atrás do menu Iniciar)
+// ficaria enterrado justamente no log que deveria prová-lo.
+var bannerTopmostLogado sync.Map
+
+// reafirmarBannerTopmost devolve o cartão ao topo da banda topmost sem mexer em
+// posição, tamanho, foco ou ordem entre janelas do mesmo dono.
+//
+// SWP_NOACTIVATE é obrigatório: o banner é WS_EX_NOACTIVATE por design (ele não
+// pode roubar o foco de teclado de quem o usuário local está usando) e um
+// SetWindowPos sem essa flag ativaria a janela, quebrando o comportamento.
+// SWP_NOMOVE|SWP_NOSIZE preservam a geometria já escalada pelo DPI.
+// SWP_NOOWNERZORDER mantém a posição relativa ao dono (o cartão não tem dono,
+// mas a flag documenta a intenção e evita reordenação surpresa no futuro).
+//
+// A função é um ponto de injeção: bannerTopmostSetWindowPos pode ser trocada nos
+// testes para contar as chamadas SEM abrir janela real — o efeito da
+// reafirmação (a ordem Z efetiva) não é observável de forma determinística em
+// CI, então o contrato testável é "reafirmou, com estes argumentos, e só quando
+// precisava".
+func reafirmarBannerTopmost(hwnd uintptr, motivo string) {
+	if hwnd == 0 {
+		return
+	}
+	bannerTopmostSetWindowPos(hwnd, hwndTopmost, 0, 0, 0, 0,
+		swpNecessariasParaNaoQuebrarClickThrough)
+	logTopmostUmaVez(hwnd, motivo)
+}
+
+// logTopmostUmaVez registra a primeira reafirmação de cada janela. O log serve
+// para provar em campo que a reafirmação está rodando (o usuário relata "atrás
+// do menu Iniciar" e o log mostra se o timer chegou a disparar), sem inundar o
+// arquivo a cada segundo.
+func logTopmostUmaVez(hwnd uintptr, motivo string) {
+	if _, jaLogado := bannerTopmostLogado.LoadOrStore(hwnd, struct{}{}); jaLogado {
+		return
+	}
+	log.Printf("[session-banner] topmost reafirmado (%s, hwnd=%d)", motivo, hwnd)
+}
+
+// esquecerLogTopmost libera a marca de log do HWND. O WM_DESTROY precisa disso:
+// o Windows recicla valores de HWND e, sem o esquecimento, o banner de uma
+// sessão seguinte poderia herdar a marca e nunca logar sua reafirmação.
+func esquecerLogTopmost(hwnd uintptr) {
+	bannerTopmostLogado.Delete(hwnd)
+}
+
+// Constantes do SetWindowPos de reafirmação do topmost. HWND_TOPMOST é -1 e o
+// uintptr precisa ser o valor com sinal estendido (^uintptr(0)), exatamente
+// como winui.EnsureTopMost já faz — passar 0xFFFFFFFF sem estender em 64 bits
+// seria lido pelo Windows como um HWND inválido.
+const (
+	hwndTopmost      = ^uintptr(0) // HWND_TOPMOST (-1)
+	swpNoSize        = 0x0001      // SWP_NOSIZE
+	swpNoMove        = 0x0002      // SWP_NOMOVE
+	swpNoActivate    = 0x0010      // SWP_NOACTIVATE
+	swpNoOwnerZOrder = 0x0200      // SWP_NOOWNERZORDER
+	// swpNecessariasParaNaoQuebrarClickThrough documenta, em um único lugar, as
+	// flags que a reafirmação NÃO pode perder: sem SWP_NOACTIVATE o banner rouba
+	// foco (ele é WS_EX_NOACTIVATE por design); sem SWP_NOMOVE|SWP_NOSIZE a
+	// reafirmação moveria a janela por cima da geometria já escalada pelo DPI.
+	// É a máscara verificada pelo teste de regressão.
+	swpNecessariasParaNaoQuebrarClickThrough = swpNoSize | swpNoMove | swpNoActivate | swpNoOwnerZOrder
+)
+
+// bannerTopmostSetWindowPos é o ponto de injeção dos testes da reafirmação do
+// topmost: a ordem Z efetiva não é observável de forma determinística em CI,
+// então o que se testa é "o banner pediu a reafirmação, com os argumentos que
+// não roubam foco nem mexem na geometria".
+//
+// A assinatura acompanha a do SetWindowPos nativo (e não a de
+// winui.EnsureTopMost) justamente para o teste poder AFIRMAR as flags: se o
+// wrapper de conveniência escondesse os argumentos, um SWP_NOACTIVATE removido
+// por engano passaria despercebido — e é exatamente essa flag que impede o
+// banner de roubar o foco.
+var bannerTopmostSetWindowPos = setWindowPosTopmostReal
+
+// setWindowPosTopmostReal aplica a reafirmação com as QUATRO flags de uma vez.
+//
+// Por que não delegar para winui.EnsureTopMost (que faz quase o mesmo): aquele
+// wrapper não passa SWP_NOOWNERZORDER. Delegar deixaria o teste afirmando uma
+// flag que o caminho de produção nunca envia — teste verde com comportamento
+// diferente, o pior tipo de cobertura. Com o P/Invoke local o binário envia
+// exatamente a máscara que o teste valida (swpNecessariasParaNaoQuebrarClickThrough),
+// e a diferença fica visível em um único lugar.
+//
+// O P/Invoke é o mesmo user32.SetWindowPos já resolvido no pacote; não há cópia
+// de DLL nem de convenção de HWND_TOPMOST.
+func setWindowPosTopmostReal(hwnd, insertAfter, x, y, cx, cy uintptr, flags uintptr) {
+	procSetWindowPos.Call(hwnd, insertAfter, x, y, cx, cy, flags)
+}
+
 var (
 	procSetWindowDisplayAffinity = user32DLL.NewProc("SetWindowDisplayAffinity")
 	procGetWindowDisplayAffinity = user32DLL.NewProc("GetWindowDisplayAffinity")
+	// procSetWindowPos é a reafirmação do topmost (ver bloco "Reafirmação do
+	// topmost"). Local de propósito: winui.EnsureTopMost não passa
+	// SWP_NOOWNERZORDER e delegar faria o teste afirmar uma flag que o binário
+	// não envia.
+	procSetWindowPos = user32DLL.NewProc("SetWindowPos")
 
 	// affinitySet/affinityGet são os pontos de injeção dos testes: a escada de
 	// afinidade é a parte mais delicada do banner (o bug do retângulo preto
@@ -379,6 +535,12 @@ func bannerWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		// chegue aqui atravessa para a janela de baixo.
 		return ^uintptr(0) // HTTRANSPARENT
 	case winui.MsgTimer:
+		// Reafirmação do topmost a cada tique (ver bloco "Reafirmação do
+		// topmost" no topo do arquivo): é o que devolve o cartão ao topo depois
+		// que o menu Iniciar/Action Center/UAC fecham. Fora do WM_PAINT de
+		// propósito — chamar SetWindowPos durante a pintura é efeito colateral
+		// dentro do desenho.
+		reafirmarBannerTopmost(hwnd, bannerTopmostMotivoReafirmacao)
 		winui.Invalidate(hwnd)
 		return 0
 	case winui.MsgSettingChange:
@@ -391,6 +553,7 @@ func bannerWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		return 0
 	case winui.MsgDestroy:
 		unregisterBannerCapture(hwnd)
+		esquecerLogTopmost(hwnd)
 		banner.fonts.release()
 		banner.fonts = bannerFonts{}
 		bannerStates.Delete(hwnd)
@@ -568,6 +731,12 @@ func NewSessionBanner(opts BannerOptions) (*SessionBanner, error) {
 
 		winui.ShowWindow(hwnd, winui.SwShowNormal)
 		winui.UpdateWindow(hwnd)
+		// Reafirma o topmost já na exibição: o ShowWindow entra na banda topmost
+		// com o estilo do CreateWindowEx, mas explicitamente aqui o cartão volta
+		// ao topo da banda mesmo que algo tenha subido entre a criação e o
+		// show (o CreateWindowEx acima acontece antes de máscara/afinidade, e
+		// nesse intervalo o shell pode abrir um flyout).
+		reafirmarBannerTopmost(hwnd, bannerTopmostMotivoAtivacao)
 		winui.SetTimer(hwnd, bannerTimerID, bannerRefreshMS)
 		banner.ready <- nil
 
@@ -771,3 +940,102 @@ func (b *SessionBanner) Close() {
 // bannerCloseTimeout é o tempo que Close() espera pela thread da janela antes de
 // forçar a destruição. 2s era o valor histórico do select; mantido.
 const bannerCloseTimeout = 2 * time.Second
+
+// ── Recuo de afinidade no DESCARTE da máscara (P0 de privacidade) ──
+//
+// A máscara de região é o que mantém a área do cartão fora do stream quando o
+// capturer não emenda (Desktop Duplication/DXGI, o capturer DESTA versão). Ela é
+// DESCARTADA em dois caminhos de banner_mask_refresh_windows.go: cobertura
+// parcial da faixa e mascaraFalhasParaDescartar falhas consecutivas (~6s). O
+// descarte é deliberado — uma máscara meio-atualizada é fantasma permanente.
+//
+// O PROBLEMA que este gancho fecha: removerMascara só apaga a máscara do
+// registry e marca a trava de recaptura. Ele NÃO mexe em
+// SetWindowDisplayAffinity. Depois do descarte a área do cartão volta a ser
+// capturada AO VIVO; se a afinidade também não protege — e o Desktop Duplication
+// IGNORA o WDA (medido em banner_exclusion_capture_windows_test.go) — o CARTÃO
+// APARECE NO STREAM com o nome do operador.
+//
+// Isso contraria a REGRA DE OURO deste arquivo: prefira CONGELAR (preto) a
+// VAZAR. O comentário do descarte afirmava ser "igual ao recuo de
+// garantirProtecaoSemMascara", mas nenhum caminho de runtime chamava aquela
+// função — a proteção era prometida no comentário e inexistente no código.
+//
+// A correção reusa a escada que já existe: garantirProtecaoSemMascara rebaixa
+// WDA_EXCLUDEFROMCAPTURE -> WDA_MONITOR (área PRETA no stream). Preto não
+// entrega o nome do operador; cartão visível entrega.
+//
+// POR QUE O CASO GDI NÃO É DEGRADADO: com emenda própria o capturer contorna a
+// região do cartão no próprio BitBlt — o cartão não vaza sem afinidade nenhuma.
+// Aplicar WDA_MONITOR ali só pintaria a área de preto de graça, então a função
+// sai antes.
+//
+// POR QUE O GANCHO FICA AQUI E NÃO NO ARQUIVO DO DESCARTE: removerMascara vive em
+// banner_patch_windows.go (escopo do mask-dev). O ponto de extensão é a var
+// aoDescartarMascara daquele arquivo; a POLÍTICA (o que fazer ao descartar) é
+// deste arquivo, que é quem conhece a escada de afinidade e o modo do banner.
+// Ver ligarRecuoAposDescarteMascara abaixo para o preenchimento da var.
+
+// reaplicarProtecaoAposDescarteMascara é o recuo de afinidade chamado pelo
+// descarte da máscara. Devolve o modo efetivo (útil para teste e log).
+//
+// Guardas, na ordem:
+//
+//  1. hwnd == 0: nada a proteger.
+//  2. hwnd != bannerCaptureTarget.Load(): o alvo mudou (cartão recriado, sessão
+//     encerrada) ou o HWND é de OUTRA janela — hoje o aviso da bandeja
+//     (session_tray_balloon) também usa máscara. Aplicar afinidade num handle
+//     antigo ou no balloon seria efeito colateral em janela alheia, e o recuo
+//     do banner é decisão do banner. Mesma guarda que reavaliarBannerNoCapturer
+//     já usa para não agir sobre handle velho.
+//  3. emendaDoCapturerDisponivel(): GDI contorna a região sozinho. Não degradar.
+//
+// Sem máscara, o "maskErr" que alimenta garantirProtecaoSemMascara é sintético:
+// a função só usa esse valor para decidir se há proteção de região, e a esta
+// altura a resposta é NÃO por construção — a máscara acabou de ser descartada.
+// Passar o erro real da captura original seria enganoso (ele pode ser nil, de uma
+// captura que funcionou no passado), então o erro sintético documenta o fato
+// presente: "esta janela está sem máscara".
+func reaplicarProtecaoAposDescarteMascara(hwnd uintptr) bannerCaptureMode {
+	if hwnd == 0 {
+		return bannerCaptureVisible
+	}
+	if hwnd != bannerCaptureTarget.Load() {
+		// Handle antigo ou janela que não é o banner ativo (ex.: o aviso da
+		// bandeja): não é nossa decisão mexer na afinidade dela.
+		return bannerCaptureVisible
+	}
+	if emendaDoCapturerDisponivel() {
+		// O capturer contorna a região por conta própria (GDI): o cartão não
+		// vaza e rebaixar para MONITOR degradaria a imagem sem motivo.
+		log.Printf("[session-banner] máscara descartada, mas o capturer emenda a região (GDI): afinidade mantida, sem recuo")
+		return bannerCaptureExcluded
+	}
+	// errRecuoSemMascara é o "maskErr" sintético do descarte: ver o comentário da
+	// função. garantirProtecaoSemMascara só o usa para saber se há região
+	// protegendo — e aqui não há mais.
+	modo := garantirProtecaoSemMascara(hwnd, bannerCaptureExcluded, errRecuoSemMascara)
+	log.Printf("[session-banner] máscara descartada: recuo de afinidade aplicado, modo efetivo %s (afinidade=%s)",
+		bannerCaptureModeName(modo), afinidadeParaLog(hwnd))
+	return modo
+}
+
+// errRecuoSemMascara documenta o estado do descarte para garantirProtecaoSemMascara.
+var errRecuoSemMascara = fmt.Errorf("máscara de região descartada em tempo de execução")
+
+// ligarRecuoAposDescarteMascara registra o recuo no ponto de extensão do descarte
+// (aoDescartarMascara, definido em banner_patch_windows.go).
+//
+// Preenchido em init() e não numa var literal porque o alvo é uma var de OUTRO
+// arquivo: numa var literal a ordem de inicialização entre arquivos do pacote
+// passaria a importar (a var do outro arquivo poderia ser zerada DEPOIS da
+// nossa), e um hook silenciosamente nil é exatamente o bug que esta task
+// conserta — proteção prometida e ausente. init() roda depois de TODAS as
+// inicializações de var do pacote, então o valor nunca é sobrescrito.
+func ligarRecuoAposDescarteMascara() {
+	aoDescartarMascara = reaplicarProtecaoAposDescarteMascara
+}
+
+func init() {
+	ligarRecuoAposDescarteMascara()
+}

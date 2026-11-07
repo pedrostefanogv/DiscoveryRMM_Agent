@@ -2044,6 +2044,51 @@ export class OperatingSystem {
              */
             this["architecture"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * IsServer indica Windows Server (membro ou controlador de domínio).
+             * Derivado de ProductType, não de string de exibição.
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["isServer"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * ProductType é o tipo de produto canônico do Windows
+             * (HKLM\SYSTEM\CurrentControlSet\Control\ProductOptions\ProductType):
+             * "WinNT" (cliente) | "ServerNT" (servidor membro) | "LanmanNT" (DC)
+             * | "unknown" (não foi possível ler). Ver native.ProductType*.
+             * @member
+             * @type {string | undefined}
+             */
+            this["productType"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Domain é o domínio (AD/Entra) ao qual a máquina pertence. Fica vazio
+             * em máquinas fora de domínio — nesse caso o nome vai em Workgroup.
+             * @member
+             * @type {string | undefined}
+             */
+            this["domain"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Workgroup é o grupo de trabalho, preenchido apenas fora de domínio.
+             * @member
+             * @type {string | undefined}
+             */
+            this["workgroup"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * PartOfDomain indica se a máquina é membro de um domínio.
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["partOfDomain"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
