@@ -330,10 +330,15 @@ func lerPixelsTelaRegiaoEstavel(rect winui.Rect) ([]byte, error) {
 	return px, nil
 }
 
-// lerPixelsTela copia os pixels de uma região da tela física para um buffer
-// BGRA top-down. Usa DIB section (pixels em memória de sistema) para não
-// depender de GetDIBits, que já falhou em campo (ver capturer_gdi.go).
-func lerPixelsTela(r winui.Rect) ([]byte, error) {
+// lerPixelsTela é var (padrão de injeção do pacote): o caminho BitBlt do
+// refresh (banner_mask_refresh_windows.go) fica testável com leitura fake.
+// Valor de produção: lerPixelsTelaWin32.
+var lerPixelsTela = lerPixelsTelaWin32
+
+// lerPixelsTelaWin32 copia os pixels de uma região da tela física para um
+// buffer BGRA top-down. Usa DIB section (pixels em memória de sistema) para
+// não depender de GetDIBits, que já falhou em campo (ver capturer_gdi.go).
+func lerPixelsTelaWin32(r winui.Rect) ([]byte, error) {
 	if r.Empty() {
 		return nil, fmt.Errorf("região vazia")
 	}
@@ -441,6 +446,34 @@ func removerMascara(hwnd uintptr) {
 // precisa notificar "esta janela perdeu a máscara", e o que fazer com isso é
 // decisão de session_banner_windows.go.
 var aoDescartarMascara func(hwnd uintptr) bannerCaptureMode
+
+// podeDescartarMascara é consultado ANTES de descartar uma máscara em runtime
+// (falhas consecutivas de refresh, cobertura parcial). Descartar devolve a
+// área à captura ao vivo — e, quando NÃO há proteção alternativa (emenda do
+// capturer GDI ou recuo de afinidade para WDA_MONITOR), o cartão APARECE no
+// stream com o nome do operador. Nesse caso o descarte é RECUSADO e a máscara
+// congelada é mantida: vazamento > fantasma. Nil = decide o chamador (comporta-
+// mento antigo).
+var podeDescartarMascara func(hwnd uintptr) bool
+
+// descarteRecusadoLog deduplica o log do descarte recusado (por janela): sem
+// isso o refresh recusaria o descarte a cada ciclo e inundaria o log.
+var (
+	descarteRecusadoMu   sync.Mutex
+	descarteRecusadoLoga = map[uintptr]bool{}
+)
+
+// logarDescarteRecusado registra o motivo do descarte recusado uma única vez
+// por janela (e de novo quando o motivo muda — simplificação: só a 1ª vez).
+func logarDescarteRecusado(hwnd uintptr, motivo string) {
+	descarteRecusadoMu.Lock()
+	primeiro := !descarteRecusadoLoga[hwnd]
+	descarteRecusadoLoga[hwnd] = true
+	descarteRecusadoMu.Unlock()
+	if primeiro {
+		log.Printf("[session-banner] descarte da máscara recusado (%s) — sem proteção alternativa, mantendo o quadro congelado (privacidade > fantasma)", motivo)
+	}
+}
 
 // mascarasDescartadas guarda os HWNDs cuja máscara foi DESCARTADA em vida (não
 // removida por fim de sessão). É um conjunto pequeno (um por cartão do agente) e

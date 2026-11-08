@@ -587,10 +587,13 @@ func TestComporCamadasNaFaixaNaoAliasBufDaFaixa(t *testing.T) {
 
 	faixa := make([]byte, rect.W*rect.H*4)
 	var bufJanela []byte
-	coberto, custo, algumaFonte := comporCamadasNaFaixa(camadas, rect, faixa, &bufJanela)
+	coberto, custo, algumaFonte, falhaViva := comporCamadasNaFaixa(camadas, rect, faixa, &bufJanela)
 
 	if !algumaFonte {
 		t.Fatal("composição não reconheceu fonte nenhuma")
+	}
+	if falhaViva {
+		t.Fatal("fonte viva falhada relatada sem nenhuma falha de impressão")
 	}
 	if got := faixa[(10*rect.W+50)*4]; got != 0xAA {
 		t.Fatalf("faixa = %#x, esperado 0xAA — imprimir a janela de trás sobrescreveu a composição da da frente (buffer compartilhado?)", got)
@@ -624,10 +627,13 @@ func TestComporCamadasNaFaixaPapelDeParedePorUltimoSemCusto(t *testing.T) {
 	camadas := []camadaJanela{{hwnd: 0x11}, {hwnd: 0x77, papelDeParede: true}}
 	faixa := make([]byte, rect.W*rect.H*4)
 	var bufJanela []byte
-	coberto, custo, algumaFonte := comporCamadasNaFaixa(camadas, rect, faixa, &bufJanela)
+	coberto, custo, algumaFonte, falhaViva := comporCamadasNaFaixa(camadas, rect, faixa, &bufJanela)
 
 	if !algumaFonte {
 		t.Fatal("composição com papel de parede deveria reconhecer fonte")
+	}
+	if falhaViva {
+		t.Fatal("fonte viva falhada relatada sem nenhuma falha de impressão")
 	}
 	if got := faixa[(10*rect.W+10)*4]; got != 0x11 {
 		t.Fatalf("metade esquerda = %#x, esperado 0x11 (a janela normal tem prioridade)", got)
@@ -704,6 +710,283 @@ func TestCamadasSobreRegiaoPapelDeParedeNaoEBloqueado(t *testing.T) {
 	}
 }
 
+
+// ── Caminho BitBlt ao vivo (fonteAoVivoBitBlt) ──
+//
+// Com WDA_EXCLUDEFROMCAPTURE efetivo na janela, o BitBlt da região devolve o
+// conteúdo REAL atrás do cartão (medido em TestJanelaExcluidaSaiDoBitBlt).
+// Estes testes fixam o contrato do caminho com leitura/afinidade injetadas.
+
+func injetarCaminhoBitBlt(t *testing.T, afinidade uint32, temAfinidade bool, leitura func(winui.Rect) ([]byte, error), autorretrato func(uintptr, *[]byte) (winui.Rect, []byte, bool, string)) {
+	t.Helper()
+	afAnterior, getOk := affinityGet, affinityGet
+	_ = getOk
+	lerAnterior := lerPixelsTela
+	impAnterior := imprimirJanela
+	affinityGet = func(uintptr) (uint32, bool) {
+		if !temAfinidade {
+			return 0, false
+		}
+		return afinidade, true
+	}
+	lerPixelsTela = leitura
+	imprimirJanela = autorretrato
+	t.Cleanup(func() {
+		affinityGet = afAnterior
+		lerPixelsTela = lerAnterior
+		imprimirJanela = impAnterior
+	})
+}
+
+// Commit do conteúdo real atrás do cartão: a máscara passa a conter os pixels
+// lidos da tela (o app aberto) e o custo é 1 (regime rápido).
+func TestAtualizarMascaraPorBitBltCommitaConteudoAtras(t *testing.T) {
+	limparMascaras(t)
+	limparMascarasDescartadas(t)
+	const hwnd = 0x7E22
+	rect := winui.Rect{X: 0, Y: 0, W: 100, H: 20}
+	m := mascaraDeTeste(hwnd, rect, 0x11, true)
+	mascarasMu.Lock()
+	mascaras[hwnd] = m
+	mascarasMu.Unlock()
+
+	injetarCaminhoBitBlt(t, wdaExcludeFromCapture, true,
+		func(winui.Rect) ([]byte, error) {
+			return regiaoUniforme(rect.W, rect.H, 0x44, 0x44, 0x44), nil
+		},
+		func(uintptr, *[]byte) (winui.Rect, []byte, bool, string) {
+			// Autorretrato DIFERENTE da leitura: a válvula não pode tripar.
+			return rect, regiaoUniforme(rect.W, rect.H, 0xEE, 0xEE, 0xEE), true, ""
+		})
+
+	var bufFaixa []byte
+	if custo := atualizarMascaraPorBitBlt(m, rect, &bufFaixa); custo != 1 {
+		t.Fatalf("custo = %d, esperado 1 (regime rápido)", custo)
+	}
+	mascarasMu.Lock()
+	depois := append([]byte(nil), m.px...)
+	falhas := m.falhasConsecutivas
+	mascarasMu.Unlock()
+	if got := depois[(10*rect.W+50)*4]; got != 0x44 {
+		t.Fatalf("máscara = %#x, esperado 0x44 (conteúdo lido atrás do cartão)", got)
+	}
+	if falhas != 0 {
+		t.Fatalf("falhas consecutivas = %d, esperado 0", falhas)
+	}
+}
+
+// Válvula anti-autocaptura: leitura idêntica ao autorretrato = o buffer contém
+// o PRÓPRIO CARTÃO (exclusão não honrada). Recusa, não commita, conta falha.
+func TestAtualizarMascaraPorBitBltRecusaProprioCartao(t *testing.T) {
+	limparMascaras(t)
+	limparMascarasDescartadas(t)
+	const hwnd = 0x7E23
+	rect := winui.Rect{X: 0, Y: 0, W: 100, H: 20}
+	m := mascaraDeTeste(hwnd, rect, 0x11, true)
+	mascarasMu.Lock()
+	mascaras[hwnd] = m
+	mascarasMu.Unlock()
+
+	cartao := regiaoUniforme(rect.W, rect.H, 0xEE, 0xEE, 0xEE)
+	injetarCaminhoBitBlt(t, wdaExcludeFromCapture, true,
+		func(winui.Rect) ([]byte, error) {
+			// "Captura" idêntica ao autorretrato: a exclusão mentiu.
+			clone := append([]byte(nil), cartao...)
+			return clone, nil
+		},
+		func(uintptr, *[]byte) (winui.Rect, []byte, bool, string) {
+			return rect, cartao, true, ""
+		})
+
+	var bufFaixa []byte
+	if custo := atualizarMascaraPorBitBlt(m, rect, &bufFaixa); custo != 0 {
+		t.Fatalf("custo = %d, esperado 0 (ciclo falho)", custo)
+	}
+	mascarasMu.Lock()
+	depois := m.px
+	falhas := m.falhasConsecutivas
+	mascarasMu.Unlock()
+	if got := depois[(10*rect.W+50)*4]; got != 0x11 {
+		t.Fatalf("máscara = %#x, esperado 0x11 — o PRÓPRIO CARTÃO foi gravado na máscara (vazamento garantido)", got)
+	}
+	if falhas != 1 {
+		t.Fatalf("falhas consecutivas = %d, esperado 1", falhas)
+	}
+}
+
+// Sem afinidade EXCLUDE o gate não abre (o BitBlt leria o próprio cartão).
+func TestFonteAoVivoBitBltExigeExclude(t *testing.T) {
+	afAnterior := affinityGet
+	t.Cleanup(func() { affinityGet = afAnterior })
+
+	affinityGet = func(uintptr) (uint32, bool) { return wdaExcludeFromCapture, true }
+	if !fonteAoVivoBitBlt(0x1234) {
+		t.Fatal("com EXCLUDE a fonte BitBlt deveria estar disponível")
+	}
+	affinityGet = func(uintptr) (uint32, bool) { return wdaMonitor, true }
+	if fonteAoVivoBitBlt(0x1234) {
+		t.Fatal("com WDA_MONITOR a fonte BitBlt deveria estar INDISPONÍVEL (leitura sai preta)")
+	}
+	affinityGet = func(uintptr) (uint32, bool) { return 0, false }
+	if fonteAoVivoBitBlt(0x1234) {
+		t.Fatal("sem afinidade legível a fonte BitBlt deveria estar indisponível")
+	}
+}
+
+// ── Fonte viva falhada (o bug do "buraco ao abrir um app") ──
+//
+// A janela GPU recusa o PrintWindow; o papel de parede compõe o resto e a
+// composição fica "completa" — mas com WALLPAPER onde o app deveria estar.
+// Commitar isso gravava o buraco na máscara como se fosse sucesso, para sempre.
+
+// Falha NÃO coberta por camada superior: ciclo falho, sem commit.
+func TestFonteVivaFalhadaNaoCommitaWallpaper(t *testing.T) {
+	limparMascaras(t)
+	limparMascarasDescartadas(t)
+	const hwnd = 0x7E24
+	rect := winui.Rect{X: 0, Y: 0, W: 100, H: 20}
+	m := mascaraDeTeste(hwnd, rect, 0x11, true)
+	mascarasMu.Lock()
+	mascaras[hwnd] = m
+	mascarasMu.Unlock()
+
+	restCamadas, restImprimir := camadasSobreRegiao, imprimirJanela
+	t.Cleanup(func() { camadasSobreRegiao = restCamadas; imprimirJanela = restImprimir })
+	camadasSobreRegiao = func(winui.Rect) []camadaJanela {
+		return []camadaJanela{{hwnd: 0x22}, {hwnd: 0x77, papelDeParede: true}}
+	}
+	imprimirJanela = func(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool, string) {
+		if hwnd == 0x22 {
+			// App GPU recusando o PrintWindow (rect vem junto na falha).
+			return rect, nil, false, "PrintWindow recusado"
+		}
+		return rect, regiaoUniforme(rect.W, rect.H, 0x77, 0x77, 0x77), true, ""
+	}
+
+	var bufFaixa, bufJanela []byte
+	antes := m.px
+	atualizarMascaraAoVivo(m, &bufFaixa, &bufJanela)
+	mascarasMu.Lock()
+	mesmo := &m.px[0] == &antes[0]
+	falhas := m.falhasConsecutivas
+	mascarasMu.Unlock()
+	if !mesmo {
+		t.Fatal("a máscara foi commitada com WALLPAPER onde o app aberto deveria estar — o buraco congelado voltaria")
+	}
+	if falhas != 1 {
+		t.Fatalf("falhas consecutivas = %d, esperado 1 (a falha da fonte viva tem de contar)", falhas)
+	}
+}
+
+// Falha coberta por camada MAIS ALTA que imprimiu: conteúdo correto, sem falha.
+func TestFonteVivaFalhadaCobertaPorCamadaSuperiorNaoFalha(t *testing.T) {
+	limparMascaras(t)
+	limparMascarasDescartadas(t)
+	const hwnd = 0x7E25
+	rect := winui.Rect{X: 0, Y: 0, W: 100, H: 20}
+	m := mascaraDeTeste(hwnd, rect, 0x11, true)
+	mascarasMu.Lock()
+	mascaras[hwnd] = m
+	mascarasMu.Unlock()
+
+	restCamadas, restImprimir := camadasSobreRegiao, imprimirJanela
+	t.Cleanup(func() { camadasSobreRegiao = restCamadas; imprimirJanela = restImprimir })
+	camadasSobreRegiao = func(winui.Rect) []camadaJanela {
+		return []camadaJanela{{hwnd: 0x22}, {hwnd: 0x33}}
+	}
+	imprimirJanela = func(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool, string) {
+		if hwnd == 0x33 {
+			// Janela de BAIXO recusa — mas a de cima (0x22) cobriu a faixa toda.
+			return rect, nil, false, "PrintWindow recusado"
+		}
+		return rect, regiaoUniforme(rect.W, rect.H, 0x22, 0x22, 0x22), true, ""
+	}
+
+	var bufFaixa, bufJanela []byte
+	atualizarMascaraAoVivo(m, &bufFaixa, &bufJanela)
+	mascarasMu.Lock()
+	depois := append([]byte(nil), m.px...)
+	falhas := m.falhasConsecutivas
+	mascarasMu.Unlock()
+	if got := depois[(10*rect.W+50)*4]; got != 0x22 {
+		t.Fatalf("máscara = %#x, esperado 0x22 (a janela de cima cobre a área da que falhou)", got)
+	}
+	if falhas != 0 {
+		t.Fatalf("falhas consecutivas = %d, esperado 0 (a área falhada está coberta por camada superior)", falhas)
+	}
+}
+
+// ── Guard de descarte (privacidade > fantasma) ──
+
+// Sem proteção alternativa o descarte é RECUSADO: a máscara congelada fica.
+func TestDescarteRecusadoSemProtecao(t *testing.T) {
+	limparMascaras(t)
+	limparMascarasDescartadas(t)
+	const hwnd = 0x7E26
+	rect := winui.Rect{X: 0, Y: 0, W: 100, H: 20}
+	m := mascaraDeTeste(hwnd, rect, 0x11, true)
+	mascarasMu.Lock()
+	mascaras[hwnd] = m
+	mascarasMu.Unlock()
+
+	restProtecao, restCamadas, restImprimir := podeDescartarMascara, camadasSobreRegiao, imprimirJanela
+	t.Cleanup(func() {
+		podeDescartarMascara = restProtecao
+		camadasSobreRegiao = restCamadas
+		imprimirJanela = restImprimir
+	})
+	podeDescartarMascara = func(uintptr) bool { return false } // sem emenda/MONITOR
+	camadasSobreRegiao = func(winui.Rect) []camadaJanela {
+		return []camadaJanela{{hwnd: 0x22}}
+	}
+	imprimirJanela = func(uintptr, *[]byte) (winui.Rect, []byte, bool, string) {
+		return rect, nil, false, "PrintWindow recusado"
+	}
+
+	var bufFaixa, bufJanela []byte
+	for i := 0; i < 5; i++ {
+		atualizarMascaraAoVivo(m, &bufFaixa, &bufJanela)
+	}
+	if !mascaraDisponivel(hwnd) {
+		t.Fatal("a máscara foi descartada sem proteção alternativa — o cartão apareceria no stream (vazamento)")
+	}
+}
+
+// Com proteção (emenda/MONITOR) o descarte segue o comportamento antigo.
+func TestDescartePermitidoComProtecao(t *testing.T) {
+	limparMascaras(t)
+	limparMascarasDescartadas(t)
+	const hwnd = 0x7E27
+	rect := winui.Rect{X: 0, Y: 0, W: 100, H: 20}
+	m := mascaraDeTeste(hwnd, rect, 0x11, true)
+	mascarasMu.Lock()
+	mascaras[hwnd] = m
+	mascarasMu.Unlock()
+
+	restProtecao, restCamadas, restImprimir := podeDescartarMascara, camadasSobreRegiao, imprimirJanela
+	t.Cleanup(func() {
+		podeDescartarMascara = restProtecao
+		camadasSobreRegiao = restCamadas
+		imprimirJanela = restImprimir
+	})
+	podeDescartarMascara = func(uintptr) bool { return true }
+	camadasSobreRegiao = func(winui.Rect) []camadaJanela {
+		return []camadaJanela{{hwnd: 0x22}}
+	}
+	imprimirJanela = func(uintptr, *[]byte) (winui.Rect, []byte, bool, string) {
+		return rect, nil, false, "PrintWindow recusado"
+	}
+
+	var bufFaixa, bufJanela []byte
+	for i := 0; i < 3; i++ {
+		atualizarMascaraAoVivo(m, &bufFaixa, &bufJanela)
+	}
+	if mascaraDisponivel(hwnd) {
+		t.Fatal("a máscara deveria ter sido descartada (descarte protegido)")
+	}
+}
+
+
 // TestComporCamadasNaFaixaOrcamentoNaoExpulsaPapelDeParede trava a interação
 // entre o limite de janelas vivas e o fallback: com mais janelas normais do que
 // o orçamento do ciclo, elas são PULADAS (continue) — nunca um break que
@@ -734,10 +1017,13 @@ func TestComporCamadasNaFaixaOrcamentoNaoExpulsaPapelDeParede(t *testing.T) {
 
 	faixa := make([]byte, rect.W*rect.H*4)
 	var bufJanela []byte
-	coberto, custo, algumaFonte := comporCamadasNaFaixa(camadas, rect, faixa, &bufJanela)
+	coberto, custo, algumaFonte, falhaViva := comporCamadasNaFaixa(camadas, rect, faixa, &bufJanela)
 
 	if !algumaFonte {
 		t.Fatal("composição deveria reconhecer fonte")
+	}
+	if falhaViva {
+		t.Fatal("fonte viva falhada relatada sem nenhuma falha de impressão")
 	}
 	if !regiaoCoberta(coberto, rect) {
 		t.Fatal("cobertura incompleta — o papel de parede foi expulso pelo orçamento de janelas e a máscara seria descartada")

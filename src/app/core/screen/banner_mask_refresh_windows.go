@@ -18,12 +18,23 @@ import (
 // A máscara (banner_patch_windows.go) é lida uma única vez, antes de o cartão
 // aparecer: o stream recebe o conteúdo daquele instante congelado. Para o caso
 // comum (barra de título, papel de parede, app parado) isso é invisível, mas um
-// vídeo/animação sob o cartão ficaria parado no stream.
+// vídeo/animação sob o cartão ficaria parado no stream — e um app ABERTO sob o
+// cartão nunca apareceria (o "buraco" do relato de campo).
 //
-// Este arquivo atualiza a máscara periodicamente com PrintWindow das janelas que
-// estão ATRÁS do cartão. PrintWindow(PW_RENDERFULLCONTENT) renderiza o conteúdo
-// PRÓPRIO da janela (sem as janelas por cima), que é exatamente o que o operador
-// deveria ver naquela faixa.
+// Dois caminhos de refresh, por ordem de preferência:
+//
+//  1. BitBlt DIRETO (fonteAoVivoBitBlt/atualizarMascaraPorBitBlt): quando a
+//     afinidade efetiva da janela é WDA_EXCLUDEFROMCAPTURE, o BitBlt GDI honra
+//     a exclusão (medido em TestJanelaExcluidaSaiDoBitBlt) e devolve o
+//     conteúdo REAL atrás do cartão — apps recém-abertos, vídeo, tudo ao vivo
+//     a cada ciclo (~500ms). Válvula: se a leitura for igual ao AUTORRETRATO
+//     da janela, a exclusão mentiu e o caminho é recusado (nunca gravar o
+//     próprio cartão na máscara).
+//
+//  2. PrintWindow das janelas que estão ATRÁS do cartão
+//     (PW_RENDERFULLCONTENT renderiza o conteúdo PRÓPRIO da janela, sem as
+//     janelas por cima) para as janelas SEM afinidade EXCLUDE — o aviso da
+//     bandeja e as máquinas que recusam SetWindowDisplayAffinity.
 //
 // ── As duas falhas de projeto que deixavam o fantasma "agarrado" ──
 //
@@ -290,6 +301,16 @@ func atualizarMascaraAoVivo(m *mascaraRegiao, bufFaixa, bufJanela *[]byte) int {
 		return 0
 	}
 
+	// Caminho PREFERIDO: com WDA_EXCLUDEFROMCAPTURE efetivo na janela, um BitBlt
+	// da região devolve o conteúdo REAL que está atrás do cartão (medido em
+	// TestJanelaExcluidaSaiDoBitBlt — o GDI honra a exclusão; o DDA ignora, por
+	// isso a máscara continua necessária para o stream). É fonte 100% ao vivo:
+	// apps recém-abertos aparecem na faixa no ciclo seguinte, sem depender de
+	// PrintWindow (que falha/recusa em apps GPU) nem de composição de ordem Z.
+	if fonteAoVivoBitBlt(m.hwnd) {
+		return atualizarMascaraPorBitBlt(m, rect, bufFaixa)
+	}
+
 	// Camadas de janelas que compõem a faixa, de cima para baixo na ordem Z.
 	// Inclui os cartões do agente (banner/aviso), marcados com cartao=true: eles
 	// nunca podem ser fonte (vazariam o cartão), mas precisam ser PULADOS — e não
@@ -319,8 +340,15 @@ func atualizarMascaraAoVivo(m *mascaraRegiao, bufFaixa, bufJanela *[]byte) int {
 	}
 	faixa := (*bufFaixa)[:len(pxAntigo)]
 
-	coberto, custo, algumaFonte := comporCamadasNaFaixa(camadas, rect, faixa, bufJanela)
+	coberto, custo, algumaFonte, falhaFonteViva := comporCamadasNaFaixa(camadas, rect, faixa, bufJanela)
 
+	if falhaFonteViva {
+		// A composição pode estar "completa" (wallpaper preencheu tudo), mas o
+		// conteúdo é mentira: wallpaper onde o app aberto deveria estar.
+		// Commitar seria gravar o buraco na máscara como se estivesse certo.
+		registrarFalhaMascara(m, "janela viva sob o cartão não pôde ser impressa (conteúdo da faixa não confiável)")
+		return custo
+	}
 	if !algumaFonte {
 		registrarFalhaMascara(m, "nenhuma janela sob o cartão pôde ser impressa")
 		return custo
@@ -332,6 +360,12 @@ func atualizarMascaraAoVivo(m *mascaraRegiao, bufFaixa, bufJanela *[]byte) int {
 	// frame (o cartão reaparece por 1 quadro, igual ao recuo já existente em
 	// garantirProtecaoSemMascara).
 	if !regiaoCoberta(coberto, rect) {
+		// Guard de privacidade: sem proteção alternativa, o descarte mostraria
+		// o cartão por 1 quadro (e para sempre, sem afinidade) — mantém.
+		if podeDescartarMascara != nil && !podeDescartarMascara(m.hwnd) {
+			logarDescarteRecusado(m.hwnd, "cobertura parcial da faixa")
+			return custo
+		}
 		log.Printf("[session-banner] máscara PARCIAL (as janelas de trás não cobrem toda a faixa do cartão) — descartando a máscara e voltando à captura ao vivo")
 		removerMascara(m.hwnd)
 		return custo
@@ -374,6 +408,109 @@ func atualizarMascaraAoVivo(m *mascaraRegiao, bufFaixa, bufJanela *[]byte) int {
 	return custo
 }
 
+// fonteAoVivoBitBlt informa se a leitura BitBlt da região devolve o conteúdo
+// REAL atrás do cartão: só quando a afinidade EFETIVA da janela é
+// WDA_EXCLUDEFROMCAPTURE. Consultada POR JANELA de propósito: o aviso da
+// bandeja nunca aplica afinidade — um BitBlt nele leria o PRÓPRIO cartão.
+func fonteAoVivoBitBlt(hwnd uintptr) bool {
+	if hwnd == 0 {
+		return false
+	}
+	afinidade, ok := displayAffinityAtual(hwnd)
+	return ok && afinidade == wdaExcludeFromCapture
+}
+
+// atualizarMascaraPorBitBlt atualiza a máscara com o conteúdo ao vivo lido
+// direto da tela (exclusão honrada pelo BitBlt). Devolve o custo do ciclo
+// (1 — artificial, só para manter o regime RÁPIDO: a região pode mudar a
+// qualquer instante e a leitura custa ~0,1ms).
+func atualizarMascaraPorBitBlt(m *mascaraRegiao, rect winui.Rect, bufFaixa *[]byte) int {
+	px, err := lerPixelsTela(rect)
+	if err != nil {
+		registrarFalhaMascara(m, "bitblt do conteúdo atrás do cartão falhou")
+		return 0
+	}
+	// Captura bloqueada (UAC/lock): tudo preto inclusive fora da região.
+	if regiaoTodaPreta(px) && telaTambemPreta(rect) {
+		registrarFalhaMascara(m, "bitblt saiu todo preto (tela bloqueada?)")
+		return 0
+	}
+	// Válvula anti-autocaptura: se a leitura for praticamente idêntica ao
+	// AUTORRETRATO da janela, a exclusão NÃO foi honrada nesse ambiente e o
+	// buffer contém o PRÓPRIO CARTÃO — gravá-lo na máscara o vazaria em todo
+	// frame. Recusa e mantém a máscara atual (o gate de afinidade é a proteção
+	// primária; esta válvula é o cinto e suspensório).
+	if capturaPareceCartao(m.hwnd, px) {
+		registrarFalhaMascara(m, "bitblt capturou o próprio cartão (exclusão não honrada na leitura)")
+		return 0
+	}
+	if len(px) != rect.W*rect.H*4 {
+		registrarFalhaMascara(m, "bitblt devolveu tamanho inesperado")
+		return 0
+	}
+	m.falhasConsecutivas = 0
+	logMascaraRefreshSucesso(m.hwnd)
+	if cap(*bufFaixa) < len(px) {
+		*bufFaixa = make([]byte, len(px))
+	}
+	copy((*bufFaixa)[:len(px)], px)
+	// Skip de commit quando o RGB não mudou (mesma economia do caminho
+	// PrintWindow; comparação por faixaIgualRGB — o alfa do BitBlt difere).
+	mascarasMu.Lock()
+	atual := mascaras[m.hwnd]
+	if atual == nil || !atual.ativa || atual.rect != rect {
+		mascarasMu.Unlock()
+		return 1
+	}
+	if faixaIgualRGB((*bufFaixa)[:len(px)], atual.px) {
+		mascarasMu.Unlock()
+		return 1
+	}
+	novo := make([]byte, len(px))
+	copy(novo, px)
+	atual.px = novo
+	mascarasMu.Unlock()
+	return 1
+}
+
+// capturaPareceCartao compara a leitura BitBlt da região com o AUTORRETRATO da
+// janela (PrintWindow dela mesma — janela nossa, render confiável). Menos de
+// 8% dos pixels amostrados diferentes = a captura É o cartão.
+func capturaPareceCartao(hwnd uintptr, px []byte) bool {
+	var buf []byte
+	_, cartao, ok, _ := imprimirJanela(hwnd, &buf)
+	if !ok || len(cartao) != len(px) {
+		// Sem autorretrato confiável a válvula não decide: permite (proteção
+		// primária é o gate de afinidade).
+		return false
+	}
+	const tolerancia = 32
+	var amostras, diferentes int
+	passo := len(px) / 4 / 512
+	if passo < 1 {
+		passo = 1
+	}
+	for i := 0; i+3 < len(px); i += passo * 4 {
+		amostras++
+		db := int(px[i]) - int(cartao[i])
+		dg := int(px[i+1]) - int(cartao[i+1])
+		dr := int(px[i+2]) - int(cartao[i+2])
+		if db < 0 {
+			db = -db
+		}
+		if dg < 0 {
+			dg = -dg
+		}
+		if dr < 0 {
+			dr = -dr
+		}
+		if db > tolerancia || dg > tolerancia || dr > tolerancia {
+			diferentes++
+		}
+	}
+	return amostras > 0 && diferentes*100 < amostras*8
+}
+
 // comporCamadasNaFaixa imprime as camadas (na ordem recebida: de cima para
 // baixo) e compõe cada uma na faixa, respeitando o que as janelas mais altas já
 // cobriram. Devolve a área coberta, o custo do ciclo (para o ritmo adaptativo —
@@ -382,7 +519,15 @@ func atualizarMascaraAoVivo(m *mascaraRegiao, bufFaixa, bufJanela *[]byte) int {
 //
 // bufJanela é o DIB de impressão das janelas e fica SEPARADO da faixa de
 // propósito: um PrintWindow não pode destruir a composição já feita.
-func comporCamadasNaFaixa(camadas []camadaJanela, rect winui.Rect, faixa []byte, bufJanela *[]byte) (coberto []winui.Rect, custo int, algumaFonte bool) {
+//
+// falhaFonteViva: alguma janela de verdade (não-cartão, não-wallpaper) que
+// interessa à faixa não pôde ser impressa e a área dela não está coberta por
+// uma camada MAIS ALTA que imprimiu. Nesse caso a composição está COMPLETA
+// (o wallpaper preenche o resto) mas o CONTEÚDO é mentira — wallpaper onde o
+// app deveria estar. O chamador NÃO deve commitar: é o bug do "buraco
+// congelado" que aparecia ao abrir um app (a janela GPU recusava o PrintWindow
+// e o wallpaper assumia como se fosse sucesso).
+func comporCamadasNaFaixa(camadas []camadaJanela, rect winui.Rect, faixa []byte, bufJanela *[]byte) (coberto []winui.Rect, custo int, algumaFonte bool, falhaFonteViva bool) {
 	// Quantas camadas de verdade (não-cartão, não-wallpaper) serão impressas:
 	// limitado por mascaraRefreshMaxJanelas. O papel de parede NÃO consome o
 	// orçamento: ele é a fonte de fundo que garante a cobertura — se 6 janelas
@@ -403,7 +548,7 @@ func comporCamadasNaFaixa(camadas []camadaJanela, rect winui.Rect, faixa []byte,
 		// Iniciar, trocou de desktop virtual E não há papel de parede): não há
 		// fonte ao vivo. A máscara fica como está — é o comportamento
 		// conservador de sempre.
-		return nil, 0, false
+		return nil, 0, false, false
 	}
 
 	// Área que já foi preenchida por uma janela mais alta. Uma janela mais baixa
@@ -433,6 +578,20 @@ func comporCamadasNaFaixa(camadas []camadaJanela, rect winui.Rect, faixa []byte,
 		}
 		janelaRect, pixels, ok, _ := imprimirJanela(c.hwnd, bufJanela)
 		if !ok {
+			if janelaRect.Empty() {
+				// Janela destruída/sem retângulo: não oculta mais nada — a área
+				// dela é simplesmente o que está atrás. Segue a composição.
+				continue
+			}
+			if !c.cartao && !c.papelDeParede {
+				// Fonte viva falhada: conta como falha SÓ se a área dela na faixa
+				// não estiver coberta por camadas mais altas que imprimiram —
+				// `coberto` neste momento contém exatamente elas (a varredura é
+				// de cima para baixo e o wallpaper só compõe no fim).
+				if sub := rect.Intersect(janelaRect); !sub.Empty() && !regiaoCoberta(coberto, sub) {
+					falhaFonteViva = true
+				}
+			}
 			continue
 		}
 		if !c.papelDeParede {
@@ -448,7 +607,7 @@ func comporCamadasNaFaixa(camadas []camadaJanela, rect winui.Rect, faixa []byte,
 		}
 		coberto = append(coberto, janelaRect)
 	}
-	return coberto, custo, algumaFonte
+	return coberto, custo, algumaFonte, falhaFonteViva
 }
 
 // temPapelDeParede informa se a lista de camadas contém alguma fonte de fundo
@@ -498,7 +657,9 @@ func imprimirJanelaWin32(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool, s
 	// App travado (não responde a mensagens): PrintWindow bloquearia a goroutine
 	// de refresh para sempre. Melhor manter a máscara congelada.
 	if travada, _, _ := procIsHungAppWindow.Call(hwnd); travada != 0 {
-		return winui.Rect{}, nil, false, "app travado (não responde)"
+		// O retângulo vem junto na falha: o chamador usa a interseção dele com a
+		// faixa para saber se a área da janela travada ficou sem fonte real.
+		return r, nil, false, "app travado (não responde)"
 	}
 
 	screenDC, _, _ := procGetDC.Call(0)
@@ -551,7 +712,9 @@ func imprimirJanelaWin32(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool, s
 	procSelectObject.Call(memDC, prev)
 	procDeleteObject.Call(hbm)
 	if impresso == 0 {
-		return winui.Rect{}, nil, false, "PrintWindow recusado"
+		// Rect na falha: o chamador precisa saber a área da janela que ficou
+		// sem fonte para não commitar wallpaper por cima dela.
+		return r, nil, false, "PrintWindow recusado"
 	}
 	return r, out, true, ""
 }
@@ -620,6 +783,12 @@ func registrarFalhaMascara(m *mascaraRegiao, motivo string) {
 	}
 	// Descarta ANTES de logar: removerMascara pode encerrar o loop de refresh.
 	hwnd := m.hwnd
+	// Guard de privacidade: sem proteção alternativa (emenda GDI / MONITOR),
+	// descartar colocaria o cartão INTEIRO no stream. Mantém o congelado.
+	if podeDescartarMascara != nil && !podeDescartarMascara(hwnd) {
+		logarDescarteRecusado(hwnd, motivo)
+		return
+	}
 	log.Printf("[session-banner] refresh da máscara falhou %d vezes seguidas (%s) — descartando a máscara e voltando à captura ao vivo", m.falhasConsecutivas, motivo)
 	removerMascara(hwnd)
 }

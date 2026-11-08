@@ -1023,6 +1023,33 @@ func reaplicarProtecaoAposDescarteMascara(hwnd uintptr) bannerCaptureMode {
 // errRecuoSemMascara documenta o estado do descarte para garantirProtecaoSemMascara.
 var errRecuoSemMascara = fmt.Errorf("máscara de região descartada em tempo de execução")
 
+// descarteMascaraProtegida responde ao hook podeDescartarMascara (banner_patch_windows.go):
+// remover a máscara AGORA deixaria a área do cartão protegida no stream?
+//
+// Regra (a mesma ordem de males do arquivo — prefira CONGELAR/PRETO a VAZAR):
+//   - emenda do capturer GDI disponível → sim (o capturer contorna a região);
+//   - recuo para WDA_MONITOR possível → sim (área PRETA no stream — protegida);
+//   - só WDA_EXCLUDEFROMCAPTURE → NÃO (o Desktop Duplication ignora a afinidade
+//     e mostraria o cartão INTEIRO — medido em
+//     banner_exclusion_capture_windows_test.go);
+//   - recusado pelo Windows (Win10/VM, errno 8) → NÃO — mantém a máscara
+//     congelada: vazamento > fantasma.
+func descarteMascaraProtegida(hwnd uintptr) bool {
+	if hwnd == 0 {
+		return false
+	}
+	if hwnd != bannerCaptureTarget.Load() {
+		// Não é o banner ativo (ex.: o aviso da bandeja, que não tem escada de
+		// afinidade própria): sem emenda não há proteção alternativa.
+		return emendaDoCapturerDisponivel()
+	}
+	if emendaDoCapturerDisponivel() {
+		return true
+	}
+	mode, _ := applyDisplayAffinity(hwnd)
+	return mode == bannerCaptureBlack
+}
+
 // ligarRecuoAposDescarteMascara registra o recuo no ponto de extensão do descarte
 // (aoDescartarMascara, definido em banner_patch_windows.go).
 //
@@ -1034,6 +1061,7 @@ var errRecuoSemMascara = fmt.Errorf("máscara de região descartada em tempo de 
 // inicializações de var do pacote, então o valor nunca é sobrescrito.
 func ligarRecuoAposDescarteMascara() {
 	aoDescartarMascara = reaplicarProtecaoAposDescarteMascara
+	podeDescartarMascara = descarteMascaraProtegida
 }
 
 func init() {

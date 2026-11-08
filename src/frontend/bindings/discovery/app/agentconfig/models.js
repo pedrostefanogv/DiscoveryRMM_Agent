@@ -139,6 +139,17 @@ export class AgentConfiguration {
              */
             this["automationP2pWingetInstallEnabled"] = null;
         }
+        if (!("updatesTabEnabled" in $$source)) {
+            /**
+             * UpdatesTabEnabled é o kill switch da aba "Atualizações" do painel do
+             * agente (apps pendentes via winget/choco). Herdável server→client→site;
+             * ausente em todos os níveis = true (habilitada). O servidor SEMPRE envia o
+             * valor resolvido — o default existe só para payload antigo/incompleto.
+             * @member
+             * @type {boolean | null}
+             */
+            this["updatesTabEnabled"] = null;
+        }
         if (!("agentHomeTab" in $$source)) {
             /**
              * @member
@@ -303,42 +314,42 @@ export class AgentConfiguration {
      * @returns {AgentConfiguration}
      */
     static createFrom($$source = {}) {
-        const $$createField23_0 = $$createType0;
-        const $$createField24_0 = $$createType1;
-        const $$createField25_0 = $$createType2;
-        const $$createField26_0 = $$createType3;
-        const $$createField27_0 = $$createType5;
-        const $$createField28_0 = $$createType6;
-        const $$createField29_0 = $$createType7;
-        const $$createField35_0 = $$createType9;
-        const $$createField36_0 = $$createType11;
+        const $$createField24_0 = $$createType0;
+        const $$createField25_0 = $$createType1;
+        const $$createField26_0 = $$createType2;
+        const $$createField27_0 = $$createType3;
+        const $$createField28_0 = $$createType5;
+        const $$createField29_0 = $$createType6;
+        const $$createField30_0 = $$createType7;
+        const $$createField36_0 = $$createType9;
+        const $$createField37_0 = $$createType11;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("agentUpdate" in $$parsedSource) {
-            $$parsedSource["agentUpdate"] = $$createField23_0($$parsedSource["agentUpdate"]);
+            $$parsedSource["agentUpdate"] = $$createField24_0($$parsedSource["agentUpdate"]);
         }
         if ("psadt" in $$parsedSource) {
-            $$parsedSource["psadt"] = $$createField24_0($$parsedSource["psadt"]);
+            $$parsedSource["psadt"] = $$createField25_0($$parsedSource["psadt"]);
         }
         if ("notifications" in $$parsedSource) {
-            $$parsedSource["notifications"] = $$createField25_0($$parsedSource["notifications"]);
+            $$parsedSource["notifications"] = $$createField26_0($$parsedSource["notifications"]);
         }
         if ("notificationBranding" in $$parsedSource) {
-            $$parsedSource["notificationBranding"] = $$createField26_0($$parsedSource["notificationBranding"]);
+            $$parsedSource["notificationBranding"] = $$createField27_0($$parsedSource["notificationBranding"]);
         }
         if ("notificationPolicies" in $$parsedSource) {
-            $$parsedSource["notificationPolicies"] = $$createField27_0($$parsedSource["notificationPolicies"]);
+            $$parsedSource["notificationPolicies"] = $$createField28_0($$parsedSource["notificationPolicies"]);
         }
         if ("consolidation" in $$parsedSource) {
-            $$parsedSource["consolidation"] = $$createField28_0($$parsedSource["consolidation"]);
+            $$parsedSource["consolidation"] = $$createField29_0($$parsedSource["consolidation"]);
         }
         if ("rollout" in $$parsedSource) {
-            $$parsedSource["rollout"] = $$createField29_0($$parsedSource["rollout"]);
+            $$parsedSource["rollout"] = $$createField30_0($$parsedSource["rollout"]);
         }
         if ("maintenanceWindow" in $$parsedSource) {
-            $$parsedSource["maintenanceWindow"] = $$createField35_0($$parsedSource["maintenanceWindow"]);
+            $$parsedSource["maintenanceWindow"] = $$createField36_0($$parsedSource["maintenanceWindow"]);
         }
         if ("mcpToolPolicy" in $$parsedSource) {
-            $$parsedSource["mcpToolPolicy"] = $$createField36_0($$parsedSource["mcpToolPolicy"]);
+            $$parsedSource["mcpToolPolicy"] = $$createField37_0($$parsedSource["mcpToolPolicy"]);
         }
         return new AgentConfiguration(/** @type {Partial<AgentConfiguration>} */($$parsedSource));
     }

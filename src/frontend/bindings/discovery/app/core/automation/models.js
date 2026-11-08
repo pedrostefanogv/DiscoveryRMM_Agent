@@ -781,6 +781,60 @@ export class SensorMeasure {
         }
         if (/** @type {any} */(false)) {
             /**
+             * Consistência de AD (ADConsistency)
+             * 
+             * Espelha os canais abaixo em campos explícitos: o servidor deriva os canais
+             * preferindo estes campos e caindo para o mapa Channels quando faltarem
+             * (compatibilidade com agentes antigos que só mandavam Channels).
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["adCollectOk"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["adReplicationFailures"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["adReplicationOk"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["adDcdiagFailedTests"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["adDcdiagOk"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["adTimeOffsetSeconds"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["adClockOk"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * Serviço: reinício automático (restartIfStopped)
              * @member
              * @type {boolean | null | undefined}
@@ -977,6 +1031,12 @@ export const SensorType = {
     SensorTypeCertificate: "CertificateExpiry",
     SensorTypeDefenderStatus: "DefenderStatus",
     SensorTypeBitLocker: "BitLocker",
+
+    /**
+     * SensorTypeADConsistency = F5 (SensorType.ADConsistency = 19 no servidor).
+     * Só se aplica a controlador de domínio; fora dele a coleta volta vazia.
+     */
+    SensorTypeADConsistency: "ADConsistency",
 };
 
 // Private type creation functions
