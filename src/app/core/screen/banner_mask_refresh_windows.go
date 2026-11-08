@@ -8,6 +8,8 @@ import (
 	"time"
 	"unsafe"
 
+	"golang.org/x/sys/windows"
+
 	"discovery/app/core/winui"
 )
 
@@ -135,6 +137,7 @@ var (
 	procPrintWindow     = user32.NewProc("PrintWindow")
 	procGetWindowLong   = user32.NewProc("GetWindowLongPtrW")
 	procGetAncestor     = user32.NewProc("GetAncestor")
+	procGetClassName    = user32.NewProc("GetClassNameW")
 
 	mascaraRefreshMu   sync.Mutex
 	mascaraRefreshStop chan struct{}
@@ -159,9 +162,15 @@ func iniciarRefreshMascaras() {
 	stop := make(chan struct{})
 	mascaraRefreshStop = stop
 	go func() {
-		// Buffer do PrintWindow é DA GERAÇÃO: quando o loop é reiniciado com
-		// outro ainda preso em PrintWindow, os dois não compartilham memória.
-		var buf []byte
+		// Dois buffers, de donos distintos (ver imprimirJanela):
+		//   bufFaixa — a faixa composta (tamanho da região do cartão);
+		//   bufJanela — o DIB da janela impressa (tamanho da maior janela).
+		// São SEPARADOS de propósito: imprimir uma janela não pode destruir a
+		// composição já feita (bug real: com buffer único, o PrintWindow de uma
+		// janela sobrescrevia o início da faixa — conteúdo riscado/branco).
+		// Cada buffer é DA GERAÇÃO: quando o loop é reiniciado com outro ainda
+		// preso em PrintWindow, os dois não compartilham memória.
+		var bufFaixa, bufJanela []byte
 		intervalo := mascaraRefreshIntervaloRapido
 		timer := time.NewTimer(intervalo)
 		defer timer.Stop()
@@ -170,7 +179,7 @@ func iniciarRefreshMascaras() {
 			case <-stop:
 				return
 			case <-timer.C:
-				ativo, custo := atualizarMascarasAoVivo(&buf)
+				ativo, custo := atualizarMascarasAoVivo(&bufFaixa, &bufJanela)
 				if !ativo {
 					mascaraRefreshMu.Lock()
 					encerrou := mascaraRefreshStop == stop
@@ -222,8 +231,9 @@ func pararRefreshMascaras() {
 // atualizarMascarasAoVivo atualiza todas as máscaras ativas e devolve
 // (ativo, custo): ativo=true enquanto houver pelo menos uma máscara (o loop usa
 // isso para se encerrar) e custo = pixels impressos no ciclo, que alimenta o
-// ritmo adaptativo.
-func atualizarMascarasAoVivo(buf *[]byte) (bool, int) {
+// ritmo adaptativo. bufFaixa é o tampão da faixa composta; bufJanela é o DIB
+// das janelas impressas — buffers separados, ver o comentário no loop.
+func atualizarMascarasAoVivo(bufFaixa, bufJanela *[]byte) (bool, int) {
 	mascarasMu.Lock()
 	alvos := make([]*mascaraRegiao, 0, len(mascaras))
 	for _, m := range mascaras {
@@ -241,7 +251,7 @@ func atualizarMascarasAoVivo(buf *[]byte) (bool, int) {
 		if !mascaraVisivel(m.hwnd) {
 			continue
 		}
-		custo += atualizarMascaraAoVivo(m, buf)
+		custo += atualizarMascaraAoVivo(m, bufFaixa, bufJanela)
 	}
 	return true, custo
 }
@@ -261,7 +271,7 @@ const mascaraFalhasParaDescartar = 3
 // Em falha de captura, mantém a máscara — até mascaraFalhasParaDescartar falhas
 // consecutivas; depois disso descarta a máscara e devolve a área à captura ao
 // vivo (ver registrarFalhaMascara).
-func atualizarMascaraAoVivo(m *mascaraRegiao, buf *[]byte) int {
+func atualizarMascaraAoVivo(m *mascaraRegiao, bufFaixa, bufJanela *[]byte) int {
 	// Snapshot do retângulo sob lock: o resto da função trabalha com ele e o
 	// commit confere no fim se a máscara ainda é a mesma (compare-and-swap).
 	mascarasMu.Lock()
@@ -284,29 +294,10 @@ func atualizarMascaraAoVivo(m *mascaraRegiao, buf *[]byte) int {
 	// Inclui os cartões do agente (banner/aviso), marcados com cartao=true: eles
 	// nunca podem ser fonte (vazariam o cartão), mas precisam ser PULADOS — e não
 	// tratados como "a primeira janela que contém o ponto", que era o bug
-	// original.
+	// original. O papel de parede (Progman/WorkerW) entra como ÚLTIMA camada.
 	camadas := camadasSobreRegiao(rect)
 	if len(camadas) == 0 {
 		registrarFalhaMascara(m, "nenhuma janela sob o cartão")
-		return 0
-	}
-
-	// Quantas camadas de verdade (não-cartão) serão impressas: é o custo do
-	// ciclo. Limitado por mascaraRefreshMaxJanelas.
-	uteis := 0
-	for _, c := range camadas {
-		if !c.cartao {
-			uteis++
-			if uteis >= mascaraRefreshMaxJanelas {
-				break
-			}
-		}
-	}
-	if uteis == 0 {
-		// Só os cartões do agente estão sob a faixa (o usuário abriu o menu
-		// Iniciar, trocou de desktop virtual): não há fonte ao vivo. A máscara
-		// fica como está — é o comportamento conservador de sempre.
-		registrarFalhaMascara(m, "apenas janelas do agente sob o cartão")
 		return 0
 	}
 
@@ -320,45 +311,15 @@ func atualizarMascaraAoVivo(m *mascaraRegiao, buf *[]byte) int {
 		registrarFalhaMascara(m, "faixa do cartão acima do teto de pixels")
 		return 0
 	}
-	// Reaproveita o tampão entre ciclos quando o tamanho é o mesmo. O buffer do
-	// PrintWindow (imprimirJanela) tem o mesmo dono e a mesma vida.
-	if cap(*buf) < len(pxAntigo) {
-		*buf = make([]byte, len(pxAntigo))
+	// Reaproveita o tampão entre ciclos quando o tamanho é o mesmo. O buffer de
+	// impressão das janelas (bufJanela) é OUTRO tampão, de dono separado: nunca
+	// pode aliasar a faixa (ver comentário no loop do refresh).
+	if cap(*bufFaixa) < len(pxAntigo) {
+		*bufFaixa = make([]byte, len(pxAntigo))
 	}
-	faixa := (*buf)[:len(pxAntigo)]
+	faixa := (*bufFaixa)[:len(pxAntigo)]
 
-	// Área que já foi preenchida por uma janela mais alta. Uma janela mais baixa
-	// só contribui com o que sobrar — é isso que reproduz o que o operador veria
-	// se o cartão não existisse.
-	coberto := make([]winui.Rect, 0, len(camadas))
-	custo := 0
-	algumaFonte := false
-	for _, c := range camadas {
-		if c.cartao {
-			// Cartão do agente: NUNCA é fonte (vazaria o cartão para o stream).
-			//
-			// E ele NÃO interrompe a varredura nem conta como área coberta: o
-			// cartão é TOPMOST, então na ordem Z ele aparece ANTES das janelas
-			// de verdade. Se ele "cobrisse" ou quebrasse o laço aqui, nenhuma
-			// janela seria impressa e a máscara seria descartada em TODO ciclo —
-			// o refresh morreria por completo. A fonte é justamente o que está
-			// ATRÁS dele: pula e segue compondo.
-			continue
-		}
-		if uteis <= 0 {
-			break
-		}
-		janelaRect, pixels, ok, _ := imprimirJanela(c.hwnd, buf)
-		if !ok {
-			continue
-		}
-		uteis--
-		custo += janelaRect.W * janelaRect.H
-		if comporJanelaNaFaixa(faixa, rect, janelaRect, pixels, coberto) {
-			algumaFonte = true
-		}
-		coberto = append(coberto, janelaRect)
-	}
+	coberto, custo, algumaFonte := comporCamadasNaFaixa(camadas, rect, faixa, bufJanela)
 
 	if !algumaFonte {
 		registrarFalhaMascara(m, "nenhuma janela sob o cartão pôde ser impressa")
@@ -386,6 +347,17 @@ func atualizarMascaraAoVivo(m *mascaraRegiao, buf *[]byte) int {
 	m.falhasConsecutivas = 0
 	logMascaraRefreshSucesso(m.hwnd)
 
+	// Composição idêntica à máscara atual: nada a commitar. Evita o
+	// copy-on-write (alocar + trocar sob lock) a cada ciclo quando o conteúdo
+	// de trás está parado — o caso comum (wallpaper sob o cartão). Sem o skip,
+	// o GC pagaria uma alocação + cópia por ciclo por máscara. A comparação
+	// ignora o canal ALFA: a máscara nasce de BitBlt (alfa definido) e a
+	// composição vem de PrintWindow (alfa frequentemente diferente) — só o RGB
+	// é conteúdo; comparar alfa faria o skip nunca disparar.
+	if faixaIgualRGB(faixa, pxAntigo) {
+		return custo
+	}
+
 	mascarasMu.Lock()
 	// COPY-ON-WRITE: monta um buffer novo e troca o slice sob lock. O patcher
 	// (PatchFrameBanner) lê o slice antigo sem lock — trocar o conteúdo no lugar
@@ -402,19 +374,96 @@ func atualizarMascaraAoVivo(m *mascaraRegiao, buf *[]byte) int {
 	return custo
 }
 
-// imprimirJanela renderiza a janela num DIB BGRA top-down e devolve o retângulo
-// da janela + os pixels. ok=false quando o Windows recusa ou a janela é grande
-// demais para o custo valer a pena; motivo diz QUAL foi a falha.
+// comporCamadasNaFaixa imprime as camadas (na ordem recebida: de cima para
+// baixo) e compõe cada uma na faixa, respeitando o que as janelas mais altas já
+// cobriram. Devolve a área coberta, o custo do ciclo (para o ritmo adaptativo —
+// papel de parede não conta, é trabalho estático) e se alguma janela compôs
+// pixels.
+//
+// bufJanela é o DIB de impressão das janelas e fica SEPARADO da faixa de
+// propósito: um PrintWindow não pode destruir a composição já feita.
+func comporCamadasNaFaixa(camadas []camadaJanela, rect winui.Rect, faixa []byte, bufJanela *[]byte) (coberto []winui.Rect, custo int, algumaFonte bool) {
+	// Quantas camadas de verdade (não-cartão) serão impressas: limitado por
+	// mascaraRefreshMaxJanelas.
+	uteis := 0
+	for _, c := range camadas {
+		if !c.cartao {
+			uteis++
+			if uteis >= mascaraRefreshMaxJanelas {
+				break
+			}
+		}
+	}
+	if uteis == 0 {
+		// Só os cartões do agente estão sob a faixa (o usuário abriu o menu
+		// Iniciar, trocou de desktop virtual E não há papel de parede): não há
+		// fonte ao vivo. A máscara fica como está — é o comportamento
+		// conservador de sempre.
+		return nil, 0, false
+	}
+
+	// Área que já foi preenchida por uma janela mais alta. Uma janela mais baixa
+	// só contribui com o que sobrar — é isso que reproduz o que o operador veria
+	// se o cartão não existisse.
+	coberto = make([]winui.Rect, 0, len(camadas))
+	for _, c := range camadas {
+		if c.cartao {
+			// Cartão do agente: NUNCA é fonte (vazaria o cartão para o stream).
+			//
+			// E ele NÃO interrompe a varredura nem conta como área coberta: o
+			// cartão é TOPMOST, então na ordem Z ele aparece ANTES das janelas
+			// de verdade. Se ele "cobrisse" ou quebrasse o laço aqui, nenhuma
+			// janela seria impressa e a máscara seria descartada em TODO ciclo —
+			// o refresh morreria por completo. A fonte é justamente o que está
+			// ATRÁS dele: pula e segue compondo.
+			continue
+		}
+		if uteis <= 0 {
+			break
+		}
+		janelaRect, pixels, ok, _ := imprimirJanela(c.hwnd, bufJanela)
+		if !ok {
+			continue
+		}
+		uteis--
+		if !c.papelDeParede {
+			// Papel de parede não conta no custo: é estático e imprimir a tela
+			// inteira a cada ciclo empurraria o refresh para o regime lento sem
+			// motivo (não há janela "viva" nenhuma). O skip de commit igual
+			// (bytes.Equal) já evita o trabalho de commit; aqui evitamos pagar
+			// o ciclo rápido por um conteúdo que não muda.
+			custo += janelaRect.W * janelaRect.H
+		}
+		if comporJanelaNaFaixa(faixa, rect, janelaRect, pixels, coberto) {
+			algumaFonte = true
+		}
+		coberto = append(coberto, janelaRect)
+	}
+	return coberto, custo, algumaFonte
+}
+
+// imprimirJanela é var (e não func) para os testes poderem injetar uma fonte
+// de impressão determinística — é exatamente o que prova o contrato de buffers
+// separados com o tampão da faixa (ver TestComporCamadasNaFaixaNaoAliasBufDaFaixa).
+// O valor de produção é imprimirJanelaWin32; os testes restauram-no no cleanup.
+var imprimirJanela = imprimirJanelaWin32
+
+// imprimirJanelaWin32 renderiza a janela num DIB BGRA top-down e devolve o
+// retângulo da janela + os pixels. ok=false quando o Windows recusa ou a janela
+// é grande demais para o custo valer a pena; motivo diz QUAL foi a falha.
 //
 // O motivo existe porque uma versão anterior colapsava CINCO causas distintas
 // num único bool e o chamador registrava sempre "PrintWindow recusado" — mesmo
 // quando a falha real era janela travada, DC indisponível ou área absurda. Num
 // diagnóstico de campo isso levou a investigar a API errada.
 //
-// IMPORTANTE: o DIB é criado com o tamanho da JANELA e o `buf` do chamador é
-// compartilhado com o tampão da faixa (ver atualizarMascaraAoVivo). O bitmap
+// IMPORTANTE: o DIB é criado com o tamanho da JANELA e o `buf` recebido é o
+// tampão de impressão DEDICADO das janelas (bufJanela) — separado do tampão da
+// faixa composta de propósito: imprimir uma janela NÃO pode destruir a
+// composição já feita (com buffer único, janelas menores que a faixa
+// sobrescreviam o início dela — conteúdo riscado/branco no stream). O bitmap
 // devolvido é válido até a próxima chamada que use o mesmo `buf`.
-func imprimirJanela(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool, string) {
+func imprimirJanelaWin32(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool, string) {
 	r, ok := winui.WindowRect(hwnd)
 	if hwnd == 0 || !ok {
 		return winui.Rect{}, nil, false, "janela sem retângulo (destruída ou handle inválido)"
@@ -586,6 +635,11 @@ func logMascaraRefreshSucesso(hwnd uintptr) {
 type camadaJanela struct {
 	hwnd   uintptr
 	cartao bool // janela do agente (banner/aviso): NUNCA é fonte
+	// papelDeParede marca Progman/WorkerW (fundo do desktop). São compostos
+	// POR ÚLTIMO e não contam para o custo do ciclo (ver compose abaixo): são
+	// o fallback que mantém a máscara válida quando nada mais cobre a faixa —
+	// desktop limpo — em vez de deixá-la morrer por falhas consecutivas.
+	papelDeParede bool
 }
 
 // camadasSobreRegiao devolve, de CIMA para baixo, as janelas VISÍVEIS que
@@ -604,10 +658,20 @@ type camadaJanela struct {
 // topmost inteira, essa área sobra na contabilidade de cobertura — e o chamador
 // descarta a máscara em vez de deixar um pedaço congelado.
 //
-// O mesmo mecanismo resolve o DESKTOP: Progman/WorkerW (papel de parede) são
-// topmost e ficam de fora; sem isso o PrintWindow deles devolveria o wallpaper —
-// estático — e a máscara congelaria legitimamente para sempre.
-func camadasSobreRegiao(regiao winui.Rect) []camadaJanela {
+// EXCEÇÃO — o papel de parede: Progman/WorkerW são topmost, mas são o FUNDO do
+// desktop (nada os cobre por baixo). Eles são coletados à parte e compostos
+// POR ÚLTIMO, preenchendo só o que nenhuma janela cobriu. Sem esse fallback, um
+// desktop limpo (só wallpaper atrás do cartão — o caso MAIS COMUM) não acha
+// fonte nenhuma, o refresh falha 3× e a máscara é descartada: a área volta à
+// captura ao vivo, o DDA ignora a afinidade e o CARTÃO APARECE no stream. Com o
+// wallpaper na composição, a máscara fica com o conteúdo correto.
+// camadasSobreRegiao é var (padrão de injeção do pacote): os testes do refresh
+// injetam uma ordem Z determinística — sem isso o caminho dependente de janelas
+// reais não é testável. Valor de produção: camadasSobreRegiaoWin32.
+var camadasSobreRegiao = camadasSobreRegiaoWin32
+
+// camadasSobreRegiaoWin32 é a implementação real (varredura da ordem Z).
+func camadasSobreRegiaoWin32(regiao winui.Rect) []camadaJanela {
 	alvo := bannerCaptureTarget.Load()
 	extras := capturaExtras()
 	// Teto de iteração: a ordem Z de um desktop real tem dezenas de janelas,
@@ -615,6 +679,7 @@ func camadasSobreRegiao(regiao winui.Rect) []camadaJanela {
 	// a cada ciclo num ambiente com muitos handles.
 	const maxIteracoes = 64
 	var camadas []camadaJanela
+	var papel []camadaJanela
 	hwnd, _, _ := procGetTopWindow.Call(0)
 	for i := 0; hwnd != 0 && i < maxIteracoes; i++ {
 		if visivel, _, _ := procIsWindowVisible.Call(hwnd); visivel != 0 {
@@ -625,13 +690,36 @@ func camadasSobreRegiao(regiao winui.Rect) []camadaJanela {
 				if janelaCobreRegiao(hwnd, regiao) {
 					camadas = append(camadas, camadaJanela{hwnd: hwnd, cartao: true})
 				}
-			} else if !eTopmost(hwnd) && janelaCobreRegiao(hwnd, regiao) {
+			} else if eTopmost(hwnd) {
+				// Banda topmost: o papel de parede é o único membro útil dela.
+				if eJanelaPapelDeParede(hwnd) && janelaCobreRegiao(hwnd, regiao) {
+					papel = append(papel, camadaJanela{hwnd: hwnd, papelDeParede: true})
+				}
+			} else if janelaCobreRegiao(hwnd, regiao) {
 				camadas = append(camadas, camadaJanela{hwnd: hwnd})
 			}
 		}
 		hwnd, _, _ = procGetWindow.Call(hwnd, gwHwndNext)
 	}
-	return camadas
+	// Papel de parede entra NO FIM da ordem de composição: como camada mais
+	// baixa, ele só preenche o que as janelas de verdade deixaram livre.
+	return append(camadas, papel...)
+}
+
+// eJanelaPapelDeParede informa se hwnd é Progman/WorkerW (hospedeiros do papel
+// de parede do desktop). São topmost na ordem Z, mas visualmente ficam ATRÁS de
+// tudo — por isso são compostos por último como fonte de fundo.
+func eJanelaPapelDeParede(hwnd uintptr) bool {
+	if hwnd == 0 {
+		return false
+	}
+	if err := procGetClassName.Find(); err != nil {
+		return false
+	}
+	var buf [16]uint16
+	n, _, _ := procGetClassName.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	classe := windows.UTF16ToString(buf[:n])
+	return classe == "Progman" || classe == "WorkerW"
 }
 
 // janelaCobreRegiao informa se alguma parte da janela (ou do seu top-level dono,
@@ -766,6 +854,20 @@ func copiarTrecho(faixa []byte, rect, janelaRect winui.Rect, pixels []byte, x, y
 		return false
 	}
 	copy(faixa[offDst:offDst+bytes], pixels[offSrc:offSrc+bytes])
+	return true
+}
+
+// faixaIgualRGB compara dois buffers BGRA pelo conteúdo RGB (ignora o canal
+// alfa). Devolve false para tamanhos diferentes.
+func faixaIgualRGB(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i+3 < len(a); i += 4 {
+		if a[i] != b[i] || a[i+1] != b[i+1] || a[i+2] != b[i+2] {
+			return false
+		}
+	}
 	return true
 }
 

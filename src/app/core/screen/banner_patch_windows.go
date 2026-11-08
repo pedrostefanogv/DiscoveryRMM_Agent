@@ -268,7 +268,7 @@ func capturarMascaraRegiao(hwnd uintptr) error {
 	if mascaraFoiDescartada(hwnd) {
 		return fmt.Errorf("máscara já descartada para esta janela (recaptura reabriria o fantasma)")
 	}
-	px, err := lerPixelsTela(rect)
+	px, err := lerPixelsTelaRegiaoEstavel(rect)
 	if err != nil {
 		return err
 	}
@@ -286,6 +286,48 @@ func capturarMascaraRegiao(hwnd uintptr) error {
 	mascaras[hwnd] = &mascaraRegiao{hwnd: hwnd, rect: rect, px: px}
 	mascarasMu.Unlock()
 	return nil
+}
+
+// mascaraSeedTentativasBranca/mascaraSeedEsperaBranca definem a tolerância da
+// captura da máscara a um desktop ainda NÃO PINTADO. No início de uma sessão
+// (VM recém-acessada, logon em curso, console retomado) a tela física pode
+// estar branca por inteiro por 1-2s antes de o compositor desenhar o wallpaper.
+// Capturar a máscara NESSA janela congela o branco na região do cartão — o
+// "retângulo branco bugado" que o operador vê no visualizador por toda a
+// sessão, porque a máscara é reescrita em TODO frame.
+const (
+	mascaraSeedTentativasBranca = 5
+	mascaraSeedEsperaBranca     = 250 * time.Millisecond
+)
+
+// lerPixelsTelaRegiaoEstavel lê os pixels da região tolerando esse instante de
+// carga: quando a região E a sonda externa estão todas brancas, re-ler a cada
+// 250ms até o desktop pintar (ou esgotar as tentativas). Se a tela for
+// legitimamente branca (app em tela cheia), a última leitura é aceita — o
+// conteúdo de baixo realmente é branco. A captura preta bloqueada continua
+// sendo tratada pelo chamador (regiaoTodaPreta/telaTambemPreta).
+func lerPixelsTelaRegiaoEstavel(rect winui.Rect) ([]byte, error) {
+	px, err := lerPixelsTela(rect)
+	if err != nil {
+		return nil, err
+	}
+	if !regiaoTodaBranca(px) || !telaTambemBranca(rect) {
+		return px, nil
+	}
+	for tentativa := 0; tentativa < mascaraSeedTentativasBranca; tentativa++ {
+		time.Sleep(mascaraSeedEsperaBranca)
+		novo, errNovo := lerPixelsTela(rect)
+		if errNovo != nil {
+			// Uma leitura que funcionou vale mais que abortar a máscara por
+			// uma falha transitória: mantém a primeira.
+			return px, nil
+		}
+		px = novo
+		if !regiaoTodaBranca(px) || !telaTambemBranca(rect) {
+			break
+		}
+	}
+	return px, nil
 }
 
 // lerPixelsTela copia os pixels de uma região da tela física para um buffer
@@ -457,6 +499,19 @@ func RegionMaskAvailable() bool {
 // captura bloqueada (tela inteira preta) de área escura legítima (app/vídeo de
 // fundo preto). Sem sonda confiável devolve true (comportamento conservador).
 func telaTambemPreta(area winui.Rect) bool {
+	return telaSondaUniforme(area, false)
+}
+
+// telaTambemBranca é o espelho do telaTambemPreta para BRANCO: a tela toda
+// branca no instante da sessão é o sinal do desktop ainda não pintado (e não
+// necessariamente conteúdo legítimo) — ver lerPixelsTelaRegiaoEstavel.
+func telaTambemBranca(area winui.Rect) bool {
+	return telaSondaUniforme(area, true)
+}
+
+// telaSondaUniforme sonda uma faixa fora da área informada e devolve se ela é
+// toda preta (branca=false) ou toda branca (branca=true).
+func telaSondaUniforme(area winui.Rect, branca bool) bool {
 	sonda := winui.Rect{X: 0, Y: 0, W: 480, H: 270}
 	if !sonda.Intersect(area).Empty() {
 		if area.Y >= 278 {
@@ -469,11 +524,26 @@ func telaTambemPreta(area winui.Rect) bool {
 	if err != nil {
 		return true
 	}
+	if branca {
+		return regiaoTodaBranca(px)
+	}
 	return regiaoTodaPreta(px)
 }
 
 // regiaoTodaPreta informa se o buffer é totalmente preto (amostragem).
 func regiaoTodaPreta(px []byte) bool {
+	return regiaoTodaCorUnica(px, 0, 0, 0)
+}
+
+// regiaoTodaBranca informa se o buffer é totalmente branco (amostragem). É o
+// sinal de "desktop ainda não pintou" no início de uma sessão — o caso que
+// congelava o retângulo branco bugado na região do cartão.
+func regiaoTodaBranca(px []byte) bool {
+	return regiaoTodaCorUnica(px, 0xFF, 0xFF, 0xFF)
+}
+
+// regiaoTodaCorUnica informa se o buffer tem RGB único (amostragem).
+func regiaoTodaCorUnica(px []byte, b, g, r byte) bool {
 	if len(px) < 4 {
 		return true
 	}
@@ -482,7 +552,7 @@ func regiaoTodaPreta(px []byte) bool {
 		passo = 1
 	}
 	for i := 0; i+3 < len(px); i += passo * 4 {
-		if px[i] != 0 || px[i+1] != 0 || px[i+2] != 0 {
+		if px[i] != b || px[i+1] != g || px[i+2] != r {
 			return false
 		}
 	}

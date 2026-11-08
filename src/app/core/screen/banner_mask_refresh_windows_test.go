@@ -514,3 +514,193 @@ func TestAtivarMascaraRecapturaComJanelaOculta(t *testing.T) {
 		t.Fatal("a trava deveria ter sido solta após a recaptura bem-sucedida")
 	}
 }
+
+
+// ── Regressões do refresh com buffers separados e papel de parede ──
+//
+// Duas falhas de projeto que produziam exatamente o sintoma relatado em campo
+// (faixa branca/riscada no visualizador onde fica o cartão):
+//
+// (1) BUFFER ÚNICO: o PrintWindow da janela usava o MESMO tampão da faixa
+//     composta. Janela de impressão menor que a faixa sobrescrevia o início
+//     dela — a composição feita até ali era destruída e o que sobrava eram
+//     riscos/lixo (ou branco chapado) gravados na máscara para sempre.
+//
+// (2) SEM FONTE DE FUNDO: num desktop limpo (só wallpaper atrás do cartão — o
+//     caso mais comum) nenhuma janela da ordem Z cobria a faixa (Progman/
+//     WorkerW são topmost e ficavam de fora), o refresh falhava 3× e a máscara
+//     era descartada — a área voltava à captura ao vivo, o DDA ignora a
+//     afinidade e o cartão aparecia no stream.
+
+// TestRegiaoTodaBranca trava o detector de branco usado pela captura da
+// semente (espelho do detector de preto, refactorado para cor única).
+func TestRegiaoTodaBranca(t *testing.T) {
+	if !regiaoTodaBranca(regiaoUniforme(64, 8, 0xFF, 0xFF, 0xFF)) {
+		t.Fatal("região toda branca não foi detectada")
+	}
+	if regiaoTodaBranca(regiaoUniforme(64, 8, 0xFE, 0xFF, 0xFF)) {
+		t.Fatal("região com um canal diferente foi detectada como branca")
+	}
+	// O refactor não pode ter mudado o detector de preto.
+	if !regiaoTodaPreta(regiaoUniforme(64, 8, 0, 0, 0)) {
+		t.Fatal("região toda preta deixou de ser detectada")
+	}
+	if regiaoTodaPreta(regiaoUniforme(64, 8, 0, 0, 1)) {
+		t.Fatal("região com canal diferente foi detectada como preta")
+	}
+}
+
+// imprimirJanelaFake devolve uma impressão uniforme com a cor derivada do hwnd,
+// do tamanho do retângulo devolvido — imita o contrato do PrintWindow real.
+func imprimirJanelaFake(cor byte, r winui.Rect) func(uintptr, *[]byte) (winui.Rect, []byte, bool, string) {
+	return func(uintptr, *[]byte) (winui.Rect, []byte, bool, string) {
+		pixels := regiaoUniforme(r.W, r.H, cor, cor, cor)
+		return r, pixels, true, ""
+	}
+}
+
+// TestComporCamadasNaFaixaNaoAliasBufDaFaixa prova o contrato dos buffers
+// separados: imprimir a segunda janela NÃO pode destruir a composição da
+// primeira. Com buffer único (bug), a faixa terminava com a cor da ÚLTIMA
+// janela impressa, não com a da janela de cima.
+func TestComporCamadasNaFaixaNaoAliasBufDaFaixa(t *testing.T) {
+	anterior := imprimirJanela
+	t.Cleanup(func() { imprimirJanela = anterior })
+
+	rect := winui.Rect{X: 0, Y: 0, W: 100, H: 20}
+	// A (hwnd 0xAA) está NA FRENTE e cobre tudo; B (0xBB) cobre tudo também.
+	camadas := []camadaJanela{{hwnd: 0xAA}, {hwnd: 0xBB}}
+	imprimirJanela = func(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool, string) {
+		cor := byte(hwnd)
+		tamanho := rect.W * rect.H * 4
+		if cap(*buf) < tamanho {
+			*buf = make([]byte, tamanho)
+		}
+		out := (*buf)[:tamanho]
+		for i := 0; i+3 < len(out); i += 4 {
+			out[i] = cor
+			out[i+1] = cor
+			out[i+2] = cor
+		}
+		return rect, out, true, ""
+	}
+
+	faixa := make([]byte, rect.W*rect.H*4)
+	var bufJanela []byte
+	coberto, custo, algumaFonte := comporCamadasNaFaixa(camadas, rect, faixa, &bufJanela)
+
+	if !algumaFonte {
+		t.Fatal("composição não reconheceu fonte nenhuma")
+	}
+	if got := faixa[(10*rect.W+50)*4]; got != 0xAA {
+		t.Fatalf("faixa = %#x, esperado 0xAA — imprimir a janela de trás sobrescreveu a composição da da frente (buffer compartilhado?)", got)
+	}
+	if !regiaoCoberta(coberto, rect) {
+		t.Fatal("cobertura deveria ser completa")
+	}
+	if custo != rect.W*rect.H*2 {
+		t.Fatalf("custo = %d, esperado %d (duas janelas impressas)", custo, rect.W*rect.H*2)
+	}
+}
+
+// TestComporCamadasNaFaixaPapelDeParedePorUltimoSemCusto prova o fallback do
+// papel de parede: entra NO FIM da composição (preenche só o que ninguém
+// cobriu) e não conta no custo do ciclo (trabalho estático não deve empurrar o
+// refresh para o regime lento).
+func TestComporCamadasNaFaixaPapelDeParedePorUltimoSemCusto(t *testing.T) {
+	anterior := imprimirJanela
+	t.Cleanup(func() { imprimirJanela = anterior })
+
+	rect := winui.Rect{X: 0, Y: 0, W: 100, H: 20}
+	esquerda := winui.Rect{X: 0, Y: 0, W: 50, H: 20}
+	imprimirJanela = func(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool, string) {
+		if hwnd == 0x11 {
+			return esquerda, regiaoUniforme(esquerda.W, esquerda.H, 0x11, 0x11, 0x11), true, ""
+		}
+		return rect, regiaoUniforme(rect.W, rect.H, 0x77, 0x77, 0x77), true, ""
+	}
+
+	// Janela normal na frente, papel de parede por último.
+	camadas := []camadaJanela{{hwnd: 0x11}, {hwnd: 0x77, papelDeParede: true}}
+	faixa := make([]byte, rect.W*rect.H*4)
+	var bufJanela []byte
+	coberto, custo, algumaFonte := comporCamadasNaFaixa(camadas, rect, faixa, &bufJanela)
+
+	if !algumaFonte {
+		t.Fatal("composição com papel de parede deveria reconhecer fonte")
+	}
+	if got := faixa[(10*rect.W+10)*4]; got != 0x11 {
+		t.Fatalf("metade esquerda = %#x, esperado 0x11 (a janela normal tem prioridade)", got)
+	}
+	if got := faixa[(10*rect.W+90)*4]; got != 0x77 {
+		t.Fatalf("metade direita = %#x, esperado 0x77 (o papel de parede preenche o resto)", got)
+	}
+	if !regiaoCoberta(coberto, rect) {
+		t.Fatal("janela + papel de parede deveriam cobrir a faixa inteira — sem isso a máscara seria descartada no desktop limpo")
+	}
+	if custo != esquerda.W*esquerda.H {
+		t.Fatalf("custo = %d, esperado %d — o papel de parede não deve contar no custo adaptativo", custo, esquerda.W*esquerda.H)
+	}
+}
+
+// TestAtualizarMascaraAoVivoCommitaSoMudanca trava o skip de commit: quando a
+// composição reproduz EXATAMENTE os pixels da máscara atual, o buffer não é
+// trocado (economia de copy-on-write); quando muda, o novo conteúdo entra.
+func TestAtualizarMascaraAoVivoCommitaSoMudanca(t *testing.T) {
+	limparMascaras(t)
+	limparMascarasDescartadas(t)
+	const hwnd = 0x7E11
+	rect := winui.Rect{X: 0, Y: 0, W: 100, H: 20}
+	m := mascaraDeTeste(hwnd, rect, 0x11, true)
+	mascarasMu.Lock()
+	mascaras[hwnd] = m
+	mascarasMu.Unlock()
+
+	restaurarCamadas, restaurarImprimir := camadasSobreRegiao, imprimirJanela
+	t.Cleanup(func() { camadasSobreRegiao = restaurarCamadas; imprimirJanela = restaurarImprimir })
+	camadasSobreRegiao = func(winui.Rect) []camadaJanela { return []camadaJanela{{hwnd: 0x22}} }
+
+	var bufFaixa, bufJanela []byte
+
+	// Ciclo 1: a janela de trás devolve a MESMA cor da máscara → sem commit.
+	imprimirJanela = imprimirJanelaFake(0x11, rect)
+	antes := m.px
+	custo := atualizarMascaraAoVivo(m, &bufFaixa, &bufJanela)
+	if custo != rect.W*rect.H {
+		t.Fatalf("custo = %d, esperado %d", custo, rect.W*rect.H)
+	}
+	if &m.px[0] != &antes[0] {
+		t.Fatal("a máscara foi recommitada com conteúdo IDÊNTICO — o skip de copy-on-write não funcionou")
+	}
+	if m.falhasConsecutivas != 0 {
+		t.Fatalf("falhas consecutivas = %d, esperado 0 (composição válida zera o contador)", m.falhasConsecutivas)
+	}
+
+	// Ciclo 2: conteúdo DIFERENTE → o commit tem de acontecer.
+	imprimirJanela = imprimirJanelaFake(0x33, rect)
+	atualizarMascaraAoVivo(m, &bufFaixa, &bufJanela)
+	mascarasMu.Lock()
+	depois := append([]byte(nil), m.px...)
+	mascarasMu.Unlock()
+	if got := depois[(10*rect.W+50)*4]; got != 0x33 {
+		t.Fatalf("máscara após mudança = %#x, esperado 0x33 — o novo conteúdo de trás não entrou", got)
+	}
+	if &m.px[0] == &antes[0] {
+		t.Fatal("o commit não trocou o buffer — copy-on-write violado")
+	}
+}
+
+// TestCamadasSobreRegiaoPapelDeParedeNaoEBloqueado prova, com janela real, que
+// uma janela comum NÃO é classificada como papel de parede (o classificador é
+// por nome de classe: Progman/WorkerW).
+func TestCamadasSobreRegiaoPapelDeParedeNaoEBloqueado(t *testing.T) {
+	if testing.Short() {
+		t.Skip("teste com janela real")
+	}
+	hwnd := janelaMagenta(t, 60, 60)
+	defer winui.DestroyWindow(hwnd)
+	if eJanelaPapelDeParede(hwnd) {
+		t.Fatal("janela comum foi classificada como papel de parede")
+	}
+}
+
