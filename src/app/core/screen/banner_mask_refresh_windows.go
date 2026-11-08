@@ -383,18 +383,22 @@ func atualizarMascaraAoVivo(m *mascaraRegiao, bufFaixa, bufJanela *[]byte) int {
 // bufJanela é o DIB de impressão das janelas e fica SEPARADO da faixa de
 // propósito: um PrintWindow não pode destruir a composição já feita.
 func comporCamadasNaFaixa(camadas []camadaJanela, rect winui.Rect, faixa []byte, bufJanela *[]byte) (coberto []winui.Rect, custo int, algumaFonte bool) {
-	// Quantas camadas de verdade (não-cartão) serão impressas: limitado por
-	// mascaraRefreshMaxJanelas.
+	// Quantas camadas de verdade (não-cartão, não-wallpaper) serão impressas:
+	// limitado por mascaraRefreshMaxJanelas. O papel de parede NÃO consome o
+	// orçamento: ele é a fonte de fundo que garante a cobertura — se 6 janelas
+	// normais o expulsassem do ciclo, a faixa voltaria a ficar parcial e a
+	// máscara seria descartada exatamente no caso que o fallback existe para
+	// evitar (desktop limpo).
 	uteis := 0
 	for _, c := range camadas {
-		if !c.cartao {
+		if !c.cartao && !c.papelDeParede {
 			uteis++
 			if uteis >= mascaraRefreshMaxJanelas {
 				break
 			}
 		}
 	}
-	if uteis == 0 {
+	if uteis == 0 && !temPapelDeParede(camadas) {
 		// Só os cartões do agente estão sob a faixa (o usuário abriu o menu
 		// Iniciar, trocou de desktop virtual E não há papel de parede): não há
 		// fonte ao vivo. A máscara fica como está — é o comportamento
@@ -418,19 +422,24 @@ func comporCamadasNaFaixa(camadas []camadaJanela, rect winui.Rect, faixa []byte,
 			// ATRÁS dele: pula e segue compondo.
 			continue
 		}
-		if uteis <= 0 {
-			break
+		if !c.papelDeParede {
+			if uteis <= 0 {
+				// Orçamento de janelas vivas esgotado: pula as janelas normais
+				// restantes SEM quebrar o laço — o papel de parede vem no FIM da
+				// lista e precisa ser alcançado (ele é o fundo, não concorre).
+				continue
+			}
+			uteis--
 		}
 		janelaRect, pixels, ok, _ := imprimirJanela(c.hwnd, bufJanela)
 		if !ok {
 			continue
 		}
-		uteis--
 		if !c.papelDeParede {
 			// Papel de parede não conta no custo: é estático e imprimir a tela
 			// inteira a cada ciclo empurraria o refresh para o regime lento sem
 			// motivo (não há janela "viva" nenhuma). O skip de commit igual
-			// (bytes.Equal) já evita o trabalho de commit; aqui evitamos pagar
+			// (faixaIgualRGB) já evita o trabalho de commit; aqui evitamos pagar
 			// o ciclo rápido por um conteúdo que não muda.
 			custo += janelaRect.W * janelaRect.H
 		}
@@ -440,6 +449,18 @@ func comporCamadasNaFaixa(camadas []camadaJanela, rect winui.Rect, faixa []byte,
 		coberto = append(coberto, janelaRect)
 	}
 	return coberto, custo, algumaFonte
+}
+
+// temPapelDeParede informa se a lista de camadas contém alguma fonte de fundo
+// (Progman/WorkerW). Usado para o caso "só cartão sob a faixa" não falhar
+// quando o wallpaper pode compor.
+func temPapelDeParede(camadas []camadaJanela) bool {
+	for _, c := range camadas {
+		if c.papelDeParede {
+			return true
+		}
+	}
+	return false
 }
 
 // imprimirJanela é var (e não func) para os testes poderem injetar uma fonte

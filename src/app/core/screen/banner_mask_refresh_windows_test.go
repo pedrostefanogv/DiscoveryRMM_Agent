@@ -704,3 +704,50 @@ func TestCamadasSobreRegiaoPapelDeParedeNaoEBloqueado(t *testing.T) {
 	}
 }
 
+// TestComporCamadasNaFaixaOrcamentoNaoExpulsaPapelDeParede trava a interação
+// entre o limite de janelas vivas e o fallback: com mais janelas normais do que
+// o orçamento do ciclo, elas são PULADAS (continue) — nunca um break que
+// impediria o papel de parede, no fim da lista, de preencher o que sobrou.
+// Sem isso, 7+ janelas sob o cartão derrubariam a cobertura para parcial e a
+// máscara seria descartada (cartão no stream) justamente no desktop cheio.
+func TestComporCamadasNaFaixaOrcamentoNaoExpulsaPapelDeParede(t *testing.T) {
+	anterior := imprimirJanela
+	t.Cleanup(func() { imprimirJanela = anterior })
+
+	rect := winui.Rect{X: 0, Y: 0, W: 70, H: 20}
+	// 6 janelas normais de 10px de largura (orçamento cheio) cobrindo x=[0,60).
+	camadas := make([]camadaJanela, 0, 8)
+	for i := 0; i < 6; i++ {
+		hwnd := uintptr(0x10 + i)
+		camadas = append(camadas, camadaJanela{hwnd: hwnd})
+	}
+	// Papel de parede cobre tudo e vem POR ÚLTIMO.
+	camadas = append(camadas, camadaJanela{hwnd: 0x77, papelDeParede: true})
+
+	imprimirJanela = func(hwnd uintptr, buf *[]byte) (winui.Rect, []byte, bool, string) {
+		if hwnd == 0x77 {
+			return rect, regiaoUniforme(rect.W, rect.H, 0x77, 0x77, 0x77), true, ""
+		}
+		r := winui.Rect{X: int(hwnd-0x10) * 10, Y: 0, W: 10, H: 20}
+		return r, regiaoUniforme(r.W, r.H, byte(hwnd), byte(hwnd), byte(hwnd)), true, ""
+	}
+
+	faixa := make([]byte, rect.W*rect.H*4)
+	var bufJanela []byte
+	coberto, custo, algumaFonte := comporCamadasNaFaixa(camadas, rect, faixa, &bufJanela)
+
+	if !algumaFonte {
+		t.Fatal("composição deveria reconhecer fonte")
+	}
+	if !regiaoCoberta(coberto, rect) {
+		t.Fatal("cobertura incompleta — o papel de parede foi expulso pelo orçamento de janelas e a máscara seria descartada")
+	}
+	if got := faixa[(10*rect.W+65)*4]; got != 0x77 {
+		t.Fatalf("faixa à direita = %#x, esperado 0x77 (papel de parede preenchendo o que as 6 janelas não cobriram)", got)
+	}
+	if custo != 6*10*20 {
+		t.Fatalf("custo = %d, esperado %d (só as janelas vivas contam)", custo, 6*10*20)
+	}
+}
+
+
