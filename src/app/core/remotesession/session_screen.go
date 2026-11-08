@@ -671,36 +671,12 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 		copyMs := float64(time.Since(copyStart).Microseconds()) / 1000.0
 		copyMsTotal += copyMs
-		s.useDirtyRect = true
 
-		// Envia para encode worker (nao bloqueante com buffer=1)
-		// KEY FRAME: o primeiro frame (ou quando o rect cobre a tela toda)
-		// é enviado como frame COMPLETO (não tile) para o viewer ter a base.
-		// Sem isso, o viewer fica com tela preta até a primeira mudança.
-		// RequestKeyFrame (viewer voltou a ficar visível) também força completo.
-		var jobRects []screen.DirtyRect
-		fullFrame := !s.useDirtyRect // primeiro frame = key frame
-		if s.forceKeyFrame.CompareAndSwap(true, false) {
-			fullFrame = true
-			// Remove tiles/dirty rects pendentes — o frame vai inteiro.
-			jobRects = nil
-		}
-		if s.tileMode && len(rects) > 0 && !fullFrame {
-			// Tile-mode: envia apenas os rects alterados (economia de banda).
-			// Se o rect cobre ~100% da tela, envia como frame completo também
-			// (mais eficiente que N tiles grandes).
-			covered := 0
-			for _, r := range rects {
-				covered += r.Width * r.Height
-			}
-			totalPx := frame.Width * frame.Height
-			if totalPx > 0 && covered >= totalPx*90/100 {
-				fullFrame = true
-			}
-		}
-		if s.tileMode && len(rects) > 0 && !fullFrame {
-			jobRects = rects
-		}
+		// Envia para encode worker (nao bloqueante com buffer=1).
+		// decideFrameKind classifica este frame como COMPLETO (key frame) ou
+		// em TILES — ver o comentário da função para as regras e para o bug de
+		// ordem corrigido em 2026-11-07 (primeiro frame saía como delta).
+		_, jobRects := s.decideFrameKind(frame, rects)
 		select {
 		case encodeChan <- encodeJob{
 			frame:   frame,
@@ -746,6 +722,63 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 		loopStart = time.Now()
 	}
+}
+
+// decideFrameKind decide COMO o frame capturado será enviado ao viewer:
+// frame COMPLETO (JPEG da tela inteira, jobRects == nil) ou em TILES
+// (dirty rects). Devolve (fullFrame, jobRects).
+//
+// Regras, em ordem:
+//  1. PRIMEIRO frame publicado por esta sessão/capturer é sempre COMPLETO —
+//     é a base sobre a qual o viewer desenha os deltas seguintes. Sem isso o
+//     viewer não tem onde aplicar os tiles e mostra tela preta/em pedaços.
+//  2. forceKeyFrame armado (viewer voltou à aba, saída do gate de canais,
+//     recovery frame, troca de desktop) força COMPLETO e descarta os tiles
+//     pendentes. O flag é consumido aqui (CompareAndSwap).
+//  3. Em tile-mode, se os rects cobrirem ~100% da tela sai mais barato
+//     mandar o frame inteiro do que N tiles grandes.
+//  4. Caso contrário, tile-mode manda só os rects alterados.
+//
+// ORDEM IMPORTA (bug corrigido em 2026-11-07): a flag useDirtyRect PRECISA ser
+// lida para decidir o frame CORRENTE e só então virar true. O código anterior
+// fazia "s.useDirtyRect = true" e depois "fullFrame := !s.useDirtyRect" — a
+// expressão era sempre false, o comentário "primeiro frame = key frame" era
+// código morto, e o primeiro frame só saía completo por acidente (flag de
+// keyframe armada ou rects cobrindo >=90%). Sintoma relatado pelo operador:
+// ao conectar, a tela remota chegava com faixas pretas e só ia "carregando"
+// conforme o mouse gerava novos dirty rects. Ver
+// session_screen_firstframe_test.go (regressão).
+func (s *SessionScreen) decideFrameKind(frame *screen.Frame, rects []screen.DirtyRect) (bool, []screen.DirtyRect) {
+	var jobRects []screen.DirtyRect
+	firstFrame := !s.useDirtyRect // primeira publicação desta sessão/capturer
+	fullFrame := firstFrame
+	// A partir daqui o diff pode ser usado — o frame atual já é a base.
+	s.useDirtyRect = true
+
+	if s.forceKeyFrame.CompareAndSwap(true, false) {
+		fullFrame = true
+		// Remove tiles/dirty rects pendentes — o frame vai inteiro.
+		jobRects = nil
+	}
+
+	if s.tileMode && len(rects) > 0 && !fullFrame {
+		// Tile-mode: envia apenas os rects alterados (economia de banda).
+		// Se o rect cobre ~100% da tela, envia como frame completo também
+		// (mais eficiente que N tiles grandes).
+		covered := 0
+		for _, r := range rects {
+			covered += r.Width * r.Height
+		}
+		totalPx := frame.Width * frame.Height
+		if totalPx > 0 && covered >= totalPx*90/100 {
+			fullFrame = true
+		}
+	}
+	if s.tileMode && len(rects) > 0 && !fullFrame {
+		jobRects = rects
+	}
+
+	return fullFrame, jobRects
 }
 
 // clampCursorCoord limita uma coordenada de cursor (desktop - origem) ao

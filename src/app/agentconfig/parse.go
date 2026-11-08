@@ -34,6 +34,13 @@ func ParseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		enabled := true
 		cfg.AutomationP2PWingetInstallEnabled = &enabled
 	}
+	// Default: aba "Atualizações" habilitada quando o campo não veio no payload
+	// (nil). A ausência no /me/configuration NÃO pode desligar a aba — o servidor
+	// sempre envia o valor resolvido; isto cobre apenas payload antigo/incompleto.
+	if cfg.UpdatesTabEnabled == nil {
+		updatesTab := true
+		cfg.UpdatesTabEnabled = &updatesTab
+	}
 	// agentHomeTab é sempre normalizado (ausente/vazio/inválido → "status").
 	cfg.AgentHomeTab = NormalizeAgentHomeTab(cfg.AgentHomeTab)
 	return cfg, nil
@@ -103,6 +110,7 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		ZeroTouchEnabled:                  getBoolPtr("zeroTouchEnabled"),
 		CloudBootstrapEnabled:             getBoolPtr("cloudBootstrapEnabled"),
 		AppStoreEnabled:                   getBoolPtr("appStoreEnabled"),
+		UpdatesTabEnabled:                 getBoolPtr("updatesTabEnabled"),
 		AutomationP2PWingetInstallEnabled: getBoolPtr("automationP2pWingetInstallEnabled"),
 		AgentHomeTab:                      NormalizeAgentHomeTab(getString("agentHomeTab")),
 		InventoryIntervalHours:            getIntPtr("inventoryIntervalHours"),
@@ -375,6 +383,18 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 		boolFromPtr(site, func(s *SiteConfiguration) *bool { return s.AutomationP2PWingetInstallEnabled }),
 		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.AutomationP2PWingetInstallEnabled }),
 		serverP2PWinget,
+	))
+	// Kill switch da aba "Atualizações". Precedência: site > client > server.
+	// O valor do servidor é *bool: nil (campo ausente no payload hierárquico)
+	// significa habilitado (true), para que a ausência não desligue a aba.
+	serverUpdatesTab := true
+	if srv.UpdatesTabEnabled != nil {
+		serverUpdatesTab = *srv.UpdatesTabEnabled
+	}
+	cfg.UpdatesTabEnabled = boolPtr(resolveBool(
+		boolFromPtr(site, func(s *SiteConfiguration) *bool { return s.UpdatesTabEnabled }),
+		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.UpdatesTabEnabled }),
+		serverUpdatesTab,
 	))
 
 	// Int fields

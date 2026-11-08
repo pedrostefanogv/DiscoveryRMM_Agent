@@ -15,13 +15,83 @@ import (
 // ── DXGI Capturer via go-d3d ──
 //
 // Substitui capturer_dxgi.go (VTable manual) por bindings tipados.
-// Usa GetImage() que internamente:
+// Usa Snapshot() que internamente:
 //   - AcquireNextFrame com timeout
 //   - GetFrameDirtyRects (GPU hardware, zero CPU)
-//   - CopyResource GPU→staging
+//   - CopyResource/CopySubresourceRegion GPU→staging
 //   - Map staging→CPU (apenas dirty regions)
-//   - DrawCursor overlay
 //   - ReleaseFrame imediato
+//
+// ── ATENÇÃO: ESTE É O CAPTURER DE FALLBACK, NÃO O PRIMÁRIO ───────────────────
+//
+// Quem escolhe o capturer da sessão é remotesession.NewSessionScreenMonitor
+// (session_screen.go): o PRIMÁRIO é o GDI (NewGDICapturerMonitor), que faz
+// BitBlt do quadro INTEIRO a cada frame e por isso nunca entrega frame parcial.
+// Este capturer go-d3d só entra quando o GDI falha de criação, ou no fallback
+// dinâmico após 40 falhas consecutivas de captura GDI (maybeFallbackToDXGI).
+//
+// CONSEQUÊNCIA PARA A INVESTIGAÇÃO DO INCIDENTE: como o GDI é o capturer
+// primário, esta correção só entra em cena quando a sessão está no fallback
+// DXGI. Ela conserta um bug REAL (delta de dirty rects sobre staging
+// recém-criada = frame majoritariamente preto no primeiro acquire, que casa
+// exatamente com o sintoma "só carrega quando mexe o mouse"), mas é DEFESA EM
+// PROFUNDIDADE: o log do agente da máquina do print (DESKTOP-DH608V7) NÃO está
+// disponível neste workspace, então não há como afirmar que aquela sessão
+// rodava em DXGI. A causa dominante do primeiro frame incompleto naquela sessão
+// foi no PRODUTOR (session_screen.go: o primeiro frame não era marcado como key
+// frame e saía como tiles/dirty rects) — corrigida no arquivo do Lead. Os dois
+// defeitos são independentes e ambos precisavam de correção.
+//
+// ── BUG CORRIGIDO AQUI: primeiro frame parcial (staging sujo) ────────────────
+//
+// Sintoma relatado: ao conectar, o viewer mostra grandes faixas PRETAS / partes
+// sem captura; a tela só vai "carregando" conforme o operador MEXE O MOUSE, e
+// não há tráfego de rede anormal (o problema é o CONTEÚDO do primeiro frame,
+// não banda).
+//
+// Causa raiz (verificada em .gomodcache/github.com/kirides/go-d3d@v1.0.1/
+// outputduplication/output_duplication.go, Snapshot, ~linhas 164-231):
+//
+//	O OutputDuplicator mantém uma staging texture PERSISTENTE (dup.stagedTex),
+//	criada UMA única vez em initializeStage() — ou seja, na primeira chamada de
+//	Snapshot() que consegue um frame. A cada Snapshot():
+//	  • frameInfo.TotalMetadataBufferSize > 0 e SEM movedRects
+//	        → CopySubresourceRegion2D copia do desktop SOMENTE os dirty rects
+//	          (linhas 210-218). O RESTANTE da staging mantém o conteúdo anterior.
+//	  • há movedRects         → CopyResource2D integral (linha 222). Seguro.
+//	  • TotalMetadataBufferSize == 0 → CopyResource2D integral (linha 226). Seguro.
+//
+//	No PRIMEIRO frame da duplicação, a staging acabou de ser criada: "o conteúdo
+//	anterior" é lixo/indefinido (na prática preto). Como o primeiro update do
+//	DXGI tipicamente traz poucos dirty rects (relógio da taskbar, ícone da
+//	bandeja, cursor), o frame publicado é MAJORITARIAMENTE PRETO com alguns
+//	pedaços corretos — exatamente o print do incidente. Cada novo dirty rect
+//	(novo movimento do mouse) pinta mais um pedaço, o que explica o "só carrega
+//	quando mexe o mouse".
+//
+//	O contrato do pipeline é: o PRIMEIRO frame de cada duplicação é KEY FRAME,
+//	isto é, contém a TELA INTEIRA. O go-d3d viola esse contrato silenciosamente
+//	porque não expõe nem a staging nem os dirty rects do frame.
+//
+// Correção (abaixo, em AcquireNextFrame): no primeiro frame de cada duplicação
+// NÃO confiamos no delta. Entregamos o frame via GDI BitBlt (captura atômica do
+// framebuffer inteiro) e, do segundo frame em diante, usamos o Snapshot normal
+// do DXGI — nesse ponto a staging já foi preenchida pelos deltas acumulados.
+//
+// Por que não forçar a cópia integral pelo próprio go-d3d: a API pública do
+// pacote não dá acesso a nada disso. NewIDXGIOutputDuplication() devolve
+// *OutputDuplicator cujos campos (stagedTex, surface, deviceCtx, dirtyRects,
+// movedRects, needsSwizzle) são TODOS não exportados; o construtor que escolhe
+// o formato (newIDXGIOutputDuplicationFormat) também é privado e está fixado em
+// DXGI_FORMAT_R8G8B8A8_UNORM. Os métodos CopyResource2D /
+// CopySubresourceRegion2D existem em d3d11.ID3D11DeviceContext e são públicos,
+// mas inúteis aqui: sem o *ID3D11Texture2D da staging não há como usá-los.
+// Não há getter, nem interface, nem campo exportado para a staging.
+//
+// Também descartamos a via "buffer acumulado no capturer" (aplicar os dirty
+// rects recebidos sobre um acumulado próprio): o Snapshot() do go-d3d NÃO
+// devolve os dirty rects (dup.dirtyRects é privado e não há accessor), então o
+// capturer não tem como saber QUAIS retângulos foram atualizados.
 
 type dxgiGoD3dCapturer struct {
 	dup          *outputduplication.OutputDuplicator
@@ -46,6 +116,33 @@ type dxgiGoD3dCapturer struct {
 	// o Data do Frame é válido ATÉ o próximo AcquireNextFrame; o consumidor
 	// (session_screen) copia para o encode worker antes do próximo acquire.
 	frameBuf []byte
+
+	// ── Estado do "primeiro frame da duplicação" (ver bug no topo do arquivo) ──
+	//
+	// firstFrameDone=false significa que a duplicação DXGI ainda não entregou
+	// nenhum frame e que a staging texture está recém-criada/indefinida — logo
+	// um Snapshot() traria um DELTA parcial sobre lixo. Enquanto for false,
+	// AcquireNextFrame() entrega o frame por GDI (quadro inteiro, atômico) e só
+	// depois passa a confiar no delta do DXGI.
+	//
+	// Sempre que a duplicação é recriada (troca de monitor/resolução, perda de
+	// acesso DXGI, recriação do capturer) a staging volta a ser indefinida, então
+	// quem recria precisa zerar este campo — é o que NewDXGIGoD3dCapturerMode e
+	// resetDuplicationState() fazem.
+	firstFrameDone bool
+
+	// firstFrameViaGDI registra COMO o primeiro frame foi obtido ("gdi" quando a
+	// captura integral deu certo, "dxgi" quando o GDI falhou e caímos de volta no
+	// comportamento antigo com log). Existe para diagnóstico e para o método
+	// FirstFrameIntegral()/testes — sem isso não há como saber de fora se o
+	// primeiro frame entregue era de fato a tela inteira.
+	firstFrameViaGDI bool
+
+	// gdiFactory injeta o capturer GDI usado no primeiro frame. Em produção é nil
+	// e o capturer abre NewGDICapturerRegion na geometria exata deste output (ver
+	// captureFirstFrameGDI); nos testes é substituído por um fake, o que permite
+	// cobrir a lógica de estado sem GPU.
+	gdiFactory func(x, y, w, h int) (Capturer, error)
 }
 
 // NewDXGIGoD3dCapturer cria um capturador DXGI usando go-d3d.
@@ -136,6 +233,10 @@ func NewDXGIGoD3dCapturerMode(monitorIndex int, drawCursor bool) (Capturer, erro
 		height:       height,
 		monitorIndex: monitorIndex,
 		drawCursor:   drawCursor,
+		// Duplicação nova ⇒ staging nova/indefinida ⇒ o primeiro AcquireNextFrame
+		// tem de entregar a tela inteira (ver bug no topo do arquivo). Explícito
+		// aqui para que a invariante fique clara a quem criar o capturer no futuro.
+		firstFrameDone: false,
 		// Cache por processo + seed determinística: o primeiro frame já sai com
 		// a cor certa (antes: palpite RGBA até a calibração concluir).
 		calib: newChannelCalibratorWithKey(
@@ -143,7 +244,138 @@ func NewDXGIGoD3dCapturerMode(monitorIndex int, drawCursor bool) (Capturer, erro
 	}, nil
 }
 
+// AcquireNextFrame captura o próximo frame.
+//
+// Garantia de integralidade: o PRIMEIRO frame entregue por esta instância é
+// sempre a tela INTEIRA. Isso é obrigatório porque o contrato do pipeline marca
+// o primeiro frame de cada duplicação como key frame (useDirtyRect=false no
+// consumidor) — um delta parcial sobre staging indefinida quebraria o viewer
+// com faixas pretas. Ver o bloco "BUG CORRIGIDO AQUI" no topo do arquivo.
 func (c *dxgiGoD3dCapturer) AcquireNextFrame() (*Frame, error) {
+	// Primeiro frame desta duplicação: o Snapshot() do go-d3d copiaria apenas os
+	// dirty rects para uma staging recém-criada (= lixo/preto no resto). Entrega
+	// o quadro inteiro por GDI e só passa a confiar no delta do DXGI a partir do
+	// segundo frame, quando a staging já estiver preenchida.
+	if !c.firstFrameDone {
+		if frame, err := c.captureFirstFrameGDI(); err == nil {
+			c.firstFrameDone = true
+			c.firstFrameViaGDI = true
+			return frame, nil
+		} else {
+			// GDI indisponível (raro: sessão presa em desktop seguro, VM sem
+			// BitBlt). Não há caminho integral alternativo sem a staging: segue o
+			// comportamento antigo (frame parcial no primeiro acquire) e registra
+			// o motivo — antes isso falhava em silêncio, o que tornou o incidente
+			// difícil de diagnosticar.
+			debugf("capturer dxgi-go-d3d: primeiro frame via GDI falhou (%v) — entregando o delta do DXGI (pode sair parcial)", err)
+			c.firstFrameDone = true
+			c.firstFrameViaGDI = false
+		}
+	}
+	return c.snapshotFrame()
+}
+
+// captureFirstFrameGDI produz o primeiro frame da duplicação pela captura GDI
+// (BitBlt do framebuffer inteiro para uma DIB section, com GdiFlush explícito —
+// ver capturer_gdi.go), garantindo conteúdo integral e atômico.
+//
+// Geometria: usa a REGIÃO DESTE OUTPUT (originX/originY/width/height), não o
+// índice de monitor. O GDI identifica monitores por EnumDisplayMonitors e o DXGI
+// por EnumOutputs — as ordens podem divergir. Capturar pela região do output
+// mantém Geometry()/OriginX/OriginY consistentes com o que o DXGI reporta.
+//
+// O capturer GDI é aberto sob demanda e fechado ao terminar: dois capturers
+// abertos ao mesmo tempo é desperdício (GDI objects) e, em tela de logon, o DC
+// errado poderia ser fixado.
+func (c *dxgiGoD3dCapturer) captureFirstFrameGDI() (*Frame, error) {
+	factory := c.gdiFactory
+	if factory == nil {
+		factory = func(x, y, w, h int) (Capturer, error) {
+			return NewGDICapturerRegion(x, y, w, h)
+		}
+	}
+
+	gdi, err := factory(c.originX, c.originY, c.width, c.height)
+	if err != nil {
+		return nil, fmt.Errorf("abrir capturer GDI: %w", err)
+	}
+	// Close() SEMPRE roda, inclusive nos caminhos de erro abaixo.
+	defer gdi.Close()
+
+	src, err := gdi.AcquireNextFrame()
+	if err != nil {
+		return nil, fmt.Errorf("captura GDI: %w", err)
+	}
+	gdi.ReleaseFrame()
+	if src == nil {
+		return nil, fmt.Errorf("captura GDI devolveu frame nulo")
+	}
+
+	// ── CÓPIA OBRIGATÓRIA DOS PIXELS ─────────────────────────────────────────
+	// O gdiCapturer entrega Data como uma slice SOBRE a memória da DIB section
+	// (unsafe.Slice(c.dibBits, ...), ver capturer_gdi.go) e Close() destrói essa
+	// DIB (releaseCached → DeleteObject). Devolver o frame do GDI e fechar o
+	// capturer em seguida liberaria a memória ANTES de o consumidor lê-la — um
+	// use-after-free que já se manifestou como segfault em
+	// TestCartaoRealNuncaVazaParaOFrame. Copiamos para um buffer próprio.
+	//
+	// Este buffer é separado de c.frameBuf de propósito: frameBuf é reutilizado
+	// pelo caminho DXGI (snapshotFrame) e o primeiro frame não pode compartilhar
+	// armazenamento com os frames seguintes.
+	srcSize := src.Stride * src.Height
+	if srcSize <= 0 {
+		srcSize = src.Width * 4 * src.Height
+	}
+	if srcSize <= 0 || len(src.Data) < srcSize {
+		return nil, fmt.Errorf("captura GDI devolveu frame inválido (%dx%d, %d bytes)", src.Width, src.Height, len(src.Data))
+	}
+	dst := make([]byte, srcSize)
+	copy(dst, src.Data[:srcSize])
+
+	frame := &Frame{
+		Data:   dst,
+		Width:  src.Width,
+		Height: src.Height,
+		Stride: src.Stride,
+		// Geometria do DXGI como fonte da verdade: um output que mudou de
+		// resolução entre a criação deste capturer e agora não pode deslocar o
+		// frame publicado nem o mapeamento de mouse do InputController.
+		OriginX: c.originX,
+		OriginY: c.originY,
+	}
+
+	// NÃO passa por c.calib.apply(): o BitBlt para DIB section 32bpp entrega
+	// BGRA canônico por construção (ver ChannelOrderPending do gdiCapturer), e a
+	// calibração compararia este frame com uma referência GDI do MESMO conteúdo
+	// — o que, além de inútil, poderia fixar a ordem errada e contaminar o cache
+	// do processo por causa de um único frame.
+	//
+	// Cursor: mantém o comportamento de drawCursor (mesma regra do caminho DXGI).
+	if c.drawCursor {
+		c.drawCursorBGRA(frame)
+	}
+	return frame, nil
+}
+
+// FirstFrameIntegral informa se o primeiro frame desta duplicação já foi
+// entregue e se ele veio integral (true) ou pelo delta do DXGI (false, só
+// quando o GDI falhou). Diagnóstico/testes — o pipeline não depende disso.
+func (c *dxgiGoD3dCapturer) FirstFrameIntegral() bool {
+	return c.firstFrameDone && c.firstFrameViaGDI
+}
+
+// resetDuplicationState volta ao estado "primeiro frame pendente". Deve ser
+// chamado SEMPRE que a duplicação DXGI for recriada: a staging texture nasce de
+// novo indefinida e o próximo Snapshot voltaria a ser um delta sobre lixo.
+func (c *dxgiGoD3dCapturer) resetDuplicationState() {
+	c.firstFrameDone = false
+	c.firstFrameViaGDI = false
+}
+
+// snapshotFrame é o caminho normal (2º frame em diante): Snapshot do go-d3d +
+// normalização de canais + cursor. A staging já contém a tela acumulada pelos
+// deltas anteriores, então o delta deste frame é seguro.
+func (c *dxgiGoD3dCapturer) snapshotFrame() (*Frame, error) {
 	// Usa Snapshot() DIRETAMENTE (não GetImage) para evitar o latch de swizzle
 	// do go-d3d: GetImage aplica swizzle.BGRA() (BGRA→RGBA) SOMENTE após o
 	// primeiro frame sem metadata — antes disso retorna bytes crus. Isso fazia

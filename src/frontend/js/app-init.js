@@ -800,6 +800,17 @@ function applyAgentFeatureVisibility() {
     knowledgeViewEl,
     !debugMode && cfg.knowledgeBaseEnabled === false,
   );
+  // Kill switch da aba "Atualizações": herdável servidor -> cliente -> site
+  // (o servidor SEMPRE envia o valor já resolvido; o default TRUE só vale para
+  // payload antigo/incompleto, então ausente = aba visível, sem mudança de
+  // comportamento). Mesmo formato reversível das demais features: quando as
+  // runtime flags mudam, applyAgentFeatureVisibility roda de novo e reexibe a
+  // aba caso o gate deixe de valer.
+  setTabVisibility(
+    tabUpdatesBtn,
+    updatesViewEl,
+    !debugMode && cfg.updatesTabEnabled === false,
+  );
 
   // P2P exige um caminho de descoberta (Descoberta de Rede na LAN ou Bootstrap
   // P2P via Nuvem). Sem nenhum dos dois os agents não se encontram.
