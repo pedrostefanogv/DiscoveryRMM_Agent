@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"discovery/app/core/automation"
 	"discovery/app/core/database"
 	"encoding/json"
 	"fmt"
@@ -103,6 +104,13 @@ type AppBridge interface {
 	// ListInstalledApps lista nomes de apps instalados (leitura pura, sem
 	// autorização) para o LLM não adivinhar o nome antes de open_app.
 	ListInstalledApps(query string, limit int) (json.RawMessage, error)
+
+	// SensorDebugSnapshotForMCP entrega o retrato do motor de sensores para a
+	// tool get_sensors (LEITURA). É o MESMO snapshot do painel de debug
+	// (App.SensorDebugSnapshotCore, com o bridge companion antes do motor
+	// local) — a tool NÃO reimplementa coleta: ela só recorta/expoe o que o
+	// núcleo já monta.
+	SensorDebugSnapshotForMCP() automation.SensorDebugSnapshot
 }
 
 // RegisterDiscoveryTools adds all Discovery app tools to the registry.
@@ -1150,6 +1158,8 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	registerSharesTool(reg)
 	registerPowerActionTool(reg, app)
 	registerSendNotificationTool(reg, app)
+	// Consulta de SENSORES do agente (somente leitura; nenhum consentimento).
+	registerSensorTools(reg, app)
 }
 
 // attachmentMetadata monta a lista de metadados dos anexos devolvida à IA,

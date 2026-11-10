@@ -449,6 +449,13 @@ type App struct {
 	companionStatusMu sync.Mutex
 	companionStatus   *AgentStatus
 
+	// Estado do CANAL DE GRAVAÇÃO reportado pelo serviço (P1.4 do
+	// PLANO_CORRECAO_CANAL_ADMIN_IPC.md): adminOk/adminPipe/writesBlocked.
+	// Sem ele a UI em modo somente-leitura era invisível — o usuário só
+	// descobria quando a ação de gravação falhava, e o chat culpava o servidor.
+	companionIPCMu         sync.RWMutex
+	companionIPCCapability map[string]interface{}
+
 	// Itens de status do menu do tray (atualizados dinamicamente).
 	trayStatusHostname   *application.MenuItem
 	trayStatusVersion    *application.MenuItem
@@ -1668,6 +1675,15 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 		online := count > 0
 		metrics.UIOnline = &online
 		metrics.UIOnlineCount = &count
+
+		// Canal de gravação (P1.4/P1.7). É o estado REAL do listener admin deste
+		// processo: quando ele não subiu, TODA mutação (chamado, comentário,
+		// anexo, config, update) falha enquanto as leituras seguem ok — a
+		// degradação silenciosa que o incidente de 2026-10-17 expôs. Este campo
+		// é o que permite ao portal alertar "agente em somente-leitura".
+		adminOk := a.ipcServer.AdminChannelActive()
+		metrics.IpcAdminOk = &adminOk
+		metrics.IpcAdminPipe = IPCPipeAdminName
 	}
 
 	return metrics

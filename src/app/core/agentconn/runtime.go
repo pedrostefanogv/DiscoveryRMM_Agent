@@ -118,6 +118,19 @@ type AgentHeartbeat struct {
 	// ausente em agentes antigos e fora do modo serviço. Permite ao servidor
 	// distinguir "1 UI" de "2+ UIs em sessões diferentes" (A3).
 	UIOnlineCount *int `json:"uiOnlineCount,omitempty"`
+	// IpcAdminOk indica se o CANAL DE GRAVAÇÃO (named pipe admin) do serviço
+	// está ativo. P1.7 do PLANO_CORRECAO_CANAL_ADMIN_IPC.md: sem este campo o
+	// servidor não tem como saber que um agente está em modo SOMENTE-LEITURA —
+	// foi assim que o incidente de 2026-10-17 passou 24h sem alerta (leituras
+	// funcionando, mutações todas falhando).
+	//
+	// nil = não aplicável (UI standalone / Linux / agente antigo). false = o
+	// serviço subiu SEM o pipe admin (mutações indisponíveis). true = canal
+	// admin escutando.
+	IpcAdminOk *bool `json:"ipcAdminOk,omitempty"`
+	// IpcAdminPipe é o caminho do named pipe do canal de gravação. Vai no
+	// heartbeat para o diagnóstico remoto não depender do log da máquina.
+	IpcAdminPipe string `json:"ipcAdminPipe,omitempty"`
 	// LoggedUser é o usuário da sessão interativa (console) reportado a cada
 	// heartbeat, usado para exibição e busca de agentes no console web.
 	//
@@ -157,6 +170,11 @@ type AgentHeartbeatMetrics struct {
 	UIOnline *bool
 	// UIOnlineCount: quantas UIs conectadas (nil = não aplicável)
 	UIOnlineCount *int
+	// IpcAdminOk: nil = não aplicável (não é serviço); true/false = estado do
+	// canal de gravação (named pipe admin) do serviço. P1.4/P1.7.
+	IpcAdminOk *bool
+	// IpcAdminPipe: caminho do pipe admin quando conhecido (diagnóstico).
+	IpcAdminPipe string
 	// LoggedUser: usuário da sessão de console ativa ("DOMINIO\usuario"), vazio
 	// quando não há sessão interativa. Coletado nativamente no Windows.
 	LoggedUser string
@@ -582,6 +600,18 @@ func (r *Runtime) markReconnecting(reason string) {
 	}
 }
 
+// BuildHeartbeatWithMetrics monta o payload de heartbeat com métricas
+// injetadas, sem passar pelo Runtime completo.
+//
+// Existe para TESTE de contrato do payload (ex.: presença de ipcAdminOk —
+// P1.7 do PLANO_CORRECAO_CANAL_ADMIN_IPC.md). Sem ele, verificar que o campo
+// chega ao JSON exigiria subir um Runtime inteiro com NATS.
+func BuildHeartbeatWithMetrics(cfg Config, ipAddr string, m AgentHeartbeatMetrics) AgentHeartbeat {
+	r := &Runtime{}
+	r.opts.GetHeartbeatMetrics = func() AgentHeartbeatMetrics { return m }
+	return r.collectHeartbeat(cfg, ipAddr)
+}
+
 // collectHeartbeat assembles a standardized AgentHeartbeat payload using
 // the current config, IP address, and optional system metrics callback.
 func (r *Runtime) collectHeartbeat(cfg Config, ipAddr string) AgentHeartbeat {
@@ -628,6 +658,14 @@ func (r *Runtime) collectHeartbeat(cfg Config, ipAddr string) AgentHeartbeat {
 		}
 		if m.UIOnlineCount != nil {
 			hb.UIOnlineCount = m.UIOnlineCount
+		}
+		// Canal de gravação (P1.4/P1.7): heartbeat carrega a CAPACIDADE para o
+		// portal alertar agentes em somente-leitura sem depender do log local.
+		if m.IpcAdminOk != nil {
+			hb.IpcAdminOk = m.IpcAdminOk
+		}
+		if pipe := strings.TrimSpace(m.IpcAdminPipe); pipe != "" {
+			hb.IpcAdminPipe = pipe
 		}
 		// Usuário logado (sessão interativa/console). Sempre presente (mesmo
 		// vazio) para o servidor distinguir "sem sessão" de "agent antigo".

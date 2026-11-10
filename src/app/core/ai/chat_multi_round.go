@@ -222,6 +222,12 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	// power_action restart/shutdown). Nesse caso o turno e encerrado na hora,
 	// sem novo round no LLM — ver terminalToolResult.
 	terminalMessage := ""
+	// stopAfterLocalWriteFailure: o canal de gravação local caiu (P2.11). O loop
+	// encerra SEM novo round no LLM — o modelo recebe o envelope estruturado com
+	// retryable=false e responde com o diagnóstico correto + orientação de
+	// reiniciar o serviço. Sem isto, o LLM pedia outra mutação e o usuário
+	// esperava mais um handshake de 3s falhado por chamada.
+	stopAfterLocalWriteFailure := false
 	forcedRetries := 0
 	// B3: tool results já executadas mas ainda não processadas pelo LLM em um
 	// round concluído. Se o round seguinte falhar por erro de rede/HTTP,
@@ -573,7 +579,17 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				// M2: serializa o erro com json.Marshal — interpolação manual
 				// com ReplaceAll não escapava barras invertidas e produzia
 				// JSON inválido quando a mensagem de erro continha aspas/barra.
-				if b, mErr := json.Marshal(map[string]string{"error": execErr.Error()}); mErr == nil {
+				//
+				// P2.9 (PLANO_CORRECAO_CANAL_ADMIN_IPC.md §4): erro do canal admin
+				// vira ENVELOPE ESTRUTURADO — {code, scope, retryable, detail}.
+				// O texto cru anterior ("canal admin indisponível (serviço sem
+				// autenticação?)") não dizia se o problema era local ou remoto, e o
+				// modelo concluiu "servidor de suporte fora do ar" + 3 retries
+				// idênticos. O envelope é repassado INTACTO pelo servidor
+				// (WrapAgentToolError) e é o que sustenta a regra anti-retry.
+				if envelope, ok := localChannelErrorEnvelope(execErr); ok {
+					result = envelope
+				} else if b, mErr := json.Marshal(map[string]string{"error": execErr.Error()}); mErr == nil {
 					result = string(b)
 				} else {
 					result = `{"error":"erro interno na execucao da tool"}`
@@ -610,6 +626,27 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			// para o tool result chegar ao servidor. Encerra o turno agora.
 			if finalMsg, terminal := terminalToolResult(result); terminal {
 				terminalMessage = finalMsg
+				break
+			}
+
+			// P2.11 — circuit breaker de mutações do canal admin local.
+			//
+			// Assim que UMA mutação falha por indisponibilidade LOCAL
+			// (scope=local_agent, retryable=false), o serviço já não aceita
+			// gravação nesta máquina. Um segundo round do LLM que peça outra
+			// mutação só queima ~13s (handshake 3s + fila) e repete o diagnóstico
+			// errado. Aqui o loop PARA: não há novo round, o turno encerra com a
+			// resposta já produzida e a orientação para reiniciar o serviço.
+			if localWriteFailureNotRetryable(result) {
+				stopAfterLocalWriteFailure = true
+				s.logChatEntry(ChatLogEntry{
+					Type:      "chat_local_write_blocked",
+					Method:    "multi_round",
+					SessionID: currentSessionID,
+					Round:     round,
+					ToolCalls: []string{tc.Name},
+					Error:     "falha local não-retentável no canal admin — abortando o loop para não repetir mutações",
+				})
 				break
 			}
 		}
@@ -655,6 +692,21 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			ToolResults:  toolResultNames,
 			LatencyMs:    int(roundElapsed.Milliseconds()),
 		})
+
+		// P2.11: canal de gravação local indisponível e não-retentável — não
+		// devolve os tool results ao LLM num novo round. O envelope estruturado
+		// já foi registrado no log do turno; a resposta final sai do texto já
+		// produzido (ou da resposta sintetizada pelo servidor), sem retry cego.
+		if stopAfterLocalWriteFailure {
+			s.logChatEntry(ChatLogEntry{
+				Type:      "multi_round_local_write_stop",
+				Method:    "multi_round",
+				SessionID: currentSessionID,
+				Round:     round,
+				Error:     "loop encerrado: canal admin local indisponível (retryable=false)",
+			})
+			break
+		}
 
 		pendingCalls = nil
 		// B3: guarda os results como "não entregues" até o próximo round

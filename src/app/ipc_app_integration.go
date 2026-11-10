@@ -71,6 +71,12 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 				"onboardingMode":       onb["mode"],
 				"onboardingConfigured": onb["configured"],
 				"onboardingMessage":    onb["message"],
+				// P1.4 — capacidade do canal de gravação no snapshot de status.
+				// A UI companion precisa saber, ao (re)conectar, se as mutações
+				// estão habilitadas NESTE serviço: antes ela só descobria no
+				// handshake e não mostrava nada ao usuário.
+				"ipcAdminOk":   a.ipcServer.AdminChannelActive(),
+				"ipcAdminPipe": IPCPipeAdminName,
 			}))
 			// Estado do CHAT DE SUPORTE junto do snapshot de status.
 			//
@@ -634,3 +640,71 @@ func (a *App) startIPCClient() {
 // M5: decideCompanionMode removida — a UI é SEMPRE interface (sem fallback
 // standalone). O cliente IPC (RunConnectLoop) aguarda o serviço aparecer e o
 // CompanionController cuida do estado "serviço ausente/voltou".
+
+// ── Estado do canal de gravação na UI companion (P1.4) ─────────────────────
+
+// storeCompanionIPCCapability guarda a capacidade do canal de gravação
+// reportada pelo SERVIÇO e emite o evento que a UI usa para o banner de
+// somente-leitura. Só emite em TRANSIÇÃO (evita um evento a cada 5s de poll).
+//
+// O evento leva o mesmo vocabulário do binding GetIPCServiceInfo
+// (adminOk/adminPipe/writesBlocked), então o frontend tem UMA leitura possível.
+func (a *App) storeCompanionIPCCapability(adminOk bool, pipe string) {
+	if a == nil {
+		return
+	}
+	pipe = strings.TrimSpace(pipe)
+	if pipe == "" {
+		pipe = IPCPipeAdminName
+	}
+	a.companionIPCMu.Lock()
+	previous, hadPrevious := a.companionIPCCapability["adminOk"].(bool)
+	a.companionIPCCapability = map[string]interface{}{
+		"adminOk":   adminOk,
+		"adminPipe": pipe,
+		// writesBlocked é o que o banner consome: "não é possível gravar".
+		"writesBlocked": !adminOk,
+	}
+	a.companionIPCMu.Unlock()
+	if hadPrevious && previous == adminOk {
+		return
+	}
+	a.EmitEvent("service:ipc_write_channel", map[string]any{
+		"adminOk":       adminOk,
+		"adminPipe":     pipe,
+		"writesBlocked": !adminOk,
+		"message":       ipcWriteChannelMessage(adminOk, pipe),
+	})
+}
+
+// ipcWriteChannelMessage é o texto entregue ao usuário. Ele NÃO menciona o
+// servidor de suporte: o erro é local desta máquina (foi o diagnóstico errado
+// que o incidente de 2026-10-17 produziu).
+func ipcWriteChannelMessage(adminOk bool, pipe string) string {
+	if adminOk {
+		return ""
+	}
+	return "Este agente está em MODO SOMENTE LEITURA: o canal de gravação (" + pipe +
+		") não está ativo, então não é possível abrir chamados, comentar, anexar arquivos " +
+		"ou alterar configurações. As consultas continuam funcionando — o problema é " +
+		"local, não no servidor de suporte. Reinicie o serviço DiscoveryAgent para reativar a gravação."
+}
+
+// getCompanionIPCCapability devolve o último estado conhecido do canal de
+// gravação (nil quando o serviço ainda não reportou — agente mais antigo).
+func (a *App) getCompanionIPCCapability() map[string]interface{} {
+	if a == nil {
+		return nil
+	}
+	a.companionIPCMu.RLock()
+	defer a.companionIPCMu.RUnlock()
+	if a.companionIPCCapability == nil {
+		return nil
+	}
+	cp := make(map[string]interface{}, len(a.companionIPCCapability))
+	for k, v := range a.companionIPCCapability {
+		cp[k] = v
+	}
+	return cp
+}
+

@@ -352,6 +352,22 @@ func (s *IPCServer) sweepIdleConns(now time.Time) int {
 	return len(idle)
 }
 
+// AdminChannelActive informa se o canal de GRAVAÇÃO (named pipe admin) está
+// escutando (P1.4). false = o serviço subiu em modo somente-leitura: mutações
+// falham e o agente precisa ser reiniciado. Nil-safe.
+//
+// Fonte única do estado: o próprio listener, não uma flag paralela — uma flag
+// separada poderia divergir do listener real, que é exatamente o tipo de
+// silêncio que escondeu o incidente de 2026-10-17.
+func (s *IPCServer) AdminChannelActive() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.adminListener != nil && !s.closed.Load()
+}
+
 // adminIdle devolve o teto de ociosidade do canal admin (injetável em teste).
 func (s *IPCServer) adminIdle() time.Duration {
 	if s != nil && s.adminIdleTimeout > 0 {
@@ -1287,10 +1303,22 @@ func (c *IPCClient) Connect(timeout time.Duration) bool {
 }
 
 // connectAdmin abre o pipe admin e faz o hello para obter o token de sessão.
+// Mantido como bool para os chamadores que só precisam do resultado; a versão
+// com causa (connectAdminErr) é a que alimenta o erro estruturado da IA.
 func (c *IPCClient) connectAdmin(timeout time.Duration) bool {
+	return c.connectAdminErr(timeout) == nil
+}
+
+// connectAdminErr é connectAdmin devolvendo a CAUSA da falha.
+//
+// A causa importa: o texto antigo ("serviço sem autenticação?") mandava o
+// diagnóstico para o lado errado. Aqui propagamos o erro do SO tal como veio
+// (ex.: "Incorrect function") e o nome do pipe, que é o que permite ao usuário
+// e ao suporte identificarem o canal de gravação que não subiu (P2.12).
+func (c *IPCClient) connectAdminErr(timeout time.Duration) error {
 	conn, err := winio.DialPipe(IPCPipeAdminName, &timeout)
 	if err != nil {
-		return false
+		return fmt.Errorf("falha ao abrir o pipe admin %s: %w", IPCPipeAdminName, err)
 	}
 	conn.SetDeadline(time.Now().Add(timeout))
 	if _, err := conn.Write(EncodeIPCMessage(NewIPCMessage(IPCMsgHello, map[string]any{
@@ -1298,19 +1326,23 @@ func (c *IPCClient) connectAdmin(timeout time.Duration) bool {
 		"protocol": IPCProtocolVersion,
 	}))); err != nil {
 		conn.Close()
-		return false
+		return fmt.Errorf("falha ao enviar hello no pipe admin %s: %w", IPCPipeAdminName, err)
 	}
 	reader := bufio.NewReader(conn)
 	msg, err := DecodeIPCMessage(reader)
-	if err != nil || msg.Type != IPCMsgHelloAck {
+	if err != nil {
 		conn.Close()
-		return false
+		return fmt.Errorf("sem resposta hello_ack do pipe admin %s: %w", IPCPipeAdminName, err)
+	}
+	if msg.Type != IPCMsgHelloAck {
+		conn.Close()
+		return fmt.Errorf("resposta inesperada do pipe admin %s: tipo %q (esperado hello_ack)", IPCPipeAdminName, msg.Type)
 	}
 	ack := helloAckFromPayload(msg.Payload)
 	if strings.TrimSpace(ack.Token) == "" {
 		conn.Close()
 		log.Printf("[ipc] canal admin recusou o handshake (sem token): %v", msg.Payload)
-		return false
+		return fmt.Errorf("pipe admin %s recusou o handshake: hello_ack sem token de sessão", IPCPipeAdminName)
 	}
 	conn.SetDeadline(time.Time{})
 
@@ -1328,8 +1360,11 @@ func (c *IPCClient) connectAdmin(timeout time.Duration) bool {
 		old.Close()
 	}
 	go c.adminReadLoop(conn, reader, down)
+	// Canal admin voltou: fecha o circuit breaker de mutações (P2.11) — ele é um
+	// curto-circuito temporário, nunca uma recusa permanente.
+	CloseIPCWriteCircuit("handshake admin autenticado")
 	log.Printf("[ipc] canal admin autenticado (token expira em %s)", ack.ExpiresAt.Format(time.RFC3339))
-	return true
+	return nil
 }
 
 // adminReadLoop roteia respostas de RPC do canal admin e hello_ack de renovação.
@@ -1398,8 +1433,11 @@ func (c *IPCClient) adminAuth() (net.Conn, string, <-chan struct{}, error) {
 	c.adminMu.Unlock()
 
 	if conn == nil {
-		if !c.connectAdmin(3 * time.Second) {
-			return nil, "", nil, fmt.Errorf("canal admin indisponível (serviço sem autenticação?)")
+		if err := c.connectAdminErr(3 * time.Second); err != nil {
+			// Mensagem ANTIGA — "canal admin indisponível (serviço sem
+			// autenticação?)" — induzia o diagnóstico errado "servidor fora do
+			// ar". Agora o erro é TIPADO e cita o pipe + a causa do SO (P2.9/P2.12).
+			return nil, "", nil, newIPCWriteUnavailable("", err.Error())
 		}
 		c.adminMu.Lock()
 		conn, token, expires, down = c.adminConn, c.adminToken, c.adminExpires, c.adminDown
@@ -1414,7 +1452,7 @@ func (c *IPCClient) adminAuth() (net.Conn, string, <-chan struct{}, error) {
 		c.adminMu.Unlock()
 	}
 	if conn == nil || strings.TrimSpace(token) == "" {
-		return nil, "", nil, fmt.Errorf("canal admin sem token válido")
+		return nil, "", nil, newIPCWriteUnavailable("", "handshake concluído sem token de sessão válido")
 	}
 	return conn, token, down, nil
 }
@@ -1435,8 +1473,8 @@ func (c *IPCClient) renewAdminToken() error {
 		return nil
 	}
 	if conn == nil {
-		if !c.connectAdmin(3 * time.Second) {
-			return fmt.Errorf("canal admin indisponível")
+		if err := c.connectAdminErr(3 * time.Second); err != nil {
+			return newIPCWriteUnavailable("", err.Error())
 		}
 		return nil
 	}
@@ -1693,17 +1731,30 @@ func (c *IPCClient) Request(ctx context.Context, method string, payload map[stri
 	// antes da resposta, o select abaixo acorda com errIPCAdminConnClosed.
 	var adminDown <-chan struct{}
 	if isIPCMutatingRequest(method, payload) {
+		// P2.11 — circuit breaker: após UMA falha local não-retentável, as
+		// próximas mutações da sessão são recusadas na hora (retryable=false),
+		// sem pagar de novo o handshake de 3s. Sem isso o LLM repetia a MESMA
+		// chamada mutante (3 × ~13s no incidente de 2026-10-17).
+		if blocked, refused := c.guardIPCWrite(method); refused {
+			return nil, blocked
+		}
 		// Mutações vão pelo canal admin com token de sessão; se o serviço for
 		// antigo (sem canal admin) devolvemos erro tratado — nunca caímos para
 		// o pipe de leitura.
 		conn, token, down, err := c.adminAuth()
 		if err != nil {
-			return nil, fmt.Errorf("ipc request %s: %w", method, err)
+			err = c.typedMutatingError(method, err)
+			OpenIPCWriteCircuit(method, err)
+			return nil, err
 		}
 		adminDown = down
 		reqMsg.Payload = c.applyAdminToken(reqMsg.Payload, token)
 		if err := c.sendOn(conn, &c.adminWriteMu, reqMsg); err != nil {
-			return nil, err
+			// A conexão admin caiu entre o handshake e o envio: mesma classe de
+			// falha local não-retentável, mesmo envelope para a IA.
+			typed := newIPCWriteUnavailable(method, "falha ao enviar no pipe admin "+IPCPipeAdminName+": "+err.Error())
+			OpenIPCWriteCircuit(method, typed)
+			return nil, typed
 		}
 	} else if err := c.Send(reqMsg); err != nil {
 		return nil, err
@@ -1726,7 +1777,13 @@ func (c *IPCClient) Request(ctx context.Context, method string, payload map[stri
 		// A conexão admin morreu com o request em voo. NÃO esperar o timeout
 		// (45 min na loja): o serviço pode estar executando a operação; a UI
 		// recebe erro definitivo em vez de ficar pendurada.
-		return nil, fmt.Errorf("ipc request %s: %w", method, errIPCAdminConnClosed)
+		//
+		// Falha LOCAL do canal de gravação (não do servidor de suporte): mesmo
+		// envelope estruturado e circuit breaker aberto (P2.9/P2.11).
+		typed := newIPCWriteUnavailable(method,
+			errIPCAdminConnClosed.Error()+": a conexão com o pipe admin "+IPCPipeAdminName+" caiu durante o request")
+		OpenIPCWriteCircuit(method, typed)
+		return nil, typed
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("ipc request %s timeout (%s)", method, timeout)
 	case <-ctx.Done():
@@ -1828,3 +1885,23 @@ func probeServiceHello(timeout time.Duration) (IPCServiceHelloAck, bool) {
 func IsServiceProtocolCompatible(protocol int) bool {
 	return protocol >= 1 && protocol <= IPCProtocolVersion
 }
+
+// typedMutatingError converte um erro do caminho mutante no erro tipado
+// consumido pela IA (P2.9), sem embrulhar duas vezes um erro já tipado.
+func (c *IPCClient) typedMutatingError(method string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var typed *ipcLocalChannelError
+	if asIPCLocalError(err, &typed) {
+		// Já tipado: só preenche o método, que o adminAuth não conhece.
+		if typed.Method == "" {
+			cp := *typed
+			cp.Method = method
+			return &cp
+		}
+		return typed
+	}
+	return newIPCWriteUnavailable(method, err.Error())
+}
+

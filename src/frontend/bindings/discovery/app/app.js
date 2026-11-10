@@ -2565,6 +2565,31 @@ export function SensorDebugSnapshotCore() {
 }
 
 /**
+ * SensorDebugSnapshotForMCP devolve o snapshot do motor de sensores para a tool
+ * MCP de LEITURA get_sensors.
+ * 
+ * Contrato:
+ *   - NUNCA devolve erro: leitura de sensores é resposta legítima mesmo quando
+ *     não há sensores ou o motor ainda está subindo. O snapshot de fallback vem
+ *     com Sensors vazio e o motivo em Engine.LastError, que a tool usa para
+ *     compor a mensagem amigável (hasSensors=false).
+ *   - companion PRIMEIRO: em companion é o serviço que coleta (M5); ler só o
+ *     AutomationSvc local devolveria "0 sensores" para uma máquina que tem
+ *     sensores configurados — a mentira exata que o painel de debug já corrigiu.
+ *   - standalone (ou RPC mudo): motor local, via SensorDebugSnapshotCore.
+ * 
+ * NÃO muda nada: é somente leitura, não exige canal admin e não entra em
+ * ipcKnownMutatingMethods. Em companion ela usa o canal de LEITURA do IPC
+ * (sensors:debug_snapshot), que já é servido sem token.
+ * @returns {$CancellablePromise<automation$1.SensorDebugSnapshot>}
+ */
+export function SensorDebugSnapshotForMCP() {
+    return $Call.ByID(1611227978).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType87($result);
+    }));
+}
+
+/**
  * SetChatConfig updates and persists the LLM API settings.
  * @param {$models.ChatConfig} cfg
  * @returns {$CancellablePromise<void>}

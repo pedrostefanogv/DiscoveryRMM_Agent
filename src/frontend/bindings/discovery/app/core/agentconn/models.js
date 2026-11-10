@@ -159,6 +159,23 @@ export class AgentHeartbeatMetrics {
              */
             this["UIOnlineCount"] = null;
         }
+        if (!("IpcAdminOk" in $$source)) {
+            /**
+             * IpcAdminOk: nil = não aplicável (não é serviço); true/false = estado do
+             * canal de gravação (named pipe admin) do serviço. P1.4/P1.7.
+             * @member
+             * @type {boolean | null}
+             */
+            this["IpcAdminOk"] = null;
+        }
+        if (!("IpcAdminPipe" in $$source)) {
+            /**
+             * IpcAdminPipe: caminho do pipe admin quando conhecido (diagnóstico).
+             * @member
+             * @type {string}
+             */
+            this["IpcAdminPipe"] = "";
+        }
         if (!("LoggedUser" in $$source)) {
             /**
              * LoggedUser: usuário da sessão de console ativa ("DOMINIO\usuario"), vazio

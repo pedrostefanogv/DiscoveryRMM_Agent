@@ -220,9 +220,14 @@ func TestRegisteredToolCount(t *testing.T) {
 	}
 	// 53 apos a consolidacao das familias + read_file, open_folder/open_app,
 	// 3 tools de anexo de imagem (attach_images_to_ticket,
-	// attach_images_to_ticket_comment e list_ticket_attachments) e
-	// view_ticket_attachment.
-	if len(names) != 57 {
-		t.Fatalf("total de tools = %d, esperado 56", len(names))
+	// attach_images_to_ticket_comment e list_ticket_attachments),
+	// view_ticket_attachment e get_sensors (consulta de sensores do agente,
+	// somente leitura — sensor_tool.go).
+	if len(names) != 58 {
+		t.Fatalf("total de tools = %d, esperado 58", len(names))
+	}
+	// A tool de sensores faz parte do catalogo exposto ao LLM.
+	if reg.Find("get_sensors") == nil {
+		t.Fatal("tool get_sensors nao registrada")
 	}
 }
