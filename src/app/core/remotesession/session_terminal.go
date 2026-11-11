@@ -1444,10 +1444,12 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 	// flush pode rodar enquanto Start ainda segura st.mu, então o callback NÃO
 	// pode adquirir RLock aqui (RWMutex não é reentrante → deadlock).
 	recTap := st.recordingTap
-	// Injeção da integração (OSC 633) postergada: dispara no PRIMEIRO output
-	// do shell (o prompt) ou após 3s de silêncio — injetar no spawn ecoa o
-	// script com highlighting do PSReadLine no viewer (o PowerShell carrega o
-	// profile por ~2s e o init chega antes de o PSReadLine inicializar).
+	// Injeção da integração (OSC 633) VIA STDIN — apenas os shells POSIX do
+	// ConPTY (WSL/zsh), que não aceitam init no command line — postergada:
+	// dispara no PRIMEIRO output do shell (o prompt) ou após 3s de silêncio.
+	// O PowerShell/pwsh NÃO passa por aqui: o init vai embutido no command
+	// line do spawn (-EncodedCommand, ver terminal/shell_integration.go) e
+	// nunca é ecoado no viewer.
 	var shell terminal.IShell
 	var shRunAs string
 	var err error
@@ -1536,11 +1538,10 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 	st.termBackend = terminal.ShellBackendName(shell)
 	st.stats = stats
 
-	// Injeção da integração via stdin: POSTERGADA até o PRIMEIRO output do
-	// shell (o prompt) — injetar no spawn ecoa o script com highlighting do
-	// PSReadLine ANTES do Clear-Host limpar (o PowerShell carrega o profile
-	// por ~2s e o init chega antes de o PSReadLine inicializar). Fallback de
-	// 3s cobre shells que não produzem output imediato.
+	// Injeção da integração via stdin (só WSL/zsh — o PowerShell recebe o init
+	// no command line do spawn): POSTERGADA até o PRIMEIRO output do shell
+	// (o prompt) — injetar no spawn ecoa o script no viewer. Fallback de 3s
+	// cobre shells que não produzem output imediato.
 	pendingIntegrationInit = buildShellIntegrationInit(shell.ShellKind(), st.termBackend)
 	if pendingIntegrationInit != "" {
 		injectGen := st.consoleGen

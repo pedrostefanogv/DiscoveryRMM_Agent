@@ -251,11 +251,15 @@ func resolveShellCommand(shell ShellKind) (exe string, args []string) {
 
 	switch shell {
 	case ShellPowerShell:
-		// PowerShell 7+ quando presente (mesma política do ResolveShell).
+		// PowerShell 7+ quando presente (mesma política do ResolveShell). O
+		// init da integração OSC 633 vai EMBUTIDO no command line
+		// (-EncodedCommand): nunca é digitado no ConPTY, logo nunca aparece
+		// no viewer — o método antigo (digitar o script + Clear-Host) ficava
+		// visível quando o operador cancelava a linha com Ctrl+C.
 		if p, err := exec.LookPath("pwsh.exe"); err == nil {
-			return p, []string{"-NoLogo", "-NoExit"}
+			return p, powerShellStartupArgs()
 		}
-		return "powershell.exe", []string{"-NoLogo", "-NoExit"}
+		return "powershell.exe", powerShellStartupArgs()
 	case ShellZsh:
 		// zsh do PATH ou de Git/MSYS2/Cygwin; sem executável o startup falha
 		// com erro claro (o shell não é oferecido sem zsh instalado).
@@ -268,7 +272,7 @@ func resolveShellCommand(shell ShellKind) (exe string, args []string) {
 	case ShellWSL:
 		return "wsl.exe", nil
 	default:
-		return "powershell.exe", []string{"-NoLogo", "-NoExit"}
+		return "powershell.exe", powerShellStartupArgs()
 	}
 }
 

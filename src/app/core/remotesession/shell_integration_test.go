@@ -11,26 +11,16 @@ import (
 
 // ── Builders do init de integração ──
 
-func TestBuildShellIntegrationInit_PowerShell(t *testing.T) {
-	init := buildPowerShellIntegrationInit()
-	if init == "" {
-		t.Fatal("init de PowerShell nao pode ser vazio")
-	}
-	for _, frag := range []string{
-		"$global:__dshPromptOriginal",
-		"$function:prompt",
-		"function global:prompt",
-		"]633;P;Cwd=",
-		"Get-Location",
-		"Clear-Host",
-	} {
-		if !strings.Contains(init, frag) {
-			t.Fatalf("init de PowerShell nao contem %q: %s", frag, init)
+func TestBuildShellIntegrationInit_PowerShellVaiNoSpawn(t *testing.T) {
+	// PowerShell/pwsh NÃO recebe init via stdin: o hook OSC 633 vai embutido
+	// no command line do spawn (-EncodedCommand — ver
+	// terminal/shell_integration.go). Digitar o init no ConPTY ecoava o script
+	// inteiro no viewer e o Clear-Host que escondia o eco era cancelável — um
+	// Ctrl+C do operador antes dele deixava o script visível para sempre.
+	for _, kind := range []terminal.ShellKind{terminal.ShellPowerShell, terminal.ShellKind("pwsh")} {
+		if got := buildShellIntegrationInit(kind, "conpty"); got != "" {
+			t.Fatalf("init via stdin de %s deveria ser vazio (hook vai no spawn): %q", kind, got)
 		}
-	}
-	// Enviado como UMA linha no stdin do ConPTY (o Enter vai separado).
-	if strings.ContainsAny(init, "\r\n") {
-		t.Fatalf("init de PowerShell deveria ser uma unica linha: %q", init)
 	}
 }
 
@@ -77,8 +67,10 @@ func TestBuildShellIntegrationInit_Dispatcher(t *testing.T) {
 		want    bool
 		frag    string
 	}{
-		{"powershell conpty", terminal.ShellPowerShell, "conpty", true, "__dshPromptOriginal"},
-		{"pwsh conpty", terminal.ShellKind("pwsh"), "conpty", true, "__dshPromptOriginal"},
+		// PowerShell/pwsh: init via command line do spawn (-EncodedCommand) —
+		// nada é injetado via stdin.
+		{"powershell conpty via spawn", terminal.ShellPowerShell, "conpty", false, ""},
+		{"pwsh conpty via spawn", terminal.ShellKind("pwsh"), "conpty", false, ""},
 		{"cmd sem hook", terminal.ShellCmd, "conpty", false, ""},
 		// bash nativo NÃO recebe init: o spawner do ConPTY resolve "bash" para
 		// powershell.exe; injetar POSIX ali quebraria a sessão.

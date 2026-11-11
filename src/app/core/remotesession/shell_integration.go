@@ -17,10 +17,12 @@ import (
 // sequência OSC 633 (ESC ] 633 ; P ; Cwd=<path> BEL), a mesma ideia usada pelo
 // VS Code.
 //
-// Este arquivo concentra (1) os builders do init injetado no start do console e
-// (2) o scanner que REMOVE a sequência do fluxo de saída (o viewer não pode
-// renderizar o OSC como lixo) e devolve os cwd reportados, inclusive quando a
-// sequência chega fragmentada entre chunks.
+// Este arquivo concentra (1) os builders do init injetado VIA STDIN — apenas os
+// shells POSIX do ConPTY (WSL/zsh); o PowerShell/pwsh recebe o init no command
+// line do spawn, ver terminal/shell_integration.go — e (2) o scanner que REMOVE
+// a sequência do fluxo de saída (o viewer não pode renderizar o OSC como lixo)
+// e devolve os cwd reportados, inclusive quando a sequência chega fragmentada
+// entre chunks.
 //
 // Limitações conhecidas:
 //   - o usuário pode sobrescrever o prompt (PowerShell) ou PROMPT_COMMAND /
@@ -43,20 +45,12 @@ const osc633CwdMarker = "P;Cwd="
 // no scrollback do usuário — o equivalente a limpar a linha que o hello faz.
 const shellIntegrationClearScreen = "\x1b[H\x1b[2J"
 
-// buildPowerShellIntegrationInit monta o init de PowerShell/pwsh.
-//
-// Guarda o prompt ORIGINAL em uma global ($function:prompt) e redefine
-// global:prompt para escrever o OSC 633 e então chamar o original — a aparência
-// do prompt não muda. O guard ($global:__dshPromptOriginal) evita empilhar
-// wrappers se o init for reenviado.
-func buildPowerShellIntegrationInit() string {
-	return strings.Join([]string{
-		`$global:__dshOsc633 = $true;`,
-		`if (-not $global:__dshPromptOriginal) { $global:__dshPromptOriginal = $function:prompt };`,
-		`function global:prompt { $dshCwd = (Get-Location).Path; if ($dshCwd) { $dshE = [char]27; [Console]::Write($dshE + ']633;P;Cwd=' + $dshCwd + [char]7) }; if ($global:__dshPromptOriginal) { & $global:__dshPromptOriginal } else { 'PS ' + (Get-Location).Path + '> ' } };`,
-		`Clear-Host`,
-	}, " ")
-}
+// O init de PowerShell/pwsh NÃO é mais injetado via stdin: o hook OSC 633 foi
+// movido para o command line do spawn (-EncodedCommand — ver
+// terminal/shell_integration.go). Digitar o init no ConPTY ecoava o script
+// inteiro no viewer (com highlighting do PSReadLine) e o Clear-Host que
+// escondia o eco era cancelável — um Ctrl+C do operador antes dele deixava o
+// script visível para sempre (2026-11-11).
 
 // buildBashIntegrationInit monta o init de bash: registra uma função em
 // PROMPT_COMMAND que emite o OSC 633 antes de cada prompt.
@@ -98,7 +92,10 @@ func buildShellIntegrationInit(shellKind terminal.ShellKind, backend string) str
 	k := strings.ToLower(strings.TrimSpace(string(shellKind)))
 	switch {
 	case k == "powershell" || k == "pwsh":
-		return buildPowerShellIntegrationInit()
+		// Init vai no command line do spawn (-EncodedCommand) — ver
+		// terminal/shell_integration.go. Via stdin não: o script era digitado
+		// no ConPTY e aparecia no viewer.
+		return ""
 	case strings.HasPrefix(k, "wsl"):
 		// WSL roda bash ou zsh (o builder POSIX detecta $ZSH_VERSION).
 		return buildPosixIntegrationInit()
