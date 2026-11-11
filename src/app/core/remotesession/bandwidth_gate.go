@@ -55,9 +55,15 @@ type BandwidthGateConfig struct {
 	CeilingKbps float64
 
 	// ── Modo AUTO: limites e passo do ajuste automático do teto ──
-	AutoMinKbps float64 // piso do teto automático (0 = 1000)
-	AutoMaxKbps float64 // teto máximo do automático (0 = 30000)
+	AutoMinKbps  float64 // piso do teto automático (0 = 1000)
+	AutoMaxKbps  float64 // teto máximo do automático (0 = 30000)
 	AutoStepKbps float64 // passo do ajuste (0 = 2000)
+	// AutoStartKbps: teto INICIAL do modo auto quando a política automática
+	// começa sem um teto corrente. É o valor de PARTIDA; o auto-ajuste o move
+	// dentro de [AutoMinKbps, AutoMaxKbps] a partir da primeira janela.
+	// Espelha AutoStartKbps do servidor (RemoteAccessOptions.cs).
+	// 0 (ou ausente) = default 8000, clampeado ao range.
+	AutoStartKbps float64
 	// AutoRaiseFactor: fração do teto que o viewer precisa receber para o teto
 	// SUBIR. AutoLowerFactor: abaixo dela o teto DESCE. Raise > Lower cria
 	// histerese (evita oscilar).
@@ -89,11 +95,13 @@ type BandwidthGateConfig struct {
 // defaultBandwidthGateConfig devolve os defaults usados quando o teto é ligado.
 func defaultBandwidthGateConfig() BandwidthGateConfig {
 	return BandwidthGateConfig{
-		Mode:              BandwidthHD, // sem teto por padrão: preserva o comportamento atual
-		CeilingKbps:       0,
-		AutoMinKbps:       1000,
-		AutoMaxKbps:       30000,
-		AutoStepKbps:      2000,
+		Mode:          BandwidthHD, // sem teto por padrão: preserva o comportamento atual
+		CeilingKbps:   0,
+		AutoMinKbps:   1000,
+		AutoMaxKbps:   30000,
+		AutoStepKbps:  2000,
+		AutoStartKbps: 8000, // espelha AutoStartKbps do servidor (RemoteAccessOptions.cs)
+
 		AutoRaiseFactor:   0.75,
 		AutoLowerFactor:   0.6,
 		ServerMaxKbps:     0,
@@ -122,6 +130,9 @@ type BandwidthGate struct {
 	openCount   int
 	autoAdjusts int // quantas vezes o teto do modo AUTO foi ajustado
 	lastKbps    float64
+
+	// autoStartKbps: teto de partida do modo auto já normalizado (nunca <= 0).
+	autoStartKbps float64
 }
 
 // NewBandwidthGate cria o gate com a configuração dada. Um teto <= 0 deixa o
@@ -141,7 +152,7 @@ func NewBandwidthGate(cfg BandwidthGateConfig) *BandwidthGate {
 		cfg.ReopenHoldFor = def.ReopenHoldFor
 	}
 	cfg = normalizeBandwidthConfig(cfg, def)
-	return &BandwidthGate{cfg: cfg, now: time.Now}
+	return &BandwidthGate{cfg: cfg, autoStartKbps: cfg.AutoStartKbps, now: time.Now}
 }
 
 // normalizeBandwidthConfig aplica defaults e a regra de teto do servidor.
@@ -170,6 +181,11 @@ func normalizeBandwidthConfig(cfg, def BandwidthGateConfig) BandwidthGateConfig 
 	if cfg.AutoStepKbps <= 0 {
 		cfg.AutoStepKbps = def.AutoStepKbps
 	}
+	if cfg.AutoStartKbps <= 0 {
+		cfg.AutoStartKbps = def.AutoStartKbps
+	}
+	// O teto inicial vive dentro do range, como qualquer outro teto do auto.
+	cfg.AutoStartKbps = clampKbps(cfg.AutoStartKbps, cfg.AutoMinKbps, cfg.AutoMaxKbps)
 	if cfg.AutoRaiseFactor <= 0 || cfg.AutoRaiseFactor > 1 {
 		cfg.AutoRaiseFactor = def.AutoRaiseFactor
 	}
@@ -181,9 +197,11 @@ func normalizeBandwidthConfig(cfg, def BandwidthGateConfig) BandwidthGateConfig 
 	if cfg.Mode == BandwidthHD {
 		cfg.CeilingKbps = 0
 	}
-	// No modo auto, o teto corrente começa no piso do range se vier zerado.
+	// No modo auto, o teto corrente começa no teto INICIAL do auto se vier
+	// zerado — não no piso (o piso é o limite inferior do auto-ajuste, não o
+	// ponto de partida da política automática).
 	if cfg.Mode == BandwidthAuto && cfg.CeilingKbps <= 0 {
-		cfg.CeilingKbps = clampKbps(def.AutoMinKbps, cfg.AutoMinKbps, cfg.AutoMaxKbps)
+		cfg.CeilingKbps = clampKbps(cfg.AutoStartKbps, cfg.AutoMinKbps, cfg.AutoMaxKbps)
 	}
 
 	cfg.CeilingKbps = applyServerCap(cfg.CeilingKbps, cfg)
@@ -378,6 +396,9 @@ func (g *BandwidthGate) SetLimits(autoMin, autoMax, autoStep, serverMax float64)
 	if serverMax > 0 {
 		g.cfg.ServerMaxKbps = serverMax
 	}
+	// O teto inicial acompanha o range: trocar o range não pode deixar a
+	// partida do auto fora de [AutoMin, AutoMax].
+	g.autoStartKbps = clampKbps(g.autoStartKbps, g.cfg.AutoMinKbps, g.cfg.AutoMaxKbps)
 
 	// Revalida o teto corrente contra o novo range/limite.
 	//
@@ -392,7 +413,9 @@ func (g *BandwidthGate) SetLimits(autoMin, autoMax, autoStep, serverMax float64)
 		c := clampKbps(g.cfg.CeilingKbps, g.cfg.AutoMinKbps, g.cfg.AutoMaxKbps)
 		g.cfg.CeilingKbps = applyServerCap(c, g.cfg)
 	} else if g.cfg.Mode == BandwidthAuto {
-		g.cfg.CeilingKbps = applyServerCap(g.cfg.AutoMinKbps, g.cfg)
+		// Sem teto corrente no modo auto: parte do teto INICIAL do auto (o mesmo
+		// critério do SetMode), não do piso.
+		g.cfg.CeilingKbps = applyServerCap(g.autoStartKbps, g.cfg)
 	} else {
 		// HD/MANUAL sem teto próprio: o servidor ainda pode impor um.
 		g.cfg.CeilingKbps = applyServerCap(0, g.cfg)
@@ -403,9 +426,11 @@ func (g *BandwidthGate) SetLimits(autoMin, autoMax, autoStep, serverMax float64)
 // operador muda Auto/HD/Manual na janela do visualizador).
 //
 //   - hd:     zera o teto (sem limite, sujeito ao ServerMaxKbps);
-//   - manual: usa ceilingKbps (o preset escolhido);
-//   - auto:   parte de ceilingKbps, se dado; senão mantém o corrente e deixa a
-//             adaptação automática ajustá-lo dentro de [AutoMin, AutoMax].
+//   - manual: usa ceilingKbps (o preset escolhido; 0 = "Sem limite");
+//   - auto:   parte de ceilingKbps, se dado; senão mantém o corrente se ele for
+//     um teto VÁLIDO (> 0) e deixa a adaptação automática ajustá-lo
+//     dentro de [AutoMin, AutoMax]; se o corrente for 0 (sem teto),
+//     começa no teto inicial do auto.
 //
 // Reabre o gate ao trocar de modo: a decisão anterior pertencia a outra
 // política e não deve arrastar para a nova.
@@ -426,10 +451,22 @@ func (g *BandwidthGate) SetMode(mode BandwidthMode, ceilingKbps float64) {
 	case BandwidthManual:
 		g.cfg.CeilingKbps = applyServerCap(ceilingKbps, g.cfg)
 	case BandwidthAuto:
-		if ceilingKbps > 0 {
+		switch {
+		case ceilingKbps > 0:
+			// Teto explícito: é o ponto de partida, clampeado ao range.
 			g.cfg.CeilingKbps = clampKbps(ceilingKbps, g.cfg.AutoMinKbps, g.cfg.AutoMaxKbps)
-		} else if g.cfg.CeilingKbps <= 0 {
-			g.cfg.CeilingKbps = clampKbps(g.cfg.AutoMinKbps, g.cfg.AutoMinKbps, g.cfg.AutoMaxKbps)
+		case g.cfg.CeilingKbps > 0:
+			// Sem teto no comando e já há um teto corrente válido: PRESERVA.
+			// (Só faz sentido clampar: o range pode ter mudado antes do modo.)
+			g.cfg.CeilingKbps = clampKbps(g.cfg.CeilingKbps, g.cfg.AutoMinKbps, g.cfg.AutoMaxKbps)
+		default:
+			// Sem teto no comando e corrente == 0 (sem teto algum): começa no
+			// teto inicial do auto, não no piso. O piso é o MÍNIMO que o
+			// auto-ajuste pode atingir, não o valor de partida da política
+			// automática — usá-lo como partida faz o teto depender de COMO o
+			// operador chegou ao modo (ex.: manual→auto preservava um teto alto,
+			// manual→hd→auto caía no piso, com o mesmo comando do servidor).
+			g.cfg.CeilingKbps = clampKbps(g.autoStartKbps, g.cfg.AutoMinKbps, g.cfg.AutoMaxKbps)
 		}
 		g.cfg.CeilingKbps = applyServerCap(g.cfg.CeilingKbps, g.cfg)
 	}
