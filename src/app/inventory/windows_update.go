@@ -40,6 +40,11 @@ type WindowsUpdateDeps struct {
 	Cache  WindowsUpdateCache
 	// Enabled e o kill switch (server config). nil = habilitado.
 	Enabled func() bool
+	// ThirdPartyEnabled espelha a origem "third_party" da politica de
+	// patches do servidor (Site > Client > Global). false = NAO coletar
+	// apps de terceiros (choco/winget) nem reportar pendencias deles.
+	// nil = servidor antigo (mantem a coleta, compat).
+	ThirdPartyEnabled func() bool
 }
 
 // SetThirdPartyProviders injeta os gerenciadores de apps de terceiros
@@ -76,6 +81,26 @@ func (s *Service) SetWindowsUpdateDeps(deps WindowsUpdateDeps) {
 	if deps.Enabled != nil {
 		s.wuEnabled = deps.Enabled
 	}
+	if deps.ThirdPartyEnabled != nil {
+		s.wuThirdPartyEnabled = deps.ThirdPartyEnabled
+	}
+}
+
+// thirdPartyEnabledLocked informa se a coleta de apps de terceiros esta
+// ligada (chama sob wuMu). nil = servidor antigo sem o campo: mantem a
+// coleta (compat); o servidor novo SEMPRE envia o valor resolvido.
+func (s *Service) thirdPartyEnabledLocked() bool {
+	if s.wuThirdPartyEnabled == nil {
+		return true
+	}
+	return s.wuThirdPartyEnabled()
+}
+
+// ThirdPartyEnabled informa se a coleta de apps de terceiros esta ligada.
+func (s *Service) ThirdPartyEnabled() bool {
+	s.wuMu.Lock()
+	defer s.wuMu.Unlock()
+	return s.thirdPartyEnabledLocked()
 }
 
 // WindowsUpdateSupported informa se o modulo esta habilitado e tem cliente.
@@ -162,7 +187,13 @@ func (s *Service) scanWindowsUpdates(verbose bool) (*windowsupdate.ScanResult, e
 	}
 	// WU-19/WU-20: apps de terceiros entram no MESMO inventario. Falha de um
 	// provider (choco ausente, winget antigo) nao invalida o scan do WUA.
-	if thirdParty, failures := s.collectThirdPartyUpdates(context.Background()); len(thirdParty) > 0 || len(failures) > 0 {
+	// D22: com a origem "third_party" DESATIVADA na politica de patches
+	// (padrao do produto), o agente NEM coleta: nada de terceiros entra no
+	// scan e o proximo upload (hash diferente) limpa as linhas antigas no
+	// servidor.
+	if !s.thirdPartyEnabledLocked() {
+		s.logf("[windows-update] inventario de terceiros desativado pela politica (origem third_party off) - nao coletado")
+	} else if thirdParty, failures := s.collectThirdPartyUpdates(context.Background()); len(thirdParty) > 0 || len(failures) > 0 {
 		for source, failure := range failures {
 			s.logf("[windows-update] inventario de terceiros: provider " + source + " falhou: " + failure.Error())
 		}

@@ -198,6 +198,12 @@ type AgentConfiguration struct {
 	// WindowsUpdateEnabled é o kill switch do gerenciador de patches (WUA).
 	// nil = habilitado (o servidor envia o valor resolvido).
 	WindowsUpdateEnabled *bool `json:"windowsUpdateEnabled"`
+	// WindowsUpdateThirdPartyEnabled espelha a origem "third_party" da política
+	// de patches (Site > Client > Global no servidor): false = o agente NÃO
+	// coleta nem reporta apps de terceiros (choco/winget) no inventário —
+	// pendências ficam fora do upload. O servidor SEMPRE envia o valor
+	// resolvido; nil = servidor antigo (mantém a coleta, compat).
+	WindowsUpdateThirdPartyEnabled *bool `json:"windowsUpdateThirdPartyEnabled"`
 	// WindowsUpdateScanIntervalMinutes controla a cadência do scan WUA.
 	// nil = default (360 min, mínimo 60).
 	WindowsUpdateScanIntervalMinutes *int `json:"windowsUpdateScanIntervalMinutes"`

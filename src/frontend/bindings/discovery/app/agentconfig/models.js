@@ -269,6 +269,18 @@ export class AgentConfiguration {
              */
             this["windowsUpdateEnabled"] = null;
         }
+        if (!("windowsUpdateThirdPartyEnabled" in $$source)) {
+            /**
+             * WindowsUpdateThirdPartyEnabled espelha a origem "third_party" da política
+             * de patches (Site > Client > Global no servidor): false = o agente NÃO
+             * coleta nem reporta apps de terceiros (choco/winget) no inventário —
+             * pendências ficam fora do upload. O servidor SEMPRE envia o valor
+             * resolvido; nil = servidor antigo (mantém a coleta, compat).
+             * @member
+             * @type {boolean | null}
+             */
+            this["windowsUpdateThirdPartyEnabled"] = null;
+        }
         if (!("windowsUpdateScanIntervalMinutes" in $$source)) {
             /**
              * WindowsUpdateScanIntervalMinutes controla a cadência do scan WUA.
@@ -321,8 +333,8 @@ export class AgentConfiguration {
         const $$createField28_0 = $$createType5;
         const $$createField29_0 = $$createType6;
         const $$createField30_0 = $$createType7;
-        const $$createField36_0 = $$createType9;
-        const $$createField37_0 = $$createType11;
+        const $$createField37_0 = $$createType9;
+        const $$createField38_0 = $$createType11;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("agentUpdate" in $$parsedSource) {
             $$parsedSource["agentUpdate"] = $$createField24_0($$parsedSource["agentUpdate"]);
@@ -346,10 +358,10 @@ export class AgentConfiguration {
             $$parsedSource["rollout"] = $$createField30_0($$parsedSource["rollout"]);
         }
         if ("maintenanceWindow" in $$parsedSource) {
-            $$parsedSource["maintenanceWindow"] = $$createField36_0($$parsedSource["maintenanceWindow"]);
+            $$parsedSource["maintenanceWindow"] = $$createField37_0($$parsedSource["maintenanceWindow"]);
         }
         if ("mcpToolPolicy" in $$parsedSource) {
-            $$parsedSource["mcpToolPolicy"] = $$createField37_0($$parsedSource["mcpToolPolicy"]);
+            $$parsedSource["mcpToolPolicy"] = $$createField38_0($$parsedSource["mcpToolPolicy"]);
         }
         return new AgentConfiguration(/** @type {Partial<AgentConfiguration>} */($$parsedSource));
     }

@@ -116,6 +116,7 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		InventoryIntervalHours:            getIntPtr("inventoryIntervalHours"),
 		AgentHeartbeatIntervalSeconds:     getIntPtr("agentHeartbeatIntervalSeconds"),
 		WindowsUpdateEnabled:              getBoolPtr("windowsUpdateEnabled"),
+		WindowsUpdateThirdPartyEnabled:    getBoolPtr("windowsUpdateThirdPartyEnabled"),
 		WindowsUpdateScanIntervalMinutes:  getIntPtr("windowsUpdateScanIntervalMinutes"),
 		WindowsUpdateStateIntervalMinutes: getIntPtr("windowsUpdateStateIntervalMinutes"),
 		SiteID:                            getString("siteId"),

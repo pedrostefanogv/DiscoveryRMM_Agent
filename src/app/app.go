@@ -1073,6 +1073,16 @@ func NewApp(opts AppStartupOptions) *App {
 			}
 			return *cfg.WindowsUpdateEnabled
 		},
+		// Origem "third_party" da política de patches (D22): false = o agente
+		// não coleta nem reporta apps de terceiros (choco/winget). nil =
+		// servidor antigo (mantém coleta, compat).
+		ThirdPartyEnabled: func() bool {
+			cfg := a.GetAgentConfiguration()
+			if cfg.WindowsUpdateThirdPartyEnabled == nil {
+				return true
+			}
+			return *cfg.WindowsUpdateThirdPartyEnabled
+		},
 	})
 
 	// Pré-carga P2P pedida pelo policy-sync (PreloadPackages): reaproveita o mesmo

@@ -63,8 +63,13 @@ func thirdPartySignatureFromEnvelope(payload []byte) string {
 }
 
 // ThirdPartyInventoryChanged informa se a lista de apps com atualização mudou
-// desde o último upload. Sem providers instalados devolve false (nada a fazer).
+// desde o último upload. Sem providers instalados, ou com a origem de
+// terceiros DESATIVADA na política (D22 — a sonda nem executa choco/winget),
+// devolve false (nada a fazer).
 func (s *Service) ThirdPartyInventoryChanged(ctx context.Context) (bool, error) {
+	if !s.ThirdPartyEnabled() {
+		return false, nil
+	}
 	providers := s.thirdPartyProvidersSnapshot()
 	if len(providers) == 0 {
 		return false, nil

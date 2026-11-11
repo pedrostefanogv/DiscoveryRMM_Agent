@@ -210,6 +210,11 @@ type Service struct {
 	wuClient  windowsupdate.Client
 	wuCache   WindowsUpdateCache
 	wuEnabled func() bool
+	// wuThirdPartyEnabled: espelho da origem "third_party" da política de
+	// patches no servidor (Site > Client > Global). false = NÃO coletar apps
+	// de terceiros (choco/winget) nem reportar suas pendências. nil = servidor
+	// antigo (mantém a coleta, compat).
+	wuThirdPartyEnabled func() bool
 	// thirdPartyProviders: gerenciadores de terceiros (choco/winget) — WU-19/20.
 	thirdPartyProviders []thirdparty.Provider
 
