@@ -56,6 +56,16 @@
   border-color: color-mix(in srgb, var(--danger, #e5484d) 45%, var(--border));
 }
 
+/* Fila do compositor de comentario do chamado (renderCommentAttachments):
+   "enviando" esmaece o tile e "enviado" marca a borda, para o usuario
+   distinguir os tres estados sem depender so do texto do meta. */
+.chat-attachment--uploading { opacity: 0.65; }
+
+.chat-attachment--sent .chat-attachment-file,
+.chat-attachment--sent img {
+  border-color: color-mix(in srgb, var(--accent, #2f6feb) 55%, var(--border));
+}
+
 .chat-attachment-meta {
   font-size: 10px;
   color: var(--muted);

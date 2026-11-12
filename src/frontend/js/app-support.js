@@ -2574,6 +2574,86 @@ function renderNewTicketAttachments() {
   });
 }
 
+// ── Anexos do COMENTARIO (fila do compositor do chamado) ──────────────────
+//
+// A fila commentAttachments e renderizada no container #commentAttachments
+// (dentro de #commentCompose, em supportView.html) com o MESMO visual do
+// composer do chat IA / abertura de chamado: buildPendingAttachmentTile monta
+// o tile (miniatura da imagem ou quadro com o nome) e o "x" remove o item.
+//
+// Os estados vem de uploadCommentAttachment: entry.uploading enquanto o
+// binding UploadTicketCommentAttachment esta em voo, entry.failed + entry.error
+// quando ele falha e attachmentId preenchido quando o anexo ja subiu. Sem o
+// translate() dos rotulos o usuario nao distingue "enviando" de "enviado".
+function renderCommentAttachments() {
+  // Container ausente (build antigo, view nao montada, outro template): a fila
+  // continua valida em memoria, mas nao ha onde desenhar. No-op silencioso —
+  // antes a chamada estourava ReferenceError e derrubava a abertura do chamado.
+  var container = typeof commentAttachmentsEl !== 'undefined' ? commentAttachmentsEl : null;
+  if (!container) return;
+
+  // Sempre limpa: e o unico ponto de sincronizacao da UI com a fila (a lista
+  // tambem e esvaziada na troca de chamado, em renderTicketDetail).
+  container.innerHTML = '';
+  if (!commentAttachments.length) {
+    container.classList.add('hidden');
+    return;
+  }
+  container.classList.remove('hidden');
+
+  commentAttachments.forEach(function (item) {
+    var tile = buildPendingAttachmentTile(item, function () {
+      // Remover so vale para o que ainda nao subiu: um anexo ja enviado
+      // pertence ao comentario no servidor.
+      if (item.attachmentId) return;
+      commentAttachments = commentAttachments.filter(function (entry) { return entry !== item; });
+      renderCommentAttachments();
+    });
+
+    // Estado do envio: erro tem prioridade sobre "enviando" (uma falha nao
+    // deixa o item preso no estado anterior).
+    if (item.failed) {
+      tile.classList.add('chat-attachment--error');
+      var error = tile.querySelector('.chat-attachment-meta');
+      if (error) {
+        // escapeHtml no texto do erro do binding: pode vir da resposta do
+        // servidor e o meta e textContent (escapeHtml mantem o padrao do
+        // arquivo para o caso de o titulo virar HTML).
+        error.textContent = translate('support.attachmentError', {
+          name: item.fileName || 'anexo',
+          error: escapeHtml(item.error || ''),
+        });
+      }
+      tile.title = String(item.error || '');
+    } else if (item.uploading) {
+      tile.classList.add('chat-attachment--uploading');
+      var sending = tile.querySelector('.chat-attachment-meta');
+      if (sending) {
+        sending.textContent = (item.fileName || 'anexo') + ' · ' + translate('support.attachmentSending');
+      }
+      tile.setAttribute('aria-busy', 'true');
+    } else if (item.attachmentId) {
+      tile.classList.add('chat-attachment--sent');
+      var sent = tile.querySelector('.chat-attachment-meta');
+      if (sent) {
+        sent.textContent = translate('support.attachmentSent', { name: item.fileName || 'anexo' });
+      }
+    }
+
+    container.appendChild(tile);
+  });
+}
+
+// commentAttachmentsUploading responde se AINDA ha upload em voo na fila do
+// comentario. O submit usa isso para nao enviar o comentario pela metade: sem a
+// funcao o "if" da linha do submitTicketComment estourava ReferenceError.
+function commentAttachmentsUploading() {
+  for (var i = 0; i < commentAttachments.length; i += 1) {
+    if (commentAttachments[i] && commentAttachments[i].uploading) return true;
+  }
+  return false;
+}
+
 // Policy do REPOSITÓRIO do chamado (TicketAttachmentSettings: tipos + tamanho).
 // A abertura de chamado usa os MESMOS limites do painel de anexos; antes ela
 // enfileirava qualquer arquivo e a recusa só aparecia no upload — depois de o
