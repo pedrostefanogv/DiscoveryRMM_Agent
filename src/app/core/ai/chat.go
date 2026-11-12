@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -63,6 +64,10 @@ type Service struct {
 	activeStreamCancel context.CancelFunc
 
 	chatLogger *ChatLogger
+	// sseHTTPStatus: status HTTP da resposta em leitura pelo parser SSE (ver
+	// sseHTTPStatus em chat_multi_round.go). Atômico porque o turno roda numa
+	// goroutine e o log é escrito de lá.
+	sseHTTPStatus atomic.Int64
 
 	// a2uiActionMu protege a fila de ações A2UI pendentes (userAction) que serão
 	// consumidas pelo próximo round do loop multi-round. Fila (não valor único):

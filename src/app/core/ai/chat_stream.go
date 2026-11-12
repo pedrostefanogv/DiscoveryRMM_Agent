@@ -19,10 +19,17 @@ import (
 // ─── Stream Types ──────────────────────────────────────────────────
 
 type agentChatStreamEvent struct {
-	Type          string          `json:"type"`
-	Content       string          `json:"content"`
-	SessionID     string          `json:"sessionId"`
-	Error         string          `json:"error"`
+	Type      string `json:"type"`
+	Content   string `json:"content"`
+	SessionID string `json:"sessionId"`
+	Error     string `json:"error"`
+	// TraceID é o identificador de correlação do SERVIDOR (AgentAuthController.cs:
+	// "traceId"), presente no frame de erro. Sem este campo o encoding/json
+	// descartava o id silenciosamente (campo inexistente no struct) e o log do
+	// agente ficava sem a única chave capaz de localizar a exceção real no log
+	// da API — era impossível correlacionar "Erro interno ao processar o chat."
+	// com o stack trace do servidor.
+	TraceID       string          `json:"traceId"`
 	LatencyMs     int             `json:"latencyMs"`
 	TokensUsed    int             `json:"tokensUsed"`
 	ToolCallID    string          `json:"toolCallId"`

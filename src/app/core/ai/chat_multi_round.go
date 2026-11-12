@@ -23,6 +23,50 @@ import (
 // (não é falha de resposta — não deve gerar notificação) de um erro real.
 var ErrTurnBusy = errors.New("já existe uma resposta em andamento — aguarde ou clique em Parar")
 
+// sseServerError é o erro TIPADO devolvido pelo parser SSE quando o servidor
+// envia um frame {"type":"error"} no meio do stream. Ele carrega o traceId do
+// servidor (antes descartado pelo encoding/json) e o texto parcial já
+// transmitido ao usuário, permitindo que o loop decida entre:
+//   - round 0 (nada útil produzido): degradar para o fallback sync;
+//   - round > 0 com texto parcial: encerrar o turno com a resposta parcial
+//   - aviso, em vez de descartar tudo o que já rodou (D1).
+type sseServerError struct {
+	Msg     string
+	TraceID string
+	Partial string
+}
+
+func (e *sseServerError) Error() string { return e.Msg }
+
+// sseHTTPStatus guarda o status HTTP da resposta cujo corpo está sendo lido
+// pelo parser SSE. O parser só recebe o io.Reader, mas a linha de
+// round_sse_error precisa do status para provar que a falha ocorreu NO MEIO do
+// stream (HTTP 200) e não na conexão — era o que faltava para status_code
+// deixar de ser 0 em 100% das linhas. Zero = falha de transporte.
+
+// traceIDOf extrai o traceId de um erro vindo do parser SSE, quando houver —
+// é a chave para achar a exceção real no log da API.
+func traceIDOf(err error) string {
+	var se *sseServerError
+	if errors.As(err, &se) {
+		return se.TraceID
+	}
+	return ""
+}
+
+// formatSSEError enriquece a mensagem genérica do servidor com o traceId, para
+// que TODAS as camadas (round_error, round_failed_*, chat:error da UI) carreguem
+// a chave de correlação em vez de repetirem "Erro interno ao processar o chat.".
+func formatSSEError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if tid := traceIDOf(err); tid != "" {
+		return fmt.Sprintf("%v (traceId=%s)", err, tid)
+	}
+	return err.Error()
+}
+
 // maxMultiRounds limita o número de rounds do loop multi-round no agent.
 // Alinhado com o orçamento do servidor (MaxToolCallIterations, default 10,
 // clamp 1-20): o agent não deve desistir antes do servidor.
@@ -234,6 +278,13 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	// tentamos reenviá-las uma vez (mode tool_results) antes de degradar.
 	undeliveredResults := make([]toolResultItem, 0)
 	rescueAttempted := false
+	// partialWarn guarda o motivo (com traceId) do encerramento antecipado do
+	// turno com resposta parcial: o frame de erro do servidor matava o turno
+	// inteiro (D1) em vez de apenas avisar que a resposta veio incompleta.
+	partialWarn := ""
+	// budgetExhausted evita repetir o aviso de orçamento esgotado a cada tool
+	// que for cortada no mesmo turno (D6).
+	budgetExhausted := false
 
 	// Guardrails A2UI client-side: normalização, teto por turno e dedup. Agora
 	// centralizados em a2uiClientGuard para valerem também nos caminhos
@@ -273,9 +324,16 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	s.mu.RUnlock()
 
 	for round := 0; round < maxMultiRounds; round++ {
-		// Deadline total do loop: encerra com resposta parcial em vez de
-		// continuar indefinidamente (o servidor também tem seu orçamento).
-		if time.Since(startTime) >= maxMultiRoundTotal {
+		// D5: o deadline total só era verificado AQUI, no topo do loop. Um
+		// round podia então correr roundTimeout(round) (até 240s) MAIS até 30
+		// min de execução de tools — o turno real de produção terminou em
+		// 731456 ms (12,2 min), 131s ALÉM do orçamento de 600s, e o usuário
+		// esperou sem qualquer feedback de prazo.
+		// O orçamento restante é calculado uma vez por round e repassado
+		// adiante, onde CLAMPA o timeout HTTP do round e o de cada tool, de
+		// modo que a soma nunca ultrapasse maxMultiRoundTotal.
+		budgetLeft := maxMultiRoundTotal - time.Since(startTime)
+		if budgetLeft <= 0 {
 			s.logChatEntry(ChatLogEntry{
 				Type:      "multi_round_total_timeout",
 				Method:    "multi_round",
@@ -319,7 +377,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 		// "Etapa {round}" (chat.activity.roundOnly) quando maxRounds é 0.
 		roundProgress := turnRoundProgress(onLoopProgress, round)
 
-		roundSessionID, roundErr := s.executeRound(streamCtx, cfg, req, round, onStatus, onToken, &pendingCalls, roundProgress, onA2uiIncomplete, a2uiCb)
+		roundSessionID, roundErr := s.executeRound(streamCtx, cfg, req, round, budgetLeft, onStatus, onToken, &pendingCalls, roundProgress, onA2uiIncomplete, a2uiCb)
 		// BUG (turno real de 2026-10-01 12:01Z): em erro o executeRound devolve
 		// sessionID VAZIO; sobrescrever currentSessionID zerava a sessão e o
 		// resgate (B3) era rejeitado com "SessionId requerido em multi-round",
@@ -335,14 +393,42 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 		}
 
 		if err != nil {
+			// D3: o traceId do frame de erro do servidor acompanha TODAS as
+			// linhas da cadeia de falha — antes cada hop repetia a mensagem
+			// genérica e nenhum carregava a chave de correlação.
+			errMsg := formatSSEError(err)
 			s.logChatEntry(ChatLogEntry{
 				Type:      "round_error",
 				Method:    "multi_round",
 				SessionID: currentSessionID,
 				Round:     round,
-				Error:     err.Error(),
+				Error:     errMsg,
 				LatencyMs: int(roundElapsed.Milliseconds()),
 			})
+			// D1 (CRÍTICO): o frame de erro do servidor NÃO deve destruir o
+			// turno quando rounds anteriores já produziram conteúdo. O texto
+			// parcial já foi transmitido ao usuário e persistido no histórico
+			// pelo parser SSE; descartá-lo fazia o usuário perder, por exemplo,
+			// um turno que já havia executado 16 tools com sucesso.
+			// Sai do loop rumo à montagem final (que devolve nil), anexando o
+			// aviso ao final do texto parcial.
+			if round > 0 {
+				if partial := strings.TrimSpace(s.lastAssistantContentSince(historyBeforeLen)); partial != "" {
+					s.logChatEntry(ChatLogEntry{
+						Type:        "round_soft_failed_keep_partial",
+						Method:      "multi_round",
+						SessionID:   currentSessionID,
+						Round:       round,
+						Error:       errMsg,
+						ResponseLen: len(partial),
+					})
+					if onStatus != nil {
+						onStatus("Finalizando com a resposta parcial...")
+					}
+					partialWarn = errMsg
+					break
+				}
+			}
 			// B3: em rounds > 0 com tool results já executadas mas ainda não
 			// processadas pelo LLM, tenta reenviá-las UMA vez (mode
 			// tool_results) em vez de degradar direto para o sync — que não
@@ -356,7 +442,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 					SessionID: currentSessionID,
 					Round:     round,
 					ToolCalls: []string{"rescue:" + fmt.Sprint(len(undeliveredResults)) + " results"},
-					Error:     err.Error(),
+					Error:     errMsg,
 				})
 				if onStatus != nil {
 					onStatus("Reconectando — reenviando resultados das ferramentas...")
@@ -394,9 +480,9 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 					Method:    "multi_round",
 					SessionID: currentSessionID,
 					Round:     round,
-					Error:     err.Error(),
+					Error:     errMsg,
 				})
-				return "", fmt.Errorf("não consegui concluir a análise das ferramentas no round %d (%v) — as capturas/resultados não foram descartados no servidor; tente novamente", round+1, err)
+				return "", fmt.Errorf("não consegui concluir a análise das ferramentas no round %d (%s) — as capturas/resultados não foram descartados no servidor; tente novamente", round+1, errMsg)
 			}
 			fallbackMsg := userMessage
 			if isA2uiTurn {
@@ -532,6 +618,14 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			toolExecStart := time.Now()
 			var result string
 			var execErr error
+			// execCtx é declarado no escopo do laço para que o tratamento de
+			// erro abaixo possa consultar SE o nosso prazo venceu (D6) — se
+			// ficasse dentro do ramo do executor, o cancelamento por deadline
+			// continuaria indistinguível de uma falha própria da tool.
+			var execCtx context.Context
+			// perToolBudget: o que ainda resta do orçamento do turno neste
+			// ponto do laço. Declarado aqui pelo mesmo motivo do execCtx.
+			perToolBudget := budgetLeft - time.Since(roundStart)
 			if mcpExecutor == nil {
 				result = `{"error":"MCP indisponivel"}`
 				execErr = fmt.Errorf("MCP indisponivel")
@@ -563,12 +657,39 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				if tc.TimeoutSeconds > 0 {
 					execTimeout = time.Duration(tc.TimeoutSeconds) * time.Second
 				}
-				var execCtx context.Context
+				// D5: a tool nunca pode viver além do orçamento restante do
+				// turno — incluindo as que esperam o usuário (30 min). O teto
+				// de 30 min podia, sozinho, estourar o orçamento de 10 min
+				// (produção: uma única tool de 361 s).
 				var execCancel context.CancelFunc
 				if interactiveToolRequiresUser(tc.Name, tc.Args) {
-					execCtx, execCancel = context.WithTimeout(streamCtx, interactiveToolTimeout)
+					toolTimeout, clampedTool := clampToBudget(interactiveToolTimeout, perToolBudget)
+					if clampedTool {
+						s.logChatEntry(ChatLogEntry{
+							Type:      "tool_timeout_clamped_by_budget",
+							Method:    "tool_exec",
+							SessionID: currentSessionID,
+							Round:     round,
+							ToolCalls: []string{tc.Name},
+							Error: fmt.Sprintf("timeout da tool reduzido de %s para %s (orçamento restante do turno)",
+								interactiveToolTimeout, toolTimeout),
+						})
+					}
+					execCtx, execCancel = context.WithTimeout(streamCtx, toolTimeout)
 				} else {
-					execCtx, execCancel = context.WithTimeout(streamCtx, execTimeout)
+					toolTimeout, clampedTool := clampToBudget(execTimeout, perToolBudget)
+					if clampedTool {
+						s.logChatEntry(ChatLogEntry{
+							Type:      "tool_timeout_clamped_by_budget",
+							Method:    "tool_exec",
+							SessionID: currentSessionID,
+							Round:     round,
+							ToolCalls: []string{tc.Name},
+							Error: fmt.Sprintf("timeout da tool reduzido de %s para %s (orçamento restante do turno)",
+								execTimeout, toolTimeout),
+						})
+					}
+					execCtx, execCancel = context.WithTimeout(streamCtx, toolTimeout)
 				}
 				result, execErr = mcpExecutor(execCtx, tc.Name, tc.Args)
 				execCancel()
@@ -576,6 +697,12 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			toolElapsed := time.Since(toolExecStart)
 
 			if execErr != nil {
+				// D6: distingue "cancelamos a tool porque o NOSSO prazo venceu"
+				// de "a tool falhou de verdade". Os dois chegavam ao servidor
+				// como o mesmo "context canceled" opaco: o LLM não tinha como
+				// explicar a demora, o pipeline do servidor lançava e o turno
+				// era descartado. Produção: tool_exec_error id=497 com 114027 ms.
+				deadlineCause := toolDeadlineCause(execErr, execCtx, perToolBudget)
 				// M2: serializa o erro com json.Marshal — interpolação manual
 				// com ReplaceAll não escapava barras invertidas e produzia
 				// JSON inválido quando a mensagem de erro continha aspas/barra.
@@ -589,13 +716,33 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				// (WrapAgentToolError) e é o que sustenta a regra anti-retry.
 				if envelope, ok := localChannelErrorEnvelope(execErr); ok {
 					result = envelope
+				} else if deadlineCause != "" {
+					// Resultado EXPLICATIVO em vez de "context canceled": o LLM
+					// consegue dizer ao usuário que a verificação demorou demais
+					// e que a ação pode ser repetida, sem inventar "servidor fora
+					// do ar" nem reenfileirar a mesma tool em loop.
+					if b, mErr := json.Marshal(map[string]any{
+						"error":     "a ferramenta foi interrompida pelo prazo do turno",
+						"cause":     deadlineCause,
+						"tool":      tc.Name,
+						"retryable": true,
+						"hint":      "a verificação demorou mais que o orçamento do turno; explique ao usuário que a ação não concluiu e pode ser repetida",
+					}); mErr == nil {
+						result = string(b)
+					} else {
+						result = `{"error":"a ferramenta foi interrompida pelo prazo do turno","retryable":true}`
+					}
 				} else if b, mErr := json.Marshal(map[string]string{"error": execErr.Error()}); mErr == nil {
 					result = string(b)
 				} else {
 					result = `{"error":"erro interno na execucao da tool"}`
 				}
+				logType := "tool_exec_error"
+				if deadlineCause != "" {
+					logType = "tool_exec_timeout"
+				}
 				s.logChatEntry(ChatLogEntry{
-					Type:      "tool_exec_error",
+					Type:      logType,
 					Method:    "tool_exec",
 					SessionID: currentSessionID,
 					Round:     round,
@@ -604,7 +751,21 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 					Error:     execErr.Error(),
 					LatencyMs: int(toolElapsed.Milliseconds()),
 				})
-				toolResultNames = append(toolResultNames, fmt.Sprintf("%s=err", tc.Name))
+				if deadlineCause != "" {
+					if !budgetExhausted {
+						budgetExhausted = true
+						s.logChatEntry(ChatLogEntry{
+							Type:      "tool_budget_exhausted",
+							Method:    "tool_exec",
+							SessionID: currentSessionID,
+							Round:     round,
+							Error:     "orçamento do turno consumido durante a execução de tools",
+						})
+					}
+					toolResultNames = append(toolResultNames, fmt.Sprintf("%s=timeout", tc.Name))
+				} else {
+					toolResultNames = append(toolResultNames, fmt.Sprintf("%s=err", tc.Name))
+				}
 			} else {
 				s.logChatEntry(ChatLogEntry{
 					Type:        "tool_exec_ok",
@@ -751,6 +912,16 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 		})
 		assistant = clean
 	}
+	// D1: turno encerrado com resposta PARCIAL por falha do servidor no meio
+	// do stream. O texto já produzido é preservado e o usuário recebe o aviso
+	// (com o traceId para o suporte) em vez de uma tela vazia seguida de
+	// "Erro interno ao processar o chat.".
+	if partialWarn != "" && strings.TrimSpace(assistant) != "" {
+		assistant = strings.TrimRight(assistant, "\n") + "\n\n" + Warn(
+			"A resposta acima está incompleta: o servidor falhou no round final ("+partialWarn+
+				"). As ações já executadas foram preservadas — tente novamente para concluir.")
+	}
+
 	s.mu.Lock()
 	if currentSessionID != "" {
 		s.sessionID = currentSessionID
@@ -882,7 +1053,11 @@ func (s *Service) lastAssistantContentSince(historySince int) string {
 	return ""
 }
 
-func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, round int, onStatus func(string), onToken func(string), pendingCalls *[]pendingToolCall, onLoopProgress func(round, maxRounds int), onA2uiIncomplete func(string), onA2ui ...func(string)) (string, error) {
+// budgetLeft é o orçamento RESTANTE do turno (maxMultiRoundTotal já decorrido
+// descontado, ver D5). Zero ou negativo significa "sem orçamento" e o timeout
+// do round cai para o mínimo, forçando o encerramento em vez de estourar o
+// prazo total silenciosamente.
+func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, round int, budgetLeft time.Duration, onStatus func(string), onToken func(string), pendingCalls *[]pendingToolCall, onLoopProgress func(round, maxRounds int), onA2uiIncomplete func(string), onA2ui ...func(string)) (string, error) {
 	startTime := time.Now()
 	baseURL, err := normalizeAgentChatBaseURL(cfg.Endpoint)
 	if err != nil {
@@ -896,7 +1071,23 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 		return "", err
 	}
 	payload, _ := json.Marshal(req)
-	timeout := roundTimeout(round)
+	// D5: o timeout do round nunca pode ultrapassar o que ainda resta do
+	// orçamento do turno. Sem este clamp o round (até 240s) podia começar a
+	// poucos segundos do deadline e estourá-lo inteiro.
+	timeout, clamped := clampToBudget(roundTimeout(round), budgetLeft)
+	if clamped {
+		s.logChatEntry(ChatLogEntry{
+			Type:      "round_timeout_clamped_by_budget",
+			Method:    "multi_round",
+			SessionID: req.SessionID,
+			Round:     round,
+			Error: fmt.Sprintf("timeout do round reduzido de %s para %s (orçamento restante do turno)",
+				roundTimeout(round), timeout),
+		})
+		if onStatus != nil {
+			onStatus("Prazo do turno quase esgotado — encerrando esta etapa...")
+		}
+	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -936,6 +1127,7 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 			Method:    "multi_round",
 			Endpoint:  endpoint,
 			SessionID: req.SessionID,
+			Round:     round,
 			Error:     fmt.Sprintf("Do: %v", err),
 			LatencyMs: int(time.Since(startTime).Milliseconds()),
 		})
@@ -950,6 +1142,7 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 			Method:     "multi_round",
 			Endpoint:   endpoint,
 			SessionID:  req.SessionID,
+			Round:      round,
 			StatusCode: resp.StatusCode,
 			Error:      errMsg,
 			LatencyMs:  int(time.Since(startTime).Milliseconds()),
@@ -963,8 +1156,16 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 		Endpoint:   endpoint,
 		SessionID:  req.SessionID,
 		StatusCode: resp.StatusCode,
-		LatencyMs:  int(time.Since(startTime).Milliseconds()),
+		// D4: o round estava ausente (Round é int simples → sempre 0 no log),
+		// o que tornava impossível correlacionar as linhas de um mesmo round.
+		Round:     round,
+		LatencyMs: int(time.Since(startTime).Milliseconds()),
 	})
+
+	// A conexão foi aceita com 200: qualquer frame de erro daqui pra frente é
+	// falha DURANTE o stream (não timeout, não conexão recusada). O parser usa
+	// este status para preencher status_code em round_sse_error.
+	s.sseHTTPStatus.Store(int64(resp.StatusCode))
 
 	// Status pós-conexão: do HTTP 200 até a primeira tool/token é o LLM
 	// planejando/executando — sem este sinal, o rótulo inicial ("Um
@@ -974,16 +1175,10 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 	}
 
 	sessionID, _, err := s.parseMultiRoundSSEWithProgress(resp.Body, onToken, pendingCalls, onLoopProgress, onA2uiIncomplete, onA2ui...)
-	if err != nil {
-		s.logChatEntry(ChatLogEntry{
-			Type:      "round_sse_error",
-			Method:    "multi_round",
-			Endpoint:  endpoint,
-			SessionID: sessionID,
-			Error:     err.Error(),
-			LatencyMs: int(time.Since(startTime).Milliseconds()),
-		})
-	}
+	// O log de round_sse_error é emitido pelo próprio parser, onde o evento
+	// cru (com o traceId) ainda está disponível — inclusive em falhas que não
+	// passam por aqui. Duplicá-lo nesta função gerava duas linhas para a mesma
+	// falha, a segunda sem traceId.
 	return sessionID, err
 }
 
@@ -1169,7 +1364,27 @@ func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(st
 				appendHistoryLocked(s, Message{Role: "assistant", Content: contentBuf.String()})
 				s.mu.Unlock()
 			}
-			return currentSessionID, false, fmt.Errorf("%s", msg)
+			// Diagnóstico (D3): o servidor manda traceId junto com o erro e a
+			// conexão estava em HTTP 200 — sem registrar ambos, a exceção real
+			// (AgentAuthController.cs:1561) fica inalcançável a partir do
+			// chat.db, e 100% das linhas de round_sse_error ficavam com
+			// status_code = 0 apesar do 200 já conhecido.
+			// O parser não recebe a resposta HTTP, então o status é anotado por
+			// executeRound em sseHTTPStatus antes da leitura do corpo.
+			s.logChatEntry(ChatLogEntry{
+				Type:       "round_sse_error",
+				Method:     "multi_round",
+				SessionID:  currentSessionID,
+				StatusCode: int(s.sseHTTPStatus.Load()),
+				Error:      fmt.Sprintf("%s (traceId=%s)", msg, evt.TraceID),
+			})
+			// Erro TIPADO (não fatal por si só): o loop decide se degrada para
+			// o sync (round 0) ou encerra o turno com a resposta parcial.
+			return currentSessionID, false, &sseServerError{
+				Msg:     msg,
+				TraceID: evt.TraceID,
+				Partial: contentBuf.String(),
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -1241,6 +1456,72 @@ func roundTimeout(round int) time.Duration {
 	default:
 		return 240 * time.Second
 	}
+}
+
+// toolDeadlineCause classifica se um erro de tool foi CAUSADO pelo nosso
+// deadline (D6) e devolve uma causa legível, ou "" quando a tool falhou por
+// motivo próprio. Dois cenários, ambos hoje indistinguíveis de um "context
+// canceled" qualquer:
+//
+//   - o contexto da tool venceu (context.DeadlineExceeded) — o timer por tool
+//     ou o orçamento restante do turno cortaram a execução;
+//   - o contexto foi CANCELADO enquanto o orçamento já tinha acabado — é o
+//     streamCtx propagando o vencimento do round HTTP para dentro da tool
+//     (produção: tool_exec_error id=497 com 114027 ms).
+//
+// Um cancelamento com orçamento AINDA disponível NÃO é atribuído ao prazo: é o
+// usuário clicando em Parar (context.Canceled no streamCtx), e isso deve
+// continuar sendo tratado como interrupção, não como estouro de prazo.
+func toolDeadlineCause(execErr error, execCtx context.Context, budgetLeft time.Duration) string {
+	if execErr == nil {
+		return ""
+	}
+	if errors.Is(execErr, context.DeadlineExceeded) {
+		return "deadline"
+	}
+	if errors.Is(execErr, context.Canceled) && budgetLeft <= 0 {
+		return "turno_sem_orcamento"
+	}
+	// Algumas tools embrulham a causa em texto (MCP remoto/stdio) em vez de
+	// devolver o erro do contexto — checa o sentinela e o texto.
+	if err := execCtx.Err(); err != nil && errors.Is(err, context.DeadlineExceeded) {
+		return "deadline"
+	}
+	if budgetLeft <= 0 {
+		msg := strings.ToLower(execErr.Error())
+		if strings.Contains(msg, "context canceled") || strings.Contains(msg, "context deadline exceeded") {
+			return "turno_sem_orcamento"
+		}
+	}
+	return ""
+}
+
+// minBudgetTimeout é o timeout efetivo usado quando o orçamento do turno JÁ
+// acabou. Um contexto já vencido (prazo 0) cancelaria a operação antes de ela
+// começar — o servidor nem receberia o request — e o sintoma viraria uma falha
+// opaca; estes 2s dão chance de a etapa terminar e, se não terminar, o
+// cancelamento é atribuído ao prazo (ver D6). O estouro admitido é limitado a
+// este piso: com orçamento POSITIVO o efetivo nunca passa do restante.
+const minBudgetTimeout = 2 * time.Second
+
+// clampToBudget reduz timeout ao orçamento restante do turno (D5). Devolve o
+// timeout efetivo e se houve redução, para o chamador registrar o motivo em vez
+// de o turno simplesmente estourar o prazo total em silêncio.
+func clampToBudget(timeout, budget time.Duration) (time.Duration, bool) {
+	// Orçamento esgotado: ainda damos minBudgetTimeout para que a etapa possa
+	// ser TENTADA (contexto já vencido seria cancelado antes de começar e o
+	// sintoma viraria uma falha opaca); o estouro é limitado a esse piso.
+	if budget <= 0 {
+		return minBudgetTimeout, true
+	}
+	// Dentro do orçamento: o timeout pedido vale como está.
+	if timeout <= budget {
+		return timeout, false
+	}
+	// Corte: o efetivo é o orçamento restante. Nunca devolvemos o piso aqui —
+	// com 1s restante, 2s adiariam o cancelamento para além do deadline do
+	// turno, que é exatamente o que este clamp existe para impedir.
+	return budget, true
 }
 
 // maxToolResultBytes limita o tamanho de cada tool result enviado ao servidor.

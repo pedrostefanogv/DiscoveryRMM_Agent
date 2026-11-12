@@ -152,6 +152,12 @@ func (cl *ChatLogger) Log(entry ChatLogEntry) {
 	}
 
 	if entry.Timestamp == "" {
+		// Invariante: todo instante gravado no chat.db é UTC. O logstore
+		// serializa ts_iso a partir de e.Timestamp.UTC() com sufixo "Z"
+		// (logstore.go), e o sufixo só é verdadeiro se o valor de entrada
+		// estiver marcado como UTC — time.Now() carrega o offset local, então
+		// o caminho canônico usa .UTC() aqui antes de formatar. É o que mantém
+		// ts_iso correlacionável com o log da API (UTC).
 		entry.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	// Revisão de código em toda linha: diagnóstico/analise sabem qual versão
