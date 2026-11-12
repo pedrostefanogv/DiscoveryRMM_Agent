@@ -16,12 +16,22 @@ import (
 	"golang.org/x/sys/windows"
 
 	"discovery/app/core/ctxutil"
+	"discovery/app/core/platform"
 	"discovery/app/core/processutil"
 )
 
 // agentUIExecutableName é o binário da UI (sessão do usuário), irmão do
 // discovery-service.exe no diretório de instalação.
 const agentUIExecutableName = "discovery-agent.exe"
+
+// Leitura do CommandLine via ntdll (ver processCommandLine).
+var (
+	modntdll                       = windows.NewLazySystemDLL("ntdll.dll")
+	procNtQueryInformationProcess  = modntdll.NewProc("NtQueryInformationProcess")
+)
+
+// ntProcessCommandLineInformation = 60 (ProcessCommandLineInformation).
+const ntProcessCommandLineInformation = 60
 
 // uiWatchdogKillWait é o teto de espera para os processos encerrados realmente
 // sumirem. O Wails mantém o lock de instância única até o processo morrer de
@@ -255,14 +265,207 @@ func findAgentUIPIDs() ([]uint32, error) {
 const webviewOrphanName = "msedgewebview2.exe"
 
 // procRecord é o mínimo do snapshot de processos para a análise de linhagem.
+//
+// cmdline é o CommandLine do processo quando legível (best-effort). Vazio
+// significa "não foi possível ler OU não havia o que ler" — e a decisão de
+// limpeza trata isso como "não mata" (fail-safe). Só é preenchido para
+// msedgewebview2.exe: é a única linha que a correção A consulta, e ler o
+// CommandLine exige abrir o processo (caro o bastante para não fazer em todos).
 type procRecord struct {
-	pid  uint32
-	ppid uint32
-	name string
+	pid     uint32
+	ppid    uint32
+	name    string
+	cmdline string
 }
 
-// processSnapshot captura pid/ppid/nome de todos os processos (toolhelp).
-func processSnapshot() ([]procRecord, error) {
+// extrairUserDataDir extrai o valor de --user-data-dir do CommandLine.
+//
+// O Chromium aceita as duas formas:
+//
+//	--user-data-dir="C:\ProgramData\Discovery\WebView2\session-1\EBWebView"
+//	--user-data-dir=C:\ProgramData\Kaspersky   (sem aspas; termina no 1º espaço)
+//
+// Devolve ok=false quando a flag não existe ou não há valor. Caminho sem aspas
+// contendo espaço é ambíguo por natureza: extraímos até o primeiro espaço e a
+// validação por prefixo decide; se não casar com a raiz do agent, NÃO matamos.
+func extrairUserDataDir(cmdline string) (string, bool) {
+	if cmdline == "" {
+		return "", false
+	}
+	idx := strings.Index(strings.ToLower(cmdline), webView2OrphanFlag)
+	if idx < 0 {
+		return "", false
+	}
+	rest := strings.TrimLeft(cmdline[idx+len(webView2OrphanFlag):], " \t")
+	if rest == "" || rest[0] != '=' {
+		return "", false
+	}
+	rest = strings.TrimLeft(rest[1:], " \t")
+	if rest == "" {
+		return "", false
+	}
+	if rest[0] == '"' {
+		end := strings.Index(rest[1:], "\"")
+		if end < 0 {
+			return "", false
+		}
+		return rest[1 : 1+end], true
+	}
+	if end := strings.IndexAny(rest, " \t"); end >= 0 {
+		return rest[:end], true
+	}
+	return rest, true
+}
+
+// pathHasDirPrefix informa se path está DENTRO de root (ou é o próprio root).
+//
+// PREFIXO DE DIRETÓRIO — nunca strings.Contains solto, que casaria
+// "C:\ProgramData\Discovery\WebView2-evil" ou "...\WebView2Backup".
+// Regras: separadores normalizados ('/' ≡ '\\'), case-insensitive (Windows),
+// separador final ignorado, e o limite tem de cair num separador ("WebView2X"
+// NÃO casa com "WebView2"). Caminho relativo ou vazio NÃO casa: não prova origem.
+func pathHasDirPrefix(path, root string) bool {
+	if path == "" || root == "" {
+		return false
+	}
+	if !filepath.IsAbs(path) || !filepath.IsAbs(root) {
+		return false
+	}
+	norm := func(s string) string {
+		s = strings.ReplaceAll(s, "/", "\\")
+		return strings.ToLower(strings.TrimRight(filepath.Clean(s), "\\"))
+	}
+	p, r := norm(path), norm(root)
+	return p == r || strings.HasPrefix(p, r+"\\")
+}
+
+// agentWebView2Root devolve a raiz dos dados do WebView2 do agent
+// (<DataDir>\WebView2), que cobre as subpastas session-<id> E o perfil base.
+// É o CHAMADOR que a resolve — as funções de decisão a recebem por parâmetro,
+// para continuarem puras e testáveis sem depender do ambiente da máquina.
+func agentWebView2Root() string {
+	return filepath.Join(platform.DataDir(), webView2RootSuffix)
+}
+
+// processCommandLine lê o CommandLine de um processo (best-effort).
+//
+// Por que não WMI: Get-CimInstance/Win32_Process custa uma conexão COM e
+// centenas de ms no startup da UI — caro demais para uma limpeza de órfãos. A
+// via nativa é NtQueryInformationProcess(ProcessCommandLineInformation),
+// disponível desde o Windows 8.1.
+//
+// Devolve ok=false em QUALQUER falha (processo protegido, acesso negado, API
+// indisponível, buffer). O chamador trata ok=false como "não mate": preferimos
+// deixar um órfão nosso vivo a arriscar a vida de um processo de terceiro.
+func processCommandLine(pid uint32) (string, bool) {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return "", false
+	}
+	defer windows.CloseHandle(h)
+
+	// Primeira chamada: descobre o tamanho necessário.
+	var needed uint32
+	status, _, _ := procNtQueryInformationProcess.Call(
+		uintptr(h),
+		uintptr(ntProcessCommandLineInformation),
+		0,
+		0,
+		uintptr(unsafe.Pointer(&needed)),
+	)
+	// STATUS_INFO_LENGTH_MISMATCH (0xC0000004) é o esperado na sondagem de tamanho.
+	const statusInfoLengthMismatch = 0xC0000004
+	if status != statusInfoLengthMismatch || needed == 0 || needed > 64*1024 {
+		return "", false
+	}
+
+	buf := make([]byte, needed)
+	status, _, _ = procNtQueryInformationProcess.Call(
+		uintptr(h),
+		uintptr(ntProcessCommandLineInformation),
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(needed),
+		uintptr(unsafe.Pointer(&needed)),
+	)
+	if status != 0 { // NTSTATUS != STATUS_SUCCESS
+		return "", false
+	}
+	// A API devolve UNICODE_STRING { USHORT Length; USHORT MaximumLength; PWSTR Buffer }
+	// no INÍCIO do nosso buffer. O Buffer aponta para DENTRO do PRÓPRIO buffer
+	// (medido nesta máquina: offset 16, logo após o cabeçalho da UNICODE_STRING),
+	// e não para uma alocação separada — por isso decodificamos por ÍNDICE no
+	// slice, sem converter uintptr em ponteiro.
+	//
+	// Isso é deliberado: converter uintptr->unsafe.Pointer é "possible misuse of
+	// unsafe.Pointer" (go vet) porque o GC pode mover o objeto entre a conversão
+	// e o uso. Indexando o slice que nós mesmos alocamos, não há essa janela.
+	const unicodeStringHeader = 16 // USHORT+USHORT+pad+PWSTR
+	length := *(*uint16)(unsafe.Pointer(&buf[0]))
+	if length < 2 || int(length) > len(buf)-unicodeStringHeader {
+		return "", false
+	}
+	bufferOffset := *(*uintptr)(unsafe.Pointer(&buf[8]))
+	bufStart := uintptr(unsafe.Pointer(&buf[0]))
+	// Sanidade: o ponteiro tem de apontar para dentro do buffer que alocamos.
+	if bufferOffset < bufStart || bufferOffset+uintptr(length) > bufStart+uintptr(len(buf)) {
+		return "", false
+	}
+	off := int(bufferOffset - bufStart)
+	utf16 := unsafe.Slice((*uint16)(unsafe.Pointer(&buf[off])), int(length)/2)
+	return windows.UTF16ToString(utf16), true
+}
+
+// agentWebviewOrphans devolve os pids de msedgewebview2.exe órfãos do agent.
+//
+// FUNÇÃO PURA: recebe o snapshot e a raiz dos dados do WebView2, não faz I/O.
+// A raiz vem por PARÂMETRO (o chamador passa agentWebView2Root()) para o teste
+// cobrir os casos sem depender do ambiente da máquina.
+//
+// Um candidato só é órfão quando TODAS valem:
+//  1. o nome é msedgewebview2.exe;
+//  2. a linhagem é lineageBroken — nem alcança host nosso vivo, nem app alheio;
+//  3. o --user-data-dir está DENTRO de webView2Root (trava da correção A).
+//
+// POR QUE A CONDIÇÃO 3 EXISTE (não remova): a linhagem sozinha decidia a
+// identidade sobre um snapshot INSTANTÂNEO. Com 28 de 33 webviews tendo outro
+// msedgewebview2.exe como pai, qualquer elo ausente do snapshot (processo
+// nascendo/morrendo/reparentado no instante da captura) fazia a subida bater no
+// vazio e a regra "pai ausente => órfão" classificar o webview de um TERCEIRO
+// como nosso. Em produção isso fechou o MICROSOFT TEAMS do usuário ao abrir o
+// agent pelo Menu Iniciar (log: "24 browser process(es) orfaos ... encerrados",
+// quando o normal são 5-8). O --user-data-dir é inequívoco e não depende de
+// corrida: Teams = %LOCALAPPDATA%\Packages\MSTeams_..., o nosso =
+// <DataDir>\WebView2\session-N\EBWebView. A linhagem CONTINUA sendo exigida —
+// a trava é ADICIONAL, não substituta.
+func agentWebviewOrphans(procs []procRecord, webView2Root string) []uint32 {
+	aliveAgents := map[uint32]bool{}
+	for _, p := range procs {
+		if strings.EqualFold(p.name, agentUIExecutableName) {
+			aliveAgents[p.pid] = true
+		}
+	}
+
+	var orphans []uint32
+	for _, p := range procs {
+		if !strings.EqualFold(p.name, webviewOrphanName) {
+			continue
+		}
+		if classifyLineage(p, procs, aliveAgents) != lineageBroken {
+			continue // host nosso vivo OU app alheio: nunca mexer
+		}
+		if !webviewUserDataDirIsOurs(p.cmdline, webView2Root) {
+			continue // não provou que a pasta de dados é nossa: fail-safe
+		}
+		orphans = append(orphans, p.pid)
+	}
+	return orphans
+}
+
+// processSnapshotWithCommandLine captura pid/ppid/nome de todos os processos,
+// acrescentando o CommandLine apenas para msedgewebview2.exe (a única linha que
+// a trava da correção A consulta). Ler o CommandLine abre o processo, então
+// fazê-lo para todos seria desperdício.
+func processSnapshotWithCommandLine() ([]procRecord, error) {
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		return nil, fmt.Errorf("CreateToolhelp32Snapshot: %w", err)
@@ -276,11 +479,17 @@ func processSnapshot() ([]procRecord, error) {
 	}
 	var procs []procRecord
 	for {
-		procs = append(procs, procRecord{
+		rec := procRecord{
 			pid:  entry.ProcessID,
 			ppid: entry.ParentProcessID,
 			name: strings.ToLower(windows.UTF16ToString(entry.ExeFile[:])),
-		})
+		}
+		if rec.name == webviewOrphanName {
+			if cl, ok := processCommandLine(rec.pid); ok {
+				rec.cmdline = cl
+			}
+		}
+		procs = append(procs, rec)
 		if err := windows.Process32Next(snapshot, &entry); err != nil {
 			break
 		}
@@ -288,64 +497,16 @@ func processSnapshot() ([]procRecord, error) {
 	return procs, nil
 }
 
-// agentWebviewOrphans devolve os pids de msedgewebview2.exe órfãos do agent:
-// aqueles cuja linhagem NÃO alcança nenhum host VIVO. Regras, na ordem:
-//   - sobe a árvore pai-a-pai (webview → webview → ... → host);
-//   - se alcança um discovery-agent.exe VIVO: não é órfão (é o browser da UI
-//     corrente) — NUNCA mexer;
-//   - se alcança qualquer OUTRO processo vivo (SearchHost, OneDrive...): é
-//     webview de outro app — NUNCA mexer;
-//   - se a subida bate num pai que JÁ MORREU (pid ausente do snapshot): resíduo
-//     do agent recém-morto — órfão. No fluxo de relanço (chamado segundos
-//     depois do TerminateProcess da UI) é exatamente o resíduo que segura o
-//     lock da pasta de dados. Webview de outros apps tem a árvore viva.
-func agentWebviewOrphans(procs []procRecord) []uint32 {
-	byPid := make(map[uint32]procRecord, len(procs))
-	for _, p := range procs {
-		byPid[p.pid] = p
-	}
-	lowerUI := strings.ToLower(agentUIExecutableName)
-	var orphans []uint32
-	for _, p := range procs {
-		if p.name != webviewOrphanName {
-			continue
-		}
-		cur := p
-		hostAlive := false
-		hostDead := false
-		for guard := 0; guard < 16; guard++ {
-			parent, ok := byPid[cur.ppid]
-			if !ok {
-				hostDead = true // pai não existe mais: subida quebrou num morto
-				break
-			}
-			switch parent.name {
-			case lowerUI:
-				hostAlive = true // host do agent VIVO: browser da UI corrente
-			case webviewOrphanName:
-				cur = parent // intermediário webview: sobe mais um nível
-				continue
-			default:
-				hostAlive = true // host de outro app VIVO: não é nosso
-			}
-			break
-		}
-		if !hostAlive && hostDead {
-			orphans = append(orphans, p.pid)
-		}
-	}
-	return orphans
-}
-
 // killAgentWebviewOrphans encerra os webviews órfãos do agent e devolve
 // quantos. Log é responsabilidade do chamador.
 func killAgentWebviewOrphans() int {
-	procs, err := processSnapshot()
+	procs, err := processSnapshotWithCommandLine()
 	if err != nil {
 		return 0
 	}
+	root := agentWebView2Root()
 	killed := 0
-	for _, pid := range agentWebviewOrphans(procs) {
+	for _, pid := range agentWebviewOrphans(procs, root) {
 		h, openErr := windows.OpenProcess(windows.PROCESS_TERMINATE, false, pid)
 		if openErr != nil {
 			continue
@@ -361,11 +522,11 @@ func killAgentWebviewOrphans() int {
 	// Espera curta: o relanço precisa da pasta de dados LIVRE.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		procs, err = processSnapshot()
+		procs, err = processSnapshotWithCommandLine()
 		if err != nil {
 			break
 		}
-		if len(agentWebviewOrphans(procs)) == 0 {
+		if len(agentWebviewOrphans(procs, root)) == 0 {
 			break
 		}
 		time.Sleep(150 * time.Millisecond)
