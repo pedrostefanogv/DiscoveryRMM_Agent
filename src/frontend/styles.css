@@ -1,4 +1,8 @@
 /* Agregador de estilos modulares */
+/* PRIMEIRO: a fonte de ícones precisa estar declarada antes das folhas que
+   usam .material-symbols-outlined (ordem não é obrigatória em CSS, mas manter
+   aqui evita que alguém mova o @font-face para depois do uso). */
+@import url("./styles/icon-font.css");
 @import url("./styles/base.css");
 @import url("./styles/components.css");
 @import url("./styles/markdown-content.css");

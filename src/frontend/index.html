@@ -6,7 +6,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="light dark" />
   <title>Discovery</title>
-  <!-- B13: sem preconnect para Google Fonts - fontes externas removidas (privacidade/offline). -->
+  <!-- B13 (atualizado na correcao do R7): continua SEM preconnect e SEM link para
+       fonts.googleapis.com/fonts.gstatic.com - o agente NAO faz requisicao externa
+       de fonte. O que mudou: a unica fonte que o agente precisava (Material
+       Symbols Rounded, para os icones do A2UI) passou a ser EMPACOTADA
+       LOCALMENTE em assets/fonts/ e declarada por @font-face em
+       styles/icon-font.css (importado por styles.css). Ela e servida pela
+       propria origem do app (//go:embed all:frontend em main.go) e funciona
+       100% offline. Historico: antes, B13 removeu o Google Fonts e o icone do
+       A2UI virou texto (R7); agora a fonte e local e o icone renderiza. -->
   <link rel="stylesheet" href="styles.css" />
   <!-- Estilos da aba embutida do chat de suporte (bolhas, statusbar, composer,
        modais e comentários do chamado). Sem este link a view perdia TODAS as
@@ -59,6 +67,11 @@
   <!-- Wails v3 bridge: expõe os bindings nativos v3 sob window.go.app.App e
        o runtime v3 estruturado sob window.wails. Deve carregar ANTES do bootstrap-partials.js. -->
   <script type="module" src="wails-bridge.js"></script>
+  <!-- Normalizacao dos nomes de glifo do componente Icon do A2UI (R7): o
+       catálogo manda camelCase ("arrowBack") e a ligadura da fonte e snake_case
+       ("arrow_back"); 4 nomes nem existem como ligadura. Precisa estar
+       disponivel ANTES de app-chat.js rodar (script classico, sem modulo). -->
+  <script src="js/a2ui-icon-names.js"></script>
   <script src="js/bootstrap-partials.js"></script>
 </body>
 

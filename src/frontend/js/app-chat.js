@@ -1830,6 +1830,16 @@ var A2UI_THEME_CSS = [
   ".a2ui-select>label{font-size:.78rem;opacity:.8;}",
   ".a2ui-select select{width:100%;padding:8px 12px;border-radius:10px;border:1px solid color-mix(in srgb,var(--border,#fff) 24%,transparent);background:var(--input-bg,color-mix(in srgb,var(--text,#888) 8%,transparent));color:inherit;font:inherit;font-size:.88rem;cursor:pointer;}",
   ".a2ui-select select:focus{outline:none;border-color:var(--accent,#4f8cff);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent,#4f8cff) 25%,transparent);}",
+  // ─── Icon (achado R7) ───
+  // O componente Icon do catálogo basic emite
+  // <span class="material-symbols-outlined a2ui-icon">NAME</span> e depende da
+  // LIGADURA da webfont (o texto "shopping_cart" vira glifo). A regra de
+  // .material-symbols-outlined em styles/icon-font.css NÃO alcança este shadow
+  // root — sem uma cópia aqui o ícone do chat continuaria saindo como TEXTO.
+  // A fonte em si (@font-face) NÃO é copiada: ela é declarada uma única vez no
+  // light DOM (styles/icon-font.css) e o shadow root resolve a família pelo
+  // documento do host. Ver A2UI_THEME_CSS_SYMBOLS.
+  ".a2ui-icon{font-family:\"Material Symbols Rounded\";font-weight:normal;font-style:normal;font-size:20px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;word-wrap:normal;direction:ltr;font-feature-settings:\"liga\";-webkit-font-feature-settings:\"liga\";-webkit-font-smoothing:antialiased;font-variation-settings:\"FILL\" 0,\"wght\" 400,\"GRAD\" 0,\"opsz\" 24;vertical-align:middle;}",
 ].join("");
 
 // a2uiInjectThemeIn percorre o container E os shadow roots (recursivo) e injeta
@@ -1850,6 +1860,86 @@ function collectAddedNodes(mutations) {
     }
   }
   return added;
+}
+
+// ─── Fonte de ícones, SOB DEMANDA (achado R7) ───
+// O @font-face está no LIGHT DOM (styles/icon-font.css → servido pela origem
+// local do app, embarcado via //go:embed all:frontend em src/main.go:29), então
+// os shadow roots já resolvem a família "Material Symbols Rounded" sem cópia.
+// O que NÃO atravessa a fronteira do shadow root é a REGRA que usa a família
+// (aquela .a2ui-icon dentro de A2UI_THEME_CSS) — essa é barata e vai sempre.
+//
+// Já a FONTE em si custa 5,4 MB e o WebView só a busca se houver uma regra que
+// a referencie no caminho de renderização. Por isso este bloco separado é
+// injetado SOMENTE quando a surface realmente tem um <a2ui-icon>: um chat que
+// nunca usa ícone não deve pagar 5,4 MB de I/O de disco.
+var A2UI_THEME_CSS_SYMBOLS = [
+  "@font-face{font-family:\"Material Symbols Rounded\";font-style:normal;font-weight:100 700;font-display:block;",
+  "src:url(\"assets/fonts/material-symbols-rounded.woff2\") format(\"woff2\");}",
+].join("");
+
+// a2uiNeedIconFont verifica se a surface contém um <a2ui-icon>. O componente
+// Icon é um custom element criado pelo @a2ui/lit DENTRO da árvore, então a
+// busca precisa descer pelos shadow roots abertos — um querySelector no
+// container não o encontraria.
+function a2uiNeedIconFont(containerEl) {
+  var stack = [containerEl];
+  while (stack.length) {
+    var el = stack.pop();
+    if (!el || el.nodeType !== 1) continue;
+    if (el.tagName && el.tagName.toLowerCase() === "a2ui-icon") return true;
+    if (el.shadowRoot) {
+      for (var i = 0; i < el.shadowRoot.children.length; i++) stack.push(el.shadowRoot.children[i]);
+    }
+    for (var j = 0; j < el.children.length; j++) stack.push(el.children[j]);
+  }
+  return false;
+}
+
+// a2uiEnsureIconFont injeta o @font-face no <head> do DOCUMENTO (não no shadow
+// root: @font-face é global e uma única declaração basta). Idempotente.
+function a2uiEnsureIconFont(containerEl) {
+  try {
+    if (document.querySelector("style[data-a2ui-symbols]")) return;
+    if (!a2uiNeedIconFont(containerEl)) return;
+    var st = document.createElement("style");
+    st.setAttribute("data-a2ui-symbols", "1");
+    st.textContent = A2UI_THEME_CSS_SYMBOLS;
+    (document.head || document.documentElement).appendChild(st);
+  } catch (e) {
+    console.warn("[a2ui] falha ao injetar a fonte de ícones:", e);
+  }
+}
+
+// a2uiNormalizeIconNames reescreve o TEXTO dos <a2ui-icon> para a ligadura
+// correta da fonte. O componente vendorado renderiza o nome do catálogo cru
+// dentro do <span> ("arrowBack"), mas a ligadura da fonte é o snake_case
+// ("arrow_back") e 4 nomes do catálogo nem existem como ligadura — ver
+// frontend/js/a2ui-icon-names.js (achado R7). Sem isto esses ícones saem como
+// TEXTO literal.
+//
+// Roda ANTES de a2uiEnsureIconFont: se o <textContent> for trocado depois de a
+// fonte carregar, a ligadura ainda é resolvida pelo layout (o navegador refaz o
+// shaping), mas manter a ordem correta evita o flash de texto no primeiro paint.
+function a2uiNormalizeIconNames(containerEl) {
+  var api = window.A2uiIconNames;
+  if (!api || typeof api.a2uiIconLigature !== "function") return;
+  var stack = [containerEl];
+  while (stack.length) {
+    var el = stack.pop();
+    if (!el || el.nodeType !== 1) continue;
+    if (el.tagName && el.tagName.toLowerCase() === "a2ui-icon") {
+      var raw = el.textContent;
+      var lig = api.a2uiIconLigature(raw);
+      // Só escreve quando muda de fato: atribuir textContent sempre recria o
+      // nó de texto e interromperia a ligadura a cada passagem de tema.
+      if (lig && lig !== String(raw).trim()) el.textContent = lig;
+    }
+    if (el.shadowRoot) {
+      for (var i = 0; i < el.shadowRoot.children.length; i++) stack.push(el.shadowRoot.children[i]);
+    }
+    for (var j = 0; j < el.children.length; j++) stack.push(el.children[j]);
+  }
 }
 
 // a2uiInjectThemeIn percorre o container E os shadow roots (recursivo) e injeta
@@ -1916,6 +2006,11 @@ function a2uiScheduleTheme(containerEl, state, addedNodes) {
     var pending = state.pending || [];
     state.pending = [];
     try { a2uiInjectThemeIn(containerEl, state, pending); } catch (e) { console.warn("[a2ui] tema falhou:", e); }
+    // Fonte de ícones: só entra quando a surface tem um <a2ui-icon> (ver
+    // A2UI_THEME_CSS_SYMBOLS). Fica DEPOIS da injeção do tema porque é ela que
+    // cria os custom elements; sem isso o <a2ui-icon> ainda não existiria.
+    try { a2uiNormalizeIconNames(containerEl); } catch (e) { console.warn("[a2ui] nomes de ícone falharam:", e); }
+    try { a2uiEnsureIconFont(containerEl); } catch (e) { console.warn("[a2ui] fonte de ícones falhou:", e); }
   };
   if (window.requestAnimationFrame) window.requestAnimationFrame(run);
   else setTimeout(run, 16);

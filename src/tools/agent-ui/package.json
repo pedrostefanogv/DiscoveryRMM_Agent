@@ -1,0 +1,10 @@
+{
+    "name": "discovery-agent-ui",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Testes do frontend VANILLA do agent (partials/, styles/, js/). Nao e o bundle do A2UI: aquele vive em tools/a2ui (deps @a2ui/lit, esbuild, build.mjs). Aqui nao ha dependencia nenhuma - so 'node --test'.",
+    "type": "module",
+    "scripts": {
+        "test": "node --test test/"
+    }
+}

@@ -1,0 +1,114 @@
+/* icon-font.css — Material Symbols EMPACOTADO LOCALMENTE (achado R7).
+   ================================================================
+
+   HISTÓRICO (importa para não regredir):
+   - B13 removeu TODO @import de Google Fonts do agente (privacidade/offline):
+     o agente enterprise não deve fazer requisição externa a cada load.
+   - Consequência NÃO prevista: o componente Icon do A2UI (@a2ui/lit) emite
+     <span class="material-symbols-outlined a2ui-icon">NAME</span>, que depende
+     da webfont por LIGADURA. Sem a fonte, a ligadura nunca resolve e o ícone
+     do chat vira TEXTO puro (achado R7).
+   - Agora a fonte é SERVIDA PELO PRÓPRIO APP: o .woff2 vive em
+     frontend/assets/fonts/ e o //go:embed all:frontend (src/main.go:29) o
+     embarca no binário. O caminho é RELATIVO, então o WebView carrega da
+     origem local — 100% offline e determinístico (não depende de cache do
+     navegador).
+
+   PROIBIDO: apontar para fonts.googleapis.com / fonts.gstatic.com em runtime.
+   Este arquivo só referencia o arquivo local.
+
+   font-display: block (e não swap) — DECISÃO JUSTIFICADA:
+   "block" evita o flash de TEXTO. No swap, durante o carregamento o WebView
+   pintaria a string do nome (ex.: "shopping_cart") no lugar do ícone — ou
+   seja, o MESMO sintoma do R7 por alguns milissegundos. Como o arquivo é
+   LOCAL (sem latência de rede, vai embutido no exe), o período de bloqueio é
+   da ordem de milissegundos. O risco do block é o oposto: se a fonte FALHAR
+   em carregar, o texto fica invisível por até ~3s (é o comportamento do
+   próprio CSS oficial do Google). Preferimos isso a reintroduzir o bug. */
+
+@font-face {
+  font-family: "Material Symbols Rounded";
+  font-style: normal;
+  /* Fonte VARIÁVEL: cobre opsz 20..48, wght 100..700, FILL 0..1, GRAD -50..200
+     num único .woff2 de 5,4 MB. É o mesmo arquivo que o CSS oficial do Google
+     aponta (v386), baixado em build-time e versionado no repo — o runtime NÃO
+     acessa a rede. */
+  font-weight: 100 700;
+  font-display: block;
+  src: url("../assets/fonts/material-symbols-rounded.woff2") format("woff2");
+}
+
+/* .material-symbols-outlined é o CONTRATO com o catálogo @a2ui: o componente
+   Icon vendorado (node_modules/@a2ui/lit/.../Icon.js) emite exatamente
+   class="material-symbols-outlined a2ui-icon". Esta classe é quem recebe a
+   font-family — sem as propriedades abaixo a ligadura NÃO resolve mesmo com a
+   fonte presente. */
+.material-symbols-outlined {
+  font-family: "Material Symbols Rounded";
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  /* ATENÇÃO — quem aplica a ligadura aqui é o 'rlig', NÃO o 'liga'.
+     Medido com o shaper real (uharfbuzz) alternando as features:
+        liga=False  -> 'arrow_back' continua resolvido  (o 'liga' é INERTE)
+        rlig=False  -> 'a','r','r','o','w','underscore','b','a','c','k' (texto cru)
+     As FeatureTags do GSUB desta fonte são ['rclt','rlig'] — não existe 'liga'.
+     O 'rlig' é REQUIRED e aplicado por PADRÃO nos scripts DFLT/latn, então o
+     navegador sempre o aplica. As duas linhas abaixo ficam como INTENÇÃO
+     documentada (custo zero), não porque sejam o mecanismo. */
+  font-feature-settings: "liga";
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+  /* Eixos da fonte variável: FILL 0 (contorno, igual aos 68 SVGs inline do
+     agente e ao estilo do console web), peso 400, GRAD 0, opsz 24. */
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+}
+
+/* ── O ícone do A2UI vive em SHADOW DOM ──
+   Os componentes do @a2ui/lit são custom elements com shadow root ABERTO. A
+   regra .material-symbols-outlined acima NÃO atravessa a fronteira do shadow
+   root: ela vale para o light DOM (ex.: os 68 SVGs/ícones do app.js), mas o
+   <span> do Icon do A2UI está DENTRO do shadow root. Sem uma cópia lá, o bug
+   do R7 continuaria no chat mesmo com a fonte presente.
+
+   A cópia é injetada por app-chat.js (a2uiInjectThemeIn) via
+   A2UI_THEME_CSS_SYMBOLS, marcada com [data-a2ui-symbols] e SOB DEMANDA: só
+   quando existe um <a2ui-icon> na surface, para não baixar os 5,4 MB de fonte
+   em chats que nunca usam ícone. Ver o comentário na constante em app-chat.js. */
+.a2ui-icon {
+  font-family: "Material Symbols Rounded";
+  font-weight: normal;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  /* INERTE neste caso — mantido como intenção documentada. Medido com o shaper
+     (uharfbuzz): liga=False NÃO altera o resultado; rlig=False é que faz o
+     texto ficar cru. Quem aplica a ligadura é o 'rlig' (required ligatures),
+     aplicado por PADRÃO nos scripts DFLT/latn — as FeatureTags do GSUB desta
+     fonte são ['rclt','rlig'] e 'liga' não existe. Ver styles/icon-font.css,
+     bloco @font-face, para a medição completa. */
+  font-feature-settings: "liga";
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  vertical-align: middle;
+}
+
+/* Os 4 nomes do catálogo que NÃO são ligaduras do GSUB (favoriteOff, starOff,
+   play, rewind) são remapeados antes de renderizar — ver
+   frontend/js/a2ui-icon-names.js. Os outros 55 já resolvem direto, inclusive os
+   que terminam em _border (favorite_border/star_border/bookmark_border SÃO
+   ligaduras válidas). Não há regra CSS necessária aqui. */

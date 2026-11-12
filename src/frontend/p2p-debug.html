@@ -5,9 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="light dark" />
   <title>Discovery · P2P Debug</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <!-- B13 / R7: SEM preconnect e SEM link para fonts.googleapis.com. O agente
+       enterprise nao faz requisicao externa de fonte (privacidade/offline); as
+       fontes Inter/JetBrains Mono que esta pagina usava vinham do Google e
+       foram REMOVIDAS. A pagina cai para a stack de fontes do sistema (Segoe UI
+       etc.), o mesmo que o B13 fez no index.html. E pagina de DEBUG: nao vale
+       empacotar Inter/JetBrains Mono so por causa dela. -->
+
   <style>
     :root {
       --bg: #f8f6f0; --surface: #fffefa; --surface-2: #f3efe2;

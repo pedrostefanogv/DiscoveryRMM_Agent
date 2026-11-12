@@ -6,7 +6,8 @@
     "type": "module",
     "scripts": {
         "build": "node build.mjs",
-        "build:watch": "node build.mjs --watch"
+        "build:watch": "node build.mjs --watch",
+        "test": "node --test test/"
     },
     "dependencies": {
         "@a2ui/lit": "0.9.1",
