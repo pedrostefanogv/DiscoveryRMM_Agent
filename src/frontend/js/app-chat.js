@@ -1825,11 +1825,20 @@ var A2UI_THEME_CSS = [
   ".a2ui-tab-headers button[style*='#eee']{opacity:1!important;border-bottom-color:var(--accent,#4f8cff)!important;background:color-mix(in srgb,var(--accent,#4f8cff) 12%,transparent)!important;color:var(--accent,#4f8cff)!important;}",
   "hr.a2ui-divider{width:100%;border:0;border-top:1px solid color-mix(in srgb,var(--border,#fff) 22%,transparent);margin:10px 0;}",
   ".a2ui-divider-vertical{width:1px;align-self:stretch;background:color-mix(in srgb,var(--border,#fff) 22%,transparent);margin:0 10px;}",
-  // Select = dropdown próprio do Discovery (components/Select.js no bundle).
+  // Select = dropdown proprio do Discovery (components/Select.js no bundle).
+  //
+  // O <select> FECHADO e estilizado aqui; o POPUP da lista e desenhado pelo
+  // WebView2/sistema e NAO aceita CSS (nenhuma regra alcanca <option> no popup).
+  // Por isso appearance:none + seta propria: sem isso o controle aparecia com a
+  // moldura nativa do Windows, destoando do card (relato do usuario 12/11).
+  // A seta e um SVG inline em background-image (data URI): dentro do shadow root
+  // nao da para usar ::after em <select>.
   ".a2ui-select{display:flex;flex-direction:column;gap:4px;width:100%;}",
   ".a2ui-select>label{font-size:.78rem;opacity:.8;}",
-  ".a2ui-select select{width:100%;padding:8px 12px;border-radius:10px;border:1px solid color-mix(in srgb,var(--border,#fff) 24%,transparent);background:var(--input-bg,color-mix(in srgb,var(--text,#888) 8%,transparent));color:inherit;font:inherit;font-size:.88rem;cursor:pointer;}",
-  ".a2ui-select select:focus{outline:none;border-color:var(--accent,#4f8cff);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent,#4f8cff) 25%,transparent);}",
+  ".a2ui-select select,.a2ui-select-input{width:100%;padding:8px 34px 8px 12px;border-radius:10px;border:1px solid color-mix(in srgb,var(--border,#fff) 24%,transparent);background-color:var(--input-bg,color-mix(in srgb,var(--text,#888) 8%,transparent));color:inherit;font:inherit;font-size:.88rem;cursor:pointer;-webkit-appearance:none;-moz-appearance:none;appearance:none;background-image:url('data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 -960 960 960%22%3E%3Cpath d=%22M480-344 240-584l56-56 184 184 184-184 56 56-240 240Z%22 fill=%22%23888%22/%3E%3C/svg%3E');background-repeat:no-repeat;background-position:right 10px center;background-size:16px 16px;}",
+  ".a2ui-select select:focus,.a2ui-select-input:focus{outline:none;border-color:var(--accent,#4f8cff);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent,#4f8cff) 25%,transparent);}",
+  ".a2ui-select select option{background:var(--card-bg,#fff);color:var(--text,#222);}",
+  ".a2ui-select select option:checked{background:color-mix(in srgb,var(--accent,#4f8cff) 22%,var(--card-bg,#fff));color:var(--text,#222);}",
   // ─── Icon (achado R7) ───
   // O componente Icon do catálogo basic emite
   // <span class="material-symbols-outlined a2ui-icon">NAME</span> e depende da
