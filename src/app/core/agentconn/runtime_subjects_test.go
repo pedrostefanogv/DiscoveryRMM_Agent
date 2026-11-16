@@ -153,7 +153,12 @@ func TestValidateAgentIdentityJWTClaims_ExactSubjects(t *testing.T) {
 	}
 }
 
-func TestValidateAgentIdentityJWTClaims_RejectsExtraSubject(t *testing.T) {
+// Subjects EXTRAS não podem reprovar a validação: o servidor concede de forma
+// legítima permissões adicionais ao agente (JetStream $JS.API/$JS.ACK, _INBOX.>
+// e o canal do chat de suporte). Exigir igualdade exata abortava a sessão NATS
+// inteira e o agente parava de receber QUALQUER comando — foi o que impediu a
+// desinstalação de chegar em um agente excluído.
+func TestValidateAgentIdentityJWTClaims_AcceptsExtraSubjects(t *testing.T) {
 	subjects, err := resolveNATSSubjects(Config{ClientID: "client-1", SiteID: "site-1", AgentID: "agent-1"})
 	if err != nil {
 		t.Fatalf("resolveNATSSubjects: %v", err)
@@ -171,7 +176,13 @@ func TestValidateAgentIdentityJWTClaims_RejectsExtraSubject(t *testing.T) {
 					subjects.SyncPing,
 					subjects.P2PDiscovery,
 					subjects.RemoteDebugControl,
+					fmt.Sprintf("tenant.%s.site.%s.agent.%s.remote.session.>",
+						stripSubjectHyphens(subjects.ClientID),
+						stripSubjectHyphens(subjects.SiteID),
+						stripSubjectHyphens(subjects.AgentID)),
 					"tenant.extra.agents.command",
+					"_INBOX.>",
+					"tenant.client-1.site.site-1.agent.agent-1.supportchat.server",
 				},
 			},
 			"pub": map[string]any{
@@ -181,13 +192,65 @@ func TestValidateAgentIdentityJWTClaims_RejectsExtraSubject(t *testing.T) {
 					subjects.Hardware,
 					subjects.RemoteDebugLog,
 					subjects.RemoteDebugControl,
+					fmt.Sprintf("tenant.%s.site.%s.agent.%s.remote.session.>",
+						stripSubjectHyphens(subjects.ClientID),
+						stripSubjectHyphens(subjects.SiteID),
+						stripSubjectHyphens(subjects.AgentID)),
+					"$JS.ACK.DISCOVERY_FANOUT_COMMANDS.>",
+				},
+			},
+		},
+	})
+
+	if err := validateAgentIdentityJWTClaims(jwt, subjects); err != nil {
+		t.Fatalf("subjects extras não podem reprovar a ACL: %v", err)
+	}
+}
+
+// O que continua obrigatório: sem os subjects de comando o agente não é
+// alcançável, então a validação DEVE falhar.
+func TestValidateAgentIdentityJWTClaims_RejectsMissingCommandSubject(t *testing.T) {
+	subjects, err := resolveNATSSubjects(Config{ClientID: "client-1", SiteID: "site-1", AgentID: "agent-1"})
+	if err != nil {
+		t.Fatalf("resolveNATSSubjects: %v", err)
+	}
+
+	jwt := buildTestJWT(t, map[string]any{
+		"nats": map[string]any{
+			"sub": map[string]any{
+				"allow": []string{
+					// CommandAgent AUSENTE de propósito.
+					subjects.CommandSiteFanout,
+					subjects.CommandClientFanout,
+					subjects.CommandGlobalFanout,
+					subjects.GlobalPong,
+					subjects.SyncPing,
+					subjects.P2PDiscovery,
+					subjects.RemoteDebugControl,
+					fmt.Sprintf("tenant.%s.site.%s.agent.%s.remote.session.>",
+						stripSubjectHyphens(subjects.ClientID),
+						stripSubjectHyphens(subjects.SiteID),
+						stripSubjectHyphens(subjects.AgentID)),
+				},
+			},
+			"pub": map[string]any{
+				"allow": []string{
+					subjects.Heartbeat,
+					subjects.Result,
+					subjects.Hardware,
+					subjects.RemoteDebugLog,
+					subjects.RemoteDebugControl,
+					fmt.Sprintf("tenant.%s.site.%s.agent.%s.remote.session.>",
+						stripSubjectHyphens(subjects.ClientID),
+						stripSubjectHyphens(subjects.SiteID),
+						stripSubjectHyphens(subjects.AgentID)),
 				},
 			},
 		},
 	})
 
 	if err := validateAgentIdentityJWTClaims(jwt, subjects); err == nil {
-		t.Fatalf("expected ACL validation to fail when JWT contains extra subscribe subject")
+		t.Fatalf("esperava falha quando falta um subject de comando no JWT")
 	}
 }
 

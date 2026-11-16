@@ -137,6 +137,20 @@ func extractJWTAllowedSubjects(claims map[string]any, direction string) ([]strin
 	return out, nil
 }
 
+// compareSubjectSets exige que TODOS os subjects esperados estejam presentes
+// nos claims (missing == 0), mas IGNORA subjects extras.
+//
+// Exigir igualdade EXATA era um defeito: o servidor concede legitimamente
+// subjects adicionais ao agente (ex.: $JS.API.*/$JS.ACK.* do JetStream,
+// _INBOX.> para request/reply e o canal do chat de suporte). Qualquer um deles
+// aparecendo no JWT fazia esta validação devolver erro, o que abortava a
+// SESSÃO NATS INTEIRA (runNATSSession → "ACL/JWT do AgentIdentity invalida").
+// O efeito prático era o pior possível: o agente parava de receber QUALQUER
+// comando, inclusive o de desinstalação, por causa de uma permissão A MAIS que
+// não faz mal algum ao agente.
+//
+// A checagem de "missing" continua rígida: sem os subjects de comando o agente
+// realmente não seria alcançado.
 func compareSubjectSets(direction string, got []string, expected []string) error {
 	gotList := normalizeSubjectList(got)
 	expectedList := normalizeSubjectList(expected)
@@ -145,10 +159,6 @@ func compareSubjectSets(direction string, got []string, expected []string) error
 	for _, item := range gotList {
 		gotSet[item] = struct{}{}
 	}
-	expectedSet := make(map[string]struct{}, len(expectedList))
-	for _, item := range expectedList {
-		expectedSet[item] = struct{}{}
-	}
 
 	var missing []string
 	for _, item := range expectedList {
@@ -156,19 +166,12 @@ func compareSubjectSets(direction string, got []string, expected []string) error
 			missing = append(missing, item)
 		}
 	}
-	var extra []string
-	for _, item := range gotList {
-		if _, ok := expectedSet[item]; !ok {
-			extra = append(extra, item)
-		}
-	}
 
-	if len(missing) == 0 && len(extra) == 0 {
+	if len(missing) == 0 {
 		return nil
 	}
 	sort.Strings(missing)
-	sort.Strings(extra)
-	return fmt.Errorf("subjects de %s divergentes (missing=%v extra=%v)", direction, missing, extra)
+	return fmt.Errorf("subjects de %s ausentes (missing=%v)", direction, missing)
 }
 
 func normalizeSubjectList(values []string) []string {
