@@ -111,6 +111,26 @@ func TestFrontend_ScreensShowWaitingStateInsteadOfRawError(t *testing.T) {
 	}
 }
 
+// A tela de espera da Loja precisa renderizar no container REAL do catálogo.
+// O bug corrigido na revisão: showServerAuthPendingStore procurava
+// 'catalogGrid'/'storeCatalogGrid' — ids inexistentes — e o painel nunca
+// aparecia (o usuário via só o toast, com a área do catálogo vazia).
+func TestFrontend_StoreWaitingStateTargetsRealContainer(t *testing.T) {
+	store := readFrontendAsset(t, "js", "app-store-updates.js")
+	if strings.Contains(store, "catalogGrid") || strings.Contains(store, "storeCatalogGrid") {
+		t.Fatal("showServerAuthPendingStore não pode usar ids inexistentes (catalogGrid/storeCatalogGrid)")
+	}
+	if !strings.Contains(store, "document.getElementById('cards')") {
+		t.Fatal("showServerAuthPendingStore precisa renderizar no container real #cards")
+	}
+
+	// O id usado no partial precisa ser o mesmo que o JS procura.
+	view := readFrontendAsset(t, "partials", "views", "storeView.html")
+	if !strings.Contains(view, `id="cards"`) {
+		t.Fatal("storeView.html precisa manter o container #cards consumido pela Loja")
+	}
+}
+
 // i18n nos dois idiomas + overlay usando a mensagem específica de liberação.
 func TestFrontend_ServerAuthorizationCopyAndOverlay(t *testing.T) {
 	utils := readFrontendAsset(t, "js", "app-utils.js")
@@ -122,9 +142,11 @@ func TestFrontend_ServerAuthorizationCopyAndOverlay(t *testing.T) {
 	}
 
 	globals := readFrontendAsset(t, "js", "app-core-globals.js")
-	// A overlay publica o modo para as telas de conteúdo...
-	if !strings.Contains(globals, "applyServerAuthorizationState(onboardingStatus)") {
-		t.Fatal("syncProvisioningOverlayFromConfig precisa publicar o modo de onboarding para as telas de conteúdo")
+	// A overlay publica o modo RESOLVIDO (o que ela exibe) para as telas de
+	// conteúdo — publicar o onboardingStatus cru deixaria as telas divergentes
+	// quando o GetOnboardingStatus falha e o modo vem do fallback local.
+	if !strings.Contains(globals, "publishServerAuthorizationMode(mode, onboardingStatus)") {
+		t.Fatal("syncProvisioningOverlayFromConfig precisa publicar o modo resolvido para as telas de conteúdo")
 	}
 	// ...e usa a mensagem específica de "aguardando liberação" no corpo do card.
 	if !strings.Contains(globals, "serverAuthWaitingMessage()") {

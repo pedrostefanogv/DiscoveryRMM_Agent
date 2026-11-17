@@ -647,11 +647,18 @@ function syncProvisioningOverlayFromConfig(debugCfg, onboardingStatus) {
   var refs = ensureProvisioningOverlay();
   var status = computeProvisioningState(debugCfg);
   var mode = resolveProvisioningOverlayMode(status, onboardingStatus);
-  // Publica o modo para as telas de conteúdo (Loja/Suporte/Base de
-  // Conhecimento) — elas mostram a tela de espera em vez do 403 cru do
-  // servidor enquanto o agente aguarda liberação (server-authorization.js).
-  if (typeof applyServerAuthorizationState === 'function' && onboardingStatus) {
-    applyServerAuthorizationState(onboardingStatus);
+  // Publica para as telas de conteúdo (Loja/Suporte/Base de Conhecimento) o
+  // modo QUE ESTA FUNÇÃO VAI EXIBIR — elas mostram a tela de espera em vez do
+  // 403 cru do servidor enquanto o agente aguarda liberação
+  // (server-authorization.js).
+  //
+  // Publicar o mode resolvido (e não o onboardingStatus cru) é essencial
+  // quando o GetOnboardingStatus FALHA: aí o modo vem do fallback local
+  // (computeProvisioningState) e, sem esta publicação, o overlay mostraria a
+  // espera enquanto as telas seguiam com o estado antigo — exatamente o
+  // caminho de erro que este trabalho elimina.
+  if (typeof publishServerAuthorizationMode === 'function') {
+    publishServerAuthorizationMode(mode, onboardingStatus);
   }
   var copyKeys = provisioningCopyKeysForMode(mode);
   var suppressOverlay = isDebugRuntimeMode();

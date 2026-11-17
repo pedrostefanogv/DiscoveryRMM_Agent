@@ -6,6 +6,14 @@ var lastStoreUpdateToastAt = 0;
 function handleStoreTabActivated() {
   if (!storeCatalogDirty) return;
   storeCatalogDirty = false;
+  // Aguardando liberação do servidor: mostra a espera em vez de disparar uma
+  // chamada que sabidamente responde 403 (e o catálogo recarrega sozinho
+  // quando a liberação chegar — ver registerStoreServerAuthListener).
+  if (typeof isServerAuthorizationPending === 'function' && isServerAuthorizationPending()) {
+    storeCatalogDirty = true;
+    showServerAuthPendingStore();
+    return;
+  }
   loadCatalog();
 }
 
@@ -377,14 +385,25 @@ async function loadCatalog(forceRefresh) {
 function showServerAuthPendingStore() {
   showFeedback(serverAuthWaitingTitle());
   if (infoEl) infoEl.textContent = translate('serverAuth.pending.store');
-  var grid = document.getElementById('catalogGrid') || document.getElementById('storeCatalogGrid');
+  // O container REAL do catálogo é #cards (storeView.html). Antes esta função
+  // procurava dois ids que NÃO existem no partial e o estado de espera
+  // simplesmente não era renderizado (falha silenciosa: o usuário via só o
+  // toast, com a área do catálogo vazia). Ver
+  // TestFrontend_StoreWaitingStateTargetsRealContainer.
+  var grid = document.getElementById('cards');
   if (grid) {
     renderServerAuthWaitingState(grid, {
       detail: translate('serverAuth.pending.store'),
       retryId: 'storeServerAuthRetryBtn',
       onRetry: function () { loadCatalog(true); },
     });
+    return;
   }
+  // Defensivo: se o partial ainda não montou, tenta novamente quando montar.
+  setTimeout(function () {
+    var late = document.getElementById('cards');
+    if (late && isServerAuthorizationPending()) showServerAuthPendingStore();
+  }, 1000);
 }
 
 // Enquanto o agente aguarda liberação, ao ativar a aba Loja mostramos o estado
@@ -394,7 +413,10 @@ function showServerAuthPendingStore() {
   onServerAuthorizationChange(function (mode) {
     if (mode === 'awaiting-approval') {
       storeCatalogDirty = true;
-      showServerAuthPendingStore();
+      // Só desenha se a Loja já estiver montada no DOM: este listener é
+      // registrado no load do script, ANTES do partial existir. Quem cobre a
+      // janela do boot é handleStoreTabActivated/handleStoreServerAuthOnActivate.
+      if (document.getElementById('cards')) showServerAuthPendingStore();
       return;
     }
     if (mode === 'normal') {

@@ -61,28 +61,40 @@ function isOnboardingBlocked() {
     __onboardingMode === 'awaiting-auto-provisioning';
 }
 
-// applyServerAuthorizationState é chamada pelo overlay (que já consulta o
-// GetOnboardingStatus a cada 10s e em eventos) e por consultas diretas.
+// applyServerAuthorizationState adota o modo cru vindo do GO
+// (GetOnboardingStatus / snapshot IPC).
 function applyServerAuthorizationState(onboardingStatus) {
-  var mode = String(onboardingStatus && onboardingStatus.mode || '').trim().toLowerCase();
+  publishServerAuthorizationMode(
+    String(onboardingStatus && onboardingStatus.mode || '').trim().toLowerCase(),
+    onboardingStatus
+  );
+}
+
+// publishServerAuthorizationMode recebe o modo JÁ RESOLVIDO (o que a overlay
+// vai exibir) e o estado bruto do GO, do qual aproveita os detalhes
+// (pendingReason/acceptedAtUtc). A overlay é quem decide o modo final porque
+// ela também tem o fallback local (computeProvisioningState) para quando o
+// GetOnboardingStatus falha.
+function publishServerAuthorizationMode(resolvedMode, onboardingStatus) {
+  var mode = String(resolvedMode || '').trim().toLowerCase();
   if (mode !== 'awaiting-approval' && mode !== 'awaiting-auto-provisioning' && mode !== 'normal') {
     return;
   }
   var reason = String(onboardingStatus && onboardingStatus.pendingReason || '').trim();
   var acceptedAt = String(onboardingStatus && onboardingStatus.acceptedAtUtc || '').trim();
+
   var changed = mode !== __onboardingMode ||
     reason !== __onboardingPendingReason ||
     acceptedAt !== __onboardingAcceptedAt;
   __onboardingMode = mode;
   __onboardingPendingReason = reason;
   __onboardingAcceptedAt = acceptedAt;
-  if (changed) {
-    var waiters = __serverAuthWaiters.slice();
-    __serverAuthWaiters = [];
-    waiters.forEach(function (fn) {
-      try { fn(mode); } catch (_) { /* listener de tela: não pode derrubar o estado */ }
-    });
-  }
+  if (!changed) return;
+  var waiters = __serverAuthWaiters.slice();
+  __serverAuthWaiters = [];
+  waiters.forEach(function (fn) {
+    try { fn(mode); } catch (_) { /* listener de tela: não pode derrubar o estado */ }
+  });
 }
 
 // onServerAuthorizationChange registra um listener chamado quando o modo MUDA.

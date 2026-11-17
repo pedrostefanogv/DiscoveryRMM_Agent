@@ -254,9 +254,11 @@ func (a *App) confirmServerAuthorizationAsync() {
 	t.mu.Unlock()
 
 	// contextOrBackground: a.ctx é nil em processos ainda não inicializados (e
-	// nos testes). Passar nil a http.NewRequestWithContext PANICA — o pânico é
-	// recuperado pelo safeGo (não derruba o processo), mas a confirmação se
-	// perde e o log enche de stack trace inútil. Melhor não pânica.
+	// nos testes). Com ctx nil o http.NewRequestWithContext devolve
+	// "net/http: nil Context" (NÃO panica — verificado em
+	// server_authorization_nilctx_test.go), então a confirmação simplesmente
+	// NUNCA acontecia e a UI podia ficar presa na tela de espera mesmo depois de
+	// o admin liberar o agente.
 	a.safeGo(func() {
 		_ = a.refreshAgentConfiguration(a.contextOrBackground())
 	})
