@@ -328,6 +328,21 @@ type Options struct {
 	// PersistCommandDedupe grava/renova uma entrada de dedupe de comando.
 	// Opcional. Só chaves de comando endereçado a UM agente são persistidas.
 	PersistCommandDedupe func(CommandDedupeEntry) error
+	// DeleteCommandDedupe remove uma entrada de dedupe (memória + disco).
+	// Opcional. Usado quando uma execução falha de forma recuperável: manter a
+	// reserva faria a reentrega seguinte ser suprimida em vez de tentar de novo
+	// (ver releaseCommandDedupe).
+	DeleteCommandDedupe func(key string) error
+	// DescribeDecommission func() string reporta, para o log de diagnóstico, se
+	// existe um descomissionamento pendente/interrompido nesta máquina.
+	// Opcional: sem ele o watchdog só mostra contadores de mensagens.
+	//
+	// Motivo: um agente que precisa se desinstalar e não consegue (uninstaller
+	// ausente, sem elevação) ficava invisível no log — não havia NENHUMA linha
+	// de descomissionamento para o operador correlacionar com o painel. Este
+	// relatório transforma "agente nunca recebeu o comando" em algo diagnosticável
+	// pelo log do próprio host.
+	DescribeDecommission func() string
 }
 
 // CommandDedupeEntry é uma entrada do dedupe de comandos do agent pronta para
@@ -425,6 +440,13 @@ type Runtime struct {
 	forceHeartbeatCh chan chan struct{}
 	// reloadCh requests the active session loop to reconnect with fresh config.
 	reloadCh chan struct{}
+
+	// ── Diagnóstico de descomissionamento ──
+	// Último estado reportado por DescribeDecommission. Serve para registrar a
+	// transição, não o estado repetido: o watchdog roda a cada 30s e um pedido
+	// preso pode durar dias (ver logDecommissionStateDiagnostic).
+	decommissionStateMu   sync.Mutex
+	decommissionStateLast string
 
 	// ── Diagnóstico de mensagens de entrada ──
 	// Contadores atômicos de mensagens NATS RECEBIDAS por categoria. Ajudam a
@@ -1463,6 +1485,36 @@ func (r *Runtime) logDiagnosticReport(reason string) {
 	}
 	r.logf("[DIAG][nats] %s: recebimento ativo (tempo=%s). pong=%d sync_ping=%d comandos=%d p2p=%d",
 		reason, age, pong, sync, cmd, p2p)
+}
+
+// logDecommissionStateDiagnostic reporta se existe um descomissionamento pendente
+// ou interrompido nesta máquina.
+//
+// Sem isto o operador via apenas "comandos=0" e não tinha como saber se o pedido
+// de desinstalação chegou e falhou, ou se nunca chegou. A distinção é o que
+// permite agir: o primeiro caso é falha local (uninstaller/elevação); o segundo
+// é entrega (subject/permissão do NATS).
+//
+// Só registra quando o estado MUDA. O watchdog roda a cada 30s e um pedido preso
+// pode durar dias: repetir a mesma linha a cada ciclo encheria o log de ruído e
+// consumiria a retenção do logs.db sem acrescentar informação. A primeira
+// observação sempre sai (o estado anterior começa vazio).
+func (r *Runtime) logDecommissionStateDiagnostic() {
+	if r.opts.DescribeDecommission == nil {
+		return
+	}
+
+	state := strings.TrimSpace(r.opts.DescribeDecommission())
+
+	r.decommissionStateMu.Lock()
+	changed := state != r.decommissionStateLast
+	r.decommissionStateLast = state
+	r.decommissionStateMu.Unlock()
+
+	if !changed || state == "" {
+		return
+	}
+	r.logf("[DIAG][decommission] %s", state)
 }
 
 func (r *Runtime) emitSyncPing(ping SyncPing) {

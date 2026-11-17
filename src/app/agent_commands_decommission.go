@@ -172,6 +172,39 @@ func (a *App) resumeAgentDecommissionIfPending() {
 	})
 }
 
+// describeAgentDecommission devolve um resumo do pedido de descomissionamento
+// para o log de diagnóstico do watchdog. String vazia = nada pendente.
+//
+// Objetivo: tornar diagnosticável o caso "o painel mandou desinstalar e a máquina
+// continua instalada". O log do host passa a dizer se o pedido chegou, se o
+// uninstaller foi resolvido e se o lançamento falhou — em vez de o operador ver
+// apenas "comandos=0" sem saber se o comando chegou.
+func (a *App) describeAgentDecommission() string {
+	if a == nil || a.CoreAgent.DB == nil {
+		return ""
+	}
+
+	var req agentDecommissionRequest
+	ok, err := a.CoreAgent.DB.CacheGetJSON(agentDecommissionRequestCacheKey, &req)
+	if err != nil || !ok {
+		return ""
+	}
+	if strings.TrimSpace(req.UninstallerPath) == "" {
+		return ""
+	}
+
+	state := "pedido pendente de desinstalacao"
+	if req.Launched {
+		// Launched=true e ESTE processo vivo significa que o uninstaller subiu mas
+		// nao removeu a maquina: a desinstalacao falhou depois de iniciar.
+		state = "uninstaller lancado mas a maquina continua instalada (desinstalacao nao concluiu)"
+	}
+
+	requestedAt := strings.TrimSpace(req.RequestedAtUTC)
+	return fmt.Sprintf("%s desde %s; uninstaller=%s; elevacao=%t",
+		state, requestedAt, req.UninstallerPath, agentDecommissionIsElevated())
+}
+
 func (a *App) markAgentDecommissionRequested(uninstallerPath string) {
 	if a == nil || a.CoreAgent.DB == nil {
 		return

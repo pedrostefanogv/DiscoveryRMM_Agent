@@ -963,6 +963,8 @@ func NewApp(opts AppStartupOptions) *App {
 		RescheduleCommandResultOutbox: a.rescheduleCommandResultOutbox,
 		LoadCommandDedupe:             a.loadCommandDedupe,
 		PersistCommandDedupe:          a.persistCommandDedupe,
+		DeleteCommandDedupe:           a.deleteCommandDedupe,
+		DescribeDecommission:          a.describeAgentDecommission,
 	})
 	a.DebugSvc = debug.NewService(debug.Options{
 		Logf: func(line string) {

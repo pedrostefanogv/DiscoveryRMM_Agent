@@ -127,6 +127,37 @@ func (a *App) persistCommandDedupe(entry agentconn.CommandDedupeEntry) error {
 	return db.CacheSetJSON(commandDedupeCacheKey, list, 0)
 }
 
+// deleteCommandDedupe remove uma entrada de dedupe (memória + cache local).
+// Usado quando a execução falhou de forma recuperável: sem remover a cópia
+// persistida, um reboot restauraria a reserva e a reentrega seguinte ficaria
+// suprimida em vez de reexecutar o comando.
+func (a *App) deleteCommandDedupe(key string) error {
+	if a == nil || a.commandDedupe == nil || strings.TrimSpace(key) == "" {
+		return nil
+	}
+
+	store := a.commandDedupe
+	db := a.DB()
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	store.loadLocked(db, a)
+	delete(store.entries, key)
+
+	if db == nil {
+		return nil
+	}
+
+	list := make([]commandDedupeWire, 0, len(store.entries))
+	for _, item := range store.entries {
+		list = append(list, item)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Key < list[j].Key })
+
+	return db.CacheSetJSON(commandDedupeCacheKey, list, 0)
+}
+
 // loadLocked lê o cache local uma única vez. Chamado com o mutex travado.
 func (s *commandDedupeStore) loadLocked(db *database.DB, a *App) {
 	if s.loaded || db == nil {

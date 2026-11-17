@@ -476,7 +476,24 @@ func (r *Runtime) executeAndPublishNATSCommand(ctx context.Context, nc *nats.Con
 		ErrorMessage: errText,
 	}
 	if dedupeKey != "" {
-		r.completeFanoutDispatch(dedupeKey, res)
+		// O descomissionamento nunca vira resultado terminal no dedupe (ver
+		// shouldCacheCommandResult). A chave é LIBERADA — não apenas não
+		// cacheada — para que a próxima reentrega realmente execute de novo.
+		//
+		// Falha: a máquina continua instalada e o motivo pode ter desaparecido
+		// (uninstaller recém-gravado, elevação de volta). Sucesso: o handler
+		// responde antes de o uninstaller subir, então um lançamento que falhe
+		// depois precisa de nova tentativa.
+		//
+		// Reexecução duplicada é contida no próprio handler, não no dedupe:
+		// agentDecommissionLaunching (CAS em memória) e o marcador persistente
+		// agent_decommission_request sobrevivem a reentrega e reboot.
+		if shouldCacheCommandResult(cmdType, res.ExitCode) {
+			r.completeFanoutDispatch(dedupeKey, res)
+		} else {
+			r.releaseCommandDedupe(dedupeKey)
+			r.logf("dedupe liberado para reentrega de descomissionamento cmdId=%s exitCode=%d", env.CommandID, res.ExitCode)
+		}
 	}
 
 	if err := publishJSONResult(nc, subjects.Result, res); err != nil {
@@ -586,6 +603,12 @@ func fanoutDedupeKey(env natsCommandEnvelope) string {
 // UM agente. Fan-out e unicast compartilham o mesmo store; a persistência em
 // disco é aplicada a TODAS as chaves (ver persistCommandDedupe).
 const agentCommandDedupePrefix = "agent-cmd:"
+
+// agentDecommissionWireType é o valor wire do comando de descomissionamento.
+// Falha nele NÃO pode ser cacheada como resultado terminal no dedupe: o
+// servidor reentrega até a confirmação e a máquina precisa de uma nova
+// tentativa quando o motivo da falha desaparecer (ver executeAndPublishNATSCommand).
+const agentDecommissionWireType = "decommissionagent"
 
 // agentCommandDedupeKey identifica um comando endereçado a um único agente.
 // Retorna "" quando o envelope não traz CommandId (nada a deduplicar).
@@ -701,6 +724,66 @@ func (r *Runtime) persistCommandDedupe(dedupeKey string, expiresAt time.Time, re
 	}
 	if err := r.opts.PersistCommandDedupe(entry); err != nil {
 		r.logf("falha ao persistir dedupe de comando cmd=%s: %v", dedupeKey, err)
+	}
+}
+
+// releaseCommandDedupe libera uma reserva de dedupe SEM cachear resultado, de
+// modo que a próxima reentrega do mesmo comando volte a executar. Usado quando
+// a execução falhou de forma recuperável (ex.: descomissionamento sem
+// uninstaller): manter o resultado de erro faria toda reentrega apenas
+// republicar a falha, nunca tentando de novo.
+func (r *Runtime) releaseCommandDedupe(dedupeKey string) {
+	if strings.TrimSpace(dedupeKey) == "" {
+		return
+	}
+
+	r.dedupeMu.Lock()
+	r.ensureDedupeLoadedLocked(time.Now().UTC())
+	delete(r.fanoutDedupe, dedupeKey)
+	r.dedupeMu.Unlock()
+
+	// Remove também a cópia persistida: sem isso um reboot restauraria a reserva
+	// do disco e a reentrega seguinte ficaria suprimida de novo.
+	r.deleteCommandDedupe(dedupeKey)
+}
+
+// shouldCacheCommandResult decide se o resultado de um comando vira terminal no
+// dedupe (reentrega passa a apenas republicar, sem reexecutar).
+//
+// Exceção deliberada: DecommissionAgent NUNCA é terminal, nem no sucesso.
+//
+// No FALHA: o servidor reentrega o comando enquanto não houver confirmação e a
+// máquina continua instalada, então a próxima entrega precisa TENTAR DE NOVO (o
+// uninstaller pode ter acabado de ser gravado, a elevação pode ter voltado).
+// Cachear o erro travava a máquina instalada para sempre.
+//
+// No SUCESSO: não cachear também é necessário, e por um motivo sutil. O handler
+// responde exitCode=0 IMEDIATAMENTE, mas só lança o uninstaller ~5s depois, numa
+// goroutine. Se aquele lançamento falhar (CreateProcess negado, binário removido
+// por um antivírus no intervalo), o resultado terminal já estaria cacheado e a
+// reentrega apenas republicaria "sucesso" — sem nunca tentar de novo, com a
+// máquina instalada. Deixar o decommission fora do dedupe fecha a corrida.
+//
+// Isso é seguro porque a idempotência NÃO depende do dedupe: o handler tem o CAS
+// em memória (agentDecommissionLaunching) e o marcador persistente
+// (agent_decommission_request), que sobrevivem a reentrega e reboot. E se o
+// uninstaller já tiver concluído, não existe mais agente na máquina para receber
+// a reentrega.
+func shouldCacheCommandResult(cmdType string, exitCode int) bool {
+	if cmdType == agentDecommissionWireType {
+		return false
+	}
+	return true
+}
+
+// deleteCommandDedupe remove a cópia persistida de uma entrada de dedupe.
+// Best-effort: falha de I/O só é logada (o dedupe em memória já foi liberado).
+func (r *Runtime) deleteCommandDedupe(dedupeKey string) {
+	if r.opts.DeleteCommandDedupe == nil || strings.TrimSpace(dedupeKey) == "" {
+		return
+	}
+	if err := r.opts.DeleteCommandDedupe(dedupeKey); err != nil {
+		r.logf("falha ao remover dedupe persistido cmd=%s: %v", dedupeKey, err)
 	}
 }
 
@@ -883,6 +966,7 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 			// Relatório periódico de saúde das mensagens de entrada. Ajuda a
 			// distinguir "servidor não publica" de "agente não recebe nada".
 			r.logDiagnosticReport("watchdog global pong")
+			r.logDecommissionStateDiagnostic()
 
 			now := time.Now().UTC()
 			if reconnect, age := shouldReconnectForMissingGlobalPong(now, connectedAt, lastGlobalPongAt); reconnect {
