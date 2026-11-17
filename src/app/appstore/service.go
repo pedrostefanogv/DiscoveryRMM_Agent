@@ -88,6 +88,12 @@ type Deps struct {
 	DB func() *database.DB
 	// Cache retorna o cache de política.
 	Cache *PolicyCache
+	// NoteAuthorizationRefusal recebe (resp, body) de toda resposta autenticada
+	// do endpoint de app-store. O App usa isso para detectar o 403 "Agent
+	// registration is pending (zero-touch)" e ligar o estado de "aguardando
+	// liberação do servidor" (server_authorization.go) — assim a Loja mostra a
+	// tela de espera em vez do erro cru. Opcional (nil-safe).
+	NoteAuthorizationRefusal func(resp *http.Response, body []byte)
 }
 
 // AgentConfiguration é uma visão mínima da configuração do agente.
@@ -103,6 +109,7 @@ type Service struct {
 	logf                  func(string)
 	db                    func() *database.DB
 	cache                 *PolicyCache
+	noteAuthorizationRefusal func(resp *http.Response, body []byte)
 
 	// fetchMu serializa o fetch remoto: quando o cache expira, múltiplas
 	// goroutines (catálogo, validação de pacote, etc.) podem disparar
@@ -134,6 +141,7 @@ func New(deps Deps) *Service {
 		logf:                  logf,
 		db:                    deps.DB,
 		cache:                 deps.Cache,
+		noteAuthorizationRefusal: deps.NoteAuthorizationRefusal,
 	}
 }
 
@@ -271,7 +279,17 @@ func (s *Service) FetchPage(ctx context.Context, installationType InstallationTy
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Agente provisionado mas ainda sem liberação do servidor: alimenta o
+		// estado de onboarding (server_authorization.go) para a UI mostrar a
+		// tela de espera em vez do 403 cru do backend.
+		if s.noteAuthorizationRefusal != nil {
+			s.noteAuthorizationRefusal(resp, body)
+		}
 		return Response{}, fmt.Errorf("app-store (%s) retornou HTTP %s: %s", installationType, resp.Status, strings.TrimSpace(string(body)))
+	}
+	// Servidor autorizou: limpa qualquer pendência anterior.
+	if s.noteAuthorizationRefusal != nil {
+		s.noteAuthorizationRefusal(resp, body)
 	}
 
 	var payload Response

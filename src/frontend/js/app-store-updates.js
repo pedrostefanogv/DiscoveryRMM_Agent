@@ -355,12 +355,56 @@ async function loadCatalog(forceRefresh) {
     // Falha ao carregar: marca dirty para que reativar a aba da loja tente de
     // novo (antes o erro ficava travado na tela até fechar e abrir o agente).
     storeCatalogDirty = true;
+    // Agente provisionado aguardando liberação do servidor: NÃO é falha da
+    // loja. Troca o erro cru ("RuntimeError: app-store (Winget) retornou HTTP
+    // 403 Forbidden: {"error":"Agent registration is pending (zero-touch)."}")
+    // pela explicação de que falta liberação — e recarrega sozinho quando ela
+    // chegar.
+    if (isServerAuthorizationPending() || serverAuthLooksLikePendingError(error)) {
+      if (serverAuthLooksLikePendingError(error)) refreshServerAuthorizationState();
+      showServerAuthPendingStore();
+      return;
+    }
     showFeedback(String(error), true);
     infoEl.textContent = translate('store.catalogLoadFailure');
   } finally {
     if (reloadBtn) reloadBtn.classList.remove('loading');
   }
 }
+
+// showServerAuthPendingStore desenha o estado de espera na Loja (sem erro
+// técnico) e agenda a recarga automática quando a liberação chegar.
+function showServerAuthPendingStore() {
+  showFeedback(serverAuthWaitingTitle());
+  if (infoEl) infoEl.textContent = translate('serverAuth.pending.store');
+  var grid = document.getElementById('catalogGrid') || document.getElementById('storeCatalogGrid');
+  if (grid) {
+    renderServerAuthWaitingState(grid, {
+      detail: translate('serverAuth.pending.store'),
+      retryId: 'storeServerAuthRetryBtn',
+      onRetry: function () { loadCatalog(true); },
+    });
+  }
+}
+
+// Enquanto o agente aguarda liberação, ao ativar a aba Loja mostramos o estado
+// de espera em vez de disparar uma chamada que sabidamente retorna 403.
+(function registerStoreServerAuthListener() {
+  if (typeof onServerAuthorizationChange !== 'function') return;
+  onServerAuthorizationChange(function (mode) {
+    if (mode === 'awaiting-approval') {
+      storeCatalogDirty = true;
+      showServerAuthPendingStore();
+      return;
+    }
+    if (mode === 'normal') {
+      // Liberação chegou: o catálogo volta sozinho, sem o usuário reabrir a
+      // aba nem clicar em "atualizar".
+      storeCatalogDirty = false;
+      loadCatalog();
+    }
+  });
+})();
 
 async function loadPackageActions(api) {
   state.packageActions = {};

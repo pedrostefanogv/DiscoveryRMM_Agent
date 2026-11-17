@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"runtime"
 	"strconv"
@@ -312,6 +313,13 @@ type App struct {
 	activeRemoteSessions     atomic.Int32
 	zeroTouchAttemptInFlight atomic.Bool
 	zeroTouchApprovalPending atomic.Bool
+
+	// serverAuth: estado de "provisionado, mas o servidor ainda não liberou o
+	// acesso" (403 Agent registration is pending). É a fonte da verdade que a
+	// overlay de onboarding e as telas de conteúdo (Loja/Suporte/KB) consultam
+	// para mostrar a tela de espera em vez do erro cru do backend. Ver
+	// server_authorization.go.
+	serverAuth serverAuthTracker
 
 	// Companion mode: último estado de onboarding recebido do serviço via
 	// snapshot IPC (agent:status_snapshot). O sync (zero-touch) roda no
@@ -691,6 +699,13 @@ func NewApp(opts AppStartupOptions) *App {
 		},
 		DB:    func() *database.DB { return a.CoreAgent.DB },
 		Cache: a.AppStorePolicy.CachePointer(),
+		// Toda resposta autenticada da app-store passa por aqui: é por este
+		// caminho que o 403 "Agent registration is pending (zero-touch)"
+		// (o erro do print da Loja) alimenta o estado de autorização do
+		// servidor e faz a UI mostrar a tela de espera.
+		NoteAuthorizationRefusal: func(resp *http.Response, body []byte) {
+			a.noteServerAuthorizationRefusal(resp, body, nil)
+		},
 	})
 	a.AutomationSvc = automation.NewService(func() automation.RuntimeConfig {
 		cfg := a.GetDebugConfig()
@@ -1175,6 +1190,13 @@ func NewApp(opts AppStartupOptions) *App {
 				ClientID: clientID,
 				SiteID:   siteID,
 			}, true
+		},
+		// Toda resposta autenticada de Suporte/KB passa por aqui: é o gancho que
+		// detecta o 403 "Agent registration is pending (zero-touch)" (o erro
+		// dos prints em Suporte e Base de Conhecimento) e liga o estado de
+		// "aguardando liberação do servidor".
+		NoteAuthorizationRefusal: func(resp *http.Response, body []byte) {
+			a.noteServerAuthorizationRefusal(resp, body, nil)
 		},
 	})
 	a.UpdatesSvc = updates.NewService(updates.Options{
@@ -2520,6 +2542,13 @@ func (a *App) onPostBootstrapProvisioned(ctx context.Context) error {
 	}
 
 	a.Logs.Append("[startup] post-bootstrap: agente provisionado — reconciliando recursos")
+
+	// 0. Estado de liberação do servidor. O agente acabou de receber as
+	//    credenciais (ou reiniciou já provisionado) e pode estar aguardando
+	//    aprovação do zero-touch: sem isto a UI só descobria no próximo ciclo
+	//    de sync e, nesse meio-tempo, Loja/Suporte/KB exibiam o 403 cru do
+	//    servidor (relato 2026-11-17). Best-effort: falha não bloqueia nada.
+	a.probeServerAuthorization()
 
 	// 1. osquery + inventário inicial (não executou no goroutine #2 porque
 	//    ainda não estava provisionado).

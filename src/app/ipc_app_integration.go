@@ -67,10 +67,14 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 				// agentConn roda AQUI no serviço — a UI não tem esses campos localmente.
 				"lastGlobalPongAtUtc": strings.TrimSpace(agent.LastGlobalPongAtUTC),
 				"globalPongStale":     agent.GlobalPongStale,
-				// Estado de onboarding (overlay de provisionamento/aprovação).
-				"onboardingMode":       onb["mode"],
-				"onboardingConfigured": onb["configured"],
-				"onboardingMessage":    onb["message"],
+				// Estado de onboarding (overlay de provisionamento/aprovação e
+				// telas de conteúdo). pendingReason explica POR QUE está
+				// esperando: awaiting-approval (servidor não liberou) x
+				// not-provisioned (sem credenciais).
+				"onboardingMode":          onb["mode"],
+				"onboardingConfigured":    onb["configured"],
+				"onboardingMessage":       onb["message"],
+				"onboardingPendingReason": onb["pendingReason"],
 				// P1.4 — capacidade do canal de gravação no snapshot de status.
 				// A UI companion precisa saber, ao (re)conectar, se as mutações
 				// estão habilitadas NESTE serviço: antes ela só descobria no
@@ -390,7 +394,7 @@ func ipcEventToFrontend(payload map[string]any) (string, []any) {
 
 // storeCompanionOnboarding guarda o último estado de onboarding recebido do
 // serviço via snapshot IPC (companion mode). Nil-safe.
-func (a *App) storeCompanionOnboarding(mode string, configured bool, message string) {
+func (a *App) storeCompanionOnboarding(mode string, configured bool, message string, pendingReason string) {
 	if a == nil {
 		return
 	}
@@ -400,6 +404,9 @@ func (a *App) storeCompanionOnboarding(mode string, configured bool, message str
 	}
 	if msg := strings.TrimSpace(message); msg != "" {
 		st["message"] = msg
+	}
+	if reason := strings.TrimSpace(pendingReason); reason != "" {
+		st["pendingReason"] = reason
 	}
 	a.companionOnboardingMu.Lock()
 	a.companionOnboarding = st
@@ -520,7 +527,8 @@ func (a *App) startIPCClient() {
 						mode, _ := rawMode.(string)
 						cfgd, _ := msg.Payload["onboardingConfigured"].(bool)
 						msg2, _ := msg.Payload["onboardingMessage"].(string)
-						a.storeCompanionOnboarding(mode, cfgd, msg2)
+						reason, _ := msg.Payload["onboardingPendingReason"].(string)
+						a.storeCompanionOnboarding(mode, cfgd, msg2, reason)
 					}
 					a.syncTrayVisualState()
 					a.updateTrayMenu()

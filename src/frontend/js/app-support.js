@@ -2080,8 +2080,29 @@ async function loadSupportTickets(opts) {
     supportOfflineReadOnly = true;
     applySupportOfflineMode();
     if (staleBanner) staleBanner.classList.add('hidden');
+    // Agente provisionado aguardando liberação do servidor: mostra a
+    // explicação (e não o erro cru "RuntimeError: ipc request support:tickets
+    // falhou: HTTP 403 Forbidden: ..."), recarregando sozinho na liberação.
+    if (isServerAuthorizationPending() || serverAuthLooksLikePendingError(err)) {
+      if (serverAuthLooksLikePendingError(err)) refreshServerAuthorizationState();
+      renderServerAuthWaitingState(supportTicketsListEl, {
+        detail: translate('serverAuth.pending.tickets'),
+        retryId: 'supportServerAuthRetryBtn',
+        onRetry: function () { loadSupportTickets({ keepView: true }); },
+      });
+      return;
+    }
     supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.ticketListLoadError', { error: String(err) })) + '</div>';
   }
+}
+
+// Liberação concedida: recarrega a lista sozinho, sem o usuário trocar de aba.
+if (typeof onServerAuthorizationChange === 'function') {
+  onServerAuthorizationChange(function (mode) {
+    if (mode === 'normal' && supportTicketsLoadFailed) {
+      loadSupportTickets({ keepView: true });
+    }
+  });
 }
 
 function renderSupportTicketList(tickets) {

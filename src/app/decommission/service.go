@@ -253,10 +253,11 @@ func PerformDelete(ctx context.Context, target Target) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
-	// 404/410 = o registro já não existe. 401/403 = token revogado — cenário do
-	// descomissionamento iniciado pelo painel, que apaga o agente e revoga os
-	// tokens antes de o uninstaller rodar. Insistir (outbox com backoff) só
-	// geraria retry inútil de um estado terminal.
+	// 404/410 = o registro já não existe. 401/403 = credencial recusada ou
+	// agente já na lixeira sem permissão para este endpoint. Insistir (outbox
+	// com backoff) só geraria retry inútil de um estado terminal: o registro
+	// some no purge e o token só é revogado lá (a lixeira preserva o token de
+	// propósito, para o comando de desinstalação ainda alcançar o agente).
 	if resp.StatusCode == http.StatusNotFound ||
 		resp.StatusCode == http.StatusGone ||
 		resp.StatusCode == http.StatusUnauthorized ||

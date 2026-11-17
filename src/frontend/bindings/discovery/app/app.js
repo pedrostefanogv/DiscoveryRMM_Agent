@@ -1025,7 +1025,27 @@ export function GetNotificationDebugState() {
 
 /**
  * GetOnboardingStatus retorna o status do agente sob perspectiva de onboarding:
- * se está configurado ou aguardando provisionamento automático da rede P2P.
+ * se está configurado, aguardando provisionamento automático da rede P2P ou —
+ * já provisionado — aguardando a LIBERAÇÃO/AUTORIZAÇÃO do servidor.
+ * 
+ * ── Por que existe o modo "awaiting-approval" ampliado (2026-11-17) ─────────
+ * Antes, "awaiting-approval" só aparecia entre o registro zero-touch e o clique
+ * de aprovação do admin, e só quando o processo que roda o sync lia
+ * zeroTouchPending=true. Depois da aprovação (ou na janela em que o flag ainda
+ * não tinha chegado), a interface voltava ao normal e TODAS as telas dependentes
+ * do servidor falhavam com o erro CRU do backend — prints do relato:
+ *   • Loja:     "RuntimeError: app-store (Winget) retornou HTTP 403 Forbidden:
+ *               {"error":"Agent registration is pending (zero-touch)."}"
+ *   • Suporte:  "Erro ao carregar chamados: RuntimeError: ipc request
+ *               support:tickets falhou: HTTP 403 Forbidden: {"error":"Agent
+ *               registration is pending (zero-touch)."}"
+ *   • KB:       "Erro ao carregar base de conhecimento."
+ * O usuário não tinha como saber que era só falta de liberação no servidor.
+ * 
+ * Regra única (esta função é a fonte da verdade — as telas consomem o modo,
+ * não recalculam nada): enquanto o agente estiver provisionado mas ainda sem
+ * autorização do servidor, o modo é "awaiting-approval" e a UI mostra a tela de
+ * espera em vez de erros de API.
  * @returns {$CancellablePromise<{ [_ in string]?: any }>}
  */
 export function GetOnboardingStatus() {
@@ -1615,6 +1635,17 @@ export function IsAgentConfigured() {
  */
 export function IsDebugHTTPBoundToAllInterfaces() {
     return $Call.ByID(2915212725);
+}
+
+/**
+ * IsServerAuthorizationPending informa à UI (binding Wails) se o agente está
+ * provisionado aguardando liberação do servidor. É o mesmo estado que alimenta
+ * GetOnboardingStatus; existe como binding separado para as telas de conteúdo
+ * (Loja/Suporte/Tela de espera) checarem sem depender do overlay.
+ * @returns {$CancellablePromise<boolean>}
+ */
+export function IsServerAuthorizationPending() {
+    return $Call.ByID(519848349);
 }
 
 /**

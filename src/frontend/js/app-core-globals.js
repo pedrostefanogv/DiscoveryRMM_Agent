@@ -647,6 +647,12 @@ function syncProvisioningOverlayFromConfig(debugCfg, onboardingStatus) {
   var refs = ensureProvisioningOverlay();
   var status = computeProvisioningState(debugCfg);
   var mode = resolveProvisioningOverlayMode(status, onboardingStatus);
+  // Publica o modo para as telas de conteúdo (Loja/Suporte/Base de
+  // Conhecimento) — elas mostram a tela de espera em vez do 403 cru do
+  // servidor enquanto o agente aguarda liberação (server-authorization.js).
+  if (typeof applyServerAuthorizationState === 'function' && onboardingStatus) {
+    applyServerAuthorizationState(onboardingStatus);
+  }
   var copyKeys = provisioningCopyKeysForMode(mode);
   var suppressOverlay = isDebugRuntimeMode();
 
@@ -666,7 +672,12 @@ function syncProvisioningOverlayFromConfig(debugCfg, onboardingStatus) {
   } else {
     provisioningOverlayState.wasVisible = true;
     refs.title.textContent = translate(copyKeys.title);
-    refs.message.textContent = translate(copyKeys.message);
+    // Modo "aguardando liberação": a mensagem padrão não distingue "sem
+    // credenciais" de "credenciais ok, servidor não liberou" — o texto do
+    // server-authorization.js explica a diferença (e o que fazer).
+    refs.message.textContent = (mode === 'awaiting-approval' && typeof serverAuthWaitingMessage === 'function')
+      ? serverAuthWaitingMessage()
+      : translate(copyKeys.message);
     refs.overlay.classList.remove('hidden');
     refs.overlay.setAttribute('aria-hidden', 'false');
     refs.footnote.textContent = translate(copyKeys.footnote);

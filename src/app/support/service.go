@@ -197,6 +197,13 @@ type Options struct {
 	// linha de defesa para a consulta offline em instalações que ainda não têm a
 	// identidade durável gravada no cache do suporte.
 	AgentInfoFallback func() (AgentInfo, bool)
+	// NoteAuthorizationRefusal recebe toda resposta HTTP autenticada do suporte
+	// e da base de conhecimento. O App usa isso para detectar o 403 "Agent
+	// registration is pending (zero-touch)" e ligar o estado de "aguardando
+	// liberação do servidor" — sem esse gancho a aba Suporte/Base de
+	// Conhecimento mostrava o erro cru do backend (relato 2026-11-17).
+	// Opcional (nil-safe).
+	NoteAuthorizationRefusal func(resp *http.Response, body []byte)
 }
 
 // Service handles support and knowledge base APIs.
@@ -211,6 +218,9 @@ type Service struct {
 	knowledgeEnabled func() *bool
 
 	agentInfoFallback func() (AgentInfo, bool)
+
+	// noteAuthorizationRefusal repassa as respostas HTTP ao App (ver Options).
+	noteAuthorizationRefusal func(resp *http.Response, body []byte)
 
 	knowledgeMu          sync.Mutex
 	lastKnowledgeRefresh time.Time
@@ -268,16 +278,28 @@ func NewService(opts Options) *Service {
 		knowledgeEnabled = func() *bool { return nil }
 	}
 	return &Service{
-		logf:              logf,
-		ctx:               ctx,
-		db:                normalizeCacheDB(opts.DB),
-		agentInfo:         opts.AgentInfo,
-		agentInfoFallback: opts.AgentInfoFallback,
-		debugConfig:       debugConfig,
-		featureEnabled:    featureEnabled,
-		supportEnabled:    supportEnabled,
-		knowledgeEnabled:  knowledgeEnabled,
+		logf:                     logf,
+		ctx:                      ctx,
+		db:                       normalizeCacheDB(opts.DB),
+		agentInfo:                opts.AgentInfo,
+		agentInfoFallback:        opts.AgentInfoFallback,
+		noteAuthorizationRefusal: opts.NoteAuthorizationRefusal,
+		debugConfig:              debugConfig,
+		featureEnabled:           featureEnabled,
+		supportEnabled:           supportEnabled,
+		knowledgeEnabled:         knowledgeEnabled,
 	}
+}
+
+// observeAuthorization responde autenticada observada pelo serviço de suporte.
+// O corpo já vem lido pelo chamador (ele precisa dele para o próprio erro); a
+// classificação de "aguardando liberação do servidor" usa assinatura, não o
+// corpo inteiro. Nil-safe.
+func (s *Service) observeAuthorization(resp *http.Response, body []byte) {
+	if s == nil || s.noteAuthorizationRefusal == nil || resp == nil {
+		return
+	}
+	s.noteAuthorizationRefusal(resp, body)
 }
 
 // SetDB atualiza a referência ao banco de dados de cache.
@@ -1072,10 +1094,14 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// 403 de agente pendente: é AQUI que a pendência aparece primeiro
+		// (fetchAgentContext é chamado antes de tickets/KB em cada tela).
+		s.observeAuthorization(resp, body)
 		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 		s.supportLogf("/api/v1/agent-auth/me/configuration retornou erro: %v", wrapped)
 		return s.offlineAgentInfo(wrapped)
 	}
+	s.observeAuthorization(resp, body)
 
 	info, err := extractAgentInfoFromJSON(body, cfg)
 	if err != nil {
@@ -1185,6 +1211,10 @@ func (s *Service) GetSupportTicketList() (SupportTicketList, error) {
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Agente provisionado aguardando liberação do servidor (403 do
+		// zero-touch): alimenta o estado de onboarding para a aba Suporte
+		// mostrar a tela de espera em vez do erro cru (relato 2026-11-17).
+		s.observeAuthorization(resp, body)
 		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 		s.supportLogf("erro na listagem de chamados: %v", wrapped)
 		// Só falha de servidor justifica servir o snapshot: 4xx indica problema

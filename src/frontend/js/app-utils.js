@@ -166,6 +166,14 @@ var APP_I18N_DICTIONARY = {
       "Dispositivo provisionado, aguardando aprovação da equipe de TI para integração com o servidor.",
     "provisioning.approval.footnote":
       "A integração será liberada automaticamente após a aprovação. Caso essa mensagem persista, entre em contato com a equipe de TI.",
+    "serverAuth.pending.message":
+      "O agente já recebeu o token de comunicação, mas este dispositivo ainda não foi liberado no servidor. Enquanto a liberação não acontecer, as áreas que dependem do servidor (Loja, Suporte, Base de Conhecimento) ficam indisponíveis — os erros deixam de aparecer e esta mensagem permanece.",
+    "serverAuth.pending.store":
+      "A loja de aplicativos será carregada automaticamente assim que o servidor liberar este dispositivo.",
+    "serverAuth.pending.tickets":
+      "Os chamados serão carregados automaticamente assim que o servidor liberar este dispositivo.",
+    "serverAuth.pending.knowledge":
+      "Os artigos serão carregados automaticamente assim que o servidor liberar este dispositivo.",
     "provisioning.completed": "Provisionamento concluído. Interface liberada.",
     "provisioning.approved.toast": "Configuração recebida — agente integrado com o servidor.",
     "provisioning.refresh": "Verificar novamente",
@@ -1099,6 +1107,14 @@ var APP_I18N_DICTIONARY = {
       "Device provisioned, awaiting IT approval to integrate with the server.",
     "provisioning.approval.footnote":
       "Integration will be enabled automatically after approval. If this message persists, contact the IT team.",
+    "serverAuth.pending.message":
+      "The agent has already received its communication token, but this device has not been authorized on the server yet. Until the authorization is granted, server-backed areas (Store, Support, Knowledge Base) stay unavailable — this message replaces the API errors.",
+    "serverAuth.pending.store":
+      "The app store will load automatically as soon as the server authorizes this device.",
+    "serverAuth.pending.tickets":
+      "Tickets will load automatically as soon as the server authorizes this device.",
+    "serverAuth.pending.knowledge":
+      "Articles will load automatically as soon as the server authorizes this device.",
     "provisioning.completed": "Provisioning completed. Interface unlocked.",
     "provisioning.approved.toast": "Configuration received — agent integrated with the server.",
     "provisioning.refresh": "Check again",

@@ -532,6 +532,12 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, knowledgeMaxBodyBytes))
 		resp.Body.Close()
 
+		// 403 "Agent registration is pending (zero-touch)": alimenta o estado
+		// de "aguardando liberação do servidor" para a Base de Conhecimento
+		// mostrar a tela de espera em vez de "Erro ao carregar" (relato
+		// 2026-11-17). Resposta 2xx confirma a liberação e limpa a pendência.
+		s.observeAuthorization(resp, body)
+
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			if pageIdx == 0 {
 				if resp.StatusCode >= 500 {

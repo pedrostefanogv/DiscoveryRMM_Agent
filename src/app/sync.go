@@ -22,24 +22,30 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 	if err != nil {
 		// fallback to cached config when request fails
 		_ = a.loadCachedAgentConfiguration()
+		// Provisionado e nunca autorizado, com o servidor inalcançável: a UI
+		// mostra "aguardando liberação do servidor" em vez de erros de API em
+		// cada tela (ver server_authorization.go). Quando o servidor apenas
+		// caiu depois da liberação, nada muda (o aviso de offline cobre).
+		a.noteServerAuthorizationRefusal(nil, nil, err)
 		return err
 	}
 
 	if result.HasZeroTouchPendingFlag && result.ZeroTouchPending {
+		// Estado ÚNICO de "aguardando liberação": alimenta a overlay e as telas
+		// de conteúdo (Loja/Suporte/KB) — antes cada tela falhava com o 403
+		// cru do servidor.
+		a.markServerAuthorizationPending(onboardPendingReasonApproval)
 		if a.setZeroTouchApprovalPending(true) {
 			a.Logs.Append("[sync] dispositivo provisionado e aguardando aprovacao da equipe de TI para integracao com o servidor")
-			// Notifica o frontend imediatamente (overlay de onboarding sai na
-			// hora, sem esperar o próximo tick de polling). No modo serviço o
-			// evento vai por IPC às UIs companion (mesmo caminho de
-			// agent:connectivity); no standalone, direto via Wails.
-			a.EmitEvent("agent:onboarding", "reason", "zero-touch-pending", "mode", "awaiting-approval")
 		}
 		return nil
 	}
 
+	// zeroTouchPending ausente (servidor autorizado) ou false (aprovado): o
+	// agente ESTÁ liberado — limpa a pendência e avisa a UI na transição.
+	a.serverAuthorizationConfirmed()
 	if a.setZeroTouchApprovalPending(false) {
 		a.Logs.Append("[sync] aprovacao recebida; integracao com o servidor liberada")
-		a.EmitEvent("agent:onboarding", "reason", "zero-touch-approved", "mode", "normal")
 	}
 
 	if a.CoreAgent.DB != nil {

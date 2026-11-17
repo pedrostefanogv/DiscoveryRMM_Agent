@@ -1106,6 +1106,19 @@ async function loadKnowledgeBase() {
     filterKnowledgeArticles(kbSearchInputEl ? kbSearchInputEl.value : "");
   } catch (err) {
     if (staleBanner) staleBanner.classList.add("hidden");
+    // Agente provisionado aguardando liberação do servidor: "Erro ao carregar
+    // base de conhecimento" não diz nada ao usuário e some sozinho quando a
+    // liberação chega — mostra a espera no lugar do erro técnico.
+    if (isServerAuthorizationPending() || serverAuthLooksLikePendingError(err)) {
+      if (serverAuthLooksLikePendingError(err)) refreshServerAuthorizationState();
+      renderServerAuthWaitingState(kbArticlesListEl, {
+        detail: translate("serverAuth.pending.knowledge"),
+        retryId: "kbServerAuthRetryBtn",
+        onRetry: loadKnowledgeBase,
+      });
+      renderKnowledgeArticleDetail(null);
+      return;
+    }
     // Estado de erro distinguível de 'sem artigos', com ação de retry
     // embutida — antes o usuário via só um texto sem caminho de recuperação.
     kbArticlesListEl.innerHTML =
@@ -1126,6 +1139,16 @@ async function loadKnowledgeBase() {
   } finally {
     kbLoading = false;
   }
+}
+
+// Liberação concedida: recarrega os artigos sozinho (o estado de espera não
+// deve exigir que o usuário reabra a aba).
+if (typeof onServerAuthorizationChange === "function") {
+  onServerAuthorizationChange(function (mode) {
+    if (mode === "normal" && typeof knowledgeArticles !== "undefined" && !knowledgeArticles.length) {
+      loadKnowledgeBase();
+    }
+  });
 }
 
 function initKnowledge() {

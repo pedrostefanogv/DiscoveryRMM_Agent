@@ -44,6 +44,10 @@
     "js/app-utils.js",
     "js/app-core-globals.js",
     "js/app-window.js",
+    // Estado de "aguardando liberação do servidor" (overlay + telas de
+    // conteúdo). Precisa carregar ANTES de app-store-updates/app-support/
+    // app-knowledge, que consomem o modo nas telas de espera.
+    "js/server-authorization.js",
     "js/app-store-updates.js",
     "js/app-inventory.js",
     // Bundle A2UI (renderer de interfaces geradas por IA). Deve carregar

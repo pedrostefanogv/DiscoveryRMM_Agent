@@ -316,7 +316,27 @@ func (a *App) GetAutoProvisioningStats() P2PAutoProvisioningStats {
 }
 
 // GetOnboardingStatus retorna o status do agente sob perspectiva de onboarding:
-// se está configurado ou aguardando provisionamento automático da rede P2P.
+// se está configurado, aguardando provisionamento automático da rede P2P ou —
+// já provisionado — aguardando a LIBERAÇÃO/AUTORIZAÇÃO do servidor.
+//
+// ── Por que existe o modo "awaiting-approval" ampliado (2026-11-17) ─────────
+// Antes, "awaiting-approval" só aparecia entre o registro zero-touch e o clique
+// de aprovação do admin, e só quando o processo que roda o sync lia
+// zeroTouchPending=true. Depois da aprovação (ou na janela em que o flag ainda
+// não tinha chegado), a interface voltava ao normal e TODAS as telas dependentes
+// do servidor falhavam com o erro CRU do backend — prints do relato:
+//   • Loja:     "RuntimeError: app-store (Winget) retornou HTTP 403 Forbidden:
+//               {"error":"Agent registration is pending (zero-touch)."}"
+//   • Suporte:  "Erro ao carregar chamados: RuntimeError: ipc request
+//               support:tickets falhou: HTTP 403 Forbidden: {"error":"Agent
+//               registration is pending (zero-touch)."}"
+//   • KB:       "Erro ao carregar base de conhecimento."
+// O usuário não tinha como saber que era só falta de liberação no servidor.
+//
+// Regra única (esta função é a fonte da verdade — as telas consomem o modo,
+// não recalculam nada): enquanto o agente estiver provisionado mas ainda sem
+// autorização do servidor, o modo é "awaiting-approval" e a UI mostra a tela de
+// espera em vez de erros de API.
 func (a *App) GetOnboardingStatus() map[string]interface{} {
 	// Companion mode: o sync (zero-touch) roda no SERVIÇO — a flag local
 	// zeroTouchApprovalPending da UI nunca muda aqui e o resultado seria
@@ -331,7 +351,14 @@ func (a *App) GetOnboardingStatus() map[string]interface{} {
 		}
 	}
 
-	configured := isAgentConfigured()
+	return a.localOnboardingStatus()
+}
+
+// localOnboardingStatus é a avaliação feita no processo que roda o core (o
+// serviço, em modo companion). É a MESMA função que alimenta o snapshot IPC,
+// para a UI nunca divergir da verdade do processo que fala com o servidor.
+func (a *App) localOnboardingStatus() map[string]interface{} {
+	configured := hasServerCredentials()
 	result := map[string]interface{}{
 		"configured": configured,
 		"mode":       "normal",
@@ -339,12 +366,19 @@ func (a *App) GetOnboardingStatus() map[string]interface{} {
 	if !configured {
 		result["mode"] = "awaiting-auto-provisioning"
 		result["message"] = "Agente genérico: aguardando auto-provisioning da rede P2P"
+		result["pendingReason"] = onboardingPendingReasonNotProvisioned
 		return result
 	}
 
-	if a.isZeroTouchApprovalPending() {
+	// reason/acceptedAtUtc explicam POR QUE a tela está esperando (overlay,
+	// telas de Loja/Suporte/KB), sempre no vocabulário do usuário final.
+	if pending, reason, acceptedAt := a.serverAuthorizationPending(); pending {
 		result["mode"] = "awaiting-approval"
-		result["message"] = "Dispositivo provisionado, aguardando aprovacao da equipe de TI para integracao com o servidor."
+		result["message"] = onboardingApprovalMessage
+		result["pendingReason"] = reason
+		if acceptedAt != "" {
+			result["acceptedAtUtc"] = acceptedAt
+		}
 	}
 	return result
 }
