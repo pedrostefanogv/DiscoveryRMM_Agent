@@ -149,7 +149,9 @@ fi
 # mudanças na API Go exposta ao frontend. Se não estiver instalado, instala
 # automaticamente via `go install`.
 WAILS3_BIN="${WAILS3_BIN:-$(command -v wails3 2>/dev/null)}"
-if [[ -z "$WAILS3_BIN" ]]; then
+# Só instala/usa o wails3 quando a regeneração de bindings foi pedida — o
+# binário é pesado e o build de produção não precisa dele (bindings versionadas).
+if [[ -z "$WAILS3_BIN" && "${WAILS3_REGEN_BINDINGS:-0}" == "1" ]]; then
   echo "[info] wails3 nao encontrado no PATH; instalando via go install..."
   # GOBIN defaults to $GOPATH/bin or $HOME/go/bin; garantimos que fica acessível.
   # F13: versão SEMPRE alinhada ao go.mod (wails v3.1.0) — beta.23 divergia
@@ -177,9 +179,14 @@ if [[ -z "$WAILS3_BIN" ]]; then
   fi
 fi
 
-# Regenera bindings do frontend se wails3 estiver disponível e houver mudanças
-# na API Go (detecção simples: compara timestamp dos bindings com arquivos .go).
-if [[ -n "$WAILS3_BIN" ]]; then
+# ── Bindings do frontend: OPT-IN (WAILS3_REGEN_BINDINGS=1) ──
+# As bindings (frontend/bindings) são VERSIONADAS no repositório e estáveis;
+# regenerá-las exige carregar o grafo de pacotes inteiro (`./...`) — no
+# servidor de build isso é caro e travava (wails3 parado com ~1,3 GB RSS num
+# host de 4 GB, causando timeout do rebuild disparado pela API). O
+# desenvolvedor regenera localmente quando a API Go exposta ao frontend muda:
+#   WAILS3_REGEN_BINDINGS=1 ./build-agent-server-linux.sh
+if [[ -n "$WAILS3_BIN" && "${WAILS3_REGEN_BINDINGS:-0}" == "1" ]]; then
   BINDINGS_DIR="$SRC_ROOT/frontend/bindings"
   NEED_REGEN=0
   if [[ ! -d "$BINDINGS_DIR" ]]; then
@@ -199,6 +206,8 @@ if [[ -n "$WAILS3_BIN" ]]; then
     }
     popd >/dev/null
   fi
+elif [[ -n "$WAILS3_BIN" ]]; then
+  echo "[info] bindings do frontend: usando as versionadas (defina WAILS3_REGEN_BINDINGS=1 para regenerar)"
 fi
 
 # Guarda de regressao: bindings gerados SEM -b importam o pacote npm
