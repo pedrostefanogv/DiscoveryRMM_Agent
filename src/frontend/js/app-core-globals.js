@@ -490,19 +490,20 @@ function computeProvisioningState(debugCfg) {
   var scheme = String(cfg.apiScheme || cfg.scheme || '').trim().toLowerCase();
   var server = String(cfg.apiServer || cfg.server || '').trim();
   var authToken = String(cfg.authToken || '').trim();
+  var hasToken = Boolean(cfg.hasAuthToken) || authToken !== '';
   var agentId = String(cfg.agentId || '').trim();
   var missing = [];
 
   if (!scheme || !server) missing.push('URL do servidor');
   if (!agentId) missing.push('Agent ID');
-  if (!authToken) missing.push('Chave/token de comunicacao');
+  if (!hasToken) missing.push('Chave/token de comunicacao');
 
   return {
     isProvisioned: missing.length === 0,
     scheme: scheme,
     server: server,
     agentId: agentId,
-    tokenPresent: authToken !== '',
+    tokenPresent: hasToken,
     missing: missing,
   };
 }

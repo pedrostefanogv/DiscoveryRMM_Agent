@@ -19,11 +19,11 @@ func TestResolveSeverityVendorWins(t *testing.T) {
 
 func TestResolveSeverityDerivedNeverCritical(t *testing.T) {
 	cases := []struct {
-		name     string
-		cats     []string
-		title    string
-		wantSev  string
-		wantSrc  string
+		name    string
+		cats    []string
+		title   string
+		wantSev string
+		wantSrc string
 	}{
 		{"critical updates capped", []string{"Critical Updates"}, "Some fix", "Important", SeveritySourceDerived},
 		{"security updates", []string{"Security Updates"}, "Security Update for Windows", "Important", SeveritySourceDerived},

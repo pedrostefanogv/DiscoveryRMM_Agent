@@ -14,6 +14,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"discovery/app/core/netproxy"
 	"discovery/app/core/safego"
 	"discovery/app/core/screen"
 	"discovery/app/core/sessioncontrol"
@@ -23,17 +24,19 @@ import (
 
 // Session representa uma sessao remota ativa gerenciada pelo agent.
 type Session struct {
-	ID           string    `json:"sessionId"`
-	Kind         string    `json:"kind"`         // screen, terminal, files, proxy
-	Transport    string    `json:"transport"`    // webrtc, nats, http
-	Quality      string    `json:"quality"`      // ultra, high, medium, low, ultralow
-	Codec        string    `json:"codec"`        // jpeg, webp, h264
-	ImageQuality int       `json:"imageQuality"` // compressão JPEG/WebP 1-100, default 70
-	MaxFps       int       `json:"maxFps"`       // taxa máxima de quadros por segundo, default 15
-	NatsSubject  string    `json:"natsSubject"`  // subject base para stream
-	ExpiresAt    time.Time `json:"expiresAtUtc"`
-	StartedAt    time.Time `json:"startedAtUtc"`
-	Recording    bool      `json:"recording"`
+	ID           string              `json:"sessionId"`
+	Kind         string              `json:"kind"` // screen, terminal, files, processes, proxy, rdp, all
+	Rights       RemoteSessionRights `json:"rights,omitempty"`
+	Transport    string              `json:"transport"`    // webrtc, nats, http
+	Quality      string              `json:"quality"`      // ultra, high, medium, low, ultralow
+	Codec        string              `json:"codec"`        // jpeg, webp, h264
+	ImageQuality int                 `json:"imageQuality"` // compressão JPEG/WebP 1-100, default 70
+	MaxFps       int                 `json:"maxFps"`       // taxa máxima de quadros por segundo, default 15
+	NatsSubject  string              `json:"natsSubject"`  // subject base para stream
+	ExpiresAt    time.Time           `json:"expiresAtUtc"`
+	StartedAt    time.Time           `json:"startedAtUtc"`
+	Recording    bool                `json:"recording"`
+	ProxyPolicy  *ProxyPolicy        `json:"-"`
 	banner       SessionBanner
 	// tray é o ícone da bandeja da sessão (aviso local + Desconectar). Também
 	// serve de indicador do input lock — evita um segundo ícone.
@@ -187,12 +190,16 @@ func (m *Manager) HandleCommand(ctx context.Context, payload map[string]any) (bo
 }
 
 func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool, string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	sessionID := toString(payload["sessionId"])
 	if sessionID == "" {
 		return false, "payload sem sessionId"
 	}
 
-	kind := toString(payload["kind"])
+	kind := ParseRemoteSessionKind(payload["kind"])
+	rights := ParseRemoteSessionRights(payload["rights"])
 	transport := normalizeTransport(toString(payload["transport"]))
 	quality := toString(payload["quality"])
 	codec := toString(payload["codec"])
@@ -200,8 +207,8 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	imageQuality := toInt(payload["imageQuality"], 70)
 	maxFps := toInt(payload["maxFps"], 15)
 
-	log.Printf("[remote-session] handleStart: sessionId=%s kind=%s transport=%s quality=%s codec=%s imageQ=%d maxFps=%d natsSubject=%s\n",
-		sessionID, kind, transport, quality, codec, imageQuality, maxFps, natsSubject)
+	log.Printf("[remote-session] handleStart: sessionId=%s kind=%s rights=%d transport=%s quality=%s codec=%s imageQ=%d maxFps=%d natsSubject=%s\n",
+		sessionID, kind, rights, transport, quality, codec, imageQuality, maxFps, natsSubject)
 
 	// Sem stream NATS não há como iniciar a captura: recusa ANTES de pedir
 	// autorização ao usuário (não faz sentido ele aprovar uma sessão que não
@@ -217,10 +224,25 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	// consumia a vaga do kind no mapa de sessões ("uma por kind"). Recusa o
 	// start na fonte — nada é criado e o servidor recebe o erro.
 	switch kind {
-	case "screen", "all", "terminal", "files", "processes", "proxy":
+	case KindScreen, KindAll, KindTerminal, KindFiles, KindProcesses, KindProxy, KindRdp:
 	default:
 		log.Printf("[remote-session] handleStart: kind não suportado %q sessionId=%s — rejeitando\n", kind, sessionID)
 		return false, "kind não suportado: " + kind
+	}
+
+	if kind == KindProxy && rights.Has(RightsNoProxy) {
+		log.Printf("[remote-session] handleStart: proxy bloqueado por rights (NoProxy) sessionId=%s\n", sessionID)
+		return false, "proxy bloqueado por restricao da sessao (NoProxy)"
+	}
+	if kind == KindRdp && rights.Has(RightsNoRdp) {
+		log.Printf("[remote-session] handleStart: rdp bloqueado por rights (NoRdp) sessionId=%s\n", sessionID)
+		return false, "rdp bloqueado por restricao da sessao (NoRdp)"
+	}
+
+	var proxyPolicy *ProxyPolicy
+	if kind == KindProxy || kind == KindRdp {
+		parsedPolicy := ParseProxyPolicy(payload, kind)
+		proxyPolicy = &parsedPolicy
 	}
 
 	// Consentimento: desktop (screen/all) e TERMINAL. Um start de terminal com
@@ -259,13 +281,21 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Fecha sessao anterior do mesmo tipo se existir (uma por kind)
-	for id, s := range m.sessions {
-		if s.Kind == kind {
-			log.Printf("[remote-session] handleStart: fechando sessao anterior %s (kind=%s)\n", id, kind)
-			m.closeSessionLocked(id, "superseded")
+	// Fecha sessao anterior do mesmo tipo ou mesmo sessionId (re-scan porque
+	// closeSessionLocked solta/readquire m.mu temporariamente).
+	for {
+		var targetID string
+		for id, s := range m.sessions {
+			if s.Kind == kind || sameSessionID(id, sessionID) {
+				targetID = id
+				break
+			}
+		}
+		if targetID == "" {
 			break
 		}
+		log.Printf("[remote-session] handleStart: fechando sessao anterior %s (kind=%s)\n", targetID, kind)
+		m.closeSessionLocked(targetID, "superseded")
 	}
 
 	now := time.Now().UTC()
@@ -304,6 +334,7 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	session := &Session{
 		ID:              sessionID,
 		Kind:            kind,
+		Rights:          rights,
 		Transport:       transport,
 		Quality:         quality,
 		Codec:           codec,
@@ -312,6 +343,7 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		NatsSubject:     natsSubject,
 		StartedAt:       now,
 		ExpiresAt:       expiresAt,
+		ProxyPolicy:     proxyPolicy,
 		stopCh:          make(chan struct{}),
 		doneCh:          make(chan struct{}),
 		Meta:            payload, // payload original (shell, termCols, termRows, etc.)
@@ -421,6 +453,12 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		}, func(line string) {
 			fmt.Printf("[remote-session-proxy] %s\n", line)
 		})
+	case "rdp":
+		safego.Go(func() {
+			m.runRdpSession(ctx, session)
+		}, func(line string) {
+			fmt.Printf("[remote-session-rdp] %s\n", line)
+		})
 	}
 
 	// Loop de liveness: envia ping ao viewer e avalia o deadline deslizante
@@ -457,7 +495,11 @@ func (m *Manager) handleStop(_ context.Context, payload map[string]any) (bool, s
 	}
 
 	m.mu.Lock()
-	closed := m.closeSessionLocked(sessionID, "stopped-by-server")
+	resolvedID := m.findSessionIDLocked(sessionID)
+	if resolvedID == "" {
+		resolvedID = sessionID
+	}
+	closed := m.closeSessionLocked(resolvedID, "stopped-by-server")
 	m.mu.Unlock()
 
 	if !closed {
@@ -1149,7 +1191,7 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	lastPublished := ""   // último texto publicado ao viewer (evita eco)
 	lastSetByViewer := "" // último texto aplicado a partir do viewer (evita re-publicar)
 
-	clipSub, clipErr := m.natsStream.SubscribeToClipboardReq(session.ID, func(text string) {
+	clipSub, clipErr := m.natsStream.SubscribeToClipboardReq(session.ID, func(text string, paste bool) {
 		if err := screen.SetClipboardText(text); err != nil {
 			log.Printf("[remote-session-screen] SetClipboardText falhou: %v", err)
 			return
@@ -1158,7 +1200,13 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 		lastSetByViewer = text
 		lastPublished = text
 		clipboardMu.Unlock()
-		// Injeta Ctrl+V para colar imediatamente no app remoto focado.
+		// paste=false: apenas set silencioso do clipboard remoto. O Ctrl+V
+		// incondicional era digitado no app focado errado — agora a injeção
+		// acontece somente com a flag explícita do operador.
+		if !paste {
+			return
+		}
+		// paste=true (explícito): injeta Ctrl+V para colar no app focado.
 		_ = screen.InjectKeyDown(screen.VK_CONTROL)
 		_ = screen.InjectKeyPress('V')
 		_ = screen.InjectKeyUp(screen.VK_CONTROL)
@@ -1459,6 +1507,10 @@ func (m *Manager) runFilesSession(ctx context.Context, session *Session) {
 	if m.natsStream == nil {
 		return
 	}
+	closeReason := "files-ended"
+	defer func() {
+		m.closeSession(session.ID, closeReason)
+	}()
 
 	// Raiz padrão: C:\ (Windows). Pode ser sobrescrita via payload Meta["rootPath"].
 	rootPath := "C:\\"
@@ -1495,22 +1547,183 @@ func (m *Manager) runProxySession(ctx context.Context, session *Session) {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	closeReason := "proxy-ended"
+	defer func() {
+		m.closeSession(session.ID, closeReason)
+	}()
+
+	if session.Rights.Has(RightsNoProxy) {
+		closeReason = "rights-denied"
+		m.publishEvent(session.ID, "error", map[string]string{
+			"scope": "proxy",
+			"error": "proxy bloqueado por restricao da sessao (NoProxy)",
+		})
+		return
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	go func() {
 		select {
 		case <-session.stopCh:
 			cancel()
-		case <-ctx.Done():
+		case <-runCtx.Done():
 		}
 	}()
 
-	// TODO: integrar netproxy.Proxy com natsStream.SubscribeToProxyReq
-	select {
-	case <-ctx.Done():
-	case <-session.stopCh:
+	policy := ParseProxyPolicy(session.Meta, KindProxy)
+	if session.ProxyPolicy != nil {
+		policy = *session.ProxyPolicy
 	}
+
+	allowlist, err := BuildProxyAllowlist(policy, KindProxy, 0)
+	if err != nil {
+		closeReason = "policy-invalid"
+		log.Printf("[remote-session-proxy] politica invalida para sessao %s: %v", session.ID, err)
+		m.publishEvent(session.ID, "error", map[string]string{
+			"scope": "proxy",
+			"error": err.Error(),
+		})
+		return
+	}
+
+	httpProxy := netproxy.NewProxyWithConfig(allowlist, netproxy.ProxyConfig{
+		MaxResponseBytes:      policy.MaxResponseBytes,
+		NatsMaxPayloadBytes:   m.natsStream.EffectiveMaxPayloadBytes(),
+		InsecureTLSSkipVerify: policy.InsecureSkipVerify,
+	})
+	defer httpProxy.Close()
+
+	tunnel := NewSessionTunnel(m.natsStream, TunnelConfig{
+		SessionID: session.ID,
+		Mode:      KindProxy,
+		Allowlist: allowlist,
+	})
+	defer tunnel.Close()
+
+	proxySub, err := m.natsStream.SubscribeToProxyReqStream(session.ID, func(reqData []byte, emit func([]byte) error) {
+		_ = httpProxy.HandleRequestStream(runCtx, reqData, emit)
+	})
+	if err != nil {
+		closeReason = "subscribe-proxy-failed"
+		log.Printf("[remote-session-proxy] ERRO ao subscrever proxy.req sessao %s: %v", session.ID, err)
+		m.publishEvent(session.ID, "error", map[string]string{
+			"scope": "proxy",
+			"error": err.Error(),
+		})
+		return
+	}
+	defer proxySub.Unsubscribe()
+
+	if err := tunnel.Subscribe(runCtx); err != nil {
+		closeReason = "subscribe-tunnel-failed"
+		log.Printf("[remote-session-proxy] ERRO ao subscrever tunnel.in sessao %s: %v", session.ID, err)
+		m.publishEvent(session.ID, "error", map[string]string{
+			"scope": "tunnel",
+			"error": err.Error(),
+		})
+		return
+	}
+
+	_ = m.natsStream.PublishProxyReady(session.ID, map[string]any{
+		"status":           "ready",
+		"mode":             KindProxy,
+		"http":             true,
+		"ws":               true,
+		"tunnel":           true,
+		"protocolVersion":  1,
+		"allowLoopback":    policy.AllowLoopback,
+		"maxResponseBytes": policy.MaxResponseBytes,
+	})
+
+	_ = tunnel.Run(runCtx)
+}
+
+func (m *Manager) runRdpSession(ctx context.Context, session *Session) {
+	defer close(session.doneCh)
+
+	if m.natsStream == nil {
+		return
+	}
+
+	closeReason := "rdp-ended"
+	defer func() {
+		m.closeSession(session.ID, closeReason)
+	}()
+
+	if session.Rights.Has(RightsNoRdp) {
+		closeReason = "rights-denied"
+		m.publishEvent(session.ID, "error", map[string]string{
+			"scope": "rdp",
+			"error": "rdp bloqueado por restricao da sessao (NoRdp)",
+		})
+		return
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-session.stopCh:
+			cancel()
+		case <-runCtx.Done():
+		}
+	}()
+
+	policy := ParseProxyPolicy(session.Meta, KindRdp)
+	if session.ProxyPolicy != nil {
+		policy = *session.ProxyPolicy
+	}
+
+	rdpStatus := CheckRDPPreflight(runCtx)
+	effPort := policy.RdpPort
+	if effPort <= 0 {
+		effPort = rdpStatus.Port
+	}
+	effPort = normalizeRDPPort(effPort)
+
+	allowlist, err := BuildProxyAllowlist(policy, KindRdp, effPort)
+	if err != nil {
+		closeReason = "policy-invalid"
+		log.Printf("[remote-session-rdp] politica invalida para sessao %s: %v", session.ID, err)
+		m.publishEvent(session.ID, "error", map[string]string{
+			"scope": "rdp",
+			"error": err.Error(),
+		})
+		return
+	}
+
+	tunnel := NewSessionTunnel(m.natsStream, TunnelConfig{
+		SessionID: session.ID,
+		Mode:      KindRdp,
+		Allowlist: allowlist,
+		RDPPort:   effPort,
+	})
+	defer tunnel.Close()
+
+	if err := tunnel.Subscribe(runCtx); err != nil {
+		closeReason = "subscribe-tunnel-failed"
+		log.Printf("[remote-session-rdp] ERRO ao subscrever tunnel.in sessao %s: %v", session.ID, err)
+		m.publishEvent(session.ID, "error", map[string]string{
+			"scope": "rdp",
+			"error": err.Error(),
+		})
+		return
+	}
+
+	_ = m.natsStream.PublishProxyReady(session.ID, map[string]any{
+		"status":          "ready",
+		"mode":            KindRdp,
+		"tunnel":          true,
+		"protocolVersion": 1,
+		"rdpHost":         "127.0.0.1",
+		"rdpPort":         effPort,
+		"rdpStatus":       rdpStatus,
+	})
+
+	_ = tunnel.Run(runCtx)
 }
 
 // runProcessesSession inicia a sessão de processos/serviços remota.
@@ -1520,6 +1733,10 @@ func (m *Manager) runProcessesSession(ctx context.Context, session *Session) {
 	if m.natsStream == nil {
 		return
 	}
+	closeReason := "processes-ended"
+	defer func() {
+		m.closeSession(session.ID, closeReason)
+	}()
 
 	sp := NewSessionProcesses(session.ID, m.natsStream)
 	log.Printf("[remote-session-processes] sessão de processos/serviços iniciada para %s", session.ID)
@@ -1552,6 +1769,29 @@ func (m *Manager) GetActiveSessions() []Session {
 		result = append(result, *s)
 	}
 	return result
+}
+
+// HasSession retorna true se existe sessao ativa com o sessionID informado
+// (tolerando diferencas de hifens/caixa em UUIDs).
+func (m *Manager) HasSession(sessionID string) bool {
+	if m == nil || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.findSessionIDLocked(sessionID) != ""
+}
+
+func (m *Manager) findSessionIDLocked(sessionID string) string {
+	if _, ok := m.sessions[sessionID]; ok {
+		return sessionID
+	}
+	for id := range m.sessions {
+		if sameSessionID(id, sessionID) {
+			return id
+		}
+	}
+	return ""
 }
 
 // HasActiveSession retorna true se existe sessao do tipo especificado.

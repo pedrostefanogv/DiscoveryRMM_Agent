@@ -19,7 +19,13 @@ type Encoder interface {
 // ── JPEG Encoder ──
 // Usa image/jpeg da stdlib. Compatível com o viewer sem alterações.
 
-type jpegEncoder struct{}
+// jpegEncoder reutiliza um scratch de conversão BGRA→RGBA entre frames: na
+// esteira de captura (30 fps a 1080p) o make() de w*h*4 por frame alocava
+// ~8,3 MB/frame (F17). O scratch é por-instância do encoder (cada sessão de
+// tela tem o seu; encode é sequencial no pump de captura).
+type jpegEncoder struct {
+	rgbaScratch []byte
+}
 
 func NewJPEGEncoder() Encoder {
 	return &jpegEncoder{}
@@ -38,11 +44,15 @@ func (e *jpegEncoder) Encode(frame *Frame, quality int) ([]byte, error) {
 	w := frame.Width
 	h := frame.Height
 
-	// Conversao BGRA→RGBA em buffer LOCAL (NUNCA muta frame.Data).
+	// Conversão BGRA→RGBA em scratch REUTILIZÁVEL (NUNCA muta frame.Data).
 	// Motivo: frame.Data pode ser reutilizado (DirtyDetector.lastFrame, tile-mode
 	// extractTile). Mutar in-place corrompia a detecção de dirty rects e trocava
-	// as cores nos tiles seguintes.
-	rgba := make([]byte, len(bgra))
+	// as cores nos tiles seguintes. O scratch cresce até o maior frame visto e
+	// é reaproveitado (zero alloc estável por frame).
+	if cap(e.rgbaScratch) < len(bgra) {
+		e.rgbaScratch = make([]byte, len(bgra))
+	}
+	rgba := e.rgbaScratch[:len(bgra)]
 	copy(rgba, bgra)
 
 	// Swap B↔R usando uint32 cast (~4x mais rapido que byte-by-byte).

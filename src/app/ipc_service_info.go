@@ -47,10 +47,10 @@ func (a *App) GetIPCServiceInfo() (string, error) {
 		"connected":      connected,
 		"mismatch":       mismatch,
 		// Estado do canal de gravação (UI/estado do canal — P1.4).
-		"adminOk":       adminOk,
-		"adminPipe":     adminPipe,
-		"writesBlocked": circuitOpen,
-		"circuitTrips":  circuitTrips,
+		"adminOk":        adminOk,
+		"adminPipe":      adminPipe,
+		"writesBlocked":  circuitOpen,
+		"circuitTrips":   circuitTrips,
 		"circuitRejects": circuitRejects,
 		"lastWriteError": lastWriteError,
 	})

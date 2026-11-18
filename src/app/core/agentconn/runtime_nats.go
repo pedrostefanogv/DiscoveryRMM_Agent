@@ -25,6 +25,10 @@ const (
 	// alinhar com syncmeta.GlobalPongStaleAfter; a queda de transporte em si é
 	// tratada antes por transportDownGrace (15s).
 	globalPongReconnectAfter = 3 * time.Minute
+
+	fanoutStreamPrefix      = "DISCOVERY_FANOUT_COMMANDS"
+	fanoutGlobalStreamName  = "DISCOVERY_FANOUT_COMMANDS_GLOBAL"
+	supportChatStreamPrefix = "DISCOVERY_SUPPORT_CHAT"
 )
 
 type natsCommandRouteScope string
@@ -226,19 +230,29 @@ func (r *Runtime) subscribeFanoutCommand(ctx context.Context, nc *nats.Conn, cfg
 	js, err := nc.JetStream()
 	if err == nil {
 		durable := natsFanoutDurableName(cfg, route)
-		if _, subErr := js.Subscribe(subject, r.natsCommandHandler(ctx, nc, cfg, subjects, route, true),
-			nats.Durable(durable),
-			nats.ManualAck(),
-			nats.AckExplicit(),
-			nats.AckWait(natsFanoutAckWait),
-			nats.DeliverAll(),
-			nats.MaxAckPending(256),
-		); subErr == nil {
-			r.logf("[nats][jetstream] fan-out com replay habilitado subject=%s durable=%s", subject, durable)
-			return nil
-		} else {
-			r.logf("[nats][jetstream] indisponivel para subject=%s (fallback core): %v", subject, subErr)
+		var lastErr error
+		candidates := natsFanoutStreamCandidates(cfg, route)
+		for idx, streamName := range candidates {
+			if _, subErr := js.Subscribe(subject, r.natsCommandHandler(ctx, nc, cfg, subjects, route, true),
+				nats.BindStream(streamName),
+				nats.Durable(durable),
+				nats.ManualAck(),
+				nats.AckExplicit(),
+				nats.AckWait(natsFanoutAckWait),
+				nats.DeliverAll(),
+				nats.MaxAckPending(256),
+			); subErr == nil {
+				if idx > 0 {
+					r.logf("[nats][jetstream] fan-out usando stream legado (migracao) stream=%s subject=%s durable=%s", streamName, subject, durable)
+				} else {
+					r.logf("[nats][jetstream] fan-out com replay habilitado stream=%s subject=%s durable=%s", streamName, subject, durable)
+				}
+				return nil
+			} else {
+				lastErr = subErr
+			}
 		}
+		r.logf("[nats][jetstream] indisponivel para subject=%s streams=%v (fallback core): %v", subject, candidates, lastErr)
 	} else {
 		r.logf("[nats][jetstream] nao disponivel (fallback core) subject=%s: %v", subject, err)
 	}
@@ -252,7 +266,9 @@ func (r *Runtime) subscribeFanoutCommand(ctx context.Context, nc *nats.Conn, cfg
 
 // subscribeSupportChat assina o canal servidor -> agent do chat de suporte.
 //
-// Usa consumer JetStream durável (AckExplicit/ManualAck/DeliverAll) para que
+// Usa consumer JetStream durável (AckExplicit/ManualAck/DeliverAll) vinculado
+// explicitamente ao stream isolado por tenant (DISCOVERY_SUPPORT_CHAT_{clientIdN},
+// com fallback ao stream legado DISCOVERY_SUPPORT_CHAT durante migração) para que
 // uma mensagem do atendente enviada enquanto o agent estava reconectando seja
 // entregue no replay. Se o stream não existir (ou o JetStream estiver
 // indisponível), cai para core NATS com log explícito do risco de perda —
@@ -279,42 +295,47 @@ func (r *Runtime) subscribeSupportChat(nc *nats.Conn, subjects natsSubjects) err
 	}
 
 	if js, err := nc.JetStream(); err == nil {
-		durable := "agent-" + strings.ReplaceAll(strings.ToLower(subjects.AgentID), "-", "")
-		if len(durable) > 80 {
-			durable = durable[:80]
-		}
-		durable += "-supportchat"
+		durable := natsSupportChatDurableName(subjects.AgentID)
 
 		// Retry curto: numa reconexão o broker pode ainda considerar o consumer
 		// durável "preso" à conexão anterior ("consumer is already bound to a
 		// subscription"). Sem o retry o agent degradava para core NATS (SEM
 		// replay) logo no primeiro reconectar — perdendo a durabilidade.
 		const subscribeAttempts = 3
-		var subErr error
+		candidates := natsSupportChatStreamCandidates(subjects.ClientID)
+		var lastErr error
 
-		for attempt := 1; attempt <= subscribeAttempts; attempt++ {
-			_, subErr = js.Subscribe(subjects.SupportChatServer, handler,
-				nats.Durable(durable),
-				nats.ManualAck(),
-				nats.AckExplicit(),
-				nats.AckWait(30*time.Second),
-				nats.DeliverAll(),
-				nats.MaxAckPending(64),
-			)
-			if subErr == nil {
-				r.logf("[supportchat][jetstream] canal servidor->agent com replay ativo subject=%s durable=%s", subjects.SupportChatServer, durable)
-				return nil
+		for idx, streamName := range candidates {
+			for attempt := 1; attempt <= subscribeAttempts; attempt++ {
+				_, subErr := js.Subscribe(subjects.SupportChatServer, handler,
+					nats.BindStream(streamName),
+					nats.Durable(durable),
+					nats.ManualAck(),
+					nats.AckExplicit(),
+					nats.AckWait(30*time.Second),
+					nats.DeliverAll(),
+					nats.MaxAckPending(64),
+				)
+				if subErr == nil {
+					if idx > 0 {
+						r.logf("[supportchat][jetstream] canal servidor->agent usando stream legado (migracao) stream=%s subject=%s durable=%s", streamName, subjects.SupportChatServer, durable)
+					} else {
+						r.logf("[supportchat][jetstream] canal servidor->agent com replay ativo stream=%s subject=%s durable=%s", streamName, subjects.SupportChatServer, durable)
+					}
+					return nil
+				}
+				lastErr = subErr
+
+				if !strings.Contains(subErr.Error(), "already bound") || attempt == subscribeAttempts {
+					break
+				}
+
+				r.logf("[supportchat][jetstream] durable ainda preso à conexao anterior (stream=%s tentativa %d/%d): %v", streamName, attempt, subscribeAttempts, subErr)
+				time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 			}
-
-			if !strings.Contains(subErr.Error(), "already bound") || attempt == subscribeAttempts {
-				break
-			}
-
-			r.logf("[supportchat][jetstream] durable ainda preso à conexao anterior (tentativa %d/%d): %v", attempt, subscribeAttempts, subErr)
-			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 		}
 
-		r.logf("[supportchat][jetstream] indisponivel (fallback core, SEM replay): %v", subErr)
+		r.logf("[supportchat][jetstream] indisponivel streams=%v (fallback core, SEM replay): %v", candidates, lastErr)
 	} else {
 		r.logf("[supportchat][jetstream] indisponivel (fallback core, SEM replay): %v", err)
 	}
@@ -327,8 +348,43 @@ func (r *Runtime) subscribeSupportChat(nc *nats.Conn, subjects natsSubjects) err
 	return nil
 }
 
+func normalizeCompactGUID(value string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "-", ""))
+}
+
+func natsFanoutStreamCandidates(cfg Config, route natsCommandRouteScope) []string {
+	if route == natsCommandRouteGlobal {
+		return []string{fanoutGlobalStreamName, fanoutStreamPrefix}
+	}
+	cid := normalizeCompactGUID(cfg.ClientID)
+	if cid == "" {
+		return []string{fanoutStreamPrefix}
+	}
+	return []string{fanoutStreamPrefix + "_" + cid, fanoutStreamPrefix}
+}
+
+func natsSupportChatStreamCandidates(clientID string) []string {
+	cid := normalizeCompactGUID(clientID)
+	if cid == "" {
+		return []string{supportChatStreamPrefix}
+	}
+	return []string{supportChatStreamPrefix + "_" + cid, supportChatStreamPrefix}
+}
+
+func natsSupportChatDurableName(agentID string) string {
+	compact := normalizeCompactGUID(agentID)
+	if compact == "" {
+		compact = "unknown"
+	}
+	durable := "agent-" + compact
+	if len(durable) > 80 {
+		durable = durable[:80]
+	}
+	return durable + "-supportchat"
+}
+
 func natsFanoutDurableName(cfg Config, route natsCommandRouteScope) string {
-	agentID := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(cfg.AgentID), "-", ""))
+	agentID := normalizeCompactGUID(cfg.AgentID)
 	if agentID == "" {
 		agentID = "unknown"
 	}

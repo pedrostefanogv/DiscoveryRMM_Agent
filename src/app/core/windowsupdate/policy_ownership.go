@@ -9,9 +9,9 @@ package windowsupdate
 //
 // Contrato (modelo Breeze): o agente marca o que escreveu com sentinelas e so
 // reverte o que e dele.
-//  - DiscoveryManagedNoAutoUpdate=1 marca o NoAutoUpdate como nosso;
-//  - DiscoveryCreatedAUKey=1 marca que a chave AU foi criada por nos (permite
-//    remove-la no revert se ficar vazia).
+//   - DiscoveryManagedNoAutoUpdate=1 marca o NoAutoUpdate como nosso;
+//   - DiscoveryCreatedAUKey=1 marca que a chave AU foi criada por nos (permite
+//     remove-la no revert se ficar vazia).
 //
 // A decisao pura vive aqui (sem build tag) para rodar no CI Linux.
 const (
@@ -24,9 +24,9 @@ const (
 // PolicyWriteAllowed decide se o agente pode sobrescrever NoAutoUpdate.
 //
 // Regras:
-//  • valor ausente → pode escrever (nada a preservar);
-//  • valor presente e sentinela nossa → pode reescrever (e nosso);
-//  • valor presente e sentinela ausente → NAO escrever: e GPO/administrador.
+//   - valor ausente → pode escrever (nada a preservar);
+//   - valor presente e sentinela nossa → pode reescrever (e nosso);
+//   - valor presente e sentinela ausente → NAO escrever: e GPO/administrador.
 func PolicyWriteAllowed(existingNoAutoUpdate *uint32, discoveryManaged bool) bool {
 	if existingNoAutoUpdate == nil {
 		return true

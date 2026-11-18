@@ -5,7 +5,12 @@ package app
 import (
 	"fmt"
 	"net/http"
+
+	"discovery/app/debughttp"
 )
+
+// ChatSSEInfo expõe porta, URL e token do servidor SSE local.
+type ChatSSEInfo = debughttp.ChatSSEInfo
 
 // SetDebugFrontendAssets is a no-op on non-Windows platforms.
 func SetDebugFrontendAssets(fs http.FileSystem) {}
@@ -40,6 +45,9 @@ func (a *App) StopChatSSEServer() {}
 
 // GetChatSSEPort returns 0 on non-Windows platforms.
 func (a *App) GetChatSSEPort() int { return 0 }
+
+// GetChatSSEInfo returns an empty ChatSSEInfo on non-Windows platforms.
+func (a *App) GetChatSSEInfo() ChatSSEInfo { return ChatSSEInfo{} }
 
 // PollChatEvents returns an empty JSON array on non-Windows platforms.
 func (a *App) PollChatEvents() string { return "[]" }

@@ -30,7 +30,11 @@ func (a *App) writeRuntimeStacksDump(reason string) string {
 	if a == nil {
 		return ""
 	}
-	dir := filepath.Join(platform.LogDir(), "dumps")
+	baseLogDir := platform.UILogDir()
+	if a.RuntimeFlags.ServiceMode {
+		baseLogDir = platform.LogDir()
+	}
+	dir := filepath.Join(baseLogDir, "dumps")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		a.Logs.Append("[diag] falha ao criar diretorio de dumps: " + err.Error())
 		return ""

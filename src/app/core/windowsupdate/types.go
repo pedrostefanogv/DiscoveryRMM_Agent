@@ -85,7 +85,7 @@ type Update struct {
 	// de idioma). Nao vao para o servidor: servem para classificar localmente
 	// (WU-14).
 	CategoryIDs []string `json:"-"`
-	Severity       string   `json:"severity,omitempty"`
+	Severity    string   `json:"severity,omitempty"`
 	// SeveritySource diz se a severidade veio do fornecedor (MSRC) ou foi
 	// derivada pelo agente (decisao D10). Vazio em linhas de QFE (instaladas),
 	// que nao tem rating.
@@ -110,7 +110,7 @@ type Update struct {
 	// Windows mostra (ex.: Insider Preview: WUA=97.7 GB vs Windows=9,1 GB).
 	// A UI exibe "a partir de min"/"≈ max" quando plausível e omite acima do
 	// limiar — nao tratar divergencia como bug de unidade.
-	MaxDownloadSize int64  `json:"maxDownloadSize,omitempty"`
+	MaxDownloadSize int64 `json:"maxDownloadSize,omitempty"`
 	// MinDownloadSize (IUpdate.MinDownloadSize, bytes): menor download possível
 	// (express/ Delta). A UI usa "a partir de X" quando > 0.
 	MinDownloadSize int64  `json:"minDownloadSize,omitempty"`
@@ -220,15 +220,15 @@ type WindowsUpdateState struct {
 	// Agregado de KBs instaladas lido do registro (barato: sem WMI).
 	// QFEInstalledCountKnown=false quando a leitura do CBS falhou: o servidor
 	// deve PRESERVAR a contagem conhecida em vez de gravar 0.
-	QFEInstalledCount      int  `json:"qfeInstalledCount"`
-	QFEInstalledCountKnown bool `json:"qfeInstalledCountKnown"`
-	RecentQFEs        []string `json:"recentQfes,omitempty"`
+	QFEInstalledCount      int      `json:"qfeInstalledCount"`
+	QFEInstalledCountKnown bool     `json:"qfeInstalledCountKnown"`
+	RecentQFEs             []string `json:"recentQfes,omitempty"`
 
-	AuOptions        int    `json:"auOptions,omitempty"`
-	NoAutoUpdate     bool   `json:"noAutoUpdate"`
-	DeferralDays     int    `json:"deferralDays,omitempty"`
-	ActiveHoursStart *int   `json:"activeHoursStart,omitempty"`
-	ActiveHoursEnd   *int   `json:"activeHoursEnd,omitempty"`
+	AuOptions        int  `json:"auOptions,omitempty"`
+	NoAutoUpdate     bool `json:"noAutoUpdate"`
+	DeferralDays     int  `json:"deferralDays,omitempty"`
+	ActiveHoursStart *int `json:"activeHoursStart,omitempty"`
+	ActiveHoursEnd   *int `json:"activeHoursEnd,omitempty"`
 	// PolicyKnown=true quando a politica de WU foi LIDA (inclusive "nenhuma
 	// politica configurada"): permite ao servidor LIMPAR valores antigos quando
 	// o WSUS/deferral sai da maquina. false = leitura falhou, preserva o

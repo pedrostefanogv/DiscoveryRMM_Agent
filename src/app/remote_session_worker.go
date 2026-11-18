@@ -33,6 +33,7 @@ import (
 	"discovery/app/core/remotesession"
 	"discovery/app/core/screen"
 	"discovery/app/core/terminal"
+	"discovery/app/core/tlsutil"
 	"discovery/app/netutil"
 )
 
@@ -94,6 +95,7 @@ func RunRemoteSessionWorker() {
 	// fallback (mesma classe de bug do token velho de 2026-09-20).
 	cfg := mergeWorkerDebugConfigFromPayload(loadWorkerDebugConfig(), cmd)
 	agentCfg := mergeWorkerAgentConfigFromPayload(loadWorkerAgentConfig(), cmd)
+	tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
 
 	agentID := trimSpace(cfg.AgentID)
 	clientID := trimSpace(agentCfg.ClientID)
@@ -103,22 +105,16 @@ func RunRemoteSessionWorker() {
 		os.Exit(3)
 	}
 
-	// Resolução do token EM CADEIA (bug 2026-09-20 — Authorization Violation):
-	// 1) authToken injetado no payload pelo serviço (token VIVO em memória —
-	//    cobre rotação ainda não persistida);
-	// 2) config.json (persistência canônica da rotação P2P/zero-touch);
-	// 3) debug_config.json (legado — fica velho após a rotação; mantido como
-	//    último recurso para instalações antigas).
+	// Token recebido estritamente via stdin (fail-closed, sem fallback de disco):
+	// config.json e debug_config.json são restritos a SYSTEM + DPAPI.
 	authToken := strings.TrimSpace(stringAuthTokenFromPayload(cmd))
 	if authToken == "" {
-		authToken = GetInstallerAuthTokenForWorker()
-	}
-	if authToken == "" {
-		authToken = trimSpace(cfg.AuthToken)
+		fmt.Fprintf(os.Stderr, "[remote-session-worker] authToken ausente no payload stdin (fail-closed)\n")
+		os.Exit(3)
 	}
 	token, err := netutil.NormalizeAgentToken(authToken)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[remote-session-worker] token inválido (%v) — fontes: payload/config.json/debug_config.json\n", err)
+		fmt.Fprintf(os.Stderr, "[remote-session-worker] token inválido (%v) — fonte: payload stdin\n", err)
 		os.Exit(3)
 	}
 
@@ -432,6 +428,9 @@ func connectWorkerNATS(cfg WorkerDebugConfig, agentID, token string) (*nats.Conn
 			if a.proxyPath != "" {
 				opts = append(opts, nats.ProxyPath(a.proxyPath))
 			}
+			if strings.HasPrefix(a.url, "wss://") {
+				opts = append(opts, nats.Secure(tlsutil.PinnedTLSConfig(cfg.NatsTLSCertHash, cfg.EnforceTLSHashValidation)))
+			}
 			nc, err := nats.Connect(a.url, opts...)
 			results <- dialResult{nc: nc, url: a.url, err: err}
 		}(a)
@@ -526,9 +525,17 @@ type WorkerDebugConfig struct {
 	NatsWsServer string
 	// NatsCurrentURL: URL NATS em uso pelo core no momento do spawn (injetada
 	// pelo serviço). Vai como PRIMEIRO candidato no race de dial.
-	NatsCurrentURL string
-	AuthToken      string
-	AgentID        string
+	NatsCurrentURL           string
+	AuthToken                string
+	AgentID                  string
+	AllowInsecureTLS         bool
+	NatsServerHost           string
+	NatsServerHostInternal   string
+	NatsUseWssExternal       bool
+	EnforceTLSHashValidation bool
+	HandshakeEnabled         bool
+	ApiTLSCertHash           string
+	NatsTLSCertHash          string
 }
 
 type WorkerAgentConfig struct {

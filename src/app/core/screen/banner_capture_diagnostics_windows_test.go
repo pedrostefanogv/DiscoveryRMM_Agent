@@ -92,7 +92,7 @@ func TestDiagnosticoPrintWindowAppsReais(t *testing.T) {
 		if vis == 0 {
 			return 1
 		}
-		var title[128]uint16
+		var title [128]uint16
 		n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&title[0])), 128)
 		if n == 0 {
 			return 1

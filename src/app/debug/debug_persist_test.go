@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -25,8 +26,10 @@ func serviceForPath(path string, interval time.Duration) *Service {
 		ConfigPaths:     func() []string { return []string{path} },
 		WatcherInterval: interval,
 		// Testes não aplicam DACL real: os arquivos ficam em t.TempDir e o
-		// process de teste (não-SYSTEM) não teria DELETE após o harden.
-		HardenFileACL: func(string) error { return nil },
+		// processo de teste (não-SYSTEM) não teria DELETE após o harden.
+		HardenFileACL:       func(string) error { return nil },
+		ValidateFileACL:     func(string) error { return nil },
+		ValidateLoadFileACL: func(string) error { return nil },
 	})
 }
 
@@ -200,7 +203,23 @@ func TestSetConfigPersistsAndAppliesPartialFields(t *testing.T) {
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatalf("config persistida inválida: %v", err)
 	}
-	if persisted.AuthToken != "token-123" || persisted.AgentID != testAgentID {
+	if persisted.AgentID != testAgentID {
+		t.Fatalf("AgentID não foi persistido: %+v", persisted)
+	}
+	if runtime.GOOS == "windows" {
+		if persisted.AuthToken != "" {
+			t.Fatalf("authToken em texto claro não deveria ir para o disco no Windows: %q", persisted.AuthToken)
+		}
+		if !strings.HasPrefix(persisted.AuthTokenDpapi, "dpapi:v1:") {
+			t.Fatalf("authTokenDpapi ausente no disco: %q", persisted.AuthTokenDpapi)
+		}
+		reloaded := serviceForPath(path, time.Hour)
+		reloaded.LoadPersistedConfig()
+		defer reloaded.StopWatcher()
+		if reloaded.GetConfig().AuthToken != "token-123" {
+			t.Fatalf("LoadPersistedConfig não decifrou authTokenDpapi: %+v", reloaded.GetConfig())
+		}
+	} else if persisted.AuthToken != "token-123" {
 		t.Fatalf("campos não foram persistidos: %+v", persisted)
 	}
 	if svc.GetConfig().NatsServer == "" {
@@ -232,12 +251,14 @@ func TestLoadPersistedConfigHardensACLOfExistingFile(t *testing.T) {
 			hardened = append(hardened, p)
 			return errors.New("icacls falhou (simulado)")
 		},
+		ValidateFileACL:     func(string) error { return nil },
+		ValidateLoadFileACL: func(string) error { return nil },
 	})
 	svc.LoadPersistedConfig()
 	defer svc.StopWatcher()
 
-	if len(hardened) != 1 || hardened[0] != path {
-		t.Fatalf("DACL do arquivo existente deveria ser endurecida 1x em %q, got %v", path, hardened)
+	if len(hardened) == 0 || hardened[0] != path {
+		t.Fatalf("DACL do arquivo existente deveria ser endurecida em %q, got %v", path, hardened)
 	}
 	if got := svc.GetConfig(); got.ApiServer != "acl.example.local" {
 		t.Fatalf("falha de ACL não pode impedir o carregamento da config: %+v", got)

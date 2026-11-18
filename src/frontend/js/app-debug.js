@@ -56,7 +56,12 @@ function loadDebugConfig() {
       if (apiSchemeEl) apiSchemeEl.value = cfg.apiScheme || 'https';
       if (apiServerEl) apiServerEl.value = cfg.apiServer || '';
       if (natsServerEl) natsServerEl.value = cfg.natsServer || '';
-      if (debugAuthTokenEl) debugAuthTokenEl.value = cfg.authToken || '';
+      if (debugAuthTokenEl) {
+        debugAuthTokenEl.value = cfg.authToken || '';
+        debugAuthTokenEl.placeholder = cfg.hasAuthToken && !cfg.authToken
+          ? '(token configurado — digite para substituir)'
+          : 'Bearer token...';
+      }
       if (debugAgentIDEl) debugAgentIDEl.value = cfg.agentId || '';
       if (automationP2PWingetInstallEnabledEl) automationP2PWingetInstallEnabledEl.value = String(cfg.automationP2pWingetInstallEnabled !== false);
       // Avancado

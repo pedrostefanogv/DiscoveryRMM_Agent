@@ -723,13 +723,23 @@ func (a *App) reportSupportChatInviteDecision(result supportChatInviteNotificati
 		// O estado desta UI pode ser uma CÓPIA (modo companion: o estado vivo
 		// está no serviço e chega por IPC). Ele não decide se a janela abre:
 		// quem decide é o servidor, abaixo.
-		err = a.supportChatService().RespondInviteAcceptedForSession(ctx, result.SessionID)
+		if a.ipcClient != nil {
+			err = a.supportChatRespondInviteViaIPC(result.SessionID, true, "")
+		} else {
+			err = a.supportChatService().RespondInviteAcceptedForSession(ctx, result.SessionID)
+		}
 		if err == nil {
 			// O servidor confirmou o aceite. A sessão local já virou "active"
 			// dentro do RespondInviteAcceptedForSession quando era a corrente;
 			// quando NÃO era, o snapshot abaixo é quem completa o estado.
 			trace.mark("estado")
-			if _, rerr := a.supportChatService().Refresh(ctx); rerr != nil {
+			var rerr error
+			if a.ipcClient != nil {
+				_, rerr = a.supportChatRefreshViaIPC(false)
+			} else {
+				_, rerr = a.supportChatService().Refresh(ctx)
+			}
+			if rerr != nil {
 				a.Logs.Append("[supportchat] snapshot apos o aceite indisponivel: " + rerr.Error())
 			}
 			_ = wasCurrentPending
@@ -750,7 +760,11 @@ func (a *App) reportSupportChatInviteDecision(result supportChatInviteNotificati
 	} else {
 		// A recusa não depende do estado corrente: ela é reportada para a sessão
 		// do cartão mesmo que outro convite tenha assumido no meio do caminho.
-		err = a.supportChatService().RespondInviteForSession(ctx, result.SessionID, false, reason)
+		if a.ipcClient != nil {
+			err = a.supportChatRespondInviteViaIPC(result.SessionID, false, reason)
+		} else {
+			err = a.supportChatService().RespondInviteForSession(ctx, result.SessionID, false, reason)
+		}
 	}
 
 	if err != nil {
@@ -846,9 +860,14 @@ func (a *App) retrySupportChatInviteDenial(sessionID, reason string) error {
 	// como sucesso).
 	var lastErr error
 	for attempt := 1; attempt <= supportChatInviteDenyMaxAttempts; attempt++ {
-		ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatInviteReportWait)
-		err := a.supportChatService().RespondInviteForSession(ctx, sessionID, false, reason)
-		cancel()
+		var err error
+		if a.ipcClient != nil {
+			err = a.supportChatRespondInviteViaIPC(sessionID, false, reason)
+		} else {
+			ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatInviteReportWait)
+			err = a.supportChatService().RespondInviteForSession(ctx, sessionID, false, reason)
+			cancel()
+		}
 		if err == nil {
 			if attempt > 1 {
 				a.Logs.Append("[supportchat] recusa do convite entregue na tentativa " + strconv.Itoa(attempt) + " (sessao " + sessionID + ")")
@@ -901,10 +920,18 @@ func (a *App) replaySupportChatInviteAfterUIReconnect() {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
-	defer cancel()
-
-	activeID, hasSession, err := a.supportChatService().ActiveSessionID(ctx)
+	var (
+		activeID   string
+		hasSession bool
+		err        error
+	)
+	if a.ipcClient != nil {
+		activeID, hasSession, err = a.supportChatActiveSessionViaIPC()
+	} else {
+		ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
+		defer cancel()
+		activeID, hasSession, err = a.supportChatService().ActiveSessionID(ctx)
+	}
 	if err != nil {
 		a.Logs.Append("[supportchat] reentrega do convite: servidor indisponível — " + err.Error())
 		return
@@ -990,10 +1017,17 @@ func (a *App) adoptSupportChatSession(sessionID string) {
 
 	a.Logs.Append("[supportchat] adotando sessao viva do servico (sessao " + sessionID + ")")
 	go func() {
-		ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
-		defer cancel()
-
-		state, err := a.supportChatService().Refresh(ctx)
+		var (
+			state supportchat.State
+			err   error
+		)
+		if a.ipcClient != nil {
+			state, err = a.supportChatRefreshViaIPC(false)
+		} else {
+			ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
+			defer cancel()
+			state, err = a.supportChatService().Refresh(ctx)
+		}
 		if err != nil {
 			a.Logs.Append("[supportchat] adocao da sessao falhou: " + err.Error())
 			return

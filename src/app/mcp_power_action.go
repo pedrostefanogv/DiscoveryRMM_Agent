@@ -160,7 +160,6 @@ func (a *App) showPSADTCancellablePowerCountdown(action string, delaySeconds int
 	return "fallback"
 }
 
-
 // lockWorkstationSession bloqueia a sessao (sem aviso: o bloqueio e reversivel
 // e nao perde trabalho). Usa CommandContext para o botao Parar/cancelamento do
 // stream nao ficar preso num processo que nao responde.

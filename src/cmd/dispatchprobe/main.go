@@ -87,4 +87,9 @@ func main() {
 	fmt.Printf("sample: %q\n", string(sample[:min(len(sample), 300)]))
 }
 
-func min(a, b int) int { if a < b { return a }; return b }
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

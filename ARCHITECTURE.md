@@ -13,7 +13,7 @@ O **Discovery Agent** é um aplicativo de inventário e gerenciamento de TI para
 - **Rede P2P** para distribuição de artefatos (instaladores, políticas) entre agentes na mesma rede local
 - **Automação** de tarefas via políticas baixadas do servidor central
 
-> **Observação de verificação:** a validação ativa do workspace usa o fluxo de build do Wails e não `go build` direto, porque o frontend é processado via `//go:embed` e o CLI do Wails. A referência do código atual está alinhada com a versão `v3.0.0-beta.34` declarada em [src/go.mod](src/go.mod).
+> **Observação de verificação:** a validação ativa do workspace usa o fluxo de build do Wails e não `go build` direto, porque o frontend é processado via `//go:embed` e o CLI do Wails. A referência do código atual está alinhada com a versão `v3.1.0` declarada em [src/go.mod](src/go.mod).
 
 ### Modos de Execução
 
@@ -21,6 +21,16 @@ O **Discovery Agent** é um aplicativo de inventário e gerenciamento de TI para
 | ------------- | ------- | ------------------------------------------- |
 | GUI (Wails)   | padrão  | Janela desktop com system tray              |
 | MCP (interno) | n/a     | Tool calling interno do chat de IA do agent |
+
+### Componentes de Core e Binários
+
+| Componente | Caminho | Papel |
+| ---------- | ------- | ----- |
+| Serviço Windows | `cmd/discovery-service` → `discovery-service.exe` | Core do agente rodando como SYSTEM (NATS/agentconn, inventário, automação, P2P, self-update, IPC named pipes) — **sem UI, sem Wails, sem WebView2** |
+| UI Companion | `discovery-agent.exe` (Wails v3) | Janela/tray na sessão interativa; conversa com o serviço via IPC (modo companion) |
+| Proxy LAN | `app/core/netproxy` | Proxy HTTP/WS para destinos da rede interna do endpoint, com allowlist fail-closed, proteção SSRF e DNS único anti-TOCTOU |
+| Sessão remota | `app/core/remotesession` | Área de trabalho remota, terminal (ConPTY), arquivos, túnel RDP multiplexado sobre NATS (`session_tunnel`) e preflight RDP (`rdp_preflight`) |
+| Identidade/Segurança | `app/core/platform` | DPAPI para authToken, ACLs endurecidas (SYSTEM/Admins), verificação Authenticode |
 
 ---
 

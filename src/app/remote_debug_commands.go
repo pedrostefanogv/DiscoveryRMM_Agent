@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"discovery/app/core/remotedebug"
+	"discovery/app/core/remotesession"
 )
 
 // handleAgentRuntimeCommand é o router central de comandos recebidos do servidor
@@ -282,43 +283,86 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 
 	// ── Remote Session Commands (acesso remoto nativo) ──
 	if isRemoteSessionCommandType(cmdType) {
+		if parent == nil {
+			parent = context.Background()
+		}
 		parsedPayload := parseAnyMap(payload)
 		if parsedPayload == nil {
 			log.Printf("[remote-session] ERRO: parseAnyMap retornou nil para cmdType=%s\n", cmdType)
 			return true, 1, "", "remotesession: payload invalido (nao eh JSON object)"
 		}
-		sid, _ := parsedPayload["sessionId"].(string)
-		act, _ := parsedPayload["action"].(string)
+		sid := payloadString(parsedPayload, "sessionId")
+		act := strings.ToLower(payloadString(parsedPayload, "action"))
+		kind := remotesession.ParseRemoteSessionKind(parsedPayload["kind"])
 
-		// Modo serviço (SYSTEM, sessão 0): a captura de tela e a injeção de
-		// input exigem um desktop interativo — a sessão 0 não o tem (captura
-		// sem frames, SendInput bloqueado por UIPI/errno=5).
-		//
-		// M-fix (decisão do dono — M5 "interface somente interface"): a sessão
-		// remota roda SEMPRE no worker spawnado pelo serviço (SYSTEM na sessão
-		// interativa), NUNCA na UI companion:
-		//   - UI em Medium integrity → UIPI bloqueia SendInput em janelas
-		//     elevadas (ex.: Gerenciador de Tarefas);
-		//   - UI não tem acesso ao desktop winsta0\winlogon (tela de logon).
-		// O worker como SYSTEM na sessão interativa captura e injeta input em
-		// todas as janelas, incluindo elevadas e a tela de logon.
+		// Modo serviço (SYSTEM, sessão 0):
+		// - Sessões headless (files, processes, proxy, rdp) executam in-process
+		//   via a.RemoteSessionMgr sem exigir desktop interativo nem worker.
+		// - Sessões interativas (screen, all, terminal) exigem desktop/sessão
+		//   interativa e são roteadas para o worker SYSTEM spawnado pelo serviço.
 		if a.RuntimeFlags.ServiceMode {
-			if act == "stop" {
+			switch {
+			case act == "stop":
+				if a.RemoteSessionMgr != nil && sid != "" && a.RemoteSessionMgr.HasSession(sid) {
+					refreshServiceRemoteConsentRuntime(a)
+					handled, errMsg := a.RemoteSessionMgr.HandleCommand(parent, parsedPayload)
+					if handled {
+						return true, 0, "ok", errMsg
+					}
+					return true, 1, "", "remotesession: " + errMsg
+				}
 				stopRemoteSessionWorker(sid)
 				return true, 0, "ok", ""
+
+			case act == "start":
+				if isHeadlessRemoteSessionKind(kind) {
+					if a.RemoteSessionMgr == nil {
+						log.Printf("[remote-session] ERRO: remoteSessionMgr nil em ServiceMode — sessao %s (%s)\n", sid, kind)
+						return true, 1, "", "remote session manager nao inicializado"
+					}
+					refreshServiceRemoteConsentRuntime(a)
+					handled, errMsg := a.RemoteSessionMgr.HandleCommand(parent, parsedPayload)
+					if handled {
+						return true, 0, "ok", errMsg
+					}
+					return true, 1, "", "remotesession: " + errMsg
+				}
+				if isInteractiveRemoteSessionKind(kind) {
+					// Injeta o token VIVO em memória no payload do worker (bug
+					// 2026-09-20): o worker lia o token do debug_config.json, que fica
+					// VELHO após a rotação P2P (persistida só no config.json).
+					injectWorkerRuntimeHints(a, parsedPayload)
+					if err := spawnRemoteSessionWorker(parent, parsedPayload); err != nil {
+						log.Printf("[remote-session] ERRO: worker não spawnado — sessao %s (%s): %v\n", sid, act, err)
+						return true, 1, "", "remote session sem sessão interativa: " + err.Error()
+					}
+					return true, 0, "ok", ""
+				}
+				if a.RemoteSessionMgr != nil {
+					if _, errMsg := a.RemoteSessionMgr.HandleCommand(parent, parsedPayload); errMsg != "" {
+						return true, 1, "", "remotesession: " + errMsg
+					}
+				}
+				return true, 1, "", "remotesession: kind não suportado: " + kind
+
+			default:
+				if a.RemoteSessionMgr != nil && sid != "" && a.RemoteSessionMgr.HasSession(sid) {
+					handled, errMsg := a.RemoteSessionMgr.HandleCommand(parent, parsedPayload)
+					if handled {
+						return true, 0, "ok", errMsg
+					}
+					return true, 1, "", "remotesession: " + errMsg
+				}
+				if hasActiveRemoteSessionWorker(sid) {
+					injectWorkerRuntimeHints(a, parsedPayload)
+					if err := spawnRemoteSessionWorker(parent, parsedPayload); err != nil {
+						log.Printf("[remote-session] ERRO: worker não respondeu — sessao %s (%s): %v\n", sid, act, err)
+						return true, 1, "", "remote session sem sessão interativa: " + err.Error()
+					}
+					return true, 0, "ok", ""
+				}
+				return true, 1, "", "remotesession: sessao nao encontrada"
 			}
-			// Injeta o token VIVO em memória no payload do worker (bug
-			// 2026-09-20): o worker lia o token do debug_config.json, que fica
-			// VELHO após a rotação P2P (persistida só no config.json) — o NATS
-			// rejeitava com "Authorization Violation" e a sessão morria no
-			// spawn. O token em memória é a fonte mais fresca; os arquivos
-			// continuam como fallback no próprio worker.
-			injectWorkerRuntimeHints(a, parsedPayload)
-			if err := spawnRemoteSessionWorker(parent, parsedPayload); err != nil {
-				log.Printf("[remote-session] ERRO: worker não spawnado — sessao %s (%s): %v\n", sid, act, err)
-				return true, 1, "", "remote session sem sessão interativa: " + err.Error()
-			}
-			return true, 0, "ok", ""
 		}
 
 		// ── UI companion (Medium integrity): repassa para o serviço (SYSTEM) ──
@@ -403,4 +447,62 @@ func (a *App) onAgentCommandOutput(cmdType, output, errText string) {
 		return
 	}
 	a.RemoteDebug.OnCommandOutput(cmdType, output, errText)
+}
+
+func isHeadlessRemoteSessionKind(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case remotesession.KindFiles, remotesession.KindProcesses, remotesession.KindProxy, remotesession.KindRdp:
+		return true
+	default:
+		return false
+	}
+}
+
+func isInteractiveRemoteSessionKind(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case remotesession.KindScreen, remotesession.KindAll, remotesession.KindTerminal:
+		return true
+	default:
+		return false
+	}
+}
+
+func payloadString(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	s, _ := m[key].(string)
+	return strings.TrimSpace(s)
+}
+
+func hasActiveRemoteSessionWorker(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	remoteSessionWorkers.mu.Lock()
+	w := remoteSessionWorkers.byID[sessionID]
+	remoteSessionWorkers.mu.Unlock()
+	if w == nil {
+		return false
+	}
+	select {
+	case <-w.done:
+		return false
+	default:
+		return true
+	}
+}
+
+func refreshServiceRemoteConsentRuntime(a *App) {
+	if a == nil || a.DebugSvc == nil {
+		return
+	}
+	cfg := a.GetDebugConfig()
+	if cfg.IsProvisioned() {
+		configureRemoteConsentRuntime(
+			workerAPIBase(WorkerDebugConfig{ApiScheme: cfg.APIScheme(), ApiServer: cfg.ApiServer}),
+			cfg.AuthToken,
+			cfg.AgentID,
+		)
+	}
 }

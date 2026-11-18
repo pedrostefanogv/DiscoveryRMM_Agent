@@ -69,15 +69,15 @@ func main() {
 	fmt.Println("upta r1=", r0, "err=", e0)
 
 	si := struct {
-		cb                                                        uint32
-		r1, lpDesktop, lpTitle                                    uintptr
-		dwX, dwY, dwXSize, dwYSize                                uint32
-		dwXCountChars, dwYCountChars                              uint32
-		dwFillAttribute, dwFlags                                  uint32
-		wShow, cbReserved                                         uint16
-		lpReserved2                                               uintptr
-		hStdInput, hStdOutput, hStdErr                            uintptr
-		lpAttributeList                                           unsafe.Pointer
+		cb                             uint32
+		r1, lpDesktop, lpTitle         uintptr
+		dwX, dwY, dwXSize, dwYSize     uint32
+		dwXCountChars, dwYCountChars   uint32
+		dwFillAttribute, dwFlags       uint32
+		wShow, cbReserved              uint16
+		lpReserved2                    uintptr
+		hStdInput, hStdOutput, hStdErr uintptr
+		lpAttributeList                unsafe.Pointer
 	}{}
 	fmt.Println("sizeof si =", unsafe.Sizeof(si), "attrList@", unsafe.Offsetof(si.lpAttributeList), "hStdIn@", unsafe.Offsetof(si.hStdInput))
 	si.cb = 112

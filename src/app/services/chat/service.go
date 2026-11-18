@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +25,8 @@ import (
 // Config is the frontend-facing AI configuration.
 type Config struct {
 	Endpoint     string `json:"endpoint"`
-	APIKey       string `json:"apiKey"`
+	APIKey       string `json:"apiKey,omitempty"`
+	APIKeyDpapi  string `json:"apiKeyDpapi,omitempty"`
 	Model        string `json:"model"`
 	SystemPrompt string `json:"systemPrompt"`
 	MaxTokens    int    `json:"maxTokens"`
@@ -244,6 +246,18 @@ func (s *Service) LoadPersistedConfig() {
 			s.logf("[chat] falha ao ler configuração persistida: " + err.Error())
 			return
 		}
+		needsMigration := false
+		if enc := strings.TrimSpace(cfg.APIKeyDpapi); enc != "" {
+			plain, decErr := platform.UnprotectSecret(enc)
+			if decErr != nil {
+				s.logf("[chat] falha ao decifrar apiKeyDpapi: " + decErr.Error())
+				return
+			}
+			cfg.APIKey = strings.TrimSpace(plain)
+		} else if strings.TrimSpace(cfg.APIKey) != "" && runtime.GOOS == "windows" {
+			needsMigration = true
+		}
+		cfg.APIKeyDpapi = ""
 		if cfg.MaxTokens < 0 {
 			cfg.MaxTokens = 0
 		}
@@ -256,13 +270,31 @@ func (s *Service) LoadPersistedConfig() {
 			SystemPrompt: cfg.SystemPrompt,
 			MaxTokens:    cfg.MaxTokens,
 		})
+		if aclErr := platform.HardenSecretFileACL(path); aclErr != nil {
+			s.logf("[chat] aviso: nao foi possivel restringir ACL de " + path + ": " + aclErr.Error())
+		}
+		if needsMigration {
+			if migErr := s.persistConfig(cfg); migErr != nil {
+				s.logf("[chat] aviso: falha ao migrar apiKey para DPAPI: " + migErr.Error())
+			}
+		}
 		s.logf("[chat] configuração carregada de " + path)
 		return
 	}
 }
 
 func (s *Service) persistConfig(cfg Config) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	persisted := cfg
+	persisted.APIKeyDpapi = ""
+	if key := strings.TrimSpace(cfg.APIKey); key != "" && runtime.GOOS == "windows" {
+		enc, err := platform.ProtectSecret(key)
+		if err != nil {
+			return fmt.Errorf("falha ao proteger apiKey via DPAPI: %w", err)
+		}
+		persisted.APIKeyDpapi = enc
+		persisted.APIKey = ""
+	}
+	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
 		return fmt.Errorf("falha ao serializar configuração do chat: %w", err)
 	}
@@ -277,12 +309,9 @@ func (s *Service) persistConfig(cfg Config) error {
 			errs = append(errs, path+": "+err.Error())
 			continue
 		}
-		// A3: endurece a DACL do arquivo quando o processo é elevado — o
-		// 0o600 é no-op no Windows e o arquivo herda Users:(M) do diretório.
-		if platform.IsElevated() {
-			if aclErr := platform.HardenSecretFileACL(path); aclErr != nil {
-				s.logf("[chat] aviso: nao foi possivel restringir ACL de " + path + ": " + aclErr.Error())
-			}
+		// Endurece a DACL do arquivo sempre (best-effort) — SYSTEM:F + Administrators:F.
+		if aclErr := platform.HardenSecretFileACL(path); aclErr != nil {
+			s.logf("[chat] aviso: nao foi possivel restringir ACL de " + path + ": " + aclErr.Error())
 		}
 		s.logf("[chat] configuração salva em " + path)
 		return nil

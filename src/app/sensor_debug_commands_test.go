@@ -164,13 +164,13 @@ func TestSensorDebugParsePayload(t *testing.T) {
 	})
 
 	invalidos := map[string]string{
-		"texto solto":           "not-json",
-		"numero":                "42",
-		"array com numero":      "[1,2]",
-		"array com objeto":      "[{\"id\":\"guid1\"}]",
-		"objeto malformado":     "{\"ids\":[\"guid1\",}",
-		"array malformado":      "[\"guid1\"",
-		"booleano":              "true",
+		"texto solto":       "not-json",
+		"numero":            "42",
+		"array com numero":  "[1,2]",
+		"array com objeto":  "[{\"id\":\"guid1\"}]",
+		"objeto malformado": "{\"ids\":[\"guid1\",}",
+		"array malformado":  "[\"guid1\"",
+		"booleano":          "true",
 	}
 	for nome, entrada := range invalidos {
 		t.Run("invalido/"+nome, func(t *testing.T) {
@@ -242,8 +242,8 @@ func TestSensorDebugBridgeReflection(t *testing.T) {
 	appType := reflect.TypeOf(&App{})
 
 	casos := []struct {
-		nome      string
-		numIn     int
+		nome       string
+		numIn      int
 		primeiroIn reflect.Kind
 	}{
 		{"GetSensorDebugSnapshot", 0, reflect.Invalid},
@@ -640,6 +640,7 @@ func TestSensorDebugRPCRegistradoNoDispatch(t *testing.T) {
 		t.Fatalf("resposta deve trazer data.snapshot, veio %#v", resp)
 	}
 }
+
 // ── Recusa honesta em modo companion (mutantes não roteados) ───────────────
 //
 // Em companion a UI não roda o loop de sensores (M5). Chamar o motor local
@@ -716,4 +717,3 @@ func TestSensorDebugMutantesSeguemLocaisEmStandalone(t *testing.T) {
 		t.Fatalf("standalone nao deveria recusar: %q", msg)
 	}
 }
-

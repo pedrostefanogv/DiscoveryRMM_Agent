@@ -17,8 +17,58 @@ func (r *Runtime) validateAgentIdentityACL(subjects natsSubjects, jwtCandidate s
 	if err := validateAgentIdentityJWTClaims(jwt, subjects); err != nil {
 		return err
 	}
+	r.warnLegacyWildcardJetStreamACL(jwt, subjects.ClientID)
 	r.logf("[acl][nats] claims do AgentIdentity validadas para 7 subscribes e 4 publishes")
 	return nil
+}
+
+func expectedTenantJetStreamPubSubjects(clientID string) []string {
+	cid := normalizeCompactGUID(clientID)
+	if cid == "" {
+		return nil
+	}
+	fanoutStream := fanoutStreamPrefix + "_" + cid
+	supportStream := supportChatStreamPrefix + "_" + cid
+	return []string{
+		fmt.Sprintf("$JS.API.STREAM.INFO.%s", fanoutStream),
+		fmt.Sprintf("$JS.API.CONSUMER.INFO.%s.>", fanoutStream),
+		fmt.Sprintf("$JS.API.CONSUMER.CREATE.%s.>", fanoutStream),
+		fmt.Sprintf("$JS.API.CONSUMER.MSG.NEXT.%s.>", fanoutStream),
+		fmt.Sprintf("$JS.ACK.%s.>", fanoutStream),
+		fmt.Sprintf("$JS.API.STREAM.INFO.%s", fanoutGlobalStreamName),
+		fmt.Sprintf("$JS.API.CONSUMER.INFO.%s.>", fanoutGlobalStreamName),
+		fmt.Sprintf("$JS.API.CONSUMER.CREATE.%s.>", fanoutGlobalStreamName),
+		fmt.Sprintf("$JS.API.CONSUMER.MSG.NEXT.%s.>", fanoutGlobalStreamName),
+		fmt.Sprintf("$JS.ACK.%s.>", fanoutGlobalStreamName),
+		fmt.Sprintf("$JS.API.STREAM.INFO.%s", supportStream),
+		fmt.Sprintf("$JS.API.CONSUMER.INFO.%s.>", supportStream),
+		fmt.Sprintf("$JS.API.CONSUMER.CREATE.%s.>", supportStream),
+		fmt.Sprintf("$JS.API.CONSUMER.MSG.NEXT.%s.>", supportStream),
+		fmt.Sprintf("$JS.ACK.%s.>", supportStream),
+	}
+}
+
+func isLegacyWildcardJetStreamSubject(subj string) bool {
+	s := strings.TrimSpace(subj)
+	return strings.Contains(s, "."+fanoutStreamPrefix+".>") ||
+		strings.Contains(s, "."+supportChatStreamPrefix+".>")
+}
+
+func (r *Runtime) warnLegacyWildcardJetStreamACL(jwt, clientID string) {
+	claims, err := decodeJWTClaimsUnverified(jwt)
+	if err != nil {
+		return
+	}
+	pubAllow, err := extractJWTAllowedSubjects(claims, "pub")
+	if err != nil {
+		return
+	}
+	for _, s := range pubAllow {
+		if isLegacyWildcardJetStreamSubject(s) {
+			r.logf("[acl][nats] AVISO: JWT contem permissao JetStream global legada (%s) para clientId=%s", s, clientID)
+			return
+		}
+	}
 }
 
 func validateAgentIdentityJWTClaims(jwt string, subjects natsSubjects) error {

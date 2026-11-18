@@ -13,6 +13,8 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+
+	"discovery/app/core/platform"
 )
 
 // ── Autoproteção da UI: a thread principal responde? ───────────────────────
@@ -120,13 +122,13 @@ func captureMainThreadFreezeDump(a *App) {
 	}
 }
 
-// freezeDumpDir devolve o diretório de diagnóstico (ao lado do logstore).
+// freezeDumpDir devolve o diretório de diagnóstico da UI (ao lado do logstore da UI).
 func freezeDumpDir() string {
-	programData := os.Getenv("ProgramData")
-	if programData == "" {
+	uiLogDir := platform.UILogDir()
+	if uiLogDir == "" {
 		return ""
 	}
-	return filepath.Join(programData, "Discovery", "logs", "freeze-dumps")
+	return filepath.Join(uiLogDir, "freeze-dumps")
 }
 
 // writeMiniDumpInProcess grava o minidump via MiniDumpWriteDump (DbgHelp.dll)

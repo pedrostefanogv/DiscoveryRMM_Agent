@@ -1904,4 +1904,3 @@ func (c *IPCClient) typedMutatingError(method string, err error) error {
 	}
 	return newIPCWriteUnavailable(method, err.Error())
 }
-

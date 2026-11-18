@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"discovery/app/core/database"
+	"discovery/app/logs"
 )
 
 func TestIsAgentDecommissionCommandType(t *testing.T) {
@@ -75,13 +78,25 @@ func TestValidateUninstallerPath(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
+	origTrusted := trustedUninstallerRootsFn
+	origUntrusted := untrustedUninstallerRootsFn
+	origACL := verifyUninstallerACLFn
+	t.Cleanup(func() {
+		trustedUninstallerRootsFn = origTrusted
+		untrustedUninstallerRootsFn = origUntrusted
+		verifyUninstallerACLFn = origACL
+	})
+	trustedUninstallerRootsFn = func() []string { return []string{dir} }
+	untrustedUninstallerRootsFn = func() []string { return nil }
+	verifyUninstallerACLFn = func(string) error { return nil }
+
 	got, err := validateUninstallerPath(valid)
 	if err != nil || got != valid {
 		t.Fatalf("validate valid: got=%q err=%v", got, err)
 	}
 
 	if _, err := validateUninstallerPath(filepath.Join(dir, "setup.exe")); err == nil {
-		t.Fatal("esperado erro para executável com nome inesperado")
+		t.Fatal("esperado erro para executÁ¡vel com nome inesperado")
 	}
 	if _, err := validateUninstallerPath(dir); err == nil {
 		t.Fatal("esperado erro para diretório")
@@ -91,11 +106,94 @@ func TestValidateUninstallerPath(t *testing.T) {
 	}
 }
 
-// resetDecommissionTestState isola as variáveis de pacote entre testes.
+func TestValidateUninstallerPathRejectsUntrustedPaths(t *testing.T) {
+	tempDir := t.TempDir()
+	tempUninstall := filepath.Join(tempDir, uninstallerFileName)
+	if err := os.WriteFile(tempUninstall, []byte("stub"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Sem override das roots confiÁ¡veis, qualquer arquivo em %TEMP%/AppData/ProgramData é rejeitado.
+	if _, err := validateUninstallerPath(tempUninstall); err == nil {
+		t.Fatalf("esperado erro para uninstaller em tempDir (%s)", tempUninstall)
+	}
+
+	// Mesmo quando roots confiÁ¡veis incluem parentDir, ACL insegura deve rejeitar.
+	origTrusted := trustedUninstallerRootsFn
+	origUntrusted := untrustedUninstallerRootsFn
+	origACL := verifyUninstallerACLFn
+	t.Cleanup(func() {
+		trustedUninstallerRootsFn = origTrusted
+		untrustedUninstallerRootsFn = origUntrusted
+		verifyUninstallerACLFn = origACL
+	})
+	trustedUninstallerRootsFn = func() []string { return []string{tempDir} }
+	untrustedUninstallerRootsFn = func() []string { return nil }
+	verifyUninstallerACLFn = func(string) error { return errors.New("owner nao confiavel") }
+
+	if _, err := validateUninstallerPath(tempUninstall); err == nil {
+		t.Fatal("esperado erro quando verifyUninstallerACLFn falha")
+	}
+
+	// Diretório explicitamente proibido (ex: ProgramData) sempre rejeitado mesmo se listado em trusted.
+	untrustedUninstallerRootsFn = func() []string { return []string{filepath.Dir(tempDir)} }
+	verifyUninstallerACLFn = func(string) error { return nil }
+	if _, err := validateUninstallerPath(tempUninstall); err == nil {
+		t.Fatal("esperado erro quando caminho reside sob untrusted root")
+	}
+}
+
+func TestResumeAgentDecommissionIfPending_RejectsPoisonedCachePath(t *testing.T) {
+	resetDecommissionTestState(t)
+
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	poisonedPath := filepath.Join(t.TempDir(), uninstallerFileName)
+	if err := os.WriteFile(poisonedPath, []byte("evil"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := db.CacheSetJSON(agentDecommissionRequestCacheKey, agentDecommissionRequest{
+		RequestedAtUTC:  time.Now().UTC().Format(time.RFC3339),
+		UninstallerPath: poisonedPath,
+	}, time.Hour); err != nil {
+		t.Fatalf("CacheSetJSON: %v", err)
+	}
+
+	launched := false
+	launchAgentUninstaller = func(string) (uint32, error) {
+		launched = true
+		return 99, nil
+	}
+
+	a := &App{}
+	a.Logs.Buffer = logs.New()
+	a.CoreAgent.DB = db
+	a.resumeAgentDecommissionIfPending()
+
+	time.Sleep(100 * time.Millisecond)
+	if launched {
+		t.Fatal("uninstaller envenenado no cache SQLite não deveria ter sido executado")
+	}
+	var after agentDecommissionRequest
+	ok, err := db.CacheGetJSON(agentDecommissionRequestCacheKey, &after)
+	if err != nil {
+		t.Fatalf("CacheGetJSON: %v", err)
+	}
+	if ok {
+		t.Fatalf("marcador envenenado deveria ter sido removido do cache, mas permaneceu: %+v", after)
+	}
+}
+
+// resetDecommissionTestState isola as variÁ¡veis de pacote entre testes.
 func resetDecommissionTestState(t *testing.T) {
 	t.Helper()
 	origElevated := agentDecommissionIsElevated
 	origResolve := agentDecommissionResolveUninstaller
+	origValidate := validateUninstallerPathFn
 	origLaunch := launchAgentUninstaller
 	origDelay := agentDecommissionLaunchDelay
 
@@ -104,6 +202,7 @@ func resetDecommissionTestState(t *testing.T) {
 	t.Cleanup(func() {
 		agentDecommissionIsElevated = origElevated
 		agentDecommissionResolveUninstaller = origResolve
+		validateUninstallerPathFn = origValidate
 		launchAgentUninstaller = origLaunch
 		agentDecommissionLaunchDelay = origDelay
 		agentDecommissionLaunching.Store(false)
@@ -117,7 +216,7 @@ func TestHandleAgentDecommissionCommand_RefusesWhenNotElevated(t *testing.T) {
 	handled, code, _, errText := (&App{}).handleAgentDecommissionCommand(nil, nil)
 
 	if !handled || code == 0 || errText == "" {
-		t.Fatalf("esperado recusa por falta de elevação: handled=%v code=%d err=%q", handled, code, errText)
+		t.Fatalf("esperado recusa por falta de elevaçãoo: handled=%v code=%d err=%q", handled, code, errText)
 	}
 }
 
@@ -141,7 +240,7 @@ func TestHandleAgentDecommissionCommand_ReportsMissingUninstaller(t *testing.T) 
 	}
 	select {
 	case path := <-launched:
-		t.Fatalf("uninstaller não deveria ser lançado (path=%q)", path)
+		t.Fatalf("uninstaller não deveria ser lanÁçado (path=%q)", path)
 	case <-time.After(200 * time.Millisecond):
 	}
 }
@@ -151,6 +250,7 @@ func TestHandleAgentDecommissionCommand_LaunchesUninstaller(t *testing.T) {
 	agentDecommissionIsElevated = func() bool { return true }
 	agentDecommissionLaunchDelay = 0
 	agentDecommissionResolveUninstaller = func() (string, error) { return "C:/tmp/uninstall.exe", nil }
+	validateUninstallerPathFn = func(p string) (string, error) { return p, nil }
 
 	launched := make(chan string, 1)
 	launchAgentUninstaller = func(path string) (uint32, error) {
@@ -169,7 +269,7 @@ func TestHandleAgentDecommissionCommand_LaunchesUninstaller(t *testing.T) {
 			t.Fatalf("path inesperado: %q", path)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("uninstaller não foi lançado")
+		t.Fatal("uninstaller não foi lanÁçado")
 	}
 }
 
@@ -177,6 +277,7 @@ func TestHandleAgentDecommissionCommand_NotElevatedDoesNotLeakLock(t *testing.T)
 	resetDecommissionTestState(t)
 	agentDecommissionLaunchDelay = 0
 	agentDecommissionResolveUninstaller = func() (string, error) { return "C:/tmp/uninstall.exe", nil }
+	validateUninstallerPathFn = func(p string) (string, error) { return p, nil }
 
 	launched := make(chan struct{}, 1)
 	launchAgentUninstaller = func(string) (uint32, error) {
@@ -188,15 +289,15 @@ func TestHandleAgentDecommissionCommand_NotElevatedDoesNotLeakLock(t *testing.T)
 	agentDecommissionIsElevated = func() bool { return false }
 	app.handleAgentDecommissionCommand(nil, nil)
 
-	// A recusa por falta de elevação não pode deixar a trava presa: depois de
-	// elevado (ex.: serviço subiu como SYSTEM), o pedido precisa funcionar.
+	// A recusa por falta de elevaçãoo não pode deixar a trava presa: depois de
+	// elevado (ex.: serviÁço subiu como SYSTEM), o pedido precisa funcionar.
 	agentDecommissionIsElevated = func() bool { return true }
 	app.handleAgentDecommissionCommand(nil, nil)
 
 	select {
 	case <-launched:
 	case <-time.After(2 * time.Second):
-		t.Fatal("trava não liberada após a recusa por falta de elevação")
+		t.Fatal("trava não liberada após a recusa por falta de elevaçãoo")
 	}
 }
 
@@ -205,6 +306,7 @@ func TestHandleAgentDecommissionCommand_RetriesAfterLaunchFailure(t *testing.T) 
 	agentDecommissionIsElevated = func() bool { return true }
 	agentDecommissionLaunchDelay = 0
 	agentDecommissionResolveUninstaller = func() (string, error) { return "C:/tmp/uninstall.exe", nil }
+	validateUninstallerPathFn = func(p string) (string, error) { return p, nil }
 
 	var attempts int
 	launchAgentUninstaller = func(string) (uint32, error) {
@@ -221,12 +323,12 @@ func TestHandleAgentDecommissionCommand_RetriesAfterLaunchFailure(t *testing.T) 
 
 	// A primeira tentativa falhou e liberou a trava: um novo pedido (purge,
 	// reentrega ou novo delete no painel) precisa tentar novamente. Sem isso o
-	// marcador bloqueava a máquina para sempre.
+	// marcador bloqueava a mÁ¡quina para sempre.
 	app.handleAgentDecommissionCommand(nil, nil)
 	time.Sleep(300 * time.Millisecond)
 
 	if attempts != 2 {
-		t.Fatalf("esperado 2 tentativas após falha de lançamento, obtido %d", attempts)
+		t.Fatalf("esperado 2 tentativas após falha de lanÁçamento, obtido %d", attempts)
 	}
 }
 
@@ -235,6 +337,7 @@ func TestHandleAgentDecommissionCommand_IsIdempotent(t *testing.T) {
 	agentDecommissionIsElevated = func() bool { return true }
 	agentDecommissionLaunchDelay = 0
 	agentDecommissionResolveUninstaller = func() (string, error) { return "C:/tmp/uninstall.exe", nil }
+	validateUninstallerPathFn = func(p string) (string, error) { return p, nil }
 
 	var launches int
 	launchAgentUninstaller = func(string) (uint32, error) {
@@ -249,6 +352,6 @@ func TestHandleAgentDecommissionCommand_IsIdempotent(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	if launches != 1 {
-		t.Fatalf("esperado exatamente um lançamento, obtido %d", launches)
+		t.Fatalf("esperado exatamente um lanÁçamento, obtido %d", launches)
 	}
 }

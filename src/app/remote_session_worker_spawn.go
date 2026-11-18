@@ -114,6 +114,9 @@ func injectWorkerRuntimeHints(a *App, payload map[string]any) {
 		if v := strings.TrimSpace(cfg.AuthToken); v != "" {
 			payload["authToken"] = v
 		}
+		if v := strings.TrimSpace(cfg.AgentID); v != "" {
+			payload["agentId"] = v
+		}
 		// URL NATS em uso PELO CORE agora: o worker tenta este endpoint primeiro
 		// (no race), herdando o transporte que já está funcionando na máquina.
 		if a.AgentConn != nil {
@@ -132,6 +135,22 @@ func injectWorkerRuntimeHints(a *App, payload map[string]any) {
 		}
 		if v := strings.TrimSpace(cfg.ApiScheme); v != "" {
 			payload["apiScheme"] = v
+		}
+		payload["allowInsecureTls"] = cfg.AllowInsecureTLS
+		if v := strings.TrimSpace(cfg.NatsServerHost); v != "" {
+			payload["natsServerHost"] = v
+		}
+		if v := strings.TrimSpace(cfg.NatsServerHostInternal); v != "" {
+			payload["natsServerHostInternal"] = v
+		}
+		payload["natsUseWssExternal"] = cfg.NatsUseWssExternal
+		payload["enforceTlsHashValidation"] = cfg.EnforceTlsHashValidation
+		payload["handshakeEnabled"] = cfg.HandshakeEnabled
+		if v := strings.TrimSpace(cfg.ApiTlsCertHash); v != "" {
+			payload["apiTlsCertHash"] = v
+		}
+		if v := strings.TrimSpace(cfg.NatsTlsCertHash); v != "" {
+			payload["natsTlsCertHash"] = v
 		}
 		agentCfg := a.GetAgentConfiguration()
 		if v := strings.TrimSpace(agentCfg.ClientID); v != "" {
@@ -329,6 +348,9 @@ func spawnRemoteSessionWorkerAttempt(parent context.Context, payload map[string]
 	sessionID, _ := payload["sessionId"].(string)
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("payload sem sessionId")
+	}
+	if strings.TrimSpace(stringAuthTokenFromPayload(payload)) == "" || strings.TrimSpace(stringFromWorkerPayload(payload, "agentId")) == "" {
+		return fmt.Errorf("credenciais ausentes no payload stdin do worker (authToken/agentId)")
 	}
 	if isRespawn {
 		// Replay do watchdog: marca o payload para o worker consultar o status

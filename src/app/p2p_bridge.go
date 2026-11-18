@@ -325,12 +325,13 @@ func (a *App) GetAutoProvisioningStats() P2PAutoProvisioningStats {
 // zeroTouchPending=true. Depois da aprovação (ou na janela em que o flag ainda
 // não tinha chegado), a interface voltava ao normal e TODAS as telas dependentes
 // do servidor falhavam com o erro CRU do backend — prints do relato:
-//   • Loja:     "RuntimeError: app-store (Winget) retornou HTTP 403 Forbidden:
-//               {"error":"Agent registration is pending (zero-touch)."}"
-//   • Suporte:  "Erro ao carregar chamados: RuntimeError: ipc request
-//               support:tickets falhou: HTTP 403 Forbidden: {"error":"Agent
-//               registration is pending (zero-touch)."}"
-//   • KB:       "Erro ao carregar base de conhecimento."
+//   - Loja:     "RuntimeError: app-store (Winget) retornou HTTP 403 Forbidden:
+//     {"error":"Agent registration is pending (zero-touch)."}"
+//   - Suporte:  "Erro ao carregar chamados: RuntimeError: ipc request
+//     support:tickets falhou: HTTP 403 Forbidden: {"error":"Agent
+//     registration is pending (zero-touch)."}"
+//   - KB:       "Erro ao carregar base de conhecimento."
+//
 // O usuário não tinha como saber que era só falta de liberação no servidor.
 //
 // Regra única (esta função é a fonte da verdade — as telas consomem o modo,

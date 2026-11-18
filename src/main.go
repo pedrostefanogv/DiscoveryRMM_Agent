@@ -43,6 +43,12 @@ func main() {
 		}
 	}
 
+	// Modo forwarder local RDP (--rdp-tunnel): interceptado antes de showCLIHelp,
+	// memlimit e Wails para suportar `--rdp-tunnel --help` e evitar overhead de UI.
+	if hasStartupArg("--rdp-tunnel") || hasStartupArg("/rdp-tunnel") || hasStartupArg("-rdp-tunnel") {
+		os.Exit(runRDPTunnelCLI(os.Args[1:]))
+	}
+
 	// Help/version: exibe e sai sem iniciar a GUI.
 	// showCLIHelp respeita a regra de nao misturar prefixos (-- vs / vs -).
 	if showCLIHelp() {

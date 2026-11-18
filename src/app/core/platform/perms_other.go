@@ -23,3 +23,18 @@ func IsElevated() bool {
 func HardenSecretFileACL(path string) error {
 	return nil
 }
+
+// VerifyTrustedSecretFileACL is a no-op on non-Windows platforms.
+func VerifyTrustedSecretFileACL(path string) error {
+	return nil
+}
+
+// VerifyTrustedSecretFileWritableSafety is a no-op on non-Windows platforms.
+func VerifyTrustedSecretFileWritableSafety(path string) error {
+	return nil
+}
+
+// VerifyTrustedExecutableACL is a no-op on non-Windows platforms.
+func VerifyTrustedExecutableACL(path string) error {
+	return nil
+}

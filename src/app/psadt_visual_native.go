@@ -42,10 +42,10 @@ func nativeBalloonNotification(req NativeVisualNotificationRequest, result *Nati
 	// usuário — agentToastIconPath() devolve "" e o toast usa o ícone default
 	// do Windows. O fluxo do servidor (toast job) resolve o ícone NO SERVIÇO.
 	err := notifyui.ShowToast(notifyui.ToastRequest{
-		AppID:   notifyui.DefaultToastAppID,
+		AppID:    notifyui.DefaultToastAppID,
 		IconPath: agentToastIconPath(),
-		Title:   strings.TrimSpace(req.Title),
-		Message: strings.TrimSpace(req.Message),
+		Title:    strings.TrimSpace(req.Title),
+		Message:  strings.TrimSpace(req.Message),
 	})
 	if err != nil {
 		result.Success = false

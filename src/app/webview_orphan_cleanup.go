@@ -3,9 +3,12 @@ package app
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/windows"
+
+	"discovery/app/core/platform"
 )
 
 // ── Limpeza de browser processes órfãos (fix 21/10, congelamento do chat) ──
@@ -207,7 +210,38 @@ func webviewUserDataDirIsOurs(cmdline, webView2Root string) bool {
 	if !ok {
 		return false
 	}
-	return pathHasDirPrefix(dir, webView2Root)
+	if pathHasDirPrefix(dir, webView2Root) {
+		return true
+	}
+	if isDiscoveryLocalAppDataWebView2Dir(dir) {
+		return true
+	}
+	legacyRoot := filepath.Join(platform.DataDir(), webView2RootSuffix)
+	return pathHasDirPrefix(dir, legacyRoot)
+}
+
+// isDiscoveryLocalAppDataWebView2Dir reconhece pastas de perfil WebView2 do
+// agente sob qualquer perfil de usuário Windows:
+// <drive>:\Users\<usuario>\AppData\Local\Discovery\WebView2(\...)
+// permitindo que o watchdog do serviço SYSTEM limpe órfãos de usuários comuns
+// sem jamais atingir WebViews de terceiros (Teams, WhatsApp, etc.).
+func isDiscoveryLocalAppDataWebView2Dir(dir string) bool {
+	norm := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(dir), "/", "\\"))
+	norm = strings.TrimRight(filepath.Clean(norm), "\\")
+	parts := strings.Split(norm, "\\")
+	// Esperado: [<drive>:, "users", <user>, "appdata", "local", "discovery", "webview2", ...]
+	if len(parts) < 7 {
+		return false
+	}
+	if len(parts[0]) != 2 || parts[0][1] != ':' {
+		return false
+	}
+	return parts[1] == "users" &&
+		parts[2] != "" &&
+		parts[3] == "appdata" &&
+		parts[4] == "local" &&
+		parts[5] == "discovery" &&
+		parts[6] == "webview2"
 }
 
 // killOrphanedWebviewBrowsers devolve quantos browsers órfãos foram mortos.
@@ -250,4 +284,3 @@ func LogOrphanCleanup(a *App) {
 		a.Logs.Append("[webview] nenhum browser orfao encontrado no startup")
 	}
 }
-

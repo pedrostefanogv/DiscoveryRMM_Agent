@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/nats-io/nats.go"
 
@@ -60,12 +61,18 @@ const DefaultMaxPayloadBytes = 2 * 1024 * 1024
 // tenantID, siteID, agentID are required to construct literal subject patterns for publish.
 // UUIDs are normalized (hyphens stripped) to match server subject format.
 func NewNatsStreamHandler(nc *nats.Conn, tenantID, siteID, agentID string) *NatsStreamHandler {
+	maxPayload := DefaultMaxPayloadBytes
+	if nc != nil {
+		if mp := int(nc.MaxPayload()); mp > 0 && mp < maxPayload {
+			maxPayload = mp
+		}
+	}
 	return &NatsStreamHandler{
 		nc:              nc,
 		tenantID:        stripHyphens(tenantID),
 		siteID:          stripHyphens(siteID),
 		agentID:         stripHyphens(agentID),
-		maxPayloadBytes: DefaultMaxPayloadBytes,
+		maxPayloadBytes: maxPayload,
 	}
 }
 
@@ -79,6 +86,39 @@ func (h *NatsStreamHandler) SetMaxPayloadBytes(max int) {
 // MaxPayloadBytes retorna o limite de payload configurado.
 func (h *NatsStreamHandler) MaxPayloadBytes() int {
 	return h.maxPayloadBytes
+}
+
+// EffectiveMaxPayloadBytes retorna o menor limite entre o configurado e nc.MaxPayload().
+func (h *NatsStreamHandler) EffectiveMaxPayloadBytes() int {
+	limit := h.maxPayloadBytes
+	if limit <= 0 {
+		limit = DefaultMaxPayloadBytes
+	}
+	if h != nil && h.nc != nil {
+		if mp := int(h.nc.MaxPayload()); mp > 0 && mp < limit {
+			limit = mp
+		}
+	}
+	return limit
+}
+
+// BufferedBytes retorna o total de bytes em buffer na conexao NATS (para backpressure).
+func (h *NatsStreamHandler) BufferedBytes() (int, error) {
+	if h == nil || h.nc == nil {
+		return 0, fmt.Errorf("nats connection unavailable")
+	}
+	return h.nc.Buffered()
+}
+
+// FlushTimeout aguarda a drenagem do buffer NATS ate o timeout informado.
+func (h *NatsStreamHandler) FlushTimeout(timeout time.Duration) error {
+	if h == nil || h.nc == nil {
+		return fmt.Errorf("nats connection unavailable")
+	}
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	return h.nc.FlushTimeout(timeout)
 }
 
 // subjectBase returns the literal base subject for this handler's scope (for publish).
@@ -318,19 +358,22 @@ func (h *NatsStreamHandler) PublishClipboard(sessionID string, text string) erro
 }
 
 // SubscribeToClipboardReq subscreve a pedidos de set/clipboard do viewer
-// (subject .clipboard.req — viewer→agent). O handler recebe o texto e é
-// responsável por aplicá-lo no clipboard do Windows.
-func (h *NatsStreamHandler) SubscribeToClipboardReq(sessionID string, handler func(text string)) (*nats.Subscription, error) {
+// (subject .clipboard.req — viewer→agent). O handler recebe o texto e a flag
+// explícita `paste`: somente com paste=true o agent injeta Ctrl+V no app
+// focado — set sem paste apenas atualiza o clipboard remoto (evita Ctrl+V
+// incondicional digitado no app errado).
+func (h *NatsStreamHandler) SubscribeToClipboardReq(sessionID string, handler func(text string, paste bool)) (*nats.Subscription, error) {
 	pattern := h.subscribePattern(sessionID, "clipboard.req")
 	sub, err := h.nc.Subscribe(pattern, func(msg *nats.Msg) {
 		var req struct {
-			Text string `json:"text"`
+			Text  string `json:"text"`
+			Paste bool   `json:"paste"`
 		}
 		if err := json.Unmarshal(msg.Data, &req); err != nil {
 			log.Printf("[remote-session-nats] clipboard.req inválido: %v", err)
 			return
 		}
-		handler(req.Text)
+		handler(req.Text, req.Paste)
 	})
 	if err != nil {
 		log.Printf("[remote-session-nats] SubscribeToClipboardReq erro: pattern=%s err=%v\n", pattern, err)
@@ -452,12 +495,119 @@ func (h *NatsStreamHandler) PublishProcReady(sessionID string, data any) error {
 
 // SubscribeToProxyReq subscreve a requisicoes de proxy HTTP.
 func (h *NatsStreamHandler) SubscribeToProxyReq(sessionID string, handler func(reqData []byte) []byte) (*nats.Subscription, error) {
-	return h.nc.Subscribe(h.subscribePattern(sessionID, "proxy.req"), func(msg *nats.Msg) {
+	if h == nil || h.nc == nil {
+		return nil, fmt.Errorf("nats connection unavailable")
+	}
+	pattern := h.subscribePattern(sessionID, "proxy.req")
+	respSubject := h.publishSubject(sessionID, "proxy.resp")
+	if pattern == "" || respSubject == "" {
+		return nil, fmt.Errorf("sessionId invalido")
+	}
+	return h.nc.Subscribe(pattern, func(msg *nats.Msg) {
 		resp := handler(msg.Data)
 		if resp != nil {
-			_ = h.nc.Publish(h.publishSubject(sessionID, "proxy.resp"), resp)
+			_ = h.nc.Publish(respSubject, resp)
 		}
 	})
+}
+
+// SubscribeToProxyReqStream subscreve a requisicoes de proxy HTTP/WebSocket com
+// concorrencia limitada e suporte a multiplas respostas (streaming/WS) em .proxy.resp.
+func (h *NatsStreamHandler) SubscribeToProxyReqStream(sessionID string, handler func(reqData []byte, emit func([]byte) error)) (*nats.Subscription, error) {
+	if h == nil || h.nc == nil {
+		return nil, fmt.Errorf("nats connection unavailable")
+	}
+	pattern := h.subscribePattern(sessionID, "proxy.req")
+	respSubject := h.publishSubject(sessionID, "proxy.resp")
+	if pattern == "" || respSubject == "" {
+		return nil, fmt.Errorf("sessionId invalido")
+	}
+
+	const maxConcurrentProxyReqs = 16
+	sem := make(chan struct{}, maxConcurrentProxyReqs)
+
+	sub, err := h.nc.Subscribe(pattern, func(msg *nats.Msg) {
+		dataCopy := make([]byte, len(msg.Data))
+		copy(dataCopy, msg.Data)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem }()
+			handler(dataCopy, func(frame []byte) error {
+				if frame == nil {
+					return nil
+				}
+				return h.PublishProxyResp(sessionID, frame)
+			})
+		}()
+	})
+	if err != nil {
+		log.Printf("[remote-session-nats] SubscribeToProxyReqStream erro: pattern=%s err=%v\n", pattern, err)
+	} else {
+		log.Printf("[remote-session-nats] SubscribeToProxyReqStream ok: pattern=%s\n", pattern)
+	}
+	return sub, err
+}
+
+// PublishProxyReady notifica o viewer que a sessao de proxy/rdp esta pronta
+// (subscricoes em proxy.req e/ou tunnel.in ativas).
+func (h *NatsStreamHandler) PublishProxyReady(sessionID string, data any) error {
+	if h == nil || h.nc == nil {
+		return fmt.Errorf("nats connection unavailable")
+	}
+	subject := h.publishSubject(sessionID, "proxy.ready")
+	if subject == "" {
+		return fmt.Errorf("sessionId invalido")
+	}
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	log.Printf("[remote-session-nats] PublishProxyReady: subject=%s\n", subject)
+	return h.nc.Publish(subject, payload)
+}
+
+// PublishProxyResp publica um frame de resposta de proxy HTTP/WS em .proxy.resp.
+func (h *NatsStreamHandler) PublishProxyResp(sessionID string, data []byte) error {
+	if h == nil || h.nc == nil {
+		return fmt.Errorf("nats connection unavailable")
+	}
+	subject := h.publishSubject(sessionID, "proxy.resp")
+	if subject == "" {
+		return fmt.Errorf("sessionId invalido")
+	}
+	return h.nc.Publish(subject, data)
+}
+
+// SubscribeToTunnelIn subscreve ao canal de entrada do tunel TCP/RDP (.tunnel.in).
+func (h *NatsStreamHandler) SubscribeToTunnelIn(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
+	if h == nil || h.nc == nil {
+		return nil, fmt.Errorf("nats connection unavailable")
+	}
+	pattern := h.subscribePattern(sessionID, "tunnel.in")
+	if pattern == "" {
+		return nil, fmt.Errorf("sessionId invalido")
+	}
+	sub, err := h.nc.Subscribe(pattern, func(msg *nats.Msg) {
+		handler(msg.Data)
+	})
+	if err != nil {
+		log.Printf("[remote-session-nats] SubscribeToTunnelIn erro: pattern=%s err=%v\n", pattern, err)
+	} else {
+		log.Printf("[remote-session-nats] SubscribeToTunnelIn ok: pattern=%s\n", pattern)
+	}
+	return sub, err
+}
+
+// PublishTunnelOut publica dados binarios (0x01) ou controle JSON (0x7B) no canal .tunnel.out.
+func (h *NatsStreamHandler) PublishTunnelOut(sessionID string, data []byte) error {
+	if h == nil || h.nc == nil {
+		return fmt.Errorf("nats connection unavailable")
+	}
+	subject := h.publishSubject(sessionID, "tunnel.out")
+	if subject == "" {
+		return fmt.Errorf("sessionId invalido")
+	}
+	return h.nc.Publish(subject, data)
 }
 
 // Close encerra o handler (no-op por enquanto, a conexao NATS e gerenciada externamente).

@@ -166,7 +166,7 @@ func TestKillOrphanedWebviewBrowsersFrom_TerminateFailureIsNotCounted(t *testing
 
 func TestKillOrphanedWebviewBrowsersFrom_EmptySnapshotKillsNothing(t *testing.T) {
 	called := false
-	killed := killOrphanedWebviewBrowsersFrom(nil, testRoot, func(uint32) bool { called = true; return true });
+	killed := killOrphanedWebviewBrowsersFrom(nil, testRoot, func(uint32) bool { called = true; return true })
 
 	if killed != 0 || called {
 		t.Fatalf("snapshot vazio não pode chamar o terminador; killed=%d called=%v", killed, called)
@@ -204,5 +204,27 @@ func TestOrphanedAgentWebviews_WindowsPathMatchingIsCaseAndSeparatorInsensitive(
 		if got := orphanedAgentWebviews(procs, testRoot); !containsPid(got, 6001) {
 			t.Errorf("UDD %q pertence à raiz (caixa/separador não distinguem no Windows): deveria ser morto; veio %v", udd, got)
 		}
+	}
+}
+
+func TestWebviewOrphanMatchesLocalAppDataAndLegacy(t *testing.T) {
+	uiRoot := `C:\Users\alice\AppData\Local\Discovery\WebView2`
+	for _, tc := range []struct {
+		name string
+		udd  string
+		want bool
+	}{
+		{name: "localappdata_user_session", udd: `C:\Users\bob\AppData\Local\Discovery\WebView2\session-2\EBWebView`, want: true},
+		{name: "localappdata_root", udd: `C:\Users\alice\AppData\Local\Discovery\WebView2`, want: true},
+		{name: "legacy_programdata", udd: `C:\ProgramData\Discovery\WebView2\session-1\EBWebView`, want: true},
+		{name: "sibling_evil", udd: `C:\Users\alice\AppData\Local\Discovery\WebView2-evil\session-1`, want: false},
+		{name: "teams", udd: `C:\Users\alice\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache`, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := webviewUserDataDirIsOurs(`msedgewebview2.exe --user-data-dir="`+tc.udd+`"`, uiRoot)
+			if got != tc.want {
+				t.Fatalf("webviewUserDataDirIsOurs(%q) = %v, want %v", tc.udd, got, tc.want)
+			}
+		})
 	}
 }

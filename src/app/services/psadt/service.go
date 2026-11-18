@@ -127,11 +127,11 @@ func (s *Service) EmitDebugNotification(title, message, mode, severity, layout, 
 // GetScriptTemplate retorna um template genérico de script PowerShell.
 func (s *Service) GetScriptTemplate() string {
 	return `# Script de exemplo (executa via PowerShell -Command)\n` +
-			`Write-Host "Discovery Agent - script de teste"\n` +
-			`$dest = Join-Path $env:ProgramFiles "DiscoveryTest"\n` +
-			`New-Item -ItemType Directory -Path $dest -Force | Out-Null\n` +
-			`Write-Host "Criado: $dest"\n` +
-			`exit 0\n`
+		`Write-Host "Discovery Agent - script de teste"\n` +
+		`$dest = Join-Path $env:ProgramFiles "DiscoveryTest"\n` +
+		`New-Item -ItemType Directory -Path $dest -Force | Out-Null\n` +
+		`Write-Host "Criado: $dest"\n` +
+		`exit 0\n`
 }
 
 // ExecuteCustomScript executa um script PowerShell genérico (console de debug).

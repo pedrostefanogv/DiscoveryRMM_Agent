@@ -107,7 +107,7 @@ func WebView2UserDataPath() string {
 	if runtime.GOOS != "windows" {
 		return ""
 	}
-	return webView2SessionDir(filepath.Join(platform.DataDir(), "WebView2"), currentProcessSessionID())
+	return webView2SessionDir(platform.UIWebView2Root(), currentProcessSessionID())
 }
 
 // webView2SessionDir resolve o User Data Folder do WebView2 para uma sessão.
@@ -299,9 +299,11 @@ type App struct {
 	toolsRegistrationMu   sync.RWMutex
 	lastToolsRegistration time.Time
 
-	debugHTTP  *debughttp.Server
-	chatSSE    *debughttp.Server
-	chatEvents *debughttp.ChatEventBroker
+	debugHTTP        *debughttp.Server
+	chatSSE          *debughttp.Server
+	chatEvents       *debughttp.ChatEventBroker
+	debugAuthTokenMu sync.Mutex
+	debugAuthToken   string
 
 	closeMu                  sync.RWMutex
 	allowClose               bool
@@ -982,7 +984,7 @@ func NewApp(opts AppStartupOptions) *App {
 		// DebugSvc roda no processo da UI. Sem isso a cópia em memória da UI
 		// companion ficava stale ("só resolve fechando e abrindo o agent/ui").
 		OnConfigChanged: func(cfg debug.Config) {
-			a.EmitEvent("debug:config_updated", "config", cfg)
+			a.EmitEvent("debug:config_updated", "config", redactDebugConfig(cfg))
 		},
 		HardwareIdentity: func() hardwareid.Info {
 			if a.HardwareIDSvc == nil {

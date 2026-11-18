@@ -598,6 +598,14 @@ func (a *App) startIPCClient() {
 				if active, known := supportChatLinkFromIPC(msg.Payload); known {
 					a.setSupportChatLink(active)
 				}
+				if name == "chat:sse_event" {
+					evType, _ := msg.Payload["eventType"].(string)
+					evData, _ := msg.Payload["data"].(string)
+					if evType != "" {
+						a.PublishChatEvent(evType, evData)
+					}
+					return
+				}
 				a.EmitEvent(name, eventData...)
 			default:
 			}
@@ -616,9 +624,10 @@ func (a *App) startIPCClient() {
 				// sessão continua pendente — ver
 				// replaySupportChatInviteAfterUIReconnect.
 				go a.replaySupportChatInviteAfterUIReconnect()
-				// Adota a configuração do agente resolvida no serviço (clientId/
-				// siteId): a UI companion nasce com AgentConfig zero e sem DB.
+				// Adota a configuração do agente e de debug resolvidas no serviço
+				// (sem expor authToken): a UI companion nasce sem ler disco.
 				go a.hydrateAgentConfigurationCompanion()
+				go a.hydrateDebugConfigCompanion()
 				// Reconexão: pede um snapshot imediato de conectividade para o
 				// tray/status refletirem o estado real sem esperar o próximo
 				// tick de 5s do CompanionController (evita indicador defasado
@@ -715,4 +724,3 @@ func (a *App) getCompanionIPCCapability() map[string]interface{} {
 	}
 	return cp
 }
-

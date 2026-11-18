@@ -41,6 +41,20 @@ jobs:
             }
           }
 
+      # F14 (P2): gate de qualidade ANTES de publicar o release — nenhuma tag
+      # vira release com vet/test quebrados (o build sozinho não cobre races).
+      - name: Go vet (gate)
+        shell: pwsh
+        working-directory: src
+        run: go vet ./app/... ./cmd/discovery-service/...
+
+      - name: Go test (gate)
+        shell: pwsh
+        working-directory: src
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./app/... -timeout 600s
+
       - name: Install NSIS
         shell: pwsh
         run: |

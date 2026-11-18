@@ -241,13 +241,13 @@ type SensorMeasure struct {
 	// Espelha os canais abaixo em campos explícitos: o servidor deriva os canais
 	// preferindo estes campos e caindo para o mapa Channels quando faltarem
 	// (compatibilidade com agentes antigos que só mandavam Channels).
-	AdCollectOK         *bool    `json:"adCollectOk,omitempty"`
-	AdReplicationFailures *int   `json:"adReplicationFailures,omitempty"`
-	AdReplicationOK     *bool    `json:"adReplicationOk,omitempty"`
-	AdDcdiagFailedTests *int     `json:"adDcdiagFailedTests,omitempty"`
-	AdDcdiagOK          *bool    `json:"adDcdiagOk,omitempty"`
-	AdTimeOffsetSeconds *float64 `json:"adTimeOffsetSeconds,omitempty"`
-	AdClockOK           *bool    `json:"adClockOk,omitempty"`
+	AdCollectOK           *bool    `json:"adCollectOk,omitempty"`
+	AdReplicationFailures *int     `json:"adReplicationFailures,omitempty"`
+	AdReplicationOK       *bool    `json:"adReplicationOk,omitempty"`
+	AdDcdiagFailedTests   *int     `json:"adDcdiagFailedTests,omitempty"`
+	AdDcdiagOK            *bool    `json:"adDcdiagOk,omitempty"`
+	AdTimeOffsetSeconds   *float64 `json:"adTimeOffsetSeconds,omitempty"`
+	AdClockOK             *bool    `json:"adClockOk,omitempty"`
 
 	// Serviço: reinício automático (restartIfStopped)
 	RestartAttempted *bool `json:"restartAttempted,omitempty"`

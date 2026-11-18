@@ -3,6 +3,7 @@ package p2p
 import (
 	"crypto/rand"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -40,6 +41,9 @@ func loadOrCreateLibp2PIdentity(dataDir string) (crypto.PrivKey, error) {
 
 	if raw, readErr := os.ReadFile(keyPath); readErr == nil && len(raw) > 0 {
 		if priv, unmarshalErr := crypto.UnmarshalEd25519PrivateKey(raw); unmarshalErr == nil {
+			if aclErr := platform.HardenSecretFileACL(keyPath); aclErr != nil {
+				log.Printf("[p2p][identity] aviso: nao foi possivel restringir ACL de %s: %v", keyPath, aclErr)
+			}
 			return priv, nil
 		}
 		// Chave corrompida/inválida → regenera abaixo.
@@ -56,15 +60,10 @@ func loadOrCreateLibp2PIdentity(dataDir string) (crypto.PrivKey, error) {
 	if err := os.WriteFile(keyPath, raw, 0o600); err != nil {
 		return nil, fmt.Errorf("persistir identidade ed25519: %w", err)
 	}
-	// É uma chave PRIVADA: o 0o600 é no-op no Windows e o arquivo herda
-	// Users:(M) de %ProgramData%\Discovery. Quando elevado, restringe a DACL
-	// (mesmo padrão do A3/HardenSecretFileACL) — somente SYSTEM/Admins leem; a
-	// UI não elevada precisa LER a identidade no modo standalone, por isso
-	// Everyone mantém Read.
-	if platform.IsElevated() {
-		if aclErr := platform.HardenSecretFileACL(keyPath); aclErr != nil {
-			return nil, fmt.Errorf("restringir ACL da identidade p2p: %w", aclErr)
-		}
+	// É uma chave PRIVADA: restringe a DACL exclusivamente para SYSTEM:F e
+	// Administrators:F (sem Users/Everyone).
+	if aclErr := platform.HardenSecretFileACL(keyPath); aclErr != nil {
+		log.Printf("[p2p][identity] aviso: nao foi possivel restringir ACL de %s: %v", keyPath, aclErr)
 	}
 	return priv, nil
 }

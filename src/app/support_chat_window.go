@@ -1491,6 +1491,9 @@ func (a *App) SupportChatAttachmentPolicyJSON() map[string]any {
 // mostrando o pedido de aceite. A validade é conferida pelo verify em
 // background, não por este snapshot.
 func (a *App) SupportChatRefresh() (supportchat.State, error) {
+	if a.ipcClient != nil {
+		return a.supportChatRefreshViaIPC(true)
+	}
 	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
 	defer cancel()
 
@@ -1499,6 +1502,13 @@ func (a *App) SupportChatRefresh() (supportchat.State, error) {
 
 // SupportChatSendMessage envia uma mensagem do usuário final.
 func (a *App) SupportChatSendMessage(body string, attachmentIDs []string) error {
+	if a.ipcClient != nil {
+		_, err := a.ipcCallError("supportchat:send", map[string]any{
+			"body":          body,
+			"attachmentIds": attachmentIDs,
+		}, supportChatCallWait)
+		return err
+	}
 	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
 	defer cancel()
 
@@ -1511,6 +1521,19 @@ func (a *App) SupportChatUploadAttachment(fileName, contentType, base64Data stri
 	contentType = strings.TrimSpace(contentType)
 	if fileName == "" || contentType == "" {
 		return "", errSupportChatInvalidAttachment
+	}
+	if a.ipcClient != nil {
+		resp, err := a.ipcCallError("supportchat:upload", map[string]any{
+			"fileName":    fileName,
+			"contentType": contentType,
+			"base64Data":  base64Data,
+		}, supportChatCallWait)
+		if err != nil {
+			return "", err
+		}
+		data, _ := resp["data"].(map[string]any)
+		id, _ := data["attachmentId"].(string)
+		return id, nil
 	}
 
 	data, err := base64.StdEncoding.DecodeString(base64Data)
@@ -1592,6 +1615,24 @@ func (a *App) SupportChatDownloadAttachment(attachmentID string) (map[string]str
 	attachmentID = strings.TrimSpace(attachmentID)
 	if attachmentID == "" {
 		return nil, errSupportChatInvalidAttachment
+	}
+	if a.ipcClient != nil {
+		resp, err := a.ipcCallError("supportchat:download", map[string]any{
+			"attachmentId": attachmentID,
+		}, supportChatCallWait)
+		if err != nil {
+			return nil, err
+		}
+		data, _ := resp["data"].(map[string]any)
+		ct, _ := data["contentType"].(string)
+		b64, _ := data["base64"].(string)
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		return map[string]string{
+			"contentType": ct,
+			"base64":      b64,
+		}, nil
 	}
 
 	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
@@ -1879,9 +1920,18 @@ func (a *App) verifySupportChatInviteWindow(sessionID string) {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(a.supportChatContext(), checkTimeout)
-		activeID, hasSession, err := a.supportChatService().ActiveSessionID(ctx)
-		cancel()
+		var (
+			activeID   string
+			hasSession bool
+			err        error
+		)
+		if a.ipcClient != nil {
+			activeID, hasSession, err = a.supportChatActiveSessionViaIPC()
+		} else {
+			ctx, cancel := context.WithTimeout(a.supportChatContext(), checkTimeout)
+			activeID, hasSession, err = a.supportChatService().ActiveSessionID(ctx)
+			cancel()
+		}
 		if err != nil {
 			// Leitura desconhecida: reseta a confirmação e nunca fecha por isso.
 			noSessionStreak = 0
@@ -2064,6 +2114,10 @@ func (a *App) hideSupportChatInviteSurface() {
 
 // SupportChatEnd encerra a sessão pelo usuário.
 func (a *App) SupportChatEnd(reason string) error {
+	if a.ipcClient != nil {
+		_, err := a.ipcCallError("supportchat:end", map[string]any{"reason": reason}, supportChatCallWait)
+		return err
+	}
 	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
 	defer cancel()
 
@@ -2087,10 +2141,14 @@ func (a *App) SupportChatConfirmClose() error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
-	defer cancel()
-
-	err := svc.End(ctx, "user_closed")
+	var err error
+	if a.ipcClient != nil {
+		_, err = a.ipcCallError("supportchat:end", map[string]any{"reason": "user_closed"}, supportChatCallWait)
+	} else {
+		ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
+		defer cancel()
+		err = svc.End(ctx, "user_closed")
+	}
 	svc.ClearState()
 	a.closeSupportChatWindow()
 

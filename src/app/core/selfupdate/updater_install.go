@@ -13,6 +13,7 @@ import (
 
 	"discovery/app/core/buildinfo"
 	"discovery/app/core/errutil"
+	"discovery/app/core/platform"
 )
 
 // InstallFromURL faz o download do instalador a partir de uma URL direta
@@ -61,6 +62,21 @@ func (u *Updater) InstallFromURL(ctx context.Context, version, downloadURL strin
 	tempPath, fileSha256, err := u.downloadFromURL(ctx, finalURL)
 	if err != nil {
 		return err
+	}
+
+	// F13 (fail-closed): install-direto a partir de URL EXTERNA executa o
+	// binário como SYSTEM — quando a política exige verificação de assinatura
+	// (RequireSignatureValidation), um binário sem assinatura Authenticode
+	// válida é RECUSADO e removido (antes isto era código morto: a política
+	// existia mas nunca era consultada neste caminho). O hash do endpoint
+	// oficial continua protegido pelo SHA-256 do servidor (downloadFromCacheOrPublic).
+	if u.policy().RequireSignatureValidation {
+		if verr := platform.VerifyAuthenticode(tempPath); verr != nil {
+			u.lastError.Store("assinatura invalida: " + verr.Error())
+			errutil.LogIfErr(os.Remove(tempPath), "selfupdate: remover instalador externo sem assinatura valida")
+			return fmt.Errorf("instalador externo recusado: assinatura Authenticode invalida (%v)", verr)
+		}
+		u.logf("[selfupdate] assinatura Authenticode valida confirmada para URL externa")
 	}
 
 	// Publica no P2P com artifactID baseado no SHA256 real do binario.

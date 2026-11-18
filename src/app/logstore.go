@@ -23,6 +23,13 @@ var (
 	processLogStore   *logstore.Store
 )
 
+func logStorePaths(serviceMode bool) (dir, dbPath, filePath string) {
+	if serviceMode {
+		return platform.LogDir(), platform.LogDBPath(), platform.ServiceLogFilePath()
+	}
+	return platform.UILogDir(), platform.UILogDBPath(), platform.UILogFilePath()
+}
+
 // ensureProcessLogStore abre o logs.db uma única vez por processo: o serviço
 // abre antes de qualquer outra operação e o App reaproveita a mesma instância.
 // Devolve nil quando o banco não pode ser aberto (o chamador cai para arquivo
@@ -36,9 +43,9 @@ func ensureProcessLogStore(source, process string) *logstore.Store {
 	if !logFilePersistenceEnabled() {
 		return nil
 	}
-	dir := platform.LogDir()
+	dir, dbPath, _ := logStorePaths(source == "service")
 	st, err := logstore.Open(logstore.Options{
-		Path:      platform.LogDBPath(),
+		Path:      dbPath,
 		Kind:      logstore.KindLogs,
 		Source:    source,
 		Process:   process,
@@ -90,10 +97,11 @@ func (a *App) initLogPersistence() {
 	if !logFilePersistenceEnabled() {
 		return
 	}
+	dir, dbPath, logPath := logStorePaths(a.RuntimeFlags.ServiceMode)
 	// A limpeza dos arquivos texto antigos (installer.log, fallback, _legacy/)
 	// vale mesmo quando o banco não abre: é o único caso em que a retenção de
 	// 7 dias dependeria do Store.
-	logstore.PurgeStaleFiles(platform.LogDir(), LogRetention)
+	logstore.PurgeStaleFiles(dir, LogRetention)
 
 	source, process := "agent", "discovery-agent"
 	if a.RuntimeFlags.ServiceMode {
@@ -102,12 +110,8 @@ func (a *App) initLogPersistence() {
 	if st := ensureProcessLogStore(source, process); st != nil {
 		a.logStore = st
 		a.Logs.EnableStore(st)
-		a.Logs.Append("[startup] logs unificados em " + platform.LogDBPath())
+		a.Logs.Append("[startup] logs unificados em " + dbPath)
 		return
-	}
-	logPath := platform.LogFilePath()
-	if a.RuntimeFlags.ServiceMode {
-		logPath = platform.ServiceLogFilePath()
 	}
 	if logPath == "" {
 		return

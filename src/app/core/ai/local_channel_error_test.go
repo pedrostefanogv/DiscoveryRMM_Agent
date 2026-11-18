@@ -51,13 +51,13 @@ func TestLocalWriteFailureNotRetryable_EscopoRemoto(t *testing.T) {
 // Resultados de sucesso, texto cru e JSON quebrado nunca abortam o loop.
 func TestLocalWriteFailureNotRetryable_ResultadosNormais(t *testing.T) {
 	cases := map[string]string{
-		"sucesso":            `{"ok":true,"data":{"ticketId":"123"}}`,
-		"erro texto cru":     "canal admin indisponível (serviço sem autenticação?)",
-		"string error":       `{"error":"parametro obrigatorio ausente"}`,
-		"json quebrado":      `{"error":{`,
-		"error sem scope":    `{"error":{"code":"X"}}`,
-		"vazio":              "",
-		"array":              `[1,2,3]`,
+		"sucesso":             `{"ok":true,"data":{"ticketId":"123"}}`,
+		"erro texto cru":      "canal admin indisponível (serviço sem autenticação?)",
+		"string error":        `{"error":"parametro obrigatorio ausente"}`,
+		"json quebrado":       `{"error":{`,
+		"error sem scope":     `{"error":{"code":"X"}}`,
+		"vazio":               "",
+		"array":               `[1,2,3]`,
 		"erro dentro de erro": `{"error":{"code":"Y","scope":"local_agent"}}`,
 	}
 	for name, result := range cases {

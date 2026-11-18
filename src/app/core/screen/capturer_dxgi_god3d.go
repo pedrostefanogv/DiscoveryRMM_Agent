@@ -542,7 +542,8 @@ func (c *dxgiGoD3dCapturer) Close() error {
 }
 
 func (c *dxgiGoD3dCapturer) Name() string {
-	return "dxgi-go-d3d"
+	// Nome canônico do contrato F17: "dxgi" (fallback GDI reporta "gdi").
+	return "dxgi"
 }
 
 // ChannelOrderPending informa se a ordem dos canais (R↔B) ainda não foi

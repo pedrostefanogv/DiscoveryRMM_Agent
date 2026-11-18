@@ -113,8 +113,9 @@ if [[ -z "$VERSION" ]]; then
 import sys, re
 with open(sys.argv[1], encoding='utf-8') as f:
     content = f.read()
-m = re.search(r'(?ms)^\s*info:\s*\n(?:.*\n)*?\s+version:\s*[\"\\']?([^\"\\'\\s#]+)[\"\\']?', content)
-print(m.group(1) if m else '')
+m = re.search(r'(?ms)^\s*info:\s*\n(?:.*\n)*?\s+version:\s*(\S+)', content)
+value = m.group(1).strip() if m else ''
+print(value.strip(chr(34) + chr(39)))
 " "$CONFIG_YML" 2>/dev/null) || true
     if [[ -n "$VERSION" ]]; then
       echo "[info] versao detectada do build/config.yml: $VERSION"
@@ -138,7 +139,7 @@ fi
 
 if ! command -v x86_64-w64-mingw32-windres >/dev/null 2>&1; then
   echo "[erro] x86_64-w64-mingw32-windres nao encontrado no PATH" >&2
-  echo "[dica] sudo apt-get install -y binutils-mingw-w64-x-64" >&2
+  echo "[dica] sudo apt-get install -y binutils-mingw-w64-x86-64" >&2
   exit 1
 fi
 
@@ -151,14 +152,19 @@ WAILS3_BIN="${WAILS3_BIN:-$(command -v wails3 2>/dev/null) || true}"
 if [[ -z "$WAILS3_BIN" ]]; then
   echo "[info] wails3 nao encontrado no PATH; instalando via go install..."
   # GOBIN defaults to $GOPATH/bin or $HOME/go/bin; garantimos que fica acessível.
-  if ! go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.23 2>/dev/null; then
+  # F13: versão SEMPRE alinhada ao go.mod (wails v3.1.0) — beta.23 divergia
+  # e gerava bindings incompatíveis com o runtime do agente.
+  if ! go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0 2>/dev/null; then
     echo "[aviso] falha ao instalar wails3; continuando (bindings nao serao regenerados)"
-    echo "[dica] instale manualmente: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.23"
+    echo "[dica] instale manualmente: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0"
   else
-    # Resolve o caminho do binário instalado (GOBIN ou GOPATH/bin).
+    # Resolve o caminho do BINÁRIO instalado (GOBIN ou GOPATH/bin) — GOBIN é um
+    # DIRETÓRIO; sem o sufixo /wails3 a chamada "$WAILS3_BIN" generate falhava.
     WAILS3_BIN="$(go env GOBIN 2>/dev/null)"
     if [[ -z "$WAILS3_BIN" ]]; then
       WAILS3_BIN="$(go env GOPATH 2>/dev/null)/bin/wails3"
+    else
+      WAILS3_BIN="${WAILS3_BIN}/wails3"
     fi
     if [[ -f "$WAILS3_BIN" ]]; then
       echo "[info] wails3 instalado em: $WAILS3_BIN"
@@ -224,10 +230,10 @@ trap cleanup EXIT
 ICON_PATH_UNIX="${ICON_PATH//\\//}"
 printf 'IDI_APP_ICON ICON "%s"\n' "$ICON_PATH_UNIX" > "$TMP_RC"
 
-echo "[1/3] Gerando recurso de icone (.syso)..."
+echo "[1/4] Gerando recurso de icone (.syso)..."
 x86_64-w64-mingw32-windres --target=pe-x86-64 -i "$TMP_RC" -o "$TMP_SYSO"
 
-echo "[2/3] Build do discovery-agent.exe (windows/amd64)..."
+echo "[2/4] Build do discovery-agent.exe (windows/amd64)..."
 pushd "$SRC_ROOT" >/dev/null
 export CGO_ENABLED=1
 export GOOS=windows
@@ -253,7 +259,29 @@ fi
 go build -tags "desktop,production" -ldflags "$LDFLAGS" -o "$OUT_DIR/$OUTPUT_NAME" .
 popd >/dev/null
 
-echo "[3/3] Finalizando artefatos..."
+echo "[3/4] Build do discovery-service.exe (windows/amd64)..."
+# F13: o servidor de aplicação empacota AGENTE E SERVIÇO — sem o serviço, o
+# instalador cai em standalone (RegisterAgentService sem binário) e o modo
+# SYSTEM/IPC do agente não existe na máquina instalada. O serviço NÃO embute
+# frontend: build direto (sem tag desktop), via go cross-compile MinGW.
+pushd "$SRC_ROOT" >/dev/null
+export CGO_ENABLED=1
+export GOOS=windows
+export GOARCH=amd64
+export CC=x86_64-w64-mingw32-gcc
+
+LDFLAGS_SVC=""
+if [[ -n "$VERSION" ]]; then
+  LDFLAGS_SVC+=" -X discovery/app/core/buildinfo.Version=$VERSION"
+fi
+if [[ "$COMMIT" != "unknown" ]]; then
+  LDFLAGS_SVC+=" -X discovery/app/core/buildinfo.Commit=$COMMIT"
+fi
+
+go build -tags "production" -ldflags "$LDFLAGS_SVC" -o "$OUT_DIR/discovery-service.exe" ./cmd/discovery-service
+popd >/dev/null
+
+echo "[4/4] Finalizando artefatos..."
 
 # Generate agent-version.json for API post-build commit resolution
 if [[ -n "$VERSION" ]]; then

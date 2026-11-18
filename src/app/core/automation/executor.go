@@ -191,10 +191,12 @@ func executeScript(ctx context.Context, task AutomationTask, customFields map[st
 		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: errMsgScriptContentMissing}
 	}
 
-	// [[campo:chave]] também vale no conteúdo do script (mesma fonte do
-	// MDZ_CUSTOM_FIELDS). O hash de integridade continua sendo o do conteúdo
-	// original enviado pelo servidor — a expansão é só em runtime.
-	content = expandCustomFieldTokens(content, customFields)
+	// SEGURANÇA (F13): custom fields NÃO são mais interpolados no texto do
+	// script — valores (inclusive segredos) ficavam visíveis na command line
+	// do powershell.exe (Win32_Process/EDR/logs) e permitiam injeção de
+	// comandos via valor do campo. A entrega é EXCLUSIVAMENTE via variável de
+	// ambiente MDZ_CUSTOM_FIELDS (buildCustomFieldsEnv), já sem campos secretos.
+	// O hash de integridade continua validando o conteúdo original do servidor.
 
 	// M30: verificação de integridade — o ContentHashSHA256 declarado pelo
 	// servidor era ignorado; um payload corrompido/adulterado executava igual.
@@ -237,12 +239,9 @@ func executeCustomCommand(ctx context.Context, task AutomationTask, customFields
 		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: err.Error()}
 	}
 
-	// [[campo:chave]] no comando/argumentos recebe o valor do campo customizado
-	// desta execução (mesma fonte da variável MDZ_CUSTOM_FIELDS).
-	command = expandCustomFieldTokens(command, customFields)
-	for index := range args {
-		args[index] = expandCustomFieldTokens(args[index], customFields)
-	}
+	// SEGURANÇA (F13): sem interpolação [[campo:chave]] em comando/argumentos —
+	// o valor do campo ficava na command line do processo (vazamento de
+	// segredos + injeção). Entrega apenas via MDZ_CUSTOM_FIELDS.
 
 	extraEnv := buildCustomFieldsEnv(customFields)
 	switch commandType {

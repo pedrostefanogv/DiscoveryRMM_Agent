@@ -86,6 +86,14 @@ func NewConPTYShellRunAs(shell ShellKind, cols, rows int, onOutput func(string),
 		fullPath = resolvedPath
 	}
 
+	// Run-as (F13, fail-closed): resolve a identidade ANTES de abrir
+	// pipes/pseudoconsole. runAs=user sem usuário logado (console/RDP) FALHA
+	// a criação — nunca nasce como SYSTEM para "não falhar".
+	ra, raerr := resolveRunAs(runAs)
+	if raerr != nil {
+		return nil, raerr
+	}
+
 	stdinRead, stdinWrite, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("criar pipe stdin: %w", err)
@@ -114,9 +122,6 @@ func NewConPTYShellRunAs(shell ShellKind, cols, rows int, onOutput func(string),
 
 	cmdLine := buildCommandLine(fullPath, exeArgs)
 
-	// Run-as: resolve a identidade ANTES do CreateProcessW. O resolveRunAs
-	// nunca falha a sessão (fallback herdado com log de aviso).
-	ra := resolveRunAs(runAs)
 	var envBlock unsafe.Pointer
 	if ra.tok != 0 {
 		if b, eerr := userEnvironmentBlock(ra.tok); eerr == nil {

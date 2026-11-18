@@ -38,6 +38,8 @@
 | ⚙️  | Automação operacional e execução de tarefas              | Operational automation and task execution          |
 | 🔗  | Distribuição P2P com descoberta local                    | P2P distribution with local discovery              |
 | 🤖  | Integração com chat/IA e ferramentas MCP                 | Chat/AI integration and MCP tooling                |
+| 🎛️  | Acesso remoto: desktop, terminal, arquivos, Proxy LAN (HTTP/WS com allowlist SSRF-safe) e túnel RDP sobre NATS | Remote access: desktop, terminal, files, LAN proxy (HTTP/WS, SSRF-safe allowlist) and RDP tunnel over NATS |
+| 🔐  | Segurança local: authToken via DPAPI + ACL SYSTEM, debug HTTP autenticado por token, decommission com validação de caminho/assinatura | Local hardening: DPAPI authToken + SYSTEM ACL, token-authenticated debug HTTP, decommission path/signature validation |
 | 📥  | Instalador NSIS, bootstrap online, versionamento por tag | NSIS installer, online bootstrap, tag versioning   |
 
 ---
@@ -111,17 +113,19 @@ Detalhes em [BRANCHING.md](BRANCHING.md).
 - [ARCHITECTURE.md](ARCHITECTURE.md) — visão arquitetural / architecture overview
 - [SECURITY.md](SECURITY.md) — política de segurança / security policy
 - [BRANCHING.md](BRANCHING.md) — fluxo de branches / branch workflow
-- [CONFIG_AGENTE.md](CONFIG_AGENTE.md) — configuração local do agente / local agent configuration
-- [DOCs/](DOCs/) — guias técnicos e operacionais / technical and operational guides
-  - [PLANO_SEPARACAO_SERVICO_UI.md](DOCs/PLANO_SEPARACAO_SERVICO_UI.md) — separação serviço × UI (arquitetura implementada) / service × UI separation (implemented architecture)
-  - [GUIA_INTEGRACAO_PSADT_API_OPERACAO.md](DOCs/GUIA_INTEGRACAO_PSADT_API_OPERACAO.md) — integração PSADT e notificações
+- [src/app/core/terminal/RUN_AS.md](src/app/core/terminal/RUN_AS.md) — run-as do terminal remoto (SYSTEM × usuário) / remote terminal run-as
+- [AGENTS.md](AGENTS.md) — regras para agentes de IA / AI agent rules
+
+> Nota: os planos históricos (PLANO_SEPARACAO_SERVICO_UI, GUIA_INTEGRACAO_PSADT_API_OPERACAO,
+> CONFIG_AGENTE) foram arquivados; a arquitetura implementada (serviço discovery-service.exe
+> + UI companion + IPC) está descrita no [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
 ## 🛠️ Build (Contribuidores / Contributors)
 
-**PT_BR:** este projeto usa GitHub Actions para build oficial. Para desenvolvimento local consulte [DOCs/](DOCs/).
-**EN:** official builds run on GitHub Actions. For local development see [DOCs/](DOCs/).
+**PT_BR:** este projeto usa GitHub Actions para build oficial. Para desenvolvimento local consulte [ARCHITECTURE.md](ARCHITECTURE.md).
+**EN:** official builds run on GitHub Actions. For local development see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 Requisitos mínimos / Minimum requirements: Windows 10+, Go 1.26+, NSIS no `PATH`.
 

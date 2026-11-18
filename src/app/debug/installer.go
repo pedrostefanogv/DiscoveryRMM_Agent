@@ -24,12 +24,6 @@ import (
 	"github.com/samber/lo"
 )
 
-var utf8Bom = []byte{0xEF, 0xBB, 0xBF}
-
-func trimJSONBOM(data []byte) []byte {
-	return bytes.TrimPrefix(data, utf8Bom)
-}
-
 func installerConfigPathCandidates() []string {
 	return platform.ConfigPathCandidates()
 }
@@ -38,7 +32,69 @@ func installerOverridePathCandidates() []string {
 	return platform.InstallerOverridePathCandidates()
 }
 
+var hardenInstallerACL = platform.HardenSecretFileACL
+
+// ProtectInstallerConfigForDisk cifra authToken/deployToken via DPAPI (no Windows)
+// e limpa os campos em texto claro da cópia serializada.
+func ProtectInstallerConfigForDisk(cfg InstallerConfig) (InstallerConfig, error) {
+	if !canUseDPAPI() {
+		return cfg, nil
+	}
+	if tok := strings.TrimSpace(cfg.AuthToken); tok != "" {
+		enc, err := protectSecretFn(tok)
+		if err != nil {
+			return InstallerConfig{}, fmt.Errorf("proteger authToken via DPAPI: %w", err)
+		}
+		cfg.AuthTokenDpapi = enc
+		cfg.AuthToken = ""
+	}
+	if dep := strings.TrimSpace(cfg.APIKey); dep != "" {
+		enc, err := protectSecretFn(dep)
+		if err != nil {
+			return InstallerConfig{}, fmt.Errorf("proteger deployToken via DPAPI: %w", err)
+		}
+		cfg.DeployTokenDpapi = enc
+		cfg.APIKey = ""
+	}
+	return cfg, nil
+}
+
+// UnprotectInstallerConfigFromDisk decifra authTokenDpapi/deployTokenDpapi para
+// memória e indica se houve campos legados em texto claro pendentes de migração.
+func UnprotectInstallerConfigFromDisk(cfg *InstallerConfig) (bool, error) {
+	if cfg == nil {
+		return false, nil
+	}
+	needsMigration := false
+	if enc := strings.TrimSpace(cfg.AuthTokenDpapi); enc != "" {
+		plain, err := unprotectSecretFn(enc)
+		if err != nil {
+			return false, fmt.Errorf("decifrar authTokenDpapi: %w", err)
+		}
+		cfg.AuthToken = strings.TrimSpace(plain)
+	} else if strings.TrimSpace(cfg.AuthToken) != "" && canUseDPAPI() {
+		needsMigration = true
+	}
+	if enc := strings.TrimSpace(cfg.DeployTokenDpapi); enc != "" {
+		plain, err := unprotectSecretFn(enc)
+		if err != nil {
+			return false, fmt.Errorf("decifrar deployTokenDpapi: %w", err)
+		}
+		cfg.APIKey = strings.TrimSpace(plain)
+	} else if strings.TrimSpace(cfg.APIKey) != "" && canUseDPAPI() {
+		needsMigration = true
+	}
+	cfg.AuthTokenDpapi = ""
+	cfg.DeployTokenDpapi = ""
+	return needsMigration, nil
+}
+
 func loadInstallerConfigFromCandidates(paths []string, normalizeP2P func(p2pmeta.Config) p2pmeta.Config) (InstallerConfig, string, bool, error) {
+	cfg, path, found, _, err := loadInstallerConfigFromCandidatesWithMigration(paths, normalizeP2P)
+	return cfg, path, found, err
+}
+
+func loadInstallerConfigFromCandidatesWithMigration(paths []string, normalizeP2P func(p2pmeta.Config) p2pmeta.Config) (InstallerConfig, string, bool, bool, error) {
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -51,7 +107,11 @@ func loadInstallerConfigFromCandidates(paths []string, normalizeP2P func(p2pmeta
 
 		var cfg InstallerConfig
 		if err := json.Unmarshal(data, &cfg); err != nil {
-			return InstallerConfig{}, "", false, fmt.Errorf("falha ao ler %s: %w", path, err)
+			return InstallerConfig{}, "", false, false, fmt.Errorf("falha ao ler %s: %w", path, err)
+		}
+		needsMigration, err := UnprotectInstallerConfigFromDisk(&cfg)
+		if err != nil {
+			return InstallerConfig{}, "", false, false, fmt.Errorf("falha ao decifrar segredos de %s: %w", path, err)
 		}
 
 		cfg.ServerURL = strings.TrimSpace(cfg.ServerURL)
@@ -68,10 +128,10 @@ func loadInstallerConfigFromCandidates(paths []string, normalizeP2P func(p2pmeta
 			cfg.P2P = normalizeP2P(cfg.P2P)
 		}
 
-		return cfg, path, true, nil
+		return cfg, path, true, needsMigration, nil
 	}
 
-	return InstallerConfig{}, "", false, nil
+	return InstallerConfig{}, "", false, false, nil
 }
 
 func mergeInstallerOverride(base, override InstallerConfig) InstallerConfig {
@@ -141,12 +201,12 @@ func installerConfigWriteCandidates(sourcePath string) []string {
 }
 
 func (s *Service) loadInstallerConfig() (InstallerConfig, string, error) {
-	baseCfg, basePath, baseFound, baseErr := loadInstallerConfigFromCandidates(installerConfigPathCandidates(), s.normalizeP2PConfig)
+	baseCfg, basePath, baseFound, baseNeedsMigration, baseErr := loadInstallerConfigFromCandidatesWithMigration(installerConfigPathCandidates(), s.normalizeP2PConfig)
 	if baseErr != nil {
 		return InstallerConfig{}, "", baseErr
 	}
 
-	overrideCfg, _, overrideFound, overrideErr := loadInstallerConfigFromCandidates(installerOverridePathCandidates(), s.normalizeP2PConfig)
+	overrideCfg, _, overrideFound, _, overrideErr := loadInstallerConfigFromCandidatesWithMigration(installerOverridePathCandidates(), s.normalizeP2PConfig)
 	if overrideErr != nil {
 		return InstallerConfig{}, "", overrideErr
 	}
@@ -172,10 +232,15 @@ func (s *Service) loadInstallerConfig() (InstallerConfig, string, error) {
 	// Alinhado com app/installer.go:loadInstallerConfig.
 	if resolved.ApiServer == "" && resolved.ServerURL == "" && resolved.APIKey == "" {
 		log.Printf("[config] config.json encontrado mas sem conexao — retornando como esta para bootstrap")
+		if baseNeedsMigration && resolvedPath != "" {
+			if err := ScrubInstallerConfigSource(resolvedPath, resolved); err != nil {
+				log.Printf("[config] aviso: falha ao migrar segredos DPAPI em %s: %v", resolvedPath, err)
+			}
+		}
 		return resolved, resolvedPath, nil
 	}
 
-	if overrideFound {
+	if overrideFound || baseNeedsMigration {
 		if writePath, err := persistInstallerConfig(resolvedPath, resolved); err == nil {
 			return resolved, writePath, nil
 		}
@@ -191,8 +256,12 @@ func persistInstallerConfig(sourcePath string, cfg InstallerConfig) (string, err
 	}
 
 	CleanInstallerConfigForPersistence(&cfg)
+	protectedCfg, err := ProtectInstallerConfigForDisk(cfg)
+	if err != nil {
+		return "", fmt.Errorf("falha ao proteger segredos de producao: %w", err)
+	}
 
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := json.MarshalIndent(protectedCfg, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("falha ao serializar config de producao: %w", err)
 	}
@@ -204,7 +273,14 @@ func persistInstallerConfig(sourcePath string, cfg InstallerConfig) (string, err
 			errs = append(errs, dir+": "+err.Error())
 			continue
 		}
-		if err := os.WriteFile(path, data, 0o600); err != nil {
+		if err := atomicWriteFile(path, data, func(tmpPath string) error {
+			if hardenInstallerACL != nil {
+				if aclErr := hardenInstallerACL(tmpPath); aclErr != nil {
+					log.Printf("[config] aviso: nao foi possivel restringir ACL de %s: %v", tmpPath, aclErr)
+				}
+			}
+			return nil
+		}); err != nil {
 			errs = append(errs, path+": "+err.Error())
 			continue
 		}
@@ -238,11 +314,22 @@ func ScrubInstallerConfigSource(path string, cfg InstallerConfig) error {
 		return nil
 	}
 	CleanInstallerConfigForPersistence(&cfg)
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	protectedCfg, err := ProtectInstallerConfigForDisk(cfg)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	data, err := json.MarshalIndent(protectedCfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(path, data, func(tmpPath string) error {
+		if hardenInstallerACL != nil {
+			if aclErr := hardenInstallerACL(tmpPath); aclErr != nil {
+				log.Printf("[config] aviso: nao foi possivel restringir ACL de %s: %v", tmpPath, aclErr)
+			}
+		}
+		return nil
+	})
 }
 
 func parseInstallerServerURL(raw string) (string, string, error) {

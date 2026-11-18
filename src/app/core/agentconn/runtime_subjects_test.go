@@ -196,7 +196,7 @@ func TestValidateAgentIdentityJWTClaims_AcceptsExtraSubjects(t *testing.T) {
 						stripSubjectHyphens(subjects.ClientID),
 						stripSubjectHyphens(subjects.SiteID),
 						stripSubjectHyphens(subjects.AgentID)),
-					"$JS.ACK.DISCOVERY_FANOUT_COMMANDS.>",
+					"$JS.ACK.DISCOVERY_FANOUT_COMMANDS_client1.>",
 				},
 			},
 		},

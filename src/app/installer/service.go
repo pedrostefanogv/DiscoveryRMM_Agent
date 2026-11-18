@@ -24,29 +24,67 @@ type Config = debug.InstallerConfig
 type Deps struct {
 	// NormalizeP2PConfig normaliza a configuração P2P.
 	NormalizeP2PConfig func(p2pmeta.Config) p2pmeta.Config
+	// HardenFileACL aplica ACL restritiva no arquivo persistido. Nil usa platform.HardenSecretFileACL.
+	HardenFileACL func(string) error
+	// ConfigPaths / OverridePaths / SharedPath são opcionais para testes.
+	ConfigPaths   func() []string
+	OverridePaths func() []string
+	SharedPath    func() string
 }
 
 // Service encapsula a leitura/persistência da configuração do instalador.
 type Service struct {
 	normalizeP2PConfig func(p2pmeta.Config) p2pmeta.Config
+	hardenFileACL      func(string) error
+	configPathsFn      func() []string
+	overridePathsFn    func() []string
+	sharedPathFn       func() string
 }
 
 // New cria um InstallerService.
 func New(deps Deps) *Service {
-	return &Service{normalizeP2PConfig: deps.NormalizeP2PConfig}
+	harden := deps.HardenFileACL
+	if harden == nil {
+		harden = platform.HardenSecretFileACL
+	}
+	return &Service{
+		normalizeP2PConfig: deps.NormalizeP2PConfig,
+		hardenFileACL:      harden,
+		configPathsFn:      deps.ConfigPaths,
+		overridePathsFn:    deps.OverridePaths,
+		sharedPathFn:       deps.SharedPath,
+	}
 }
 
 // ConfigPathCandidates retorna os caminhos candidatos do config.
 func (s *Service) ConfigPathCandidates() []string {
+	if s != nil && s.configPathsFn != nil {
+		return s.configPathsFn()
+	}
 	return platform.ConfigPathCandidates()
 }
 
 // OverridePathCandidates retorna os caminhos candidatos do installer.json.
 func (s *Service) OverridePathCandidates() []string {
+	if s != nil && s.overridePathsFn != nil {
+		return s.overridePathsFn()
+	}
 	return platform.InstallerOverridePathCandidates()
 }
 
+func (s *Service) sharedConfigPath() string {
+	if s != nil && s.sharedPathFn != nil {
+		return s.sharedPathFn()
+	}
+	return platform.SharedConfigPath()
+}
+
 func (s *Service) loadFromCandidates(paths []string) (Config, string, bool, error) {
+	cfg, path, found, _, err := s.loadFromCandidatesWithMigration(paths)
+	return cfg, path, found, err
+}
+
+func (s *Service) loadFromCandidatesWithMigration(paths []string) (Config, string, bool, bool, error) {
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -58,7 +96,11 @@ func (s *Service) loadFromCandidates(paths []string) (Config, string, bool, erro
 
 		var cfg Config
 		if err := json.Unmarshal(data, &cfg); err != nil {
-			return Config{}, "", false, fmt.Errorf("falha ao ler %s: %w", path, err)
+			return Config{}, "", false, false, fmt.Errorf("falha ao ler %s: %w", path, err)
+		}
+		needsMigration, err := debug.UnprotectInstallerConfigFromDisk(&cfg)
+		if err != nil {
+			return Config{}, "", false, false, fmt.Errorf("falha ao decifrar segredos de %s: %w", path, err)
 		}
 
 		cfg.ServerURL = strings.TrimSpace(cfg.ServerURL)
@@ -74,10 +116,10 @@ func (s *Service) loadFromCandidates(paths []string) (Config, string, bool, erro
 			cfg.P2P = s.normalizeP2PConfig(cfg.P2P)
 		}
 
-		return cfg, path, true, nil
+		return cfg, path, true, needsMigration, nil
 	}
 
-	return Config{}, "", false, nil
+	return Config{}, "", false, false, nil
 }
 
 func (s *Service) mergeOverride(base, override Config) Config {
@@ -129,8 +171,9 @@ func (s *Service) cleanupLegacyOverrideFiles() {
 }
 
 func (s *Service) writeCandidates(sourcePath string) []string {
-	paths := make([]string, 0, len(platform.ConfigPathCandidates())+1)
-	paths = append(paths, platform.ConfigPathCandidates()...)
+	candidates := s.ConfigPathCandidates()
+	paths := make([]string, 0, len(candidates)+1)
+	paths = append(paths, candidates...)
 	if strings.TrimSpace(sourcePath) != "" {
 		paths = append(paths, sourcePath)
 	}
@@ -169,12 +212,12 @@ func (s *Service) EnsureDefault() (Config, string, error) {
 
 // Load carrega a configuração do instalador.
 func (s *Service) Load() (Config, string, error) {
-	baseCfg, basePath, baseFound, baseErr := s.loadFromCandidates(s.ConfigPathCandidates())
+	baseCfg, basePath, baseFound, baseNeedsMigration, baseErr := s.loadFromCandidatesWithMigration(s.ConfigPathCandidates())
 	if baseErr != nil {
 		return Config{}, "", baseErr
 	}
 
-	overrideCfg, _, overrideFound, overrideErr := s.loadFromCandidates(s.OverridePathCandidates())
+	overrideCfg, _, overrideFound, _, overrideErr := s.loadFromCandidatesWithMigration(s.OverridePathCandidates())
 	if overrideErr != nil {
 		return Config{}, "", overrideErr
 	}
@@ -199,10 +242,15 @@ func (s *Service) Load() (Config, string, error) {
 	// retorna como está — NÃO sobrescreve com defaults. O bootstrap tratará.
 	if resolved.ApiServer == "" && resolved.ServerAPI == "" && resolved.ServerURL == "" && resolved.APIKey == "" {
 		log.Printf("[config] config.json encontrado mas sem conexão — retornando como está para bootstrap")
+		if baseNeedsMigration && resolvedPath != "" {
+			if _, err := s.Persist(resolvedPath, resolved); err != nil {
+				log.Printf("[config] aviso: falha ao migrar segredos DPAPI em %s: %v", resolvedPath, err)
+			}
+		}
 		return resolved, resolvedPath, nil
 	}
 
-	if overrideFound {
+	if overrideFound || baseNeedsMigration {
 		if writePath, err := s.Persist(resolvedPath, resolved); err == nil {
 			return resolved, writePath, nil
 		}
@@ -225,7 +273,7 @@ func (s *Service) ensureDefault() (Config, string, error) {
 		},
 	}
 
-	path := platform.SharedConfigPath()
+	path := s.sharedConfigPath()
 
 	// Não sobrescreve arquivo existente — apenas cria se não existir.
 	if _, err := os.Stat(path); err == nil {
@@ -255,7 +303,7 @@ func (s *Service) ensureDefault() (Config, string, error) {
 		return cfg, "", nil
 	}
 
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := s.writeConfigAtomic(path, data); err != nil {
 		log.Printf("[config] aviso: nao foi possivel persistir config padrao em %s: %v", path, err)
 		return cfg, "", nil
 	}
@@ -273,8 +321,12 @@ func (s *Service) Persist(sourcePath string, cfg Config) (string, error) {
 	}
 
 	debug.CleanInstallerConfigForPersistence(&cfg)
+	protectedCfg, err := debug.ProtectInstallerConfigForDisk(cfg)
+	if err != nil {
+		return "", fmt.Errorf("falha ao proteger segredos de producao: %w", err)
+	}
 
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := json.MarshalIndent(protectedCfg, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("falha ao serializar config de producao: %w", err)
 	}
@@ -286,7 +338,7 @@ func (s *Service) Persist(sourcePath string, cfg Config) (string, error) {
 			errs = append(errs, dir+": "+err.Error())
 			continue
 		}
-		if err := os.WriteFile(path, data, 0o600); err != nil {
+		if err := s.writeConfigAtomic(path, data); err != nil {
 			errs = append(errs, path+": "+err.Error())
 			continue
 		}
@@ -295,4 +347,45 @@ func (s *Service) Persist(sourcePath string, cfg Config) (string, error) {
 	}
 
 	return "", fmt.Errorf("falha ao persistir config de producao: %s", strings.Join(errs, " | "))
+}
+
+func (s *Service) writeConfigAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	tmp, err := os.CreateTemp(dir, "."+base+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if s != nil && s.hardenFileACL != nil {
+		if aclErr := s.hardenFileACL(tmpPath); aclErr != nil {
+			log.Printf("[config] aviso: nao foi possivel restringir ACL de %s: %v", tmpPath, aclErr)
+		}
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }

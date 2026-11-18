@@ -21,19 +21,26 @@ import (
 // workerDebugConfigFile espelha debug.debugConfigFile (não exportado).
 const workerDebugConfigFile = "debug_config.json"
 
-// workerDebugConfigRaw é o subconjunto de debug.Config que o worker precisa.
-// Reusa os mesmos nomes de campo JSON do debug.Config (tags em debug/config.go).
+// workerDebugConfigRaw é o subconjunto não-secreto de debug.Config.
+// authToken NUNCA é lido do disco pelo worker (chega estritamente via stdin).
 type workerDebugConfigRaw struct {
-	ApiScheme    string `json:"apiScheme,omitempty"`
-	ApiServer    string `json:"apiServer,omitempty"`
-	NatsServer   string `json:"natsServer"`
-	NatsWsServer string `json:"natsWsServer"`
-	AuthToken    string `json:"authToken"`
-	AgentID      string `json:"agentId"`
+	ApiScheme                string `json:"apiScheme,omitempty"`
+	ApiServer                string `json:"apiServer,omitempty"`
+	NatsServer               string `json:"natsServer"`
+	NatsWsServer             string `json:"natsWsServer"`
+	AgentID                  string `json:"agentId"`
+	AllowInsecureTLS         bool   `json:"allowInsecureTls,omitempty"`
+	NatsServerHost           string `json:"natsServerHost,omitempty"`
+	NatsServerHostInternal   string `json:"natsServerHostInternal,omitempty"`
+	NatsUseWssExternal       bool   `json:"natsUseWssExternal,omitempty"`
+	EnforceTLSHashValidation bool   `json:"enforceTlsHashValidation,omitempty"`
+	HandshakeEnabled         bool   `json:"handshakeEnabled,omitempty"`
+	ApiTLSCertHash           string `json:"apiTlsCertHash,omitempty"`
+	NatsTLSCertHash          string `json:"natsTlsCertHash,omitempty"`
 }
 
-// GetDebugConfigForWorker lê o debug_config.json persistido (mesmo caminho
-// usado pelo debug.Service.LoadPersistedConfig).
+// GetDebugConfigForWorker lê campos não-secretos do debug_config.json (quando
+// acessível). Segredos (AuthToken) são recebidos estritamente via stdin.
 func GetDebugConfigForWorker() WorkerDebugConfig {
 	out := WorkerDebugConfig{}
 	programData := os.Getenv("ProgramData")
@@ -54,15 +61,21 @@ func GetDebugConfigForWorker() WorkerDebugConfig {
 	out.ApiServer = raw.ApiServer
 	out.NatsServer = raw.NatsServer
 	out.NatsWsServer = raw.NatsWsServer
-	out.AuthToken = raw.AuthToken
 	out.AgentID = raw.AgentID
+	out.AllowInsecureTLS = raw.AllowInsecureTLS
+	out.NatsServerHost = raw.NatsServerHost
+	out.NatsServerHostInternal = raw.NatsServerHostInternal
+	out.NatsUseWssExternal = raw.NatsUseWssExternal
+	out.EnforceTLSHashValidation = raw.EnforceTLSHashValidation
+	out.HandshakeEnabled = raw.HandshakeEnabled
+	out.ApiTLSCertHash = raw.ApiTLSCertHash
+	out.NatsTLSCertHash = raw.NatsTLSCertHash
 	return out
 }
 
-// workerInstallerConfigRaw é o subconjunto de InstallerConfig que o worker usa.
+// workerInstallerConfigRaw é o subconjunto não-secreto de InstallerConfig.
 type workerInstallerConfigRaw struct {
 	ApiServer string `json:"apiServer"`
-	AuthToken string `json:"authToken"`
 	AgentID   string `json:"agentId"`
 	ClientID  string `json:"clientId"`
 	SiteID    string `json:"siteId"`
@@ -92,9 +105,24 @@ func stringFromWorkerPayload(cmd map[string]any, key string) string {
 	return ""
 }
 
+func boolFromWorkerPayload(cmd map[string]any, key string) (bool, bool) {
+	if cmd == nil {
+		return false, false
+	}
+	v, ok := cmd[key].(bool)
+	return v, ok
+}
+
 // mergeWorkerDebugConfigFromPayload aplica os overrides do payload sobre o
-// config lido dos arquivos. Campos ausentes no payload mantêm o arquivo.
+// config do worker. Segredos (authToken) e hints TLS/identidade do serviço têm
+// precedência absoluta.
 func mergeWorkerDebugConfigFromPayload(cfg WorkerDebugConfig, cmd map[string]any) WorkerDebugConfig {
+	if v := stringFromWorkerPayload(cmd, "authToken"); v != "" {
+		cfg.AuthToken = v
+	}
+	if v := stringFromWorkerPayload(cmd, "agentId"); v != "" {
+		cfg.AgentID = v
+	}
 	if v := stringFromWorkerPayload(cmd, "natsCurrentUrl"); v != "" {
 		cfg.NatsCurrentURL = v
 	}
@@ -110,6 +138,30 @@ func mergeWorkerDebugConfigFromPayload(cfg WorkerDebugConfig, cmd map[string]any
 	if v := stringFromWorkerPayload(cmd, "apiScheme"); v != "" {
 		cfg.ApiScheme = v
 	}
+	if v, ok := boolFromWorkerPayload(cmd, "allowInsecureTls"); ok {
+		cfg.AllowInsecureTLS = v
+	}
+	if v := stringFromWorkerPayload(cmd, "natsServerHost"); v != "" {
+		cfg.NatsServerHost = v
+	}
+	if v := stringFromWorkerPayload(cmd, "natsServerHostInternal"); v != "" {
+		cfg.NatsServerHostInternal = v
+	}
+	if v, ok := boolFromWorkerPayload(cmd, "natsUseWssExternal"); ok {
+		cfg.NatsUseWssExternal = v
+	}
+	if v, ok := boolFromWorkerPayload(cmd, "enforceTlsHashValidation"); ok {
+		cfg.EnforceTLSHashValidation = v
+	}
+	if v, ok := boolFromWorkerPayload(cmd, "handshakeEnabled"); ok {
+		cfg.HandshakeEnabled = v
+	}
+	if v := stringFromWorkerPayload(cmd, "apiTlsCertHash"); v != "" {
+		cfg.ApiTLSCertHash = v
+	}
+	if v := stringFromWorkerPayload(cmd, "natsTlsCertHash"); v != "" {
+		cfg.NatsTLSCertHash = v
+	}
 	return cfg
 }
 
@@ -124,38 +176,15 @@ func mergeWorkerAgentConfigFromPayload(cfg WorkerAgentConfig, cmd map[string]any
 	return cfg
 }
 
-// GetInstallerAuthTokenForWorker lê o authToken do config.json do instalador
-// (mesmo arquivo que o agentconn usa como fallback canônico).
-//
-// POR QUÊ (bug 2026-09-20 — "nats: Authorization Violation" no worker de
-// remote session): o token do agente é ROTACIONADO pelo P2P/zero-touch e a
-// persistência da rotação vai para o config.json (persistInstallerConfig).
-// O debug_config.json NÃO é reescrito pela rotação — fica com o token
-// original. O worker lia o token APENAS do debug_config.json e conectava o
-// NATS com token vencido → "Authorization Violation" nos dois endpoints
-// (nats:// e wss://) → sessão de terminal/acesso remoto morria no spawn
-// (evidência: agent-service.log 10:42:20-10:42:40, 4 sessões). O agent
-// principal conecta com o token vivo em memória — por isso só o worker falhava.
+// GetInstallerAuthTokenForWorker foi desativado por segurança (F12): config.json
+// é restrito a SYSTEM e protegido por DPAPI, portanto o worker NÃO lê authToken
+// do disco — recebe estritamente via stdin do serviço (fail-closed).
 func GetInstallerAuthTokenForWorker() string {
-	programData := os.Getenv("ProgramData")
-	if programData == "" {
-		programData = `C:\\ProgramData`
-	}
-	path := filepath.Join(programData, "Discovery", "config.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	data = trimJSONBOMWorker(data)
-	var raw workerInstallerConfigRaw
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(raw.AuthToken)
+	return ""
 }
 
 // GetAgentConfigurationForWorker lê clientId/siteId do config.json do
-// instalador (mesmo arquivo que o agentconn usa como fallback canônico).
+// instalador (fallback apenas quando não injetados via stdin).
 func GetAgentConfigurationForWorker() WorkerAgentConfig {
 	out := WorkerAgentConfig{}
 	programData := os.Getenv("ProgramData")

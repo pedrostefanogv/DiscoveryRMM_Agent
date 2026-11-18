@@ -26,8 +26,8 @@ const agentUIExecutableName = "discovery-agent.exe"
 
 // Leitura do CommandLine via ntdll (ver processCommandLine).
 var (
-	modntdll                       = windows.NewLazySystemDLL("ntdll.dll")
-	procNtQueryInformationProcess  = modntdll.NewProc("NtQueryInformationProcess")
+	modntdll                      = windows.NewLazySystemDLL("ntdll.dll")
+	procNtQueryInformationProcess = modntdll.NewProc("NtQueryInformationProcess")
 )
 
 // ntProcessCommandLineInformation = 60 (ProcessCommandLineInformation).
@@ -340,11 +340,10 @@ func pathHasDirPrefix(path, root string) bool {
 }
 
 // agentWebView2Root devolve a raiz dos dados do WebView2 do agent
-// (<DataDir>\WebView2), que cobre as subpastas session-<id> E o perfil base.
-// É o CHAMADOR que a resolve — as funções de decisão a recebem por parâmetro,
-// para continuarem puras e testáveis sem depender do ambiente da máquina.
+// (<UIDataDir>\WebView2 em %LOCALAPPDATA%\Discovery\WebView2), que cobre as
+// subpastas session-<id> E o perfil base.
 func agentWebView2Root() string {
-	return filepath.Join(platform.DataDir(), webView2RootSuffix)
+	return platform.UIWebView2Root()
 }
 
 // processCommandLine lê o CommandLine de um processo (best-effort).

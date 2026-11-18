@@ -515,7 +515,6 @@ func TestAtivarMascaraRecapturaComJanelaOculta(t *testing.T) {
 	}
 }
 
-
 // ── Regressões do refresh com buffers separados e papel de parede ──
 //
 // Duas falhas de projeto que produziam exatamente o sintoma relatado em campo
@@ -709,7 +708,6 @@ func TestCamadasSobreRegiaoPapelDeParedeNaoEBloqueado(t *testing.T) {
 		t.Fatal("janela comum foi classificada como papel de parede")
 	}
 }
-
 
 // ── Caminho BitBlt ao vivo (fonteAoVivoBitBlt) ──
 //
@@ -986,7 +984,6 @@ func TestDescartePermitidoComProtecao(t *testing.T) {
 	}
 }
 
-
 // TestComporCamadasNaFaixaOrcamentoNaoExpulsaPapelDeParede trava a interação
 // entre o limite de janelas vivas e o fallback: com mais janelas normais do que
 // o orçamento do ciclo, elas são PULADAS (continue) — nunca um break que
@@ -1035,5 +1032,3 @@ func TestComporCamadasNaFaixaOrcamentoNaoExpulsaPapelDeParede(t *testing.T) {
 		t.Fatalf("custo = %d, esperado %d (só as janelas vivas contam)", custo, 6*10*20)
 	}
 }
-
-

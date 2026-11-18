@@ -57,11 +57,11 @@ func thirdPartyUpdates(apps []thirdparty.AppUpdate) []windowsupdate.Update {
 			description = fmt.Sprintf("%s: %s -> %s", app.Source, app.InstalledVersion, app.AvailableVersion)
 		}
 		updates = append(updates, windowsupdate.Update{
-			UpdateKey:      app.UpdateKey(),
-			Title:          truncateForLog(title+" ("+app.ID+")", 500),
-			Description:    truncateForLog(description, 2000),
-			Classification: "Third-party",
-			Categories:     []string{"Third Party"},
+			UpdateKey:        app.UpdateKey(),
+			Title:            truncateForLog(title+" ("+app.ID+")", 500),
+			Description:      truncateForLog(description, 2000),
+			Classification:   "Third-party",
+			Categories:       []string{"Third Party"},
 			IsPending:        true,
 			Source:           app.Source,
 			UpdateType:       "software",
@@ -74,9 +74,9 @@ func thirdPartyUpdates(apps []thirdparty.AppUpdate) []windowsupdate.Update {
 // InstallThirdParty instala/atualiza apps de terceiros (WU-19/WU-20/WU-21).
 //
 // Dois caminhos:
-//  - com metadados de CATÁLOGO (URL + SHA-256): baixa do fornecedor, valida o
-//    hash e executa os switches curados — não depende do gerenciador;
-//  - sem metadados: delega ao provider (comportamento anterior).
+//   - com metadados de CATÁLOGO (URL + SHA-256): baixa do fornecedor, valida o
+//     hash e executa os switches curados — não depende do gerenciador;
+//   - sem metadados: delega ao provider (comportamento anterior).
 //
 // O ID é validado pela allowlist (provider ou instalador), nunca no shell.
 func (s *Service) InstallThirdParty(ctx context.Context, source string, requests []ThirdPartyInstallRequest) ([]ThirdPartyInstallOutcome, error) {

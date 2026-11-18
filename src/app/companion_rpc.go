@@ -245,6 +245,16 @@ func ipcRPCDataOutput(resp map[string]any) string {
 // roda o core) precisa receber a mesma config, senão fica divergente até
 // reiniciar. debug:get devolve a config VIVA do serviço para a UI adotar.
 
+// redactDebugConfig remove segredos (AuthToken/AuthTokenDpapi) antes de
+// trafegar DebugConfig pelo IPC ou eventos de UI, preservando HasAuthToken.
+func redactDebugConfig(cfg DebugConfig) DebugConfig {
+	hasToken := strings.TrimSpace(cfg.AuthToken) != "" || cfg.HasAuthToken
+	cfg.AuthToken = ""
+	cfg.AuthTokenDpapi = ""
+	cfg.HasAuthToken = hasToken
+	return cfg
+}
+
 // getDebugConfigCompanion consulta a config de debug do serviço via IPC.
 // Retorna (zero, false) quando standalone ou falhou.
 func (a *App) getDebugConfigCompanion() (DebugConfig, bool) {
@@ -261,15 +271,25 @@ func (a *App) getDebugConfigCompanion() (DebugConfig, bool) {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return DebugConfig{}, false
 	}
-	return cfg, true
+	return redactDebugConfig(cfg), true
 }
 
-// ipcRPCDebugGet devolve a config de debug VIVA do serviço.
+func (a *App) hydrateDebugConfigCompanion() {
+	if a == nil || a.ipcClient == nil || a.DebugSvc == nil {
+		return
+	}
+	if cfg, ok := a.getDebugConfigCompanion(); ok {
+		a.DebugSvc.AdoptExternalConfig(cfg)
+		a.Logs.Append("[ipc] config de debug adotada do serviço (debug:get)")
+	}
+}
+
+// ipcRPCDebugGet devolve a config de debug VIVA do serviço (com segredos redigidos).
 func (a *App) ipcRPCDebugGet() map[string]any {
 	if err := a.requireDebugSvc(); err != nil {
 		return map[string]any{"ok": false, "error": err.Error()}
 	}
-	raw, err := json.Marshal(a.DebugSvc.GetConfig())
+	raw, err := json.Marshal(redactDebugConfig(a.DebugSvc.GetConfig()))
 	if err != nil {
 		return map[string]any{"ok": false, "error": err.Error()}
 	}
@@ -278,6 +298,7 @@ func (a *App) ipcRPCDebugGet() map[string]any {
 
 // ipcRPCDebugSet aplica a config de debug recebida da UI companion NO serviço
 // (valida, persiste em debug_config.json e recarrega o agentConn do core).
+// Quando authToken chega vazio ou mascarado ("********"), preserva o token atual.
 func (a *App) ipcRPCDebugSet(payload map[string]any) map[string]any {
 	if err := a.requireDebugSvc(); err != nil {
 		return map[string]any{"ok": false, "error": err.Error()}
@@ -290,10 +311,61 @@ func (a *App) ipcRPCDebugSet(payload map[string]any) map[string]any {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return map[string]any{"ok": false, "error": "config inválida: " + err.Error()}
 	}
+	if tok := strings.TrimSpace(cfg.AuthToken); tok == "" || tok == "********" {
+		cfg.AuthToken = a.DebugSvc.GetConfig().AuthToken
+	}
 	if err := a.DebugSvc.SetConfig(cfg); err != nil {
 		return map[string]any{"ok": false, "error": err.Error()}
 	}
-	return map[string]any{"ok": true}
+	effRaw, err := json.Marshal(redactDebugConfig(a.DebugSvc.GetConfig()))
+	if err != nil {
+		return map[string]any{"ok": true}
+	}
+	return map[string]any{"ok": true, "data": map[string]any{"config": json.RawMessage(effRaw)}}
+}
+
+// ipcRPCDebugTest testa conectividade com API/NATS usando o DebugSvc do serviço
+// (preenchendo authToken armazenado caso venha vazio/redigido da UI companion).
+func (a *App) ipcRPCDebugTest(payload map[string]any) map[string]any {
+	if err := a.requireDebugSvc(); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	var cfg DebugConfig
+	if rawCfg, ok := payload["config"]; ok && rawCfg != nil {
+		raw, err := json.Marshal(rawCfg)
+		if err != nil {
+			return map[string]any{"ok": false, "error": "config inválida: " + err.Error()}
+		}
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return map[string]any{"ok": false, "error": "config inválida: " + err.Error()}
+		}
+	} else {
+		cfg = a.DebugSvc.GetConfig()
+	}
+	if tok := strings.TrimSpace(cfg.AuthToken); tok == "" || tok == "********" {
+		cfg.AuthToken = a.DebugSvc.GetConfig().AuthToken
+	}
+	out, err := a.DebugSvc.TestConnection(cfg)
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	return map[string]any{"ok": true, "data": map[string]any{"output": out}}
+}
+
+// ipcRPCDebugRealtimeStatus consulta /me/realtime/status no serviço (que detém AuthToken).
+func (a *App) ipcRPCDebugRealtimeStatus() map[string]any {
+	if err := a.requireDebugSvc(); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	st, err := a.DebugSvc.GetRealtimeStatus()
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	raw, err := json.Marshal(st)
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	return map[string]any{"ok": true, "data": map[string]any{"status": json.RawMessage(raw)}}
 }
 
 // hydrateAgentConfigurationCompanion adota a configuração do agente resolvida

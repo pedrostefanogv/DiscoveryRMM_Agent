@@ -138,5 +138,3 @@ func TestThirdPartyGateSwapsDynamically(t *testing.T) {
 		t.Fatal("provider não consultado após habilitar a origem")
 	}
 }
-
-

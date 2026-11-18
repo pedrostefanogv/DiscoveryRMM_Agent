@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"discovery/app/core/platform"
 	_ "modernc.org/sqlite"
 )
 
@@ -198,6 +199,12 @@ func Open(dataDir string) (*DB, error) {
 	if err := db.initialize(); err != nil {
 		conn.Close()
 		return nil, err
+	}
+
+	if platform.IsElevated() {
+		if aclErr := platform.HardenSecretFileACL(dbPath); aclErr != nil {
+			log.Printf("[sqlite] aviso: nao foi possivel restringir ACL de %s: %v", dbPath, aclErr)
+		}
 	}
 
 	return db, nil

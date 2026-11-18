@@ -4,6 +4,7 @@ package remotesession
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -98,7 +99,40 @@ func (sf *SessionFiles) Stop() {
 	<-sf.doneCh
 }
 
+// maxBinaryFileHeaderBytes espelha o teto do codec do viewer (fileFrameCodec.ts).
+const maxBinaryFileHeaderBytes = 64 * 1024
+
+// decodeBinaryFileRequest reconhece o frame binário 'DF' do contrato de
+// transferência de arquivos (fileFrameCodec.ts no viewer / encodeBinaryFileFrame
+// no e2e): [0..1] magic 'D','F' · [2..5] headerLen uint32 BigEndian ·
+// [6..6+headerLen) JSON do FileSessionRequest (sem data) · resto = payload cru
+// do chunk. Retorna ok=false para payloads JSON legados.
+func decodeBinaryFileRequest(reqData []byte) (fileserver.FileSessionRequest, []byte, bool) {
+	if len(reqData) < 6 || reqData[0] != 'D' || reqData[1] != 'F' {
+		return fileserver.FileSessionRequest{}, nil, false
+	}
+	headerLen := int(binary.BigEndian.Uint32(reqData[2:6]))
+	if headerLen <= 0 || headerLen > maxBinaryFileHeaderBytes || 6+headerLen > len(reqData) {
+		return fileserver.FileSessionRequest{}, nil, false
+	}
+	var req fileserver.FileSessionRequest
+	if err := json.Unmarshal(reqData[6:6+headerLen], &req); err != nil {
+		return fileserver.FileSessionRequest{}, nil, false
+	}
+	return req, reqData[6+headerLen:], true
+}
+
 func (sf *SessionFiles) handleRequest(reqData []byte) []byte {
+	// Frame binário 'DF' (upload de chunks 256 KB — evita base64 +33% e JUMBO
+	// frames): converte para o FileSessionRequest com Data preenchida e segue
+	// o MESMO caminho de validação/sandbox/auditoria do JSON legado.
+	if binReq, payload, ok := decodeBinaryFileRequest(reqData); ok {
+		binReq.Data = payload
+		if b, err := json.Marshal(binReq); err == nil {
+			reqData = b
+		}
+	}
+
 	var req fileserver.FileSessionRequest
 	if err := json.Unmarshal(reqData, &req); err != nil {
 		return sf.errorResponse("", "payload json inválido: "+err.Error())

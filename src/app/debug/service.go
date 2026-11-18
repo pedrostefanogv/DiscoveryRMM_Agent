@@ -1,6 +1,7 @@
 package debug
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -88,6 +89,12 @@ type Options struct {
 	// platform.HardenSecretFileACL. Injetável para testes (evita icacls em
 	// diretórios temporários).
 	HardenFileACL func(string) error
+	// ValidateFileACL valida dono/DACL/reparse-point antes de adotar alteração
+	// externa no watcher. Nil usa platform.VerifyTrustedSecretFileACL.
+	ValidateFileACL func(string) error
+	// ValidateLoadFileACL valida dono e segurança do diretório pai ao carregar
+	// debug_config.json no boot. Nil usa platform.VerifyTrustedSecretFileWritableSafety.
+	ValidateLoadFileACL func(string) error
 }
 
 // Service owns runtime debug configuration and related workflows.
@@ -118,8 +125,10 @@ type Service struct {
 	// Ordem de aquisição: applyMu → persistMu/watchMu/mu (nunca o inverso).
 	applyMu sync.Mutex
 
-	configPathsFn func() []string
-	hardenACL     func(string) error
+	configPathsFn   func() []string
+	hardenACL       func(string) error
+	validateFileACL func(string) error
+	validateLoadACL func(string) error
 
 	// ── Watcher de alteração externa (polling mtime+hash) ──
 	watchMu       sync.Mutex
@@ -143,6 +152,14 @@ func NewService(opts Options) *Service {
 	if hardenACL == nil {
 		hardenACL = platform.HardenSecretFileACL
 	}
+	validateFileACL := opts.ValidateFileACL
+	if validateFileACL == nil {
+		validateFileACL = platform.VerifyTrustedSecretFileACL
+	}
+	validateLoadACL := opts.ValidateLoadFileACL
+	if validateLoadACL == nil {
+		validateLoadACL = platform.VerifyTrustedSecretFileWritableSafety
+	}
 	return &Service{
 		logf:               logf,
 		agentConn:          opts.AgentConn,
@@ -157,6 +174,8 @@ func NewService(opts Options) *Service {
 		configPathsFn:      opts.ConfigPaths,
 		watchInterval:      opts.WatcherInterval,
 		hardenACL:          hardenACL,
+		validateFileACL:    validateFileACL,
+		validateLoadACL:    validateLoadACL,
 	}
 }
 
@@ -193,11 +212,18 @@ func (s *Service) applyAllowInsecureTLS(allow bool) {
 func (s *Service) LoadPersistedConfig() {
 	s.StartWatcher()
 	for _, path := range s.configPaths() {
+		if _, lstatErr := os.Lstat(path); lstatErr == nil {
+			if err := s.validateLoadConfigSafety(path); err != nil {
+				s.logf("[debug] ALERTA DE SEGURANCA: debug_config.json rejeitado por ACL/owner inseguro (" + path + "): " + err.Error())
+				_ = osRename(path, path+".untrusted")
+				return
+			}
+		}
 		data, err := osReadFile(path)
 		if err != nil {
 			continue
 		}
-		cfg, err := parsePersistedConfigData(data)
+		cfg, needsMigration, err := parsePersistedConfigDataWithMigration(data)
 		if err != nil {
 			s.logf("[debug] configuração persistida ignorada: " + err.Error())
 			return
@@ -209,23 +235,40 @@ func (s *Service) LoadPersistedConfig() {
 		s.mu.Unlock()
 		s.applyMu.Unlock()
 		tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
-		// A.1.5: a DACL restritiva (SYSTEM:F + Users:R) vale para o arquivo JÁ
-		// existente, não só para o temporário de cada gravação nova. Um arquivo
-		// criado antes desta fase (ou pelo instalador) herda a ACL do diretório
-		// (ProgramData/Discovery tem Users:(M)) e só seria endurecido no
-		// próximo save do serviço — que pode nunca acontecer. Best-effort: a
-		// falha é apenas logada (não impede o carregamento da config).
+		// A.1.5: a DACL restritiva (SYSTEM:F + Administrators:F) vale para o arquivo JÁ
+		// existente, não só para o temporário de cada gravação nova.
 		if aclErr := s.hardenLoadedConfigACL(path); aclErr != nil {
 			s.logf("[debug] aviso: nao foi possivel restringir ACL de " + path + ": " + aclErr.Error())
+		}
+		if needsMigration {
+			if migErr := s.PersistConfig(cfg); migErr != nil {
+				s.logf("[debug] aviso: falha ao migrar authToken legado para DPAPI em " + path + ": " + migErr.Error())
+			} else {
+				s.logf("[debug] authToken legado migrado para DPAPI em " + path)
+			}
 		}
 		s.logf("[debug] configuração carregada de " + path)
 		return
 	}
 }
 
+func (s *Service) validateLoadConfigSafety(path string) error {
+	if s == nil || s.validateLoadACL == nil || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	return s.validateLoadACL(path)
+}
+
+func (s *Service) validateWatcherConfigACL(path string) error {
+	if s == nil || s.validateFileACL == nil || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	return s.validateFileACL(path)
+}
+
 // hardenLoadedConfigACL aplica a DACL de segredo no arquivo de config que já
 // existe no disco (ver HardenSecretFileACL). Não depende de elevação: quem
-// decide é o resultado do icacls, e o caller apenas loga a falha.
+// decide é o resultado do SetNamedSecurityInfo, e o caller apenas loga a falha.
 func (s *Service) hardenLoadedConfigACL(path string) error {
 	if s == nil || s.hardenACL == nil || strings.TrimSpace(path) == "" {
 		return nil
@@ -237,22 +280,49 @@ func (s *Service) hardenLoadedConfigACL(path string) error {
 	return s.hardenACL(path)
 }
 
+// utf8Bom é o Byte Order Mark UTF-8 que editores Windows inserem no início de
+// debug_config.json — sem o trim, o json.Unmarshal falha ("invalid character
+// 'ï'") e a config externa legítima é descartada.
+var utf8Bom = []byte{0xEF, 0xBB, 0xBF}
+
+func trimJSONBOM(data []byte) []byte {
+	return bytes.TrimPrefix(data, utf8Bom)
+}
+
 // parsePersistedConfigData valida um JSON de debug_config.json antes de adotar
 // (leitura inicial e watcher usam a MESMA validação — JSON inválido nunca
 // substitui o último estado válido em memória).
 func parsePersistedConfigData(data []byte) (Config, error) {
+	cfg, _, err := parsePersistedConfigDataWithMigration(data)
+	return cfg, err
+}
+
+func parsePersistedConfigDataWithMigration(data []byte) (Config, bool, error) {
 	data = trimJSONBOM(data)
 
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return Config{}, fmt.Errorf("json inválido: %w", err)
+		return Config{}, false, fmt.Errorf("json inválido: %w", err)
 	}
 	if !isValidDebugScheme(cfg.Scheme) {
-		return Config{}, fmt.Errorf("scheme inválido: %q", cfg.Scheme)
+		return Config{}, false, fmt.Errorf("scheme inválido: %q", cfg.Scheme)
 	}
+	needsMigration := false
+	if enc := strings.TrimSpace(cfg.AuthTokenDpapi); enc != "" {
+		plain, err := unprotectSecretFn(enc)
+		if err != nil {
+			return Config{}, false, fmt.Errorf("falha ao decifrar authTokenDpapi: %w", err)
+		}
+		cfg.AuthToken = strings.TrimSpace(plain)
+	} else if strings.TrimSpace(cfg.AuthToken) != "" && canUseDPAPI() {
+		needsMigration = true
+	}
+	cfg.AuthTokenDpapi = ""
+	cfg.HasAuthToken = false
+
 	normalizeSecurityConfig(&cfg)
 	cfg.normalizeApiScheme()
-	return cfg, nil
+	return cfg, needsMigration, nil
 }
 
 // PersistConfig persists debug configuration to disk.
@@ -262,7 +332,18 @@ func parsePersistedConfigData(data []byte) (Config, error) {
 // qualquer erro o arquivo antigo permanece intacto — nunca truncamos o
 // original. As gravações são serializadas por persistMu (mutex de processo).
 func (s *Service) PersistConfig(cfg Config) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	persisted := cfg
+	persisted.HasAuthToken = false
+	persisted.AuthTokenDpapi = ""
+	if token := strings.TrimSpace(cfg.AuthToken); token != "" && canUseDPAPI() {
+		enc, err := protectSecretFn(token)
+		if err != nil {
+			return fmt.Errorf("falha ao proteger authToken via DPAPI: %w", err)
+		}
+		persisted.AuthTokenDpapi = enc
+		persisted.AuthToken = ""
+	}
+	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
 		return fmt.Errorf("falha ao serializar configuração de debug: %w", err)
 	}
@@ -523,6 +604,10 @@ func (s *Service) pollExternalConfigChangeLocked() (Config, string, bool) {
 		return Config{}, "", false
 	}
 	if sig == "" {
+		return Config{}, "", false
+	}
+	if err := s.validateWatcherConfigACL(path); err != nil {
+		s.logf("[debug] ALERTA DE SEGURANCA: alteração externa rejeitada por ACL/owner inseguro em " + path + ": " + err.Error())
 		return Config{}, "", false
 	}
 
@@ -1319,4 +1404,8 @@ var (
 	// atomicWriteFile é o writer atômico injetável (testes simulam falha de
 	// escrita/rename sem tocar no arquivo original).
 	atomicWriteFile = writeFileAtomic
+
+	protectSecretFn   = platform.ProtectSecret
+	unprotectSecretFn = platform.UnprotectSecret
+	canUseDPAPI       = func() bool { return runtime.GOOS == "windows" }
 )

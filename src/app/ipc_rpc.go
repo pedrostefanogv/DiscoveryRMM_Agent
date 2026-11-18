@@ -51,6 +51,52 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCDebugGet()
 	case "debug:set":
 		return a.ipcRPCDebugSet(payload)
+	case "debug:test":
+		return a.ipcRPCDebugTest(payload)
+	case "debug:realtime_status":
+		return a.ipcRPCDebugRealtimeStatus()
+	case "chat:get_config":
+		return a.ipcRPCChatGetConfig()
+	case "chat:set_config":
+		return a.ipcRPCChatSetConfig(payload)
+	case "chat:test_config":
+		return a.ipcRPCChatTestConfig(payload)
+	case "chat:send":
+		return a.ipcRPCChatSend(payload)
+	case "chat:stream":
+		return a.ipcRPCChatStream(payload)
+	case "chat:stream_images":
+		return a.ipcRPCChatStreamImages(payload)
+	case "chat:stop":
+		return a.ipcRPCChatStop()
+	case "chat:active":
+		return a.ipcRPCChatActive()
+	case "chat:clear":
+		return a.ipcRPCChatClear()
+	case "chat:history":
+		return a.ipcRPCChatHistory()
+	case "chat:tools":
+		return a.ipcRPCChatTools()
+	case "chat:register_tools":
+		return a.ipcRPCChatRegisterTools()
+	case "supportchat:refresh":
+		return a.ipcRPCSupportChatRefresh(false)
+	case "supportchat:refresh_keeping_invite":
+		return a.ipcRPCSupportChatRefresh(true)
+	case "supportchat:send":
+		return a.ipcRPCSupportChatSend(payload)
+	case "supportchat:upload":
+		return a.ipcRPCSupportChatUpload(payload)
+	case "supportchat:download":
+		return a.ipcRPCSupportChatDownload(payload)
+	case "supportchat:end":
+		return a.ipcRPCSupportChatEnd(payload)
+	case "supportchat:respond_invite":
+		return a.ipcRPCSupportChatRespondInvite(payload)
+	case "supportchat:active_session":
+		return a.ipcRPCSupportChatActiveSession()
+	case "supportchat:policy":
+		return a.ipcRPCSupportChatPolicy()
 	case "store:catalog":
 		return a.ipcRPCStoreCatalog(payload)
 	case "inventory:snapshot":
@@ -280,6 +326,7 @@ func (a *App) ipcRPCAutomationState() map[string]any {
 	}
 	return map[string]any{"ok": true, "data": map[string]any{"state": json.RawMessage(raw)}}
 }
+
 // ipcRPCSensorsDebugSnapshot devolve o retrato do motor de sensores DO SERVIÇO.
 //
 // Existe porque, desde a refatoração M5, a UI companion não inicia o

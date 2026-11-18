@@ -50,6 +50,19 @@ var agentDecommissionIsElevated = platform.IsElevated
 // agentDecommissionResolveUninstaller é injetável nos testes.
 var agentDecommissionResolveUninstaller = resolveAgentUninstaller
 
+// validateUninstallerPathFn é injetável nos testes (aponta para
+// validateUninstallerPath por padrão).
+var validateUninstallerPathFn = validateUninstallerPath
+
+// verifyUninstallerACLFn / trustedUninstallerRootsFn / untrustedUninstallerRootsFn /
+// verifyUninstallerAuthenticodeFn são injetáveis nos testes.
+var (
+	verifyUninstallerACLFn          = platform.VerifyTrustedExecutableACL
+	trustedUninstallerRootsFn       = defaultTrustedUninstallerRoots
+	untrustedUninstallerRootsFn     = defaultUntrustedUninstallerRoots
+	verifyUninstallerAuthenticodeFn = platform.VerifyAuthenticode
+)
+
 // launchAgentUninstaller lança o uninstaller e devolve o PID (injetável nos testes).
 var launchAgentUninstaller = launchAgentUninstallerDetached
 
@@ -130,12 +143,17 @@ func (a *App) handleAgentDecommissionCommand(_ context.Context, payload any) (bo
 // Em falha, libera a trava (agentDecommissionLaunching) para permitir nova
 // tentativa: um uninstaller que não subiu deixa a máquina instalada.
 func (a *App) runAgentUninstaller(uninstallerPath string) error {
-	pid, err := launchAgentUninstaller(uninstallerPath)
+	validated, err := validateUninstallerPathFn(uninstallerPath)
+	if err != nil {
+		agentDecommissionLaunching.Store(false)
+		return fmt.Errorf("caminho do uninstaller rejeitado: %w", err)
+	}
+	pid, err := launchAgentUninstaller(validated)
 	if err != nil {
 		agentDecommissionLaunching.Store(false)
 		return err
 	}
-	a.Logs.Append(fmt.Sprintf("[decommission] uninstaller iniciado (pid=%d): %s", pid, uninstallerPath))
+	a.Logs.Append(fmt.Sprintf("[decommission] uninstaller iniciado (pid=%d): %s", pid, validated))
 	return nil
 }
 
@@ -158,13 +176,19 @@ func (a *App) resumeAgentDecommissionIfPending() {
 	if strings.TrimSpace(req.UninstallerPath) == "" {
 		return
 	}
+	validated, vErr := validateUninstallerPathFn(req.UninstallerPath)
+	if vErr != nil {
+		a.Logs.Append(fmt.Sprintf("[decommission] ALERTA DE SEGURANCA: pedido pendente rejeitado (%s): %v — removendo marcador", req.UninstallerPath, vErr))
+		_ = a.CoreAgent.DB.CacheDelete(agentDecommissionRequestCacheKey)
+		return
+	}
 	if !agentDecommissionLaunching.CompareAndSwap(false, true) {
 		return
 	}
 
-	a.Logs.Append("[decommission] retomando desinstalação pendente: " + req.UninstallerPath)
+	a.Logs.Append("[decommission] retomando desinstalação pendente: " + validated)
 	a.safeGo(func() {
-		if err := a.runAgentUninstaller(req.UninstallerPath); err != nil {
+		if err := a.runAgentUninstaller(validated); err != nil {
 			a.Logs.Append("[decommission] falha ao retomar uninstaller: " + err.Error())
 			return
 		}
@@ -276,24 +300,132 @@ func resolveAgentUninstaller() (string, error) {
 	return "", fmt.Errorf("uninstaller não encontrado (registro HKLM Uninstall/Discovery.RMM e %s no diretório do agente)", uninstallerFileName)
 }
 
-// validateUninstallerPath exige arquivo existente e nome esperado.
+// validateUninstallerPath exige caminho canônico (sem symlinks/junctions),
+// arquivo regular chamado uninstall.exe, contido no diretório confiável de
+// instalação (nunca ProgramData/Temp/UserProfile), com ACL administrativa e
+// assinatura Authenticode consistente quando o próprio binário em execução é
+// assinado.
 func validateUninstallerPath(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("caminho do uninstaller vazio")
 	}
 
-	info, err := os.Stat(path)
+	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("uninstaller não encontrado em %s: %w", path, err)
+		return "", fmt.Errorf("caminho do uninstaller invalido (%s): %w", path, err)
 	}
-	if info.IsDir() {
-		return "", fmt.Errorf("uninstaller aponta para um diretório: %s", path)
+	absPath = filepath.Clean(absPath)
+
+	linfo, err := os.Lstat(absPath)
+	if err != nil {
+		return "", fmt.Errorf("uninstaller não encontrado em %s: %w", absPath, err)
 	}
-	if !strings.EqualFold(filepath.Base(path), uninstallerFileName) {
-		return "", fmt.Errorf("executável inesperado para desinstalação: %s", filepath.Base(path))
+	if linfo.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("uninstaller não pode ser symlink: %s", absPath)
 	}
-	return path, nil
+
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return "", fmt.Errorf("falha ao resolver caminho canônico do uninstaller %s: %w", absPath, err)
+	}
+	resolved = filepath.Clean(resolved)
+	if !strings.EqualFold(resolved, absPath) {
+		return "", fmt.Errorf("uninstaller aponta para caminho redirecionado (%s -> %s)", absPath, resolved)
+	}
+
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("uninstaller não encontrado em %s: %w", resolved, err)
+	}
+	if info.IsDir() || !info.Mode().IsRegular() {
+		return "", fmt.Errorf("uninstaller não é arquivo regular: %s", resolved)
+	}
+	if !strings.EqualFold(filepath.Base(resolved), uninstallerFileName) {
+		return "", fmt.Errorf("executável inesperado para desinstalação: %s", filepath.Base(resolved))
+	}
+
+	dir := filepath.Dir(resolved)
+	for _, forbidden := range untrustedUninstallerRootsFn() {
+		if pathHasDirPrefixCI(dir, forbidden) {
+			return "", fmt.Errorf("uninstaller em diretório não confiável (%s): %s", forbidden, resolved)
+		}
+	}
+	if !isTrustedUninstallerDir(dir) {
+		return "", fmt.Errorf("uninstaller fora do diretório de instalação confiável: %s", resolved)
+	}
+
+	if verifyUninstallerACLFn != nil {
+		if aclErr := verifyUninstallerACLFn(resolved); aclErr != nil {
+			return "", fmt.Errorf("ACL/owner do uninstaller não confiável: %w", aclErr)
+		}
+	}
+
+	if verifyUninstallerAuthenticodeFn != nil {
+		if exe, exeErr := os.Executable(); exeErr == nil && strings.TrimSpace(exe) != "" {
+			if verifyUninstallerAuthenticodeFn(exe) == nil {
+				if sigErr := verifyUninstallerAuthenticodeFn(resolved); sigErr != nil {
+					return "", fmt.Errorf("assinatura Authenticode do uninstaller inválida: %w", sigErr)
+				}
+			}
+		}
+	}
+
+	return resolved, nil
+}
+
+func isTrustedUninstallerDir(dir string) bool {
+	cleanDir := filepath.Clean(strings.TrimSpace(dir))
+	if cleanDir == "" || cleanDir == "." {
+		return false
+	}
+	for _, root := range trustedUninstallerRootsFn() {
+		if cleanRoot := filepath.Clean(strings.TrimSpace(root)); cleanRoot != "" && strings.EqualFold(cleanDir, cleanRoot) {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultTrustedUninstallerRoots() []string {
+	var roots []string
+	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
+		roots = append(roots, filepath.Dir(exe))
+	}
+	for _, envName := range []string{"ProgramFiles", "ProgramFiles(x86)"} {
+		if base := strings.TrimSpace(os.Getenv(envName)); base != "" {
+			roots = append(roots, filepath.Join(base, "Discovery"))
+		}
+	}
+	return roots
+}
+
+func defaultUntrustedUninstallerRoots() []string {
+	var roots []string
+	for _, envName := range []string{"ProgramData", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA"} {
+		if base := strings.TrimSpace(os.Getenv(envName)); base != "" {
+			roots = append(roots, base)
+		}
+	}
+	if tmpDir := strings.TrimSpace(os.TempDir()); tmpDir != "" {
+		roots = append(roots, tmpDir)
+	}
+	return roots
+}
+
+func pathHasDirPrefixCI(candidate, prefix string) bool {
+	c := strings.ToLower(filepath.Clean(strings.TrimSpace(candidate)))
+	p := strings.ToLower(filepath.Clean(strings.TrimSpace(prefix)))
+	if c == "" || p == "" || p == "." {
+		return false
+	}
+	if c == p {
+		return true
+	}
+	if !strings.HasSuffix(p, string(filepath.Separator)) {
+		p += string(filepath.Separator)
+	}
+	return strings.HasPrefix(c, p)
 }
 
 // parseUninstallerExecutable extrai o caminho do executável de um

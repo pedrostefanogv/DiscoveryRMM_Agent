@@ -64,9 +64,9 @@ func TestSensorMCPPonteFallbackLocal(t *testing.T) {
 // precisa responder SEMPRE — "não tenho sensores" é resposta legítima.
 func TestSensorMCPPonteNuncaFalhaNemEntraEmPanic(t *testing.T) {
 	casos := []struct {
-		nome    string
-		montar  func(t *testing.T) *App
-		rpcOK   bool
+		nome   string
+		montar func(t *testing.T) *App
+		rpcOK  bool
 	}{
 		{"app_vazia_sem_rpc", func(*testing.T) *App { return &App{} }, false},
 		{"app_vazia_com_rpc_vazio", func(*testing.T) *App { return &App{} }, true},

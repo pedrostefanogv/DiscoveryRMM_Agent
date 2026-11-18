@@ -5,12 +5,12 @@ import "testing"
 // normalizeIconKind mapeia aliases do contrato para os 4 kinds canônicos.
 func TestNormalizeIconKind(t *testing.T) {
 	cases := map[string]string{
-		"":          IconInfo,
-		"info":      IconInfo,
-		"WARNING":   IconWarning,
-		"warn":      IconWarning,
-		"Error":     IconError,
-		"question":  IconQuestion,
+		"":             IconInfo,
+		"info":         IconInfo,
+		"WARNING":      IconWarning,
+		"warn":         IconWarning,
+		"Error":        IconError,
+		"question":     IconQuestion,
 		"desconhecido": IconInfo,
 	}
 	for in, want := range cases {

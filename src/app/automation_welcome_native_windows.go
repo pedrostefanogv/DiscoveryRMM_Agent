@@ -147,6 +147,7 @@ func allowDeferID(allowDefer bool) string {
 	}
 	return "install"
 }
+
 // detectRunningCloseProcesses cruza os CloseProcesses configurados com o
 // snapshot de processos em execução e devolve a lista do Welcome nativo
 // (mesmo padrão do PSADT: só os que estão rodando, ícone + nome do exe).

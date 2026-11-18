@@ -16,7 +16,6 @@ import (
 
 const sasRequestPrefix = sasRequestStderrMarker + " id="
 
-
 // parseSASRequestLine reconhece a linha de pedido de SAS do worker no stderr
 // e devolve o id de correlação.
 func parseSASRequestLine(line string) (string, bool) {

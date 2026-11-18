@@ -1063,7 +1063,7 @@ func buildTermReadyPayload(availableShells []string, consoleID string, cols, row
 		"cwd":                     cwd,
 		// Identidade EFETIVA do console ("user"/"system"/"inherit") — aditivo:
 		// consumidores antigos ignoram; o viewer pode exibir o badge.
-		"runAs":                   runAs,
+		"runAs": runAs,
 	}
 }
 
@@ -1349,9 +1349,10 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 }
 
 // StartRunAs é a variante run-as do Start: runAs=user faz o shell rodar na
-// identidade do usuário da sessão de console ativa (fallback herdado quando
-// não há usuário logado). O runAs EFETIVO fica em st.runAsEffective para o
-// term.ready.
+// identidade do usuário logado (console/RDP ativo). FAIL-CLOSED (F13): sem
+// usuário disponível a sessão FALHA (terminal_start_failed) — nunca nasce
+// como SYSTEM para "não falhar". O runAs EFETIVO fica em st.runAsEffective
+// para o term.ready.
 func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.ShellKind, cols, rows int, runAs terminal.RunAs) (*TerminalSession, error) {
 	st.mu.Lock()
 	// Detach ATÔMICO do console antigo: ele é desanexado (st.terminal = nil)
@@ -1407,7 +1408,6 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 
 	// Telemetria da sessão (subject .stats, contrato B).
 	stats := &termStats{startedAt: time.Now()}
-
 
 	// publishFrame publica um frame em term.out mantendo a ordem (outMu) e
 	// registrando-o no anel de replay. Falha de publish NÃO impede o registro:
@@ -1482,7 +1482,6 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 		}
 	}, termOutputCoalesceMs*time.Millisecond)
 	coalescer.stats = stats
-
 
 	// Integração de shell: o prompt reporta o cwd por OSC 633. O scanner
 	// REMOVE a sequência do fluxo (o viewer não pode renderizar ESC ] 633 como

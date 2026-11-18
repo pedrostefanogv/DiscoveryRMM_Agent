@@ -341,11 +341,8 @@ func remoteConsentEndpoint() (string, string) {
 			}
 		}
 	}
-	if token == "" {
-		token = GetInstallerAuthTokenForWorker()
-		if token == "" {
-			token = strings.TrimSpace(cfg.AuthToken)
-		}
-	}
+	// Token de autenticação é recebido exclusivamente em memória via
+	// configureRemoteConsentRuntime (injetado pelo serviço/stdin no worker);
+	// sem fallback de leitura em disco (config.json/debug_config.json).
 	return strings.TrimRight(apiBase, "/"), token
 }

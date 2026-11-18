@@ -7,13 +7,15 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/core/platform"
 	"discovery/app/netutil"
 	"github.com/nats-io/nats.go"
 )
 
 type localConfig struct {
-	APIServer string `json:"apiServer"`
-	AuthToken string `json:"authToken"`
+	APIServer      string `json:"apiServer"`
+	AuthToken      string `json:"authToken"`
+	AuthTokenDpapi string `json:"authTokenDpapi"`
 }
 
 type remoteDebugLogMessage struct {
@@ -46,6 +48,14 @@ func main() {
 	if strings.TrimSpace(cfg.APIServer) == "" {
 		fmt.Println("ERROR_CONFIG: apiServer vazio")
 		os.Exit(1)
+	}
+	if strings.TrimSpace(cfg.AuthToken) == "" && strings.TrimSpace(cfg.AuthTokenDpapi) != "" {
+		plain, decErr := platform.UnprotectSecret(cfg.AuthTokenDpapi)
+		if decErr != nil {
+			fmt.Println("ERROR_DECRYPT_TOKEN:", decErr)
+			os.Exit(1)
+		}
+		cfg.AuthToken = strings.TrimSpace(plain)
 	}
 	if strings.TrimSpace(cfg.AuthToken) == "" {
 		fmt.Println("ERROR_CONFIG: authToken vazio")

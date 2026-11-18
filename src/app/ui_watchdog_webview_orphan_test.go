@@ -71,7 +71,7 @@ func TestAgentWebviewOrphans_TeamsWebviewWithDeadParentIsNotKilled(t *testing.T)
 	// linhagem bate no vazio e, SEM a trava do user-data-dir, virava órfão).
 	procs := []procRecord{
 		foreignWebview(5001, 9999, testTeamsUDD), // pai 9999 não existe no snapshot
-		agentProc(100),                            // a UI do agent está viva
+		agentProc(100),                           // a UI do agent está viva
 	}
 
 	got := agentWebviewOrphans(procs, testRoot)
@@ -210,8 +210,8 @@ func TestAgentWebviewOrphans_UserDataDirSiblingWithSamePrefixTextDoesNotMatch(t 
 	// strings.HasPrefix/HasSufixo solto casaria os dois — a comparação tem de
 	// exigir o limite no separador de diretório.
 	casos := []string{
-		`C:\ProgramData\Discovery\WebView2Backup` ,
-		`C:\ProgramData\Discovery\WebView2-evil` ,
+		`C:\ProgramData\Discovery\WebView2Backup`,
+		`C:\ProgramData\Discovery\WebView2-evil`,
 		`C:\ProgramData\Discovery\WebView2Backup\session-1\EBWebView`,
 		`C:\ProgramData\Discovery\WebView2-evil\session-1\EBWebView`,
 	}
@@ -230,8 +230,8 @@ func TestAgentWebviewOrphans_UserDataDirMatchIsCaseAndSeparatorInsensitive(t *te
 		`C:\PROGRAMDATA\Discovery\WEBVIEW2\SESSION-1\EBWebView`,
 		`C:/ProgramData/Discovery/WebView2/session-1/EBWebView`,
 		`C:\ProgramData\Discovery\WebView2\SESSION-9\EBWebView`,
-		`C:\ProgramData\Discovery\WebView2` , // a própria raiz
-		`C:\ProgramData\Discovery\WebView2\` , // raiz com barra final
+		`C:\ProgramData\Discovery\WebView2`,  // a própria raiz
+		`C:\ProgramData\Discovery\WebView2\`, // raiz com barra final
 	}
 
 	for _, udd := range casos {

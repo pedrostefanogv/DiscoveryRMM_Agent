@@ -46,6 +46,7 @@ type ProcessItem struct {
 // cardMaxProcessRows limita as linhas da lista (o cartão não cresce para
 // sempre; listas maiores do PSADT são raras e podem ser consolidadas).
 const cardMaxProcessRows = 5
+
 // CardRequest descreve um cartão de notificação nativo.
 type CardRequest struct {
 	// Title é o título do cartão (obrigatório; default "Discovery Agent").

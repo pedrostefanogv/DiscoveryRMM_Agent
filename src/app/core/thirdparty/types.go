@@ -7,10 +7,10 @@
 // para a proxima etapa.
 //
 // Regras de seguranca:
-//  - o ID do pacote e validado por allowlist de caracteres ANTES de virar
-//    argumento de processo (nunca shell);
-//  - falha de um provider nao derruba o inventario (agrega o que deu certo);
-//  - "sem atualizacao" nao e erro.
+//   - o ID do pacote e validado por allowlist de caracteres ANTES de virar
+//     argumento de processo (nunca shell);
+//   - falha de um provider nao derruba o inventario (agrega o que deu certo);
+//   - "sem atualizacao" nao e erro.
 package thirdparty
 
 import (

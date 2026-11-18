@@ -456,7 +456,11 @@ func NewLegacyShellRunAs(shell ShellKind, cols, rows int, onOutput func(string),
 	if strings.HasPrefix(key, "wsl") {
 		key = "wsl"
 	}
-	ra := resolveRunAs(runAs)
+	ra, raerr := resolveRunAs(runAs)
+	if raerr != nil {
+		// Fail-closed (F13): runAs=user sem usuário disponível não vira SYSTEM.
+		return nil, raerr
+	}
 	if ra.tok != 0 {
 		stdLog("[terminal] legacy shell spawnado como %s (requested=%s)", ra.identity, string(runAs))
 	}

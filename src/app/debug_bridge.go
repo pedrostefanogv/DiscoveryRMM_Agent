@@ -12,7 +12,14 @@ func (a *App) GetDebugConfig() DebugConfig {
 	if a == nil || a.DebugSvc == nil {
 		return DebugConfig{}
 	}
-	return a.DebugSvc.GetConfig()
+	cfg := a.DebugSvc.GetConfig()
+	if a.ipcClient != nil && strings.TrimSpace(cfg.ApiServer) == "" && strings.TrimSpace(cfg.AgentID) == "" && !cfg.HasAuthToken {
+		if synced, ok := a.getDebugConfigCompanion(); ok {
+			a.DebugSvc.AdoptExternalConfig(synced)
+			return synced
+		}
+	}
+	return cfg
 }
 
 func (a *App) SetDebugConfig(cfg DebugConfig) error {
@@ -85,12 +92,58 @@ func (a *App) TestDebugConnection(cfg DebugConfig) (string, error) {
 	if err := a.requireDebugSvc(); err != nil {
 		return "", err
 	}
+	if a.ipcClient != nil {
+		raw, err := json.Marshal(cfg)
+		if err != nil {
+			return "", fmt.Errorf("falha ao serializar config de debug: %w", err)
+		}
+		ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+		resp, reqErr := a.ipcClient.Request(ctx, "debug:test", map[string]any{"config": json.RawMessage(raw)})
+		cancel()
+		if reqErr != nil {
+			return "", reqErr
+		}
+		if resp == nil {
+			return "", fmt.Errorf("serviço não respondeu ao teste de conexão")
+		}
+		if ok, _ := resp["ok"].(bool); !ok {
+			errMsg, _ := resp["error"].(string)
+			if strings.TrimSpace(errMsg) == "" {
+				errMsg = "falha ao testar conexão no serviço"
+			}
+			return "", fmt.Errorf("%s", errMsg)
+		}
+		return ipcRPCDataOutput(resp), nil
+	}
 	return a.DebugSvc.TestConnection(cfg)
 }
 
 func (a *App) GetRealtimeStatus() (RealtimeStatus, error) {
 	if err := a.requireDebugSvc(); err != nil {
 		return RealtimeStatus{}, err
+	}
+	if a.ipcClient != nil {
+		resp, ok := a.ipcRequest("debug:realtime_status", nil)
+		if !ok {
+			return RealtimeStatus{}, fmt.Errorf("serviço indisponível para consultar realtime status")
+		}
+		if respOk, _ := resp["ok"].(bool); !respOk {
+			errMsg, _ := resp["error"].(string)
+			if strings.TrimSpace(errMsg) == "" {
+				errMsg = "falha ao consultar realtime status"
+			}
+			return RealtimeStatus{}, fmt.Errorf("%s", errMsg)
+		}
+		data, _ := resp["data"].(map[string]any)
+		raw, err := json.Marshal(data["status"])
+		if err != nil {
+			return RealtimeStatus{}, err
+		}
+		var out RealtimeStatus
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return RealtimeStatus{}, err
+		}
+		return out, nil
 	}
 	return a.DebugSvc.GetRealtimeStatus()
 }

@@ -231,6 +231,7 @@ func (a *App) sensorDebugSnapshotView(snapshot automation.SensorDebugSnapshot, o
 		Origin:              origin,
 	}
 }
+
 // sensorDebugIPCRequest é o ponto de indireção do RPC do painel.
 //
 // Existe SÓ para teste: ipcRequest exige um *IPCClient ligado a um named pipe
@@ -239,6 +240,7 @@ func (a *App) sensorDebugSnapshotView(snapshot automation.SensorDebugSnapshot, o
 var sensorDebugIPCRequest = func(a *App, method string, payload map[string]any) (map[string]any, bool) {
 	return a.ipcRequest(method, payload)
 }
+
 // Rótulos da origem do dado. São constantes para o lado serviço e a UI não
 // divergirem do texto que o teste verifica.
 const (
@@ -297,6 +299,7 @@ func (a *App) sensorDebugCompanionRefusal(acao string) (string, bool) {
 		"%s roda no servico DiscoveryAgent, nao nesta janela. Use o console para disparar agora ou aguarde o proximo ciclo do motor — a coleta continua acontecendo normalmente no servico.",
 		acao), true
 }
+
 // RunSensorsNowDebug agenda a coleta imediata de sensores a partir do painel de
 // debug (POST /api/RunSensorsNowDebug).
 //

@@ -1,6 +1,9 @@
 package app
 
 import (
+	"encoding/json"
+	"time"
+
 	"discovery/app/core/ai"
 	"discovery/app/core/mcp"
 	"discovery/app/core/platform"
@@ -38,10 +41,16 @@ func (a *App) initChatLogger() {
 	// Em binários de teste o logger global é desligado (mesma guarda do
 	// agent.log/logs.db): sem isso o go test criaria chat.db em produção.
 	if shouldEnable && logFilePersistenceEnabled() {
+		logDir := platform.UILogDir()
+		chatDBPath := platform.UIChatDBPath()
+		if a.RuntimeFlags.ServiceMode {
+			logDir = platform.LogDir()
+			chatDBPath = platform.ChatDBPath()
+		}
 		chatLogger := ai.NewChatLogger("")
-		chatLogger.Enable(platform.LogDir())
+		chatLogger.Enable(logDir)
 		a.chatSvc.Service().SetChatLogger(chatLogger)
-		a.Logs.Append("[chat] log detalhado de chat ativado em " + platform.ChatDBPath())
+		a.Logs.Append("[chat] log detalhado de chat ativado em " + chatDBPath)
 	} else {
 		chatLogger := ai.NewChatLogger("")
 		chatLogger.Disable()
@@ -57,6 +66,10 @@ type ChatMessage struct {
 
 // SetChatConfig updates and persists the LLM API settings.
 func (a *App) SetChatConfig(cfg ChatConfig) error {
+	if a.ipcClient != nil {
+		_, err := a.ipcCallError("chat:set_config", map[string]any{"config": cfg}, 10*time.Second)
+		return err
+	}
 	return a.chatSvc.SetConfig(chat.Config{
 		Endpoint:      cfg.Endpoint,
 		APIKey:        cfg.APIKey,
@@ -69,6 +82,13 @@ func (a *App) SetChatConfig(cfg ChatConfig) error {
 
 // TestChatConfig checks whether the informed LLM settings are valid without saving them.
 func (a *App) TestChatConfig(cfg ChatConfig) (string, error) {
+	if a.ipcClient != nil {
+		resp, err := a.ipcCallError("chat:test_config", map[string]any{"config": cfg}, 30*time.Second)
+		if err != nil {
+			return "", err
+		}
+		return ipcRPCDataOutput(resp), nil
+	}
 	return a.chatSvc.TestConfig(chat.Config{
 		Endpoint:     cfg.Endpoint,
 		APIKey:       cfg.APIKey,
@@ -80,6 +100,17 @@ func (a *App) TestChatConfig(cfg ChatConfig) (string, error) {
 
 // GetChatConfig returns the current config (API key masked).
 func (a *App) GetChatConfig() ChatConfig {
+	if a.ipcClient != nil {
+		if resp, ok := a.ipcRequest("chat:get_config", nil); ok {
+			data, _ := resp["data"].(map[string]any)
+			if raw, err := json.Marshal(data["config"]); err == nil {
+				var out ChatConfig
+				if json.Unmarshal(raw, &out) == nil {
+					return out
+				}
+			}
+		}
+	}
 	c := a.chatSvc.GetConfig()
 	return ChatConfig{
 		Endpoint:      c.Endpoint,
@@ -93,11 +124,22 @@ func (a *App) GetChatConfig() ChatConfig {
 
 // SendChatMessage sends a user message and returns the assistant response.
 func (a *App) SendChatMessage(message string) (string, error) {
+	if a.ipcClient != nil {
+		resp, err := a.ipcCallError("chat:send", map[string]any{"message": message}, 2*time.Minute)
+		if err != nil {
+			return "", err
+		}
+		return ipcRPCDataOutput(resp), nil
+	}
 	return a.chatSvc.SendMessage(message)
 }
 
 // StartChatStream sends a chat message and streams the response via Wails events.
 func (a *App) StartChatStream(message string) {
+	if a.ipcClient != nil {
+		_, _ = a.ipcRequest("chat:stream", map[string]any{"message": message})
+		return
+	}
 	a.chatSvc.StartStream(message)
 }
 
@@ -106,11 +148,22 @@ func (a *App) StartChatStream(message string) {
 // URLs (data:image/...). As imagens são enviadas ao servidor no primeiro round
 // e viram conteúdo multimodal para o LLM.
 func (a *App) StartChatStreamWithImages(message string, imagesJSON string) {
+	if a.ipcClient != nil {
+		_, _ = a.ipcRequest("chat:stream_images", map[string]any{"message": message, "imagesJSON": imagesJSON})
+		return
+	}
 	a.chatSvc.StartStreamWithImages(message, imagesJSON)
 }
 
 // StopChatStream interrupts the active streamed AI response, if running.
 func (a *App) StopChatStream() bool {
+	if a.ipcClient != nil {
+		if resp, ok := a.ipcRequest("chat:stop", nil); ok {
+			data, _ := resp["data"].(map[string]any)
+			stopped, _ := data["stopped"].(bool)
+			return stopped
+		}
+	}
 	return a.chatSvc.StopStream()
 }
 
@@ -120,16 +173,38 @@ func (a *App) StopChatStream() bool {
 // liberava cedo demais e o próximo send batia no TryLock do backend, exibindo
 // "já existe uma resposta em andamento" para o usuário.
 func (a *App) HasActiveChatStream() bool {
+	if a.ipcClient != nil {
+		if resp, ok := a.ipcRequest("chat:active", nil); ok {
+			data, _ := resp["data"].(map[string]any)
+			active, _ := data["active"].(bool)
+			return active
+		}
+	}
 	return a.chatSvc.HasActiveStream()
 }
 
 // ClearChatHistory resets the conversation.
 func (a *App) ClearChatHistory() {
+	if a.ipcClient != nil {
+		_, _ = a.ipcRequest("chat:clear", nil)
+		return
+	}
 	a.chatSvc.ClearHistory()
 }
 
 // GetChatHistory returns the conversation for display.
 func (a *App) GetChatHistory() []ChatMessage {
+	if a.ipcClient != nil {
+		if resp, ok := a.ipcRequest("chat:history", nil); ok {
+			data, _ := resp["data"].(map[string]any)
+			if raw, err := json.Marshal(data["history"]); err == nil {
+				var out []ChatMessage
+				if json.Unmarshal(raw, &out) == nil {
+					return out
+				}
+			}
+		}
+	}
 	history := a.chatSvc.GetHistory()
 	msgs := make([]ChatMessage, 0, len(history))
 	for _, m := range history {
@@ -140,6 +215,17 @@ func (a *App) GetChatHistory() []ChatMessage {
 
 // GetAvailableTools returns the list of MCP tools for display.
 func (a *App) GetAvailableTools() []map[string]string {
+	if a.ipcClient != nil {
+		if resp, ok := a.ipcRequest("chat:tools", nil); ok {
+			data, _ := resp["data"].(map[string]any)
+			if raw, err := json.Marshal(data["tools"]); err == nil {
+				var out []map[string]string
+				if json.Unmarshal(raw, &out) == nil {
+					return out
+				}
+			}
+		}
+	}
 	return a.chatSvc.GetAvailableTools()
 }
 
@@ -150,5 +236,9 @@ func (a *App) GetMCPRegistry() *mcp.Registry {
 
 // RegisterAgentToolsOnServer envia a lista de tools MCP para a API.
 func (a *App) RegisterAgentToolsOnServer() error {
+	if a.ipcClient != nil {
+		_, err := a.ipcCallError("chat:register_tools", nil, 30*time.Second)
+		return err
+	}
 	return a.chatSvc.RegisterToolsOnServer()
 }

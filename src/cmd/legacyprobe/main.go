@@ -19,9 +19,13 @@ func main() {
 			CreationFlags: windows.CREATE_NEW_CONSOLE,
 		}
 		stdin, err := cmd.StdinPipe()
-		if err != nil { panic(err) }
+		if err != nil {
+			panic(err)
+		}
 		stdout, err := cmd.StdoutPipe()
-		if err != nil { panic(err) }
+		if err != nil {
+			panic(err)
+		}
 		if err := cmd.Start(); err != nil {
 			fmt.Println("spawn falhou:", err)
 			continue

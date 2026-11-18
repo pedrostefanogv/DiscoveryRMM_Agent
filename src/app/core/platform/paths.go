@@ -32,6 +32,49 @@ func DataDir() string {
 // ConfigDir retorna DataDir() — alias para clareza semântica.
 func ConfigDir() string { return DataDir() }
 
+// UIDataDir retorna o diretório gravável por usuário para o processo companion UI
+// (WebView2 UDF, logs e stack dumps da UI), isolado de %ProgramData%\Discovery.
+// No Windows usa %LOCALAPPDATA%\Discovery (fallback UserCacheDir, depois DataDir).
+func UIDataDir() string {
+	if runtime.GOOS == "windows" {
+		if lad := envutil.LocalAppData(); lad != "" {
+			return filepath.Join(lad, "Discovery")
+		}
+		if cacheDir, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cacheDir) != "" {
+			return filepath.Join(strings.TrimSpace(cacheDir), "Discovery")
+		}
+	}
+	return DataDir()
+}
+
+// UIWebView2Root retorna o diretório raiz de perfis WebView2 da UI do usuário.
+func UIWebView2Root() string {
+	return filepath.Join(UIDataDir(), "WebView2")
+}
+
+// UILogDir retorna o diretório de logs gravável pelo processo UI não-elevado.
+func UILogDir() string {
+	return filepath.Join(UIDataDir(), "logs")
+}
+
+// UILogDBPath retorna o caminho do banco de logs do processo UI.
+func UILogDBPath() string {
+	return filepath.Join(UILogDir(), "logs.db")
+}
+
+// UIChatDBPath retorna o caminho do banco de chat quando aberto pelo processo UI.
+func UIChatDBPath() string {
+	return filepath.Join(UILogDir(), "chat.db")
+}
+
+// UILogFilePath retorna o caminho do arquivo de log textual do processo UI.
+func UILogFilePath() string {
+	if logFile := envutil.LogFile(); logFile != "" {
+		return logFile
+	}
+	return filepath.Join(UILogDir(), "agent.log")
+}
+
 // TempDir retorna o diretório temporário do Discovery.
 // Windows: %WINDIR%\Temp\Discovery
 // Outros: <DataDir>/Temp

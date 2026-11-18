@@ -143,15 +143,16 @@ func (a *App) startTray() {
 	// Debug-only: "Abrir no navegador" menu item.
 	// Only shown when the debug HTTP server is running.
 	if a.RuntimeFlags.DebugMode && a.GetDebugHTTPPort() > 0 {
-		url := fmt.Sprintf("http://127.0.0.1:%d", a.GetDebugHTTPPort())
+		displayURL := fmt.Sprintf("http://127.0.0.1:%d", a.GetDebugHTTPPort())
+		launchURL := a.GetDebugHTTPURL()
 		menu.Add("Abrir no navegador").OnClick(func(_ *application.Context) {
 			a.safeTrayAction("tray-menu-browser", func() {
-				cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+				cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", launchURL)
 				processutil.HideWindow(cmd)
 				_ = cmd.Start()
 
-				// Log na UI
-				a.Logs.Append("[debug-http] abrindo " + url + " no navegador")
+				// Log na UI sem expor o token de sessão
+				a.Logs.Append("[debug-http] abrindo " + displayURL + " no navegador")
 			})
 		})
 	}

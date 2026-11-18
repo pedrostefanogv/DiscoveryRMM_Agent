@@ -20,15 +20,17 @@ import (
 //   - RunAsSystem / RunAsInherit: herda a identidade do processo do agente
 //     (SYSTEM quando o agent-service roda como serviço; o usuário logado no
 //     modo GUI).
-//   - RunAsUser: o shell roda na identidade do usuário da SESSÃO DE CONSOLE
-//     ATIVA (o mesmo token que o worker de sessão remota usa), obtido via
-//     WTSGetActiveConsoleSessionId → WTSQueryUserToken → DuplicateTokenEx
-//     (TokenPrimary). Sem usuário logado o pedido faz FALLBACK para a
-//     identidade herdada (nunca falha a sessão de terminal).
+//   - RunAsUser: o shell roda na identidade do usuário logado (sessão de
+//     console física OU sessão RDP ativa), obtido via WTSEnumerateSessions →
+//     WTSQueryUserToken → DuplicateTokenEx (TokenPrimary). Sem usuário
+//     disponível o pedido FALHA FECHADO (F13): a sessão de terminal não
+//     nasce como SYSTEM para satisfazer runAs=user — o viewer recebe
+//     terminal_start_failed com o motivo.
 //
 // Segurança: o token NUNCA vem do servidor/viewer — só o token primário da
-// sessão de console local. Não há escalada de privilégio: o operador do RMM
-// recebe no máximo o poder do usuário logado.
+// sessão local (console/RDP). Não há escalada de privilégio: o operador do
+// RMM recebe no máximo o poder do usuário logado; pedidos runAs=user sem
+// usuário logado falham em vez de escalar silenciosamente para SYSTEM.
 
 type RunAs string
 
@@ -114,11 +116,14 @@ type runAsResolution struct {
 	effectiveRunAs string        // "user" ou "system"/"inherit" (term.ready)
 }
 
-// resolveRunAs traduz o pedido em token. Falha do RunAsUser degrada para
-// herdado com log de aviso (nunca erro: o terminal não pode deixar de abrir).
-func resolveRunAs(ra RunAs) runAsResolution {
+// resolveRunAs traduz o pedido em token. CONTRATO FAIL-CLOSED (F13):
+// runAs=user sem usuário logado (console/RDP) retorna ERRO — o shell não
+// nasce como SYSTEM para "não falhar": degradar silenciosamente dava ao
+// operador um shell SYSTEM quando ele pediu explicitamente o usuário logado.
+// O caller encerra a sessão de terminal com terminal_start_failed.
+func resolveRunAs(ra RunAs) (runAsResolution, error) {
 	if ra != RunAsUser {
-		return runAsResolution{identity: "inherit", effectiveRunAs: EffectiveRunAs(ra)}
+		return runAsResolution{identity: "inherit", effectiveRunAs: EffectiveRunAs(ra)}, nil
 	}
 	// Processo não-SYSTEM (ex.: remote-session-worker rodando COMO o usuário
 	// logado): runAs=user ≡ identidade herdada — o shell já nasce na
@@ -126,12 +131,12 @@ func resolveRunAs(ra RunAs) runAsResolution {
 	// ("A required privilege is not held by the client") e poluiria o log a
 	// cada retry do ConPTY — resolve sem tentar.
 	if !isProcessSystem() {
-		return runAsResolution{identity: "user (processo do agente — já é o usuário)", effectiveRunAs: "user"}
+		return runAsResolution{identity: "user (processo do agente — já é o usuário)", effectiveRunAs: "user"}, nil
 	}
 	tok, session, ident, err := cachedUserToken()
 	if err != nil || tok == 0 {
-		log.Printf("[terminal] runAs=user sem usuário logado (console session=%d): %v — usando identidade herdada", session, err)
-		return runAsResolution{identity: "inherit", effectiveRunAs: EffectiveRunAs(RunAsInherit)}
+		log.Printf("[terminal] runAs=user NEGADO (fail-closed): nenhuma sessão de usuário ativa (console session=%d): %v — sessão de terminal NÃO nasce como SYSTEM", session, err)
+		return runAsResolution{}, fmt.Errorf("runAs=user indisponivel: nenhuma sessao de usuario ativa (console session=%d): %w", session, err)
 	}
 	// closeTok fica nil: o CACHE é o dono do handle (o shell usa o token
 	// apenas até o CreateProcessW — o kernel duplica no processo filho).
@@ -140,7 +145,7 @@ func resolveRunAs(ra RunAs) runAsResolution {
 		closeTok:       nil,
 		identity:       ident,
 		effectiveRunAs: "user",
-	}
+	}, nil
 }
 
 // cachedUserToken devolve o token primário da sessão de console ativa com
@@ -177,13 +182,39 @@ func resetUserTokenCache() {
 	userTokenMu.Unlock()
 }
 
-// resolveUserToken resolve o token primário do usuário da sessão de console
-// ativa. Retorna (0, session, "", err) quando não há usuário logado ou o
-// processo não tem permissão (WTSQueryUserToken exige SYSTEM/admin).
+// resolveUserToken resolve o token primário do usuário logado. Ordem de
+// tentativa (F13): 1) sessão de console física ativa; 2) enumeração WTS
+// (WTSEnumerateSessions) cobrindo sessões RDP ativas — servidores acessados
+// apenas via RDP não têm console ativo, mas POSSUEM usuário para runAs=user.
+// Retorna (0, session, "", err) quando não há usuário logado ou o processo
+// não tem permissão (WTSQueryUserToken exige SYSTEM/admin).
 func resolveUserToken() (windows.Token, uint32, string, error) {
-	session := windows.WTSGetActiveConsoleSessionId()
+	var lastErr error
+	if session := windows.WTSGetActiveConsoleSessionId(); session != 0xFFFFFFFF && session != 0 {
+		if tok, s, ident, err := resolveTokenForSession(session); err == nil {
+			return tok, s, ident, nil
+		} else {
+			lastErr = err
+		}
+	}
+	for _, session := range enumerateActiveWTSSessions() {
+		if tok, s, ident, err := resolveTokenForSession(session); err == nil {
+			return tok, s, ident, nil
+		} else {
+			lastErr = err
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("nenhuma sessao de usuario ativa (console ou RDP)")
+	}
+	return 0, 0, "", lastErr
+}
+
+// resolveTokenForSession devolve o token primário do usuário dono da sessão
+// WTS informada (console ou RDP).
+func resolveTokenForSession(session uint32) (windows.Token, uint32, string, error) {
 	if session == 0xFFFFFFFF || session == 0 {
-		return 0, session, "", errors.New("nenhuma sessao de console ativa")
+		return 0, session, "", errors.New("sessao invalida")
 	}
 	var raw uintptr
 	r1, _, callErr := procWTSQueryUserToken.Call(
@@ -211,11 +242,38 @@ func resolveUserToken() (windows.Token, uint32, string, error) {
 		return 0, session, "", fmt.Errorf("DuplicateTokenEx: %v", callErr)
 	}
 
-	ident := "user (console session " + fmt.Sprint(session) + ")"
+	ident := "user (session " + fmt.Sprint(session) + ")"
 	if name := tokenUserName(primary); name != "" {
 		ident = "user " + name
 	}
 	return primary, session, ident, nil
+}
+
+// enumerateActiveWTSSessions lista as sessões WTS com estado Active (exceto a
+// sessão 0 de serviços), para cobrir servidores acessados somente via RDP.
+// Usa o wrapper windows.WTSEnumerateSessions (alocação/liberação tratadas).
+func enumerateActiveWTSSessions() []uint32 {
+	var info *windows.WTS_SESSION_INFO
+	var count uint32
+	if err := windows.WTSEnumerateSessions(0, 0, 1, &info, &count); err != nil {
+		stdLog("[terminal] WTSEnumerateSessions falhou: %v", err)
+		return nil
+	}
+	if info == nil || count == 0 {
+		return nil
+	}
+	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(info)))
+
+	const wtsStateActive = 0 // WTSActive
+	entrySize := unsafe.Sizeof(windows.WTS_SESSION_INFO{})
+	out := make([]uint32, 0, count)
+	for i := uint32(0); i < count; i++ {
+		entry := (*windows.WTS_SESSION_INFO)(unsafe.Pointer(uintptr(unsafe.Pointer(info)) + uintptr(i)*entrySize))
+		if entry.State == wtsStateActive && entry.SessionID != 0 {
+			out = append(out, entry.SessionID)
+		}
+	}
+	return out
 }
 
 // tokenUserName resolve domain\user do token (auditoria no log).
@@ -239,13 +297,11 @@ func tokenUserName(tok windows.Token) string {
 func EffectiveRunAs(ra RunAs) string {
 	switch ra {
 	case RunAsUser:
-		if _, _, _, err := cachedUserToken(); err == nil {
-			return "user"
-		}
-		if isProcessSystem() {
-			return "system"
-		}
-		return "inherit"
+		// Fail-closed (F13): sem fallback para SYSTEM. Quando a sessão de
+		// terminal existe, ela REALMENTE nasceu como usuário (o StartRunAs
+		// falha antes com terminal_start_failed quando não há token) — ou o
+		// processo do agente já é o usuário (worker/UI).
+		return "user"
 	case RunAsSystem:
 		return "system"
 	default:

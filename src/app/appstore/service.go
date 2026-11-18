@@ -103,12 +103,12 @@ type AgentConfiguration struct {
 
 // Service encapsula a lógica de app-store (fetch, cache e política efetiva).
 type Service struct {
-	getDebugConfig        func() DebugConfig
-	getAgentConfiguration func() AgentConfiguration
-	featureEnabled        func(*bool) bool
-	logf                  func(string)
-	db                    func() *database.DB
-	cache                 *PolicyCache
+	getDebugConfig           func() DebugConfig
+	getAgentConfiguration    func() AgentConfiguration
+	featureEnabled           func(*bool) bool
+	logf                     func(string)
+	db                       func() *database.DB
+	cache                    *PolicyCache
 	noteAuthorizationRefusal func(resp *http.Response, body []byte)
 
 	// fetchMu serializa o fetch remoto: quando o cache expira, múltiplas
@@ -135,12 +135,12 @@ func New(deps Deps) *Service {
 		logf = func(string) {}
 	}
 	return &Service{
-		getDebugConfig:        deps.GetDebugConfig,
-		getAgentConfiguration: deps.GetAgentConfiguration,
-		featureEnabled:        deps.FeatureEnabled,
-		logf:                  logf,
-		db:                    deps.DB,
-		cache:                 deps.Cache,
+		getDebugConfig:           deps.GetDebugConfig,
+		getAgentConfiguration:    deps.GetAgentConfiguration,
+		featureEnabled:           deps.FeatureEnabled,
+		logf:                     logf,
+		db:                       deps.DB,
+		cache:                    deps.Cache,
 		noteAuthorizationRefusal: deps.NoteAuthorizationRefusal,
 	}
 }

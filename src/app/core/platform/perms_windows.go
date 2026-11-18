@@ -3,9 +3,12 @@
 package platform
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"unsafe"
 
@@ -20,6 +23,7 @@ const (
 	wellKnownSidSystem         = "*S-1-5-18"     // SYSTEM
 	wellKnownSidAdministrators = "*S-1-5-32-544" // Builtin\Administrators
 	wellKnownSidUsers          = "*S-1-5-32-545" // Builtin\Users
+	trustedInstallerSIDString  = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
 )
 
 // IsElevated retorna true se o processo atual está elevado (TokenElevation
@@ -84,38 +88,286 @@ func EnsureSharedStagingAccess(path string) error {
 }
 
 // HardenSecretFileACL restringe a DACL de um arquivo que contém segredos
-// (config.json com deployToken/AuthToken, debug_config.json, chat_config.json).
+// (config.json com deployToken/authTokenDpapi, debug_config.json, chat_config.json,
+// discovery.db, libp2p-identity.key).
 //
-// Correção P2/P7 (decisão "serviço é dono único da config"): os.WriteFile
-// (0o600) é no-op no Windows — o arquivo herda a ACL do diretório
-// (%ProgramData%\Discovery tem Users:(M)), então qualquer usuário local podia
-// LER o token e REESCREVER a configuração (config poisoning). A DACL explícita
-// passa a ser:
-//
-//	SYSTEM:F  — o serviço (dono único) lê e grava;
-//	Users:R   — usuários locais (inclusive a UI companion não elevada) leem,
-//	            mas NÃO reescrevem a config.
-//
-// A herança é removida (/inheritance:r) para a ACL do diretório não reintroduzir
-// Users:(M). Diferente da versão anterior, a aplicação NÃO depende de
-// IsElevated: quem decide é o caller, que deve tentar sempre e apenas logar a
-// falha (a escrita no serviço continua). Best-effort: o erro é retornado para
-// o caller logar, sem bloquear o fluxo de configuração.
+// Remove a herança (PROTECTED_DACL_SECURITY_INFORMATION) e concede controle total
+// exclusivamente para NT AUTHORITY\SYSTEM e BUILTIN\Administrators — sem qualquer
+// acesso de leitura ou modificação para BUILTIN\Users ou Everyone.
 func HardenSecretFileACL(path string) error {
-	if _, err := os.Stat(path); err != nil {
-		return err
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		return errors.New("caminho vazio para HardenSecretFileACL")
 	}
-	cmd := exec.Command("icacls.exe", path,
-		"/inheritance:r",
-		"/grant:r", wellKnownSidSystem+":F",
-		"/grant:r", wellKnownSidUsers+":R",
-		"/Q")
-	processutil.HideWindow(cmd)
-	out, err := cmd.CombinedOutput()
+	if err := verifyNoReparsePoint(cleanPath); err != nil {
+		return fmt.Errorf("arquivo de segredo invalido: %w", err)
+	}
+
+	systemSID, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
 	if err != nil {
-		return fmt.Errorf("icacls harden falhou: %w — saida: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("SID SYSTEM: %w", err)
+	}
+	adminSID, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return fmt.Errorf("SID Administrators: %w", err)
+	}
+
+	var pinner runtime.Pinner
+	pinner.Pin(systemSID)
+	pinner.Pin(adminSID)
+	defer pinner.Unpin()
+
+	const fileAllAccess = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1FF
+
+	entries := []windows.EXPLICIT_ACCESS{
+		{
+			AccessPermissions: fileAllAccess,
+			AccessMode:        windows.SET_ACCESS,
+			Inheritance:       windows.NO_INHERITANCE,
+			Trustee: windows.TRUSTEE{
+				TrusteeForm:  windows.TRUSTEE_IS_SID,
+				TrusteeType:  windows.TRUSTEE_IS_WELL_KNOWN_GROUP,
+				TrusteeValue: windows.TrusteeValueFromSID(systemSID),
+			},
+		},
+		{
+			AccessPermissions: fileAllAccess,
+			AccessMode:        windows.SET_ACCESS,
+			Inheritance:       windows.NO_INHERITANCE,
+			Trustee: windows.TRUSTEE{
+				TrusteeForm:  windows.TRUSTEE_IS_SID,
+				TrusteeType:  windows.TRUSTEE_IS_ALIAS,
+				TrusteeValue: windows.TrusteeValueFromSID(adminSID),
+			},
+		},
+	}
+
+	acl, err := windows.ACLFromEntries(entries, nil)
+	if err != nil {
+		return fmt.Errorf("ACLFromEntries falhou: %w", err)
+	}
+	if err := windows.SetNamedSecurityInfo(
+		cleanPath,
+		windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		nil,
+		nil,
+		acl,
+		nil,
+	); err != nil {
+		return fmt.Errorf("SetNamedSecurityInfo falhou: %w", err)
 	}
 	return nil
+}
+
+const fileDeleteChild uint32 = 0x00000040
+
+const untrustedWriteMask uint32 = windows.FILE_WRITE_DATA |
+	windows.FILE_APPEND_DATA |
+	windows.FILE_WRITE_EA |
+	windows.FILE_WRITE_ATTRIBUTES |
+	fileDeleteChild |
+	windows.DELETE |
+	windows.WRITE_DAC |
+	windows.WRITE_OWNER |
+	windows.GENERIC_WRITE |
+	windows.GENERIC_ALL
+
+// VerifyTrustedSecretFileACL valida de forma estrita um arquivo de segredo
+// (ex.: debug_config.json no watcher):
+//   - não é symlink nem reparse point (nem o diretório pai);
+//   - o dono (owner) é SYSTEM ou BUILTIN\Administrators;
+//   - a DACL é não-nula e toda ACE ALLOW efetiva pertence exclusivamente a
+//     SYSTEM ou BUILTIN\Administrators (nenhum acesso a Users/Everyone);
+//   - o diretório pai também pertence a SYSTEM/Administrators e não concede
+//     escrita/exclusão/take-ownership a contas não administrativas.
+func VerifyTrustedSecretFileACL(path string) error {
+	return verifySecretFileACL(path, true)
+}
+
+// VerifyTrustedSecretFileWritableSafety valida se o arquivo (e o diretório pai)
+// pertence a SYSTEM/Administrators e não é gravável por usuários comuns,
+// permitindo migração segura de arquivos pré-hardening com Users:R legado.
+func VerifyTrustedSecretFileWritableSafety(path string) error {
+	return verifySecretFileACL(path, false)
+}
+
+func verifySecretFileACL(path string, strictNoExtraRead bool) error {
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		return errors.New("caminho vazio")
+	}
+	if err := verifyNoReparsePoint(cleanPath); err != nil {
+		return err
+	}
+	parentDir := filepath.Dir(cleanPath)
+	if err := verifyNoReparsePoint(parentDir); err != nil {
+		return fmt.Errorf("diretorio pai inseguro (%s): %w", parentDir, err)
+	}
+	if err := verifyTrustedDirectoryWriteACL(parentDir, false); err != nil {
+		return fmt.Errorf("diretorio pai nao confiavel (%s): %w", parentDir, err)
+	}
+
+	sd, err := windows.GetNamedSecurityInfo(cleanPath, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("GetNamedSecurityInfo(%s): %w", cleanPath, err)
+	}
+	if sd == nil {
+		return errors.New("security descriptor nulo")
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("consultar owner(%s): %w", cleanPath, err)
+	}
+	if !isAdminOrSystemSID(owner, false) {
+		return fmt.Errorf("owner nao confiavel (%s)", sidToStringSafe(owner))
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return fmt.Errorf("consultar DACL(%s): %w", cleanPath, err)
+	}
+	return inspectFileDACL(dacl, strictNoExtraRead, false)
+}
+
+// VerifyTrustedExecutableACL valida que um binário executável (ex.: uninstall.exe)
+// e seu diretório pai não são reparse points, têm dono administrativo/TrustedInstaller
+// e não possuem permissões de escrita/modificação para não-administradores.
+func VerifyTrustedExecutableACL(path string) error {
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		return errors.New("caminho vazio")
+	}
+	if err := verifyNoReparsePoint(cleanPath); err != nil {
+		return err
+	}
+	parentDir := filepath.Dir(cleanPath)
+	if err := verifyNoReparsePoint(parentDir); err != nil {
+		return fmt.Errorf("diretorio pai inseguro (%s): %w", parentDir, err)
+	}
+	if err := verifyTrustedDirectoryWriteACL(parentDir, true); err != nil {
+		return fmt.Errorf("diretorio do executavel nao confiavel (%s): %w", parentDir, err)
+	}
+
+	sd, err := windows.GetNamedSecurityInfo(cleanPath, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("GetNamedSecurityInfo(%s): %w", cleanPath, err)
+	}
+	if sd == nil {
+		return errors.New("security descriptor nulo")
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("consultar owner(%s): %w", cleanPath, err)
+	}
+	if !isAdminOrSystemSID(owner, true) {
+		return fmt.Errorf("owner do executavel nao confiavel (%s)", sidToStringSafe(owner))
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return fmt.Errorf("consultar DACL(%s): %w", cleanPath, err)
+	}
+	return inspectFileDACL(dacl, false, true)
+}
+
+func verifyTrustedDirectoryWriteACL(dir string, allowTrustedInstaller bool) error {
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("GetNamedSecurityInfo(%s): %w", dir, err)
+	}
+	if sd == nil {
+		return errors.New("security descriptor do diretorio nulo")
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("consultar owner(%s): %w", dir, err)
+	}
+	if !isAdminOrSystemSID(owner, allowTrustedInstaller) {
+		return fmt.Errorf("owner do diretorio nao confiavel (%s)", sidToStringSafe(owner))
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return fmt.Errorf("consultar DACL(%s): %w", dir, err)
+	}
+	return inspectFileDACL(dacl, false, allowTrustedInstaller)
+}
+
+func inspectFileDACL(dacl *windows.ACL, strictNoExtraRead bool, allowTrustedInstaller bool) error {
+	if dacl == nil {
+		return errors.New("DACL nula (acesso irrestrito)")
+	}
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return fmt.Errorf("GetAce(%d): %w", i, err)
+		}
+		if ace == nil {
+			continue
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			continue
+		}
+		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
+			continue
+		}
+		trustee := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if isAdminOrSystemSID(trustee, allowTrustedInstaller) {
+			continue
+		}
+		if strictNoExtraRead {
+			return fmt.Errorf("ACE nao permitida para trustee %s (mask=0x%x)", sidToStringSafe(trustee), uint32(ace.Mask))
+		}
+		if uint32(ace.Mask)&untrustedWriteMask != 0 {
+			return fmt.Errorf("ACE gravavel para trustee nao administrativo %s (mask=0x%x)", sidToStringSafe(trustee), uint32(ace.Mask))
+		}
+	}
+	return nil
+}
+
+func verifyNoReparsePoint(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("reparse/symlink proibido: %s", path)
+	}
+	p16, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	attrs, err := windows.GetFileAttributes(p16)
+	if err != nil {
+		return err
+	}
+	if attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return fmt.Errorf("reparse point proibido: %s", path)
+	}
+	return nil
+}
+
+func isAdminOrSystemSID(sid *windows.SID, allowTrustedInstaller bool) bool {
+	if sid == nil {
+		return false
+	}
+	if systemSID, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid); err == nil && sid.Equals(systemSID) {
+		return true
+	}
+	if adminSID, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid); err == nil && sid.Equals(adminSID) {
+		return true
+	}
+	if allowTrustedInstaller {
+		if tiSID, err := windows.StringToSid(trustedInstallerSIDString); err == nil && sid.Equals(tiSID) {
+			return true
+		}
+	}
+	return false
+}
+
+func sidToStringSafe(sid *windows.SID) string {
+	if sid == nil {
+		return "<nil>"
+	}
+	return sid.String()
 }
 
 // EnsureWorldReadable grants Everyone read (R) on a single file.

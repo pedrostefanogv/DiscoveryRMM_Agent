@@ -16,11 +16,11 @@ import (
 var (
 	modkernel32 = syscall.NewLazyDLL("kernel32.dll")
 
-	procCreateToolhelp32Snapshot = modkernel32.NewProc("CreateToolhelp32Snapshot")
-	procProcess32FirstW          = modkernel32.NewProc("Process32FirstW")
-	procProcess32NextW           = modkernel32.NewProc("Process32NextW")
-	procOpenProcess              = modkernel32.NewProc("OpenProcess")
-	procTerminateProcess          = modkernel32.NewProc("TerminateProcess")
+	procCreateToolhelp32Snapshot   = modkernel32.NewProc("CreateToolhelp32Snapshot")
+	procProcess32FirstW            = modkernel32.NewProc("Process32FirstW")
+	procProcess32NextW             = modkernel32.NewProc("Process32NextW")
+	procOpenProcess                = modkernel32.NewProc("OpenProcess")
+	procTerminateProcess           = modkernel32.NewProc("TerminateProcess")
 	procQueryFullProcessImageNameW = modkernel32.NewProc("QueryFullProcessImageNameW")
 )
 

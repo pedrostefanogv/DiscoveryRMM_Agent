@@ -119,10 +119,17 @@ func (a *App) cachedSupportChatAttachmentPolicy() supportchat.AttachmentPolicy {
 	}
 	a.supportChatPolicyMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatPolicyWait)
-	defer cancel()
-
-	policy, err := a.supportChatService().FetchAttachmentPolicy(ctx)
+	var (
+		policy supportchat.AttachmentPolicy
+		err    error
+	)
+	if a.ipcClient != nil {
+		policy, err = a.supportChatPolicyViaIPC()
+	} else {
+		ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatPolicyWait)
+		defer cancel()
+		policy, err = a.supportChatService().FetchAttachmentPolicy(ctx)
+	}
 
 	ttl := supportChatPolicyTTL
 	if err != nil {

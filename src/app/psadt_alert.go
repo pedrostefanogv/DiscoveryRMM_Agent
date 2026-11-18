@@ -155,7 +155,7 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 	}
 
 	// Backend nativo indisponível (janela não criada etc.): erro explícito no
-// contrato — não há mais caminho PSADT de fallback.
+	// contrato — não há mais caminho PSADT de fallback.
 	errMsg = strings.TrimSpace(errMsg)
 	if errMsg == "" {
 		errMsg = "backend nativo de notificacoes indisponivel"
@@ -199,7 +199,7 @@ func (a *App) showNativePowerCountdown(action string, delaySeconds int, message 
 	buttons = append(buttons, notifyui.Button{ID: "proceed", Label: okText, Kind: "primary"})
 
 	// force=true: sem botão de adiamento — fechar/Esc também prossegue,
-// replicando o CountdownNoDefer do PSADT.
+	// replicando o CountdownNoDefer do PSADT.
 	closeID := "defer"
 	if force {
 		closeID = "proceed"

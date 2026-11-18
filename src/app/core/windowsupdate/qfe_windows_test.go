@@ -102,25 +102,25 @@ func TestParseWMIInstalledOnAmbiguousDates(t *testing.T) {
 		want     time.Time
 	}{
 		{
-			name: "pt-BR escolhe dia/mes",
-			raw:  "05/03/2026",
-			now:  now,
+			name:     "pt-BR escolhe dia/mes",
+			raw:      "05/03/2026",
+			now:      now,
 			dayFirst: true, known: true,
 			want: time.Date(2026, 3, 5, 0, 0, 0, 0, time.UTC),
 		},
 		{
-			name: "en-US escolhe mes/dia",
-			raw:  "05/03/2026",
-			now:  now,
+			name:     "en-US escolhe mes/dia",
+			raw:      "05/03/2026",
+			now:      now,
 			dayFirst: false, known: true,
 			want: time.Date(2026, 5, 3, 0, 0, 0, 0, time.UTC),
 		},
 		{
 			// pt-BR: 05/12/2026 = 5 de dezembro, que está no FUTURO. Data de
 			// instalação não pode ser futura: cai para a outra interpretação.
-			name: "pt-BR com data futura cai para a outra leitura",
-			raw:  "05/12/2026",
-			now:  now,
+			name:     "pt-BR com data futura cai para a outra leitura",
+			raw:      "05/12/2026",
+			now:      now,
 			dayFirst: true, known: true,
 			want: time.Date(2026, 5, 12, 0, 0, 0, 0, time.UTC),
 		},
@@ -134,26 +134,26 @@ func TestParseWMIInstalledOnAmbiguousDates(t *testing.T) {
 		},
 		{
 			// Dia 13 não existe como mês: só o layout dd/mm casa.
-			name: "somente dia/mes",
-			raw:  "13/03/2026",
-			now:  now,
+			name:     "somente dia/mes",
+			raw:      "13/03/2026",
+			now:      now,
 			dayFirst: true, known: true,
 			want: time.Date(2026, 3, 13, 0, 0, 0, 0, time.UTC),
 		},
 		{
 			// 31/12 não existe como mês/dia; só dd/mm casa.
-			name: "31/12/2025",
-			raw:  "31/12/2025",
-			now:  now,
+			name:     "31/12/2025",
+			raw:      "31/12/2025",
+			now:      now,
 			dayFirst: true, known: true,
 			want: time.Date(2025, 12, 31, 0, 0, 0, 0, time.UTC),
 		},
 		{
 			// Relógio errado: todas as interpretações no futuro => fica a mais
 			// próxima de agora (determinismo preservado).
-			name: "todas no futuro",
-			raw:  "05/03/2027",
-			now:  now,
+			name:     "todas no futuro",
+			raw:      "05/03/2027",
+			now:      now,
 			dayFirst: true, known: true,
 			want: time.Date(2027, 3, 5, 0, 0, 0, 0, time.UTC),
 		},

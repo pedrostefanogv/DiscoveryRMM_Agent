@@ -15,7 +15,9 @@ type Config struct {
 	// Deprecated: use ApiInsecure instead. Kept for runtime compatibility.
 	ApiScheme                         string `json:"apiScheme,omitempty"`
 	ApiServer                         string `json:"apiServer"`
-	AuthToken                         string `json:"authToken"`
+	AuthToken                         string `json:"authToken,omitempty"`
+	AuthTokenDpapi                    string `json:"authTokenDpapi,omitempty"`
+	HasAuthToken                      bool   `json:"hasAuthToken,omitempty"`
 	NatsServer                        string `json:"natsServer"`
 	NatsWsServer                      string `json:"natsWsServer"`
 	AllowInsecureTLS                  bool   `json:"allowInsecureTls,omitempty"`
@@ -72,8 +74,9 @@ type InstallerConfig struct {
 	// Após bootstrap, não é mais serializado. O campo canônico é ServerAPI.
 	ServerURL string `json:"serverUrl,omitempty"`
 	// ServerAPI é o nome canônico do FQN do endpoint da API.
-	ServerAPI string `json:"serverapi,omitempty"`
-	APIKey    string `json:"deployToken,omitempty"`
+	ServerAPI        string `json:"serverapi,omitempty"`
+	APIKey           string `json:"deployToken,omitempty"`
+	DeployTokenDpapi string `json:"deployTokenDpapi,omitempty"`
 	// AutoProvisioning controla a participação local no fluxo de zero-touch
 	// auto-provisioning via P2P (endpoint /p2p/config/onboard). Quando ausente,
 	// o agente assume o comportamento padrão definido pela configuração do
@@ -83,6 +86,7 @@ type InstallerConfig struct {
 	ApiScheme        string             `json:"-"` // Deprecated: não serializado. Usar ApiInsecure.
 	ApiServer        string             `json:"apiServer,omitempty"`
 	AuthToken        string             `json:"authToken,omitempty"`
+	AuthTokenDpapi   string             `json:"authTokenDpapi,omitempty"`
 	AgentID          string             `json:"agentId,omitempty"`
 	ClientID         string             `json:"clientId,omitempty"`
 	SiteID           string             `json:"siteId,omitempty"`
@@ -112,6 +116,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		ServerURL        string             `json:"serverUrl"`
 		ServerAPI        string             `json:"serverapi,omitempty"`
 		DeployToken      string             `json:"deployToken,omitempty"`
+		DeployTokenDpapi string             `json:"deployTokenDpapi,omitempty"`
 		APIKey           string             `json:"apiKey"`
 		AutoProvisioning json.RawMessage    `json:"autoProvisioning,omitempty"`
 		DiscoveryEnabled json.RawMessage    `json:"discoveryEnabled,omitempty"`
@@ -119,6 +124,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		ApiServer        string             `json:"apiServer,omitempty"`
 		ApiInsecure      json.RawMessage    `json:"apiInsecure,omitempty"`
 		AuthToken        string             `json:"authToken,omitempty"`
+		AuthTokenDpapi   string             `json:"authTokenDpapi,omitempty"`
 		AgentID          string             `json:"agentId,omitempty"`
 		ClientID         string             `json:"clientId,omitempty"`
 		SiteID           string             `json:"siteId,omitempty"`
@@ -136,12 +142,14 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		ServerURL        string             `json:"server_url"`
 		ServerAPI        string             `json:"server_api,omitempty"`
 		DeployToken      string             `json:"deploy_token,omitempty"`
+		DeployTokenDpapi string             `json:"deploy_token_dpapi,omitempty"`
 		APIKey           string             `json:"api_key"`
 		AutoProvisioning json.RawMessage    `json:"auto_provisioning,omitempty"`
 		ApiScheme        string             `json:"api_scheme,omitempty"`
 		ApiServer        string             `json:"api_server,omitempty"`
 		ApiInsecure      json.RawMessage    `json:"api_insecure,omitempty"`
 		AuthToken        string             `json:"auth_token,omitempty"`
+		AuthTokenDpapi   string             `json:"auth_token_dpapi,omitempty"`
 		AgentID          string             `json:"agent_id,omitempty"`
 		ClientID         string             `json:"client_id,omitempty"`
 		SiteID           string             `json:"site_id,omitempty"`
@@ -159,18 +167,20 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 	}
 
 	// Se o parse camelCase não preencheu campos críticos, tenta snake_case.
-	if strings.TrimSpace(raw.ServerURL) == "" && strings.TrimSpace(raw.AuthToken) == "" && strings.TrimSpace(raw.AgentID) == "" {
+	if strings.TrimSpace(raw.ServerURL) == "" && strings.TrimSpace(raw.AuthToken) == "" && strings.TrimSpace(raw.AuthTokenDpapi) == "" && strings.TrimSpace(raw.AgentID) == "" {
 		var snake snakeCaseInstallerConfig
 		if err := json.Unmarshal(data, &snake); err == nil {
 			raw.ServerURL = coalesceStr(raw.ServerURL, snake.ServerURL)
 			raw.ServerAPI = coalesceStr(raw.ServerAPI, snake.ServerAPI)
 			raw.DeployToken = coalesceStr(raw.DeployToken, snake.DeployToken)
+			raw.DeployTokenDpapi = coalesceStr(raw.DeployTokenDpapi, snake.DeployTokenDpapi)
 			raw.APIKey = coalesceStr(raw.APIKey, snake.APIKey)
 			if raw.ApiScheme == "" {
 				raw.ApiScheme = coalesceStr(raw.ApiScheme, snake.ApiScheme)
 			}
 			raw.ApiServer = coalesceStr(raw.ApiServer, snake.ApiServer)
 			raw.AuthToken = coalesceStr(raw.AuthToken, snake.AuthToken)
+			raw.AuthTokenDpapi = coalesceStr(raw.AuthTokenDpapi, snake.AuthTokenDpapi)
 			raw.AgentID = coalesceStr(raw.AgentID, snake.AgentID)
 			raw.ClientID = coalesceStr(raw.ClientID, snake.ClientID)
 			raw.SiteID = coalesceStr(raw.SiteID, snake.SiteID)
@@ -241,10 +251,12 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		ServerURL:        raw.ServerURL,
 		ServerAPI:        raw.ServerAPI,
 		APIKey:           deployToken,
+		DeployTokenDpapi: strings.TrimSpace(raw.DeployTokenDpapi),
 		AutoProvisioning: autoProvisioning,
 		ApiScheme:        raw.ApiScheme,
 		ApiServer:        raw.ApiServer,
 		AuthToken:        raw.AuthToken,
+		AuthTokenDpapi:   strings.TrimSpace(raw.AuthTokenDpapi),
 		AgentID:          raw.AgentID,
 		ClientID:         raw.ClientID,
 		SiteID:           raw.SiteID,

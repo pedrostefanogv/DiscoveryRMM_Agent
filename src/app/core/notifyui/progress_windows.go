@@ -265,10 +265,10 @@ func runProgressWindow(ctx context.Context, req ProgressRequest) ProgressResult 
 	}
 
 	state := &progressState{
-		req:    req,
-		start:  time.Now(),
-		theme:  winui.DetectTheme(),
-		scale:  scale,
+		req:   req,
+		start: time.Now(),
+		theme: winui.DetectTheme(),
+		scale: scale,
 	}
 	if req.DurationSeconds > 0 {
 		state.deadline = state.start.Add(time.Duration(req.DurationSeconds) * time.Second)
@@ -277,11 +277,11 @@ func runProgressWindow(ctx context.Context, req ProgressRequest) ProgressResult 
 		return progressLayout(s, extraHeight)
 	}
 	state.fonts = progressFonts{
-		title:   winui.CreateFont(winui.ScalePx(22, scale), 600),
+		title:    winui.CreateFont(winui.ScalePx(22, scale), 600),
 		subtitle: winui.CreateFont(winui.ScalePx(14, scale), 400),
-		body:    bodyFont,
-		detail:  winui.CreateFont(winui.ScalePx(12, scale), 400),
-		percent: winui.CreateFont(winui.ScalePx(12, scale), 400),
+		body:     bodyFont,
+		detail:   winui.CreateFont(winui.ScalePx(12, scale), 400),
+		percent:  winui.CreateFont(winui.ScalePx(12, scale), 400),
 	}
 
 	progressStates.Store(hwnd, state)

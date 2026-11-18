@@ -33,6 +33,31 @@
 
   // No modo navegador, reutiliza a origem atual da página debug HTTP.
   var API_BASE = location.origin + '/api/';
+  var DEBUG_TOKEN_STORAGE_KEY = 'discovery_debug_http_token';
+
+  function resolveDebugAuthToken() {
+    var hash = String(location.hash || '');
+    if (hash) {
+      var m = hash.match(/(?:^#|&)token=([^&]+)/i);
+      if (m && m[1]) {
+        var parsed = decodeURIComponent(m[1]);
+        try {
+          sessionStorage.setItem(DEBUG_TOKEN_STORAGE_KEY, parsed);
+        } catch (e) {}
+        try {
+          history.replaceState(null, '', location.pathname + location.search);
+        } catch (e) {}
+        return parsed;
+      }
+    }
+    try {
+      return String(sessionStorage.getItem(DEBUG_TOKEN_STORAGE_KEY) || '');
+    } catch (e) {
+      return '';
+    }
+  }
+
+  var debugAuthToken = resolveDebugAuthToken();
 
   // Cria um proxy que intercepta chamadas a window.go.app.App.*
   function createGoBridge() {
@@ -47,9 +72,15 @@
           var args = Array.prototype.slice.call(arguments);
           console.log('[debug-http] bridge HTTP: ' + methodName);
 
+          var headers = { 'Content-Type': 'application/json' };
+          if (debugAuthToken) {
+            headers['Authorization'] = 'Bearer ' + debugAuthToken;
+            headers['X-Discovery-Debug-Token'] = debugAuthToken;
+          }
+
           var fetchOpts = {
             method: 'GET',
-            headers: { 'Content-Type': 'application/json' },
+            headers: headers,
           };
 
           // M18: bindings multi-argumento (AddTicketComment(id, author, body),
@@ -109,7 +140,10 @@
       return;
     }
     var url = location.origin + '/api/chat-events';
-    console.log('[debug-http] conectando SSE: ' + url);
+    if (debugAuthToken) {
+      url += '?token=' + encodeURIComponent(debugAuthToken);
+    }
+    console.log('[debug-http] conectando SSE: ' + location.origin + '/api/chat-events');
     sseEventSource = new EventSource(url);
 
     sseEventSource.onmessage = function (msg) {

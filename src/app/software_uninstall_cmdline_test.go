@@ -33,7 +33,6 @@ func TestRunUninstallCommandQuotedPathWithSpace(t *testing.T) {
 	}
 }
 
-
 // Regressão /D /S /C: UninstallString com caminho citado E argumento citado
 // (ex.: /DEST="C:... com espaço") — o /C simples quebrava no primeiro espaço.
 func TestRunUninstallCommandQuotedPathAndQuotedArg(t *testing.T) {

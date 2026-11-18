@@ -296,9 +296,9 @@ func TestSensorToolDeclaradoCru(t *testing.T) {
 			// Sensor que NÃO declarou nada: os campos precisam sair vazios (e não
 			// inventados como "Unknown"/"Critical").
 			LastResults: []automation.SensorRunView{{
-				StartedAt: "2026-01-01T10:00:00Z",
+				StartedAt:  "2026-01-01T10:00:00Z",
 				DurationMs: &duration,
-				Channels:  map[string]float64{"livre_gb": 12.5},
+				Channels:   map[string]float64{"livre_gb": 12.5},
 			}},
 		}},
 	}

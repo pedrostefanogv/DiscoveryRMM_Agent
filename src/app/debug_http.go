@@ -4,13 +4,16 @@ package app
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,11 +21,42 @@ import (
 	"discovery/app/debughttp"
 )
 
+// ChatSSEInfo expõe porta, URL e token do servidor SSE local para o webview nativo.
+type ChatSSEInfo = debughttp.ChatSSEInfo
+
+// debugBlockedReflectionMethods lista métodos do *App que NUNCA podem ser
+// invocados ou listados via reflection HTTP (/api/<method>).
+var debugBlockedReflectionMethods = map[string]bool{
+	"GetChatSSEInfo":  true,
+	"GetDebugHTTPURL": true,
+}
+
+func (a *App) ensureDebugAuthToken() string {
+	a.debugAuthTokenMu.Lock()
+	defer a.debugAuthTokenMu.Unlock()
+	if a.debugAuthToken != "" {
+		return a.debugAuthToken
+	}
+	tok, err := debughttp.GenerateAuthToken()
+	if err != nil {
+		// Fallback determinístico-impossível não permitido; usa timestamp+pid só se CSPRNG falhar.
+		tok = fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	a.debugAuthToken = tok
+	return tok
+}
+
 // PublishChatEvent publica um evento de chat para os inscritos SSE.
-// Chamado por StartChatStream para forward dos eventos Wails → HTTP.
+// Chamado por StartChatStream para forward dos eventos Wails -> HTTP/IPC.
 func (a *App) PublishChatEvent(eventType, data string) {
 	if a.chatEvents != nil {
 		a.chatEvents.Publish(eventType, data)
+	}
+	if a.RuntimeFlags.ServiceMode && a.ipcServer != nil && a.ipcServer.ClientCount() > 0 {
+		a.broadcastIPCEvent("chat:sse_event", map[string]any{
+			"eventType": eventType,
+			"data":      data,
+		})
 	}
 }
 
@@ -50,11 +84,16 @@ func (a *App) startDebugHTTPInternal(bindAddr string, port int) error {
 
 	port = listener.Addr().(*net.TCPAddr).Port
 	bindAll := bindAddr == "0.0.0.0"
+	authToken := a.ensureDebugAuthToken()
 
+	var srv *debughttp.Server
 	mux := http.NewServeMux()
 
 	// Static file serving from embedded FS (SPA fallback to index.html)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if !a.validateDebugHost(w, r, srv) {
+			return
+		}
 		// API routes are handled separately
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			http.NotFound(w, r)
@@ -90,14 +129,17 @@ func (a *App) startDebugHTTPInternal(bindAddr string, port int) error {
 
 	// /api/chat-events — SSE streaming para eventos de chat no navegador
 	mux.HandleFunc("/api/chat-events", func(w http.ResponseWriter, r *http.Request) {
-		a.serveChatEventsSSE(w, r)
+		if !a.validateDebugRequest(w, r, srv, true) {
+			return
+		}
+		a.serveChatEventsSSE(w, r, srv)
 	})
 
 	// /api/internal/runtime-memory — fotografia de memória do runtime Go
-	// (heap/GC/goroutines). Fecha a lacuna de observabilidade do agente: não
-	// havia NENHUMA instrumentação de heap. Só existe enquanto o servidor de
-	// debug está ativo (modo debug), então não amplia a superfície normal.
 	mux.HandleFunc("/api/internal/runtime-memory", func(w http.ResponseWriter, r *http.Request) {
+		if !a.validateDebugRequest(w, r, srv, false) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(runtimediag.Take()); err != nil {
 			log.Printf("[debug-http] falha ao serializar memória do runtime: %v", err)
@@ -106,10 +148,10 @@ func (a *App) startDebugHTTPInternal(bindAddr string, port int) error {
 
 	// /api/* — REST bridge mirroring Wails bindings
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		a.serveDebugAPI(w, r)
+		a.serveDebugAPI(w, r, srv)
 	})
 
-	srv := debughttp.NewServer(
+	srv = debughttp.NewServer(
 		&http.Server{
 			Handler:      mux,
 			ReadTimeout:  30 * time.Second,
@@ -119,6 +161,7 @@ func (a *App) startDebugHTTPInternal(bindAddr string, port int) error {
 		listener,
 		port,
 		bindAll,
+		authToken,
 	)
 
 	a.debugHTTP = srv
@@ -148,8 +191,6 @@ func (a *App) StopDebugHTTPServer() {
 	if a.debugHTTP == nil {
 		return
 	}
-	// Fecha o listener ANTES do Shutdown: novas conexões são recusadas na
-	// hora e o Shutdown não precisa esperar por elas.
 	_ = a.debugHTTP.Listener.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -169,6 +210,17 @@ func (a *App) GetDebugHTTPPort() int {
 	return a.GetChatSSEPort()
 }
 
+// GetDebugHTTPURL retorna a URL completa de abertura no navegador com #token=
+// (fragmento nunca enviado em headers HTTP/Referer). Bloqueada de /api/.
+func (a *App) GetDebugHTTPURL() string {
+	port := a.GetDebugHTTPPort()
+	if port <= 0 {
+		return ""
+	}
+	tok := a.ensureDebugAuthToken()
+	return fmt.Sprintf("http://127.0.0.1:%d/#token=%s", port, url.QueryEscape(tok))
+}
+
 // GetChatSSEPort returns the port of the dedicated chat SSE server (always on
 // loopback), or 0 if it could not be started.
 func (a *App) GetChatSSEPort() int {
@@ -178,31 +230,41 @@ func (a *App) GetChatSSEPort() int {
 	return a.chatSSE.Port
 }
 
+// GetChatSSEInfo devolve porta, URL e token do servidor SSE local para o webview
+// nativo (via binding Wails; bloqueado do servidor HTTP reflection).
+func (a *App) GetChatSSEInfo() ChatSSEInfo {
+	port := a.GetChatSSEPort()
+	if port <= 0 {
+		return ChatSSEInfo{}
+	}
+	tok := ""
+	if a.chatSSE != nil {
+		tok = a.chatSSE.AuthToken
+	}
+	if tok == "" {
+		tok = a.ensureDebugAuthToken()
+	}
+	return ChatSSEInfo{
+		Port:  port,
+		URL:   fmt.Sprintf("http://127.0.0.1:%d/api/chat-events", port),
+		Token: tok,
+	}
+}
+
 // PollChatEvents retorna todos os eventos de chat pendentes no buffer de
 // polling e os remove. Usado pelo frontend nativo (WebView2) como alternativa
 // ao EventSource quando o SSE é bloqueado por mixed-content.
-// Retorna um array JSON de strings (cada string é um evento JSON no formato
-// {"event":"chat:token","data":"..."}), ou array vazio se não houver eventos.
-//
-// O frontend deve chamar este método em polling (ex.: a cada 100ms) enquanto
-// houver um stream ativo (chatSending=true). O polling é interrompido quando
-// recebe chat:done/chat:error/chat:stopped.
 func (a *App) PollChatEvents() string {
 	if a.chatEvents == nil {
 		return "[]"
 	}
 	events := a.chatEvents.DrainPollBuffer()
-	// M7 (revisão 2026-10-08): os contadores de descarte existiam mas nunca eram
-	// lidos — o evento perdido ficava invisível no diagnóstico. B4: agora cada
-	// causa é reportada separadamente.
 	if subDropped, pollOverwritten := a.chatEvents.DrainDrops(); subDropped > 0 || pollOverwritten > 0 {
 		log.Printf("[chat-sse] broker: descarte de eventos — inscrito SSE lento=%d, buffer de polling sobrescrito=%d", subDropped, pollOverwritten)
 	}
 	if len(events) == 0 {
 		return "[]"
 	}
-	// Usa encoding/json para serialização segura (evita concatenação manual de
-	// JSON que quebraria com strings contendo aspas/barras).
 	b, err := json.Marshal(events)
 	if err != nil {
 		return "[]"
@@ -211,9 +273,7 @@ func (a *App) PollChatEvents() string {
 }
 
 // EnsureChatSSEServer starts a minimal SSE-only HTTP server on 127.0.0.1 that
-// serves only /api/chat-events. This is always active (even outside debug mode)
-// so the native webview can reliably receive chat streaming events via SSE when
-// Wails v3 native event delivery is unreliable.
+// serves only /api/chat-events (autenticado por token + Host loopback).
 func (a *App) EnsureChatSSEServer() error {
 	if a.chatSSE != nil {
 		return nil // already running
@@ -228,12 +288,18 @@ func (a *App) EnsureChatSSEServer() error {
 	}
 
 	port := listener.Addr().(*net.TCPAddr).Port
+	authToken := a.ensureDebugAuthToken()
+
+	var srv *debughttp.Server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/chat-events", func(w http.ResponseWriter, r *http.Request) {
-		a.serveChatEventsSSE(w, r)
+		if !a.validateDebugRequest(w, r, srv, true) {
+			return
+		}
+		a.serveChatEventsSSE(w, r, srv)
 	})
 
-	srv := debughttp.NewServer(
+	srv = debughttp.NewServer(
 		&http.Server{
 			Handler:      mux,
 			ReadTimeout:  30 * time.Second,
@@ -243,6 +309,7 @@ func (a *App) EnsureChatSSEServer() error {
 		listener,
 		port,
 		false, // sempre loopback-only
+		authToken,
 	)
 	a.chatSSE = srv
 
@@ -261,9 +328,6 @@ func (a *App) StopChatSSEServer() {
 	if a.chatSSE == nil {
 		return
 	}
-	// Fecha o listener ANTES do Shutdown: conexões SSE são long-lived e o
-	// Shutdown do http.Server as espera drenar, consumindo o timeout inteiro.
-	// Com o listener fechado primeiro, o encerramento é imediato.
 	_ = a.chatSSE.Listener.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -285,21 +349,16 @@ func (a *App) IsDebugHTTPBoundToAllInterfaces() bool {
 
 // SetDebugHTTPBindAllInterfaces restarts the debug HTTP server to bind on
 // 0.0.0.0 (when enabled=true) or 127.0.0.1 (when enabled=false).
-// Preserves the current port so tray menu "Abrir no navegador" and other
-// references remain valid after the rebind.
 func (a *App) SetDebugHTTPBindAllInterfaces(enabled bool) error {
 	if a.debugHTTP == nil {
 		return fmt.Errorf("servidor debug-http nao esta em execucao")
 	}
 	if a.debugHTTP.BindAllInterfaces == enabled {
-		// Already in the requested state — no-op
 		return nil
 	}
 
-	// Preserve the current port so references (tray, logs) stay valid.
 	currentPort := a.debugHTTP.Port
 
-	// Stop the current listener/server
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := a.debugHTTP.HTTP.Shutdown(ctx); err != nil {
@@ -308,14 +367,12 @@ func (a *App) SetDebugHTTPBindAllInterfaces(enabled bool) error {
 	a.debugHTTP.Listener.Close()
 	a.debugHTTP = nil
 
-	// Restart with the new bind address, preserving the port.
 	bindAddr := "127.0.0.1"
 	if enabled {
 		bindAddr = "0.0.0.0"
 	}
 
 	if err := a.startDebugHTTPInternal(bindAddr, currentPort); err != nil {
-		// If the port was somehow taken, fall back to random port
 		log.Printf("[debug-http] falha ao reiniciar na porta %d, tentando porta aleatoria: %v", currentPort, err)
 		if err2 := a.startDebugHTTPInternal(bindAddr, 0); err2 != nil {
 			return fmt.Errorf("falha ao reiniciar debug-http com bind %s: %w", bindAddr, err2)
@@ -330,66 +387,174 @@ func (a *App) SetDebugHTTPBindAllInterfaces(enabled bool) error {
 	return nil
 }
 
-// resolveDebugCORSOrigin returns the CORS header value for the debug HTTP server.
-func (a *App) resolveDebugCORSOrigin() string {
-	if a.debugHTTP != nil && a.debugHTTP.BindAllInterfaces {
-		return "*"
+func (a *App) validateDebugHost(w http.ResponseWriter, r *http.Request, srv *debughttp.Server) bool {
+	if srv == nil || srv.Port <= 0 {
+		a.writeAPIError(w, http.StatusForbidden, "host validation unavailable")
+		return false
 	}
-	if a.debugHTTP != nil {
-		return "http://127.0.0.1:" + fmt.Sprint(a.debugHTTP.Port)
+	rawHost := strings.TrimSpace(r.Host)
+	if rawHost == "" || strings.ContainsAny(rawHost, " \t\r\n/\\@") {
+		a.writeAPIError(w, http.StatusForbidden, "host invalido")
+		return false
 	}
-	return "http://localhost"
+	hostname, portStr, err := net.SplitHostPort(rawHost)
+	if err != nil {
+		if srv.Port != 80 {
+			a.writeAPIError(w, http.StatusForbidden, "host sem porta esperada")
+			return false
+		}
+		hostname = strings.Trim(rawHost, "[]")
+		portStr = "80"
+	}
+	if portStr != strconv.Itoa(srv.Port) {
+		a.writeAPIError(w, http.StatusForbidden, "porta de host invalida")
+		return false
+	}
+	if !srv.BindAllInterfaces {
+		if !strings.EqualFold(hostname, "localhost") && hostname != "127.0.0.1" && hostname != "::1" {
+			a.writeAPIError(w, http.StatusForbidden, "host fora de loopback rejeitado")
+			return false
+		}
+	}
+	return true
 }
 
-// setSSECORSOrigin define o header Access-Control-Allow-Origin do endpoint SSE
-// de chat. O navegador (modo debug HTTP) já era atendido por resolveDebugCORSOrigin.
-// Para permitir que o webview nativo Wails consuma o mesmo broker SSE, ecoamos o
-// Origin da requisição quando ele for seguro (loopback, host vazio/paginado ou
-// igual ao origin do debug HTTP). Nunca ecoamos um Origin arbitrário de rede.
-func (a *App) setSSECORSOrigin(w http.ResponseWriter, r *http.Request) {
+func extractDebugTokenFromRequest(r *http.Request, allowQueryToken bool) string {
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if len(auth) > 7 && strings.EqualFold(auth[:7], "bearer ") {
+		if tok := strings.TrimSpace(auth[7:]); tok != "" {
+			return tok
+		}
+	}
+	if tok := strings.TrimSpace(r.Header.Get("X-Discovery-Debug-Token")); tok != "" {
+		return tok
+	}
+	if allowQueryToken {
+		if tok := strings.TrimSpace(r.URL.Query().Get("token")); tok != "" {
+			return tok
+		}
+	}
+	return ""
+}
+
+func (a *App) validateDebugToken(w http.ResponseWriter, r *http.Request, srv *debughttp.Server, allowQueryToken bool) bool {
+	expected := ""
+	if srv != nil {
+		expected = srv.AuthToken
+	}
+	got := extractDebugTokenFromRequest(r, allowQueryToken)
+	if expected == "" || len(got) != len(expected) || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		a.writeAPIError(w, http.StatusUnauthorized, "unauthorized")
+		return false
+	}
+	return true
+}
+
+func (a *App) validateDebugRequest(w http.ResponseWriter, r *http.Request, srv *debughttp.Server, allowQueryToken bool) bool {
+	if !a.validateDebugHost(w, r, srv) {
+		return false
+	}
+	return a.validateDebugToken(w, r, srv, allowQueryToken)
+}
+
+func (a *App) isAllowedDebugPort(portStr string, srv *debughttp.Server) bool {
+	if portStr == "" {
+		return false
+	}
+	if srv != nil && portStr == strconv.Itoa(srv.Port) {
+		return true
+	}
+	if a.debugHTTP != nil && portStr == strconv.Itoa(a.debugHTTP.Port) {
+		return true
+	}
+	if a.chatSSE != nil && portStr == strconv.Itoa(a.chatSSE.Port) {
+		return true
+	}
+	return false
+}
+
+// resolveDebugCORSOrigin valida estritamente o Origin contra origens loopback
+// da própria porta (ou a autoridade exata do Host quando BindAllInterfaces=true).
+// Nunca devolve "*" nem ecoa "null".
+func (a *App) resolveDebugCORSOrigin(r *http.Request, srv *debughttp.Server) string {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin == "" {
-		// Sem Origin (curl, EventSource local de mesma origem): reflete o padrão.
-		w.Header().Set("Access-Control-Allow-Origin", a.resolveDebugCORSOrigin())
+	if origin == "" || strings.EqualFold(origin, "null") {
+		return ""
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return ""
+	}
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	if scheme != "http" {
+		return ""
+	}
+	uHost := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	uPort := strings.TrimSpace(parsed.Port())
+	if (uHost == "127.0.0.1" || uHost == "localhost" || uHost == "::1") && a.isAllowedDebugPort(uPort, srv) {
+		return origin
+	}
+	if srv != nil && srv.BindAllInterfaces && strings.EqualFold(parsed.Host, strings.TrimSpace(r.Host)) {
+		return origin
+	}
+	return ""
+}
+
+// setSSECORSOrigin define Access-Control-Allow-Origin exclusivamente para
+// origens loopback confiáveis na porta do servidor ou origens nativas do Wails.
+// Nunca ecoa "null" nem devolve "*".
+func (a *App) setSSECORSOrigin(w http.ResponseWriter, r *http.Request, srv *debughttp.Server) {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" || strings.EqualFold(origin, "null") {
 		return
 	}
-
-	// Loopback, host "localhost" (inclui o origin do webview nativo Wails v3,
-	// que usa "http://wails.localhost" — que resolve para 127.0.0.1) e
-	// null-origin são sempre seguros para ecoar (fetch/EventSource de arquivos
-	// locais ou do webview nativo podem usar "null"/"wails.localhost").
-	lower := strings.ToLower(origin)
-	if strings.HasPrefix(lower, "http://127.0.0.1:") ||
-		strings.HasPrefix(lower, "http://localhost:") ||
-		strings.HasPrefix(lower, "http://[::1]:") ||
-		strings.HasSuffix(origin, "://wails.localhost") ||
-		lower == "wails://app" ||
-		lower == "null" {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
+	if allowed := a.resolveDebugCORSOrigin(r, srv); allowed != "" {
+		w.Header().Set("Access-Control-Allow-Origin", allowed)
 		w.Header().Set("Vary", "Origin")
 		return
 	}
-
-	// Se a origem for idêntica à autoridade do debug HTTP (ex.: outro origin
-	// loopback da mesma máquina), ecoa. Caso contrário, recua para o padrão.
-	w.Header().Set("Access-Control-Allow-Origin", a.resolveDebugCORSOrigin())
+	lower := strings.ToLower(origin)
+	if lower == "http://wails.localhost" || lower == "https://wails.localhost" || lower == "wails://app" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Vary", "Origin")
+	}
 }
 
 // serveDebugAPI handles /api/<method> requests, dispatching to the corresponding App method.
-func (a *App) serveDebugAPI(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", a.resolveDebugCORSOrigin())
+func (a *App) serveDebugAPI(w http.ResponseWriter, r *http.Request, srv *debughttp.Server) {
+	if !a.validateDebugHost(w, r, srv) {
+		return
+	}
+	if allowedOrigin := a.resolveDebugCORSOrigin(r, srv); allowedOrigin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		w.Header().Set("Vary", "Origin")
+	}
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Discovery-Debug-Token")
 
 	if r.Method == http.MethodOptions {
+		if r.Header.Get("Origin") != "" && w.Header().Get("Access-Control-Allow-Origin") == "" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if !a.validateDebugToken(w, r, srv, false) {
 		return
 	}
 
 	methodName := strings.TrimPrefix(r.URL.Path, "/api/")
 	methodName = strings.TrimSuffix(methodName, "/")
 	if methodName == "" {
-		a.serveDebugAPIList(w, r)
+		a.serveDebugAPIList(w, r, srv)
+		return
+	}
+
+	if debugBlockedReflectionMethods[methodName] {
+		a.writeAPIError(w, http.StatusForbidden, "método bloqueado via HTTP: "+methodName)
 		return
 	}
 
@@ -424,10 +589,6 @@ func (a *App) serveDebugAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		args = append(args, reflect.ValueOf(arg))
 	default:
-		// M18: suporte a múltiplos parâmetros — o body é um ARRAY JSON com um
-		// elemento por parâmetro, na ordem de assinatura do método (o bridge
-		// HTTP do navegador envia o array completo; antes, multi-param era
-		// rejeitado e o client descartava argumentos além do primeiro).
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			a.writeAPIError(w, http.StatusBadRequest, "falha ao ler corpo da requisicao: "+err.Error())
@@ -460,7 +621,6 @@ func (a *App) serveDebugAPI(w http.ResponseWriter, r *http.Request) {
 	case 1:
 		a.writeAPIJSON(w, http.StatusOK, results[0].Interface())
 	case 2:
-		// Most common: (result, error)
 		resultVal := results[0]
 		errVal := results[1]
 
@@ -481,15 +641,12 @@ func (a *App) unmarshalAPIParam(raw string, targetType reflect.Type) (interface{
 
 	switch targetType.Kind() {
 	case reflect.String:
-		// Unwrap JSON string quotes if present
 		var s string
 		if err := json.Unmarshal([]byte(raw), &s); err != nil {
-			// Accept plain string without quotes
 			return raw, nil
 		}
 		return s, nil
 	default:
-		// Create a new instance of the target type and unmarshal into it
 		ptr := reflect.New(targetType)
 		if err := json.Unmarshal([]byte(raw), ptr.Interface()); err != nil {
 			return nil, fmt.Errorf("falha ao decodificar %s: %w", targetType.Name(), err)
@@ -498,35 +655,42 @@ func (a *App) unmarshalAPIParam(raw string, targetType reflect.Type) (interface{
 	}
 }
 
-func (a *App) serveDebugAPIList(w http.ResponseWriter, _ *http.Request) {
+func (a *App) serveDebugAPIList(w http.ResponseWriter, _ *http.Request, srv *debughttp.Server) {
 	v := reflect.ValueOf(a)
 	t := v.Type()
 	var methods []string
 	for i := 0; i < t.NumMethod(); i++ {
 		m := t.Method(i)
-		// Only include exported methods with 0 or 1 parameters (excluding context.Context)
-		if m.PkgPath != "" {
+		if m.PkgPath != "" || debugBlockedReflectionMethods[m.Name] {
 			continue
 		}
 		mt := m.Type
-		if mt.NumIn() > 2 { // receiver + arg (we check for context separately)
+		if mt.NumIn() > 2 {
 			continue
 		}
-		// Skip methods that take context.Context as first argument
 		if mt.NumIn() == 2 && mt.In(1).String() == "context.Context" {
 			continue
 		}
 		methods = append(methods, m.Name)
 	}
 	displayHost := "127.0.0.1"
-	if a.debugHTTP != nil && a.debugHTTP.BindAllInterfaces {
+	port := 0
+	bindAll := false
+	if srv != nil {
+		port = srv.Port
+		bindAll = srv.BindAllInterfaces
+	} else if a.debugHTTP != nil {
+		port = a.debugHTTP.Port
+		bindAll = a.debugHTTP.BindAllInterfaces
+	}
+	if bindAll {
 		displayHost = "0.0.0.0"
 	}
 	a.writeAPIJSON(w, http.StatusOK, map[string]interface{}{
 		"methods":           methods,
-		"port":              a.debugHTTP.Port,
-		"url":               fmt.Sprintf("http://%s:%d", displayHost, a.debugHTTP.Port),
-		"bindAllInterfaces": a.debugHTTP != nil && a.debugHTTP.BindAllInterfaces,
+		"port":              port,
+		"url":               fmt.Sprintf("http://%s:%d", displayHost, port),
+		"bindAllInterfaces": bindAll,
 	})
 }
 
@@ -544,8 +708,7 @@ func (a *App) writeAPIError(w http.ResponseWriter, status int, message string) {
 
 // serveChatEventsSSE mantém uma conexão SSE (Server-Sent Events) para
 // transmitir eventos de streaming de chat ao navegador no modo debug HTTP.
-// O frontend usa esse endpoint como fallback para window.runtime.EventsOn.
-func (a *App) serveChatEventsSSE(w http.ResponseWriter, r *http.Request) {
+func (a *App) serveChatEventsSSE(w http.ResponseWriter, r *http.Request, srv *debughttp.Server) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming nao suportado", http.StatusInternalServerError)
@@ -555,14 +718,7 @@ func (a *App) serveChatEventsSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	// Um webview nativo Wails pode obter eventos de chat reutilizando o mesmo
-	// broker SSE do navegador. Como o Origin do webview é um scheme custom
-	// (ex.: http://wails.localhost), ecoamos o Origin da requisição quando a
-	// origem é confiável (loopback/identical), em vez de só aceitar o origin
-	// fixo do debug HTTP. EventSource cross-origin sem esta header é bloqueado
-	// pelo navegador e o chat nativo mostraria "Tempo limite" (com o backend
-	// completando normalmente — ver chat-native-event-loss.md).
-	a.setSSECORSOrigin(w, r)
+	a.setSSECORSOrigin(w, r, srv)
 
 	if a.chatEvents == nil {
 		http.Error(w, "chat events indisponivel", http.StatusServiceUnavailable)
@@ -573,7 +729,6 @@ func (a *App) serveChatEventsSSE(w http.ResponseWriter, r *http.Request) {
 	ch := a.chatEvents.Subscribe()
 	defer a.chatEvents.Unsubscribe(ch)
 
-	// Envia um evento inicial para confirmar conexão
 	fmt.Fprintf(w, "data: {\"event\":\"chat:connected\",\"data\":\"\"}\n\n")
 	flusher.Flush()
 

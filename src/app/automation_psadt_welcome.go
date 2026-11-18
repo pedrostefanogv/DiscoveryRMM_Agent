@@ -57,7 +57,7 @@ func (a *App) tryDispatchAutomationPsadtWelcome(req automation.AutomationNotific
 	// (dois snapshots podiam divergir: mensagem citava processo já fechado).
 	runningProcs := detectRunningCloseProcesses(closeProcs)
 	message := welcomeMessage(appName, timeoutSeconds, closeProcs, runningProcs)
-		message += fmt.Sprintf(" Os programas abertos (%s) serao fechados automaticamente em %d segundos.", strings.Join(closeProcs, ", "), timeoutSeconds)
+	message += fmt.Sprintf(" Os programas abertos (%s) serao fechados automaticamente em %d segundos.", strings.Join(closeProcs, ", "), timeoutSeconds)
 	// Prompt NATIVO do agente (cartão winui com contador). Indisponível →
 	// handled=false e o chamador cai no toast require_confirmation.
 	allowDefer := automationMetadataBool(req.Metadata, "allowDefer", true)
@@ -182,6 +182,7 @@ func automationMetadataStrings(metadata map[string]any, key string) []string {
 	}
 	return out
 }
+
 // welcomeMessage monta o corpo do Welcome nativo: lista em execução vira
 // "programas abaixo" (caixa no cartão); sem processos rodando, mantém o
 // texto inline com os nomes configurados.

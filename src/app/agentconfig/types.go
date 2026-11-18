@@ -153,41 +153,41 @@ type AgentConsolidationConfig struct {
 // AgentConfiguration defines the configuration schema returned by /api/v1/agent-auth/me/configuration.
 // It is used to control what features should be enabled on the agent.
 type AgentConfiguration struct {
-	RecoveryEnabled                   *bool                           `json:"recoveryEnabled"`
-	DiscoveryEnabled                  *bool                           `json:"discoveryEnabled"`
-	P2PFilesEnabled                   *bool                           `json:"p2pFilesEnabled"`
-	SupportEnabled                    *bool                           `json:"supportEnabled"`
-	NatsServerHost                    string                          `json:"natsServerHost"`
-	NatsServerHostInternal            string                          `json:"natsServerHostInternal"`
-	NatsUseWssExternal                *bool                           `json:"natsUseWssExternal"`
-	EnforceTlsHashValidation          *bool                           `json:"enforceTlsHashValidation"`
-	HandshakeEnabled                  *bool                           `json:"handshakeEnabled"`
-	ApiTlsCertHash                    string                          `json:"apiTlsCertHash"`
-	NatsTlsCertHash                   string                          `json:"natsTlsCertHash"`
-	ChatAIEnabled                     *bool                           `json:"chatAIEnabled"`
-	KnowledgeBaseEnabled              *bool                           `json:"knowledgeBaseEnabled"`
-	ZeroTouchEnabled                  *bool                           `json:"zeroTouchEnabled"`
-	CloudBootstrapEnabled             *bool                           `json:"cloudBootstrapEnabled"`
-	AppStoreEnabled                   *bool                           `json:"appStoreEnabled"`
-	AutomationP2PWingetInstallEnabled *bool                           `json:"automationP2pWingetInstallEnabled"`
+	RecoveryEnabled                   *bool  `json:"recoveryEnabled"`
+	DiscoveryEnabled                  *bool  `json:"discoveryEnabled"`
+	P2PFilesEnabled                   *bool  `json:"p2pFilesEnabled"`
+	SupportEnabled                    *bool  `json:"supportEnabled"`
+	NatsServerHost                    string `json:"natsServerHost"`
+	NatsServerHostInternal            string `json:"natsServerHostInternal"`
+	NatsUseWssExternal                *bool  `json:"natsUseWssExternal"`
+	EnforceTlsHashValidation          *bool  `json:"enforceTlsHashValidation"`
+	HandshakeEnabled                  *bool  `json:"handshakeEnabled"`
+	ApiTlsCertHash                    string `json:"apiTlsCertHash"`
+	NatsTlsCertHash                   string `json:"natsTlsCertHash"`
+	ChatAIEnabled                     *bool  `json:"chatAIEnabled"`
+	KnowledgeBaseEnabled              *bool  `json:"knowledgeBaseEnabled"`
+	ZeroTouchEnabled                  *bool  `json:"zeroTouchEnabled"`
+	CloudBootstrapEnabled             *bool  `json:"cloudBootstrapEnabled"`
+	AppStoreEnabled                   *bool  `json:"appStoreEnabled"`
+	AutomationP2PWingetInstallEnabled *bool  `json:"automationP2pWingetInstallEnabled"`
 	// UpdatesTabEnabled é o kill switch da aba "Atualizações" do painel do
 	// agente (apps pendentes via winget/choco). Herdável server→client→site;
 	// ausente em todos os níveis = true (habilitada). O servidor SEMPRE envia o
 	// valor resolvido — o default existe só para payload antigo/incompleto.
-	UpdatesTabEnabled *bool `json:"updatesTabEnabled"`
-	AgentHomeTab                      string                          `json:"agentHomeTab"`
-	InventoryIntervalHours            *int                            `json:"inventoryIntervalHours"`
-	AgentHeartbeatIntervalSeconds     *int                            `json:"agentHeartbeatIntervalSeconds"`
-	SiteID                            string                          `json:"siteId"`
-	ClientID                          string                          `json:"clientId"`
-	ResolvedAt                        string                          `json:"resolvedAt"`
-	AgentUpdate                       selfupdate.Policy               `json:"agentUpdate"`
-	PSADT                             AgentPSADTConfig                `json:"psadt"`
-	Notifications                     AgentNotificationsConfig        `json:"notifications"`
-	NotificationBranding              AgentNotificationBrandingConfig `json:"notificationBranding"`
-	NotificationPolicies              []AgentNotificationPolicy       `json:"notificationPolicies"`
-	Consolidation                     AgentConsolidationConfig        `json:"consolidation"`
-	Rollout                           AgentRolloutConfig              `json:"rollout"`
+	UpdatesTabEnabled             *bool                           `json:"updatesTabEnabled"`
+	AgentHomeTab                  string                          `json:"agentHomeTab"`
+	InventoryIntervalHours        *int                            `json:"inventoryIntervalHours"`
+	AgentHeartbeatIntervalSeconds *int                            `json:"agentHeartbeatIntervalSeconds"`
+	SiteID                        string                          `json:"siteId"`
+	ClientID                      string                          `json:"clientId"`
+	ResolvedAt                    string                          `json:"resolvedAt"`
+	AgentUpdate                   selfupdate.Policy               `json:"agentUpdate"`
+	PSADT                         AgentPSADTConfig                `json:"psadt"`
+	Notifications                 AgentNotificationsConfig        `json:"notifications"`
+	NotificationBranding          AgentNotificationBrandingConfig `json:"notificationBranding"`
+	NotificationPolicies          []AgentNotificationPolicy       `json:"notificationPolicies"`
+	Consolidation                 AgentConsolidationConfig        `json:"consolidation"`
+	Rollout                       AgentRolloutConfig              `json:"rollout"`
 	// StartupThrottleEnabled enables CPU-aware throttling during agent startup.
 	// When nil (default), auto-detection is used (throttled on <=4 cores).
 	// When explicitly false, the agent runs at full speed during startup.
@@ -231,26 +231,26 @@ type ServerConfiguration struct {
 	AppStorePolicy                    string `json:"appStorePolicy"`
 	AutomationP2PWingetInstallEnabled *bool  `json:"automationP2pWingetInstallEnabled"`
 	// Kill switch da aba "Atualizações". nil = habilitada (default true).
-	UpdatesTabEnabled *bool `json:"updatesTabEnabled"`
-	AgentHomeTab                      string `json:"agentHomeTab"`
-	InventoryIntervalHours            int    `json:"inventoryIntervalHours"`
-	AgentUpdatePolicyJSON             string `json:"agentUpdatePolicyJson"`
-	AgentHeartbeatIntervalSeconds     int    `json:"agentHeartbeatIntervalSeconds"`
-	AgentOnlineGraceSeconds           int    `json:"agentOnlineGraceSeconds"`
-	BrandingSettingsJSON              string `json:"brandingSettingsJson"`
-	AIIntegrationSettingsJSON         string `json:"aiIntegrationSettingsJson"`
-	NatsEnabled                       bool   `json:"natsEnabled"`
-	NatsAuthEnabled                   bool   `json:"natsAuthEnabled"`
-	NatsAgentJwtTtlMinutes            int    `json:"natsAgentJwtTtlMinutes"`
-	NatsUserJwtTtlMinutes             int    `json:"natsUserJwtTtlMinutes"`
-	NatsServerHostInternal            string `json:"natsServerHostInternal"`
-	NatsServerHostExternal            string `json:"natsServerHostExternal"`
-	NatsUseWssExternal                bool   `json:"natsUseWssExternal"`
-	ReportingSettingsJSON             string `json:"reportingSettingsJson"`
-	RetentionSettingsJSON             string `json:"retentionSettingsJson"`
-	TicketAttachmentSettingsJSON      string `json:"ticketAttachmentSettingsJson"`
-	CreatedAt                         string `json:"createdAt"`
-	UpdatedAt                         string `json:"updatedAt"`
+	UpdatesTabEnabled             *bool  `json:"updatesTabEnabled"`
+	AgentHomeTab                  string `json:"agentHomeTab"`
+	InventoryIntervalHours        int    `json:"inventoryIntervalHours"`
+	AgentUpdatePolicyJSON         string `json:"agentUpdatePolicyJson"`
+	AgentHeartbeatIntervalSeconds int    `json:"agentHeartbeatIntervalSeconds"`
+	AgentOnlineGraceSeconds       int    `json:"agentOnlineGraceSeconds"`
+	BrandingSettingsJSON          string `json:"brandingSettingsJson"`
+	AIIntegrationSettingsJSON     string `json:"aiIntegrationSettingsJson"`
+	NatsEnabled                   bool   `json:"natsEnabled"`
+	NatsAuthEnabled               bool   `json:"natsAuthEnabled"`
+	NatsAgentJwtTtlMinutes        int    `json:"natsAgentJwtTtlMinutes"`
+	NatsUserJwtTtlMinutes         int    `json:"natsUserJwtTtlMinutes"`
+	NatsServerHostInternal        string `json:"natsServerHostInternal"`
+	NatsServerHostExternal        string `json:"natsServerHostExternal"`
+	NatsUseWssExternal            bool   `json:"natsUseWssExternal"`
+	ReportingSettingsJSON         string `json:"reportingSettingsJson"`
+	RetentionSettingsJSON         string `json:"retentionSettingsJson"`
+	TicketAttachmentSettingsJSON  string `json:"ticketAttachmentSettingsJson"`
+	CreatedAt                     string `json:"createdAt"`
+	UpdatedAt                     string `json:"updatedAt"`
 	// StartupThrottleEnabled enables CPU-aware throttling during agent startup.
 	StartupThrottleEnabled *bool `json:"startupThrottleEnabled"`
 	// StartupMaxCPUPercent defines the CPU usage threshold (0-100) for throttling.
@@ -266,77 +266,77 @@ type ServerConfiguration struct {
 
 // ClientConfiguration representa a configuração no nível do cliente (API v1).
 type ClientConfiguration struct {
-	ID                                string                   `json:"id"`
-	ClientID                          string                   `json:"clientId"`
-	RecoveryEnabled                   *bool                    `json:"recoveryEnabled"`
-	DiscoveryEnabled                  *bool                    `json:"discoveryEnabled"`
-	P2PFilesEnabled                   *bool                    `json:"p2PFilesEnabled"`
-	CloudBootstrapEnabled             *bool                    `json:"cloudBootstrapEnabled"`
-	SupportEnabled                    *bool                    `json:"supportEnabled"`
-	ChatAIEnabled                     *bool                    `json:"chatAIEnabled"`
-	KnowledgeBaseEnabled              *bool                    `json:"knowledgeBaseEnabled"`
-	ZeroTouchEnabled                  *bool                    `json:"zeroTouchEnabled"`
-	AppStorePolicy                    *string                  `json:"appStorePolicy"`
-	AutomationP2PWingetInstallEnabled *bool                    `json:"automationP2pWingetInstallEnabled"`
+	ID                                string  `json:"id"`
+	ClientID                          string  `json:"clientId"`
+	RecoveryEnabled                   *bool   `json:"recoveryEnabled"`
+	DiscoveryEnabled                  *bool   `json:"discoveryEnabled"`
+	P2PFilesEnabled                   *bool   `json:"p2PFilesEnabled"`
+	CloudBootstrapEnabled             *bool   `json:"cloudBootstrapEnabled"`
+	SupportEnabled                    *bool   `json:"supportEnabled"`
+	ChatAIEnabled                     *bool   `json:"chatAIEnabled"`
+	KnowledgeBaseEnabled              *bool   `json:"knowledgeBaseEnabled"`
+	ZeroTouchEnabled                  *bool   `json:"zeroTouchEnabled"`
+	AppStorePolicy                    *string `json:"appStorePolicy"`
+	AutomationP2PWingetInstallEnabled *bool   `json:"automationP2pWingetInstallEnabled"`
 	// Kill switch da aba "Atualizações". nil = herda o nível superior.
-	UpdatesTabEnabled *bool `json:"updatesTabEnabled"`
-	AgentHomeTab                      *string                  `json:"agentHomeTab"`
-	AIIntegrationSettingsJSON         *string                  `json:"aiIntegrationSettingsJson"`
-	InventoryIntervalHours            *int                     `json:"inventoryIntervalHours"`
-	AgentUpdatePolicyJSON             *string                  `json:"agentUpdatePolicyJson"`
-	AgentHeartbeatIntervalSeconds     *int                     `json:"agentHeartbeatIntervalSeconds"`
-	AgentOnlineGraceSeconds           *int                     `json:"agentOnlineGraceSeconds"`
-	LockedFieldsJSON                  string                   `json:"lockedFieldsJson"`
-	CreatedAt                         string                   `json:"createdAt"`
-	UpdatedAt                         string                   `json:"updatedAt"`
-	CreatedBy                         *string                  `json:"createdBy"`
-	UpdatedBy                         *string                  `json:"updatedBy"`
-	Version                           int                      `json:"version"`
-	StartupThrottleEnabled            *bool                    `json:"startupThrottleEnabled"`
-	StartupMaxCPUPercent              *int                     `json:"startupMaxCPUPercent"`
-	WindowsUpdateEnabled              *bool                    `json:"windowsUpdateEnabled"`
-	WindowsUpdateScanIntervalMinutes  *int                     `json:"windowsUpdateScanIntervalMinutes"`
-	MaintenanceWindow                 *MaintenanceWindowConfig `json:"maintenanceWindow"`
-	MCPToolPolicy                     *MCPToolPolicyConfig     `json:"mcpToolPolicy"`
+	UpdatesTabEnabled                *bool                    `json:"updatesTabEnabled"`
+	AgentHomeTab                     *string                  `json:"agentHomeTab"`
+	AIIntegrationSettingsJSON        *string                  `json:"aiIntegrationSettingsJson"`
+	InventoryIntervalHours           *int                     `json:"inventoryIntervalHours"`
+	AgentUpdatePolicyJSON            *string                  `json:"agentUpdatePolicyJson"`
+	AgentHeartbeatIntervalSeconds    *int                     `json:"agentHeartbeatIntervalSeconds"`
+	AgentOnlineGraceSeconds          *int                     `json:"agentOnlineGraceSeconds"`
+	LockedFieldsJSON                 string                   `json:"lockedFieldsJson"`
+	CreatedAt                        string                   `json:"createdAt"`
+	UpdatedAt                        string                   `json:"updatedAt"`
+	CreatedBy                        *string                  `json:"createdBy"`
+	UpdatedBy                        *string                  `json:"updatedBy"`
+	Version                          int                      `json:"version"`
+	StartupThrottleEnabled           *bool                    `json:"startupThrottleEnabled"`
+	StartupMaxCPUPercent             *int                     `json:"startupMaxCPUPercent"`
+	WindowsUpdateEnabled             *bool                    `json:"windowsUpdateEnabled"`
+	WindowsUpdateScanIntervalMinutes *int                     `json:"windowsUpdateScanIntervalMinutes"`
+	MaintenanceWindow                *MaintenanceWindowConfig `json:"maintenanceWindow"`
+	MCPToolPolicy                    *MCPToolPolicyConfig     `json:"mcpToolPolicy"`
 }
 
 // SiteConfiguration representa a configuração no nível do site (API v1).
 type SiteConfiguration struct {
-	ID                                string                   `json:"id"`
-	SiteID                            string                   `json:"siteId"`
-	ClientID                          string                   `json:"clientId"`
-	RecoveryEnabled                   *bool                    `json:"recoveryEnabled"`
-	DiscoveryEnabled                  *bool                    `json:"discoveryEnabled"`
-	P2PFilesEnabled                   *bool                    `json:"p2PFilesEnabled"`
-	SupportEnabled                    *bool                    `json:"supportEnabled"`
-	ChatAIEnabled                     *bool                    `json:"chatAIEnabled"`
-	KnowledgeBaseEnabled              *bool                    `json:"knowledgeBaseEnabled"`
-	ZeroTouchEnabled                  *bool                    `json:"zeroTouchEnabled"`
-	AppStorePolicy                    *string                  `json:"appStorePolicy"`
-	AutomationP2PWingetInstallEnabled *bool                    `json:"automationP2pWingetInstallEnabled"`
+	ID                                string  `json:"id"`
+	SiteID                            string  `json:"siteId"`
+	ClientID                          string  `json:"clientId"`
+	RecoveryEnabled                   *bool   `json:"recoveryEnabled"`
+	DiscoveryEnabled                  *bool   `json:"discoveryEnabled"`
+	P2PFilesEnabled                   *bool   `json:"p2PFilesEnabled"`
+	SupportEnabled                    *bool   `json:"supportEnabled"`
+	ChatAIEnabled                     *bool   `json:"chatAIEnabled"`
+	KnowledgeBaseEnabled              *bool   `json:"knowledgeBaseEnabled"`
+	ZeroTouchEnabled                  *bool   `json:"zeroTouchEnabled"`
+	AppStorePolicy                    *string `json:"appStorePolicy"`
+	AutomationP2PWingetInstallEnabled *bool   `json:"automationP2pWingetInstallEnabled"`
 	// Kill switch da aba "Atualizações". nil = herda o nível superior.
-	UpdatesTabEnabled *bool `json:"updatesTabEnabled"`
-	AgentHomeTab                      *string                  `json:"agentHomeTab"`
-	AIIntegrationSettingsJSON         *string                  `json:"aiIntegrationSettingsJson"`
-	InventoryIntervalHours            *int                     `json:"inventoryIntervalHours"`
-	AgentUpdatePolicyJSON             *string                  `json:"agentUpdatePolicyJson"`
-	AgentOnlineGraceSeconds           *int                     `json:"agentOnlineGraceSeconds"`
-	Timezone                          *string                  `json:"timezone"`
-	Location                          *string                  `json:"location"`
-	ContactPerson                     *string                  `json:"contactPerson"`
-	ContactEmail                      *string                  `json:"contactEmail"`
-	LockedFieldsJSON                  string                   `json:"lockedFieldsJson"`
-	CreatedAt                         string                   `json:"createdAt"`
-	UpdatedAt                         string                   `json:"updatedAt"`
-	CreatedBy                         *string                  `json:"createdBy"`
-	UpdatedBy                         *string                  `json:"updatedBy"`
-	Version                           int                      `json:"version"`
-	StartupThrottleEnabled            *bool                    `json:"startupThrottleEnabled"`
-	StartupMaxCPUPercent              *int                     `json:"startupMaxCPUPercent"`
-	WindowsUpdateEnabled              *bool                    `json:"windowsUpdateEnabled"`
-	WindowsUpdateScanIntervalMinutes  *int                     `json:"windowsUpdateScanIntervalMinutes"`
-	MaintenanceWindow                 *MaintenanceWindowConfig `json:"maintenanceWindow"`
-	MCPToolPolicy                     *MCPToolPolicyConfig     `json:"mcpToolPolicy"`
+	UpdatesTabEnabled                *bool                    `json:"updatesTabEnabled"`
+	AgentHomeTab                     *string                  `json:"agentHomeTab"`
+	AIIntegrationSettingsJSON        *string                  `json:"aiIntegrationSettingsJson"`
+	InventoryIntervalHours           *int                     `json:"inventoryIntervalHours"`
+	AgentUpdatePolicyJSON            *string                  `json:"agentUpdatePolicyJson"`
+	AgentOnlineGraceSeconds          *int                     `json:"agentOnlineGraceSeconds"`
+	Timezone                         *string                  `json:"timezone"`
+	Location                         *string                  `json:"location"`
+	ContactPerson                    *string                  `json:"contactPerson"`
+	ContactEmail                     *string                  `json:"contactEmail"`
+	LockedFieldsJSON                 string                   `json:"lockedFieldsJson"`
+	CreatedAt                        string                   `json:"createdAt"`
+	UpdatedAt                        string                   `json:"updatedAt"`
+	CreatedBy                        *string                  `json:"createdBy"`
+	UpdatedBy                        *string                  `json:"updatedBy"`
+	Version                          int                      `json:"version"`
+	StartupThrottleEnabled           *bool                    `json:"startupThrottleEnabled"`
+	StartupMaxCPUPercent             *int                     `json:"startupMaxCPUPercent"`
+	WindowsUpdateEnabled             *bool                    `json:"windowsUpdateEnabled"`
+	WindowsUpdateScanIntervalMinutes *int                     `json:"windowsUpdateScanIntervalMinutes"`
+	MaintenanceWindow                *MaintenanceWindowConfig `json:"maintenanceWindow"`
+	MCPToolPolicy                    *MCPToolPolicyConfig     `json:"mcpToolPolicy"`
 }
 
 // AgentConfigResponse é o wrapper completo retornado por GET /me/configuration (API v1).

@@ -6,15 +6,15 @@ import "testing"
 // do resultado do DialogBox) e coloca a ação principal por último.
 func TestNormalizeDialogButtons(t *testing.T) {
 	cases := map[string][]string{
-		"":                {"OK"},
-		"ok":              {"OK"},
-		"okcancel":        {"Cancel", "OK"},
-		"yesno":           {"No", "Yes"},
-		"yesnocancel":     {"Cancel", "No", "Yes"},
-		"abortretryignore": {"Ignore", "Retry", "Abort"},
-		"retrycancel":     {"Cancel", "Retry"},
+		"":                  {"OK"},
+		"ok":                {"OK"},
+		"okcancel":          {"Cancel", "OK"},
+		"yesno":             {"No", "Yes"},
+		"yesnocancel":       {"Cancel", "No", "Yes"},
+		"abortretryignore":  {"Ignore", "Retry", "Abort"},
+		"retrycancel":       {"Cancel", "Retry"},
 		"canceltrycontinue": {"Cancel", "Try Again", "Continue"},
-		"desconhecido":    {"OK"},
+		"desconhecido":      {"OK"},
 	}
 	for kind, want := range cases {
 		got := NormalizeDialogButtons(kind)

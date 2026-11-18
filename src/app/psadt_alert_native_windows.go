@@ -40,7 +40,7 @@ func psadtActionValue(action PsadtAlertAction) string {
 // agentToastIconPath extrai o ícone global do agente (embedado) para um
 // arquivo e devolve o caminho absoluto — o Windows Runtime exige um path.
 var (
-	agentToastIconOnce sync.Once
+	agentToastIconOnce       sync.Once
 	agentToastIconPathResult string
 )
 
@@ -70,10 +70,10 @@ func agentToastIconPath() string {
 // foi entregue (ou decididamente não exibível por política própria).
 func (a *App) nativeToastAlert(ctx context.Context, p PsadtAlertPayload) (int, string, string, bool) {
 	req := notifyui.ToastRequest{
-		AppID:   notifyui.DefaultToastAppID,
+		AppID:    notifyui.DefaultToastAppID,
 		IconPath: agentToastIconPath(),
-		Title:   strings.TrimSpace(p.Title),
-		Message: strings.TrimSpace(p.Message),
+		Title:    strings.TrimSpace(p.Title),
+		Message:  strings.TrimSpace(p.Message),
 	}
 	if req.Title == "" {
 		req.Title = "Discovery Agent"
@@ -138,7 +138,7 @@ func (a *App) nativeModalAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		// Motivo da notificação (informação/aviso/erro/pergunta) — o glifo
 		// aparece à direita do cabeçalho do cartão.
 		Icon:    strings.ToLower(strings.TrimSpace(p.Icon)),
-		Buttons:  buttons,
+		Buttons: buttons,
 		// Enter confirma a ação principal (último botão), como no PSADT.
 		DefaultButtonID: defaultID,
 		CountdownSeconds: func() int {
@@ -295,9 +295,9 @@ func (a *App) nativePowerCountdown(ctx context.Context, action string, delaySeco
 	}
 
 	req := notifyui.CardRequest{
-		Title:            title,
-		Subtitle:         "Discovery Agent",
-		Message:          body,
+		Title:    title,
+		Subtitle: "Discovery Agent",
+		Message:  body,
 		Buttons: []notifyui.Button{
 			{ID: "cancel", Label: "Cancelar"},
 			{ID: "proceed", Label: okText, Kind: "primary"},

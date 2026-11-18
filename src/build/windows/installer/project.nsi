@@ -687,6 +687,12 @@ Section
          ${InstallerLog} "Iniciando copia de arquivos (SetOverwrite=on AllowSkipFiles=off)..."
 
          !insertmacro wails.webview2runtime
+         ; F11 (P0): restaura o $OUTDIR alterado pelo macro webview2runtime
+         ; (wails_tools.nsh faz SetOutPath "$pluginsdir\webview2bootstrapper").
+         ; Sem esta linha, os binários do wails.files seguinte são extraídos
+         ; em %TEMP% (e $INSTDIR fica vazio) quando o WebView2 precisa ser
+         ; instalado — Windows Server 2016/2019/2022 e Win10 LTSC.
+         SetOutPath $INSTDIR
          !insertmacro wails.files
 
          ; Binário do serviço: embutido AQUI e não no wails_tools.nsh (que é
@@ -1000,13 +1006,39 @@ Function SaveAgentConfig
       Abort
    ${EndIf}
 
-   ; Garantir permissao multiusuario para runtime sem servico Windows.
-   ; Usa SIDs bem conhecidos para evitar falha em SOs localizados.
+   ; SEGURANÇA (F11/P0): a raiz %ProgramData%\Discovery passa a ser APENAS
+   ; leitura/execução para BUILTIN\Users (RX) — Modify/Full dava a qualquer
+   ; usuário padrão o poder de reescrever config.json/debug_config.json e
+   ; escalar para SYSTEM (vetor 1 do plano). Escrita de usuário fica isolada
+   ; nos subdiretórios WebView2/ (UDF de fallback da UI) e logs/.
+   ; SYSTEM+Administrators mantêm controle total (herdam para os filhos).
+   ; SIDs bem conhecidos evitam falha em SOs localizados.
    ; /inheritance:e + /T aplica em filhos existentes (ex.: config.json legado).
-   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q'
+   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(RX)" /T /C /Q'
    Pop $R9
    ${If} $R9 != 0
       DetailPrint "Aviso: nao foi possivel ajustar ACL de $R0\Discovery (icacls codigo $R9)"
+   ${EndIf}
+
+   ; Subdiretórios graváveis pelo usuário (UI): WebView2 (UDF fallback quando
+   ; %LOCALAPPDATA% está indisponível — platform.UIDataDir cai em DataDir) e
+   ; logs/. Aqui é o ÚNICO lugar onde BUILTIN\Users recebe Modify.
+   CreateDirectory "$R0\Discovery\WebView2"
+   CreateDirectory "$R0\Discovery\logs"
+   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery\WebView2" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q'
+   Pop $R9
+   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery\logs" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q'
+   Pop $R9
+   ${If} $R9 != 0
+      DetailPrint "Aviso: nao foi possivel ajustar ACL dos subdiretorios gravaveis (icacls codigo $R9)"
+   ${EndIf}
+
+   ; debug_config.json preexistente (upgrade): restringe a SYSTEM/Admins —
+   ; o runtime também endurece o arquivo (debug/service.go), mas entre a
+   ; instalação e a 1a execução do serviço a herança Users da raiz valeria.
+   ${If} ${FileExists} "$R0\Discovery\debug_config.json"
+      nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery\debug_config.json" /inheritance:r /grant "*S-1-5-18:F" "*S-1-5-32-544:F" /Q'
+      Pop $R9
    ${EndIf}
 
    StrCpy $R1 "$R0\Discovery\config.json"
@@ -1264,14 +1296,25 @@ Function EnsureSharedDataDir
    ${EndIf}
    CreateDirectory "$R0\Discovery"
    CreateDirectory "$R0\Discovery\logs"
+   CreateDirectory "$R0\Discovery\WebView2"
 
-   ; Aplicar ACL no diretorio compartilhado para execucao por usuarios padrao.
-   ; SIDs evitam dependencia de nomes localizados de grupos.
+   ; SEGURANÇA (F11/P0): raiz apenas RX para BUILTIN\Users — escrita de
+   ; usuário isolada em logs/ e WebView2/ (ver SaveAgentConfig).
+   ; SIDs evitam dependência de nomes localizados de grupos.
    ; /inheritance:e + /T cobre arquivos preexistentes no diretorio.
-   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q'
+   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(RX)" /T /C /Q'
    Pop $R9
    ${If} $R9 != 0
       DetailPrint "Aviso: nao foi possivel ajustar ACL de $R0\Discovery (icacls codigo $R9)"
+   ${EndIf}
+
+   ; Subdiretórios graváveis pelo usuário: único lugar com Users Modify.
+   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery\logs" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q'
+   Pop $R9
+   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery\WebView2" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q'
+   Pop $R9
+   ${If} $R9 != 0
+      DetailPrint "Aviso: nao foi possivel ajustar ACL dos subdiretorios gravaveis (icacls codigo $R9)"
    ${EndIf}
 FunctionEnd
 
@@ -1401,7 +1444,7 @@ Function RegisterWindowsFirewallRule
    # 1) UI (discovery-agent.exe) — mantida por compatibilidade/remote session.
    nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_FIREWALL_RULE_NAME}"'
    Pop $R0
-   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_FIREWALL_RULE_NAME}" dir=in action=allow program="$INSTDIR\${PRODUCT_EXECUTABLE}" enable=yes profile=any'
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_FIREWALL_RULE_NAME}" dir=in action=allow program="$INSTDIR\${PRODUCT_EXECUTABLE}" enable=yes profile=domain,private'
    Pop $R0
    ${If} $R0 != 0
       DetailPrint "Aviso: falha ao registrar regra de Windows Firewall para ${PRODUCT_EXECUTABLE}. Codigo: $R0"
@@ -1411,7 +1454,7 @@ Function RegisterWindowsFirewallRule
    IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}" 0 fw_service_missing
    nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_SERVICE_FIREWALL_RULE_NAME}"'
    Pop $R1
-   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_SERVICE_FIREWALL_RULE_NAME}" dir=in action=allow program="$INSTDIR\${SERVICE_EXECUTABLE}" enable=yes profile=any'
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_SERVICE_FIREWALL_RULE_NAME}" dir=in action=allow program="$INSTDIR\${SERVICE_EXECUTABLE}" enable=yes profile=domain,private'
    Pop $R1
    ${If} $R1 != 0
       DetailPrint "Aviso: falha ao registrar regra de Firewall para ${SERVICE_EXECUTABLE}. Codigo: $R1"
@@ -1427,14 +1470,14 @@ Function RegisterWindowsFirewallRule
    #    cairia em fallback mais lento).
    nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_P2P_PORTS_RULE_NAME}"'
    Pop $R2
-   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_P2P_PORTS_RULE_NAME}" dir=in action=allow protocol=TCP localport=${DISCOVERY_P2P_HTTP_PORT_RANGE},${DISCOVERY_P2P_LIBP2P_PORT} enable=yes profile=any'
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_P2P_PORTS_RULE_NAME}" dir=in action=allow protocol=TCP localport=${DISCOVERY_P2P_HTTP_PORT_RANGE},${DISCOVERY_P2P_LIBP2P_PORT} enable=yes profile=domain,private'
    Pop $R2
    ${If} $R2 != 0
       DetailPrint "Aviso: falha ao registrar regra de portas P2P (TCP). Codigo: $R2"
    ${EndIf}
    nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_P2P_PORTS_UDP_RULE_NAME}"'
    Pop $R3
-   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_P2P_PORTS_UDP_RULE_NAME}" dir=in action=allow protocol=UDP localport=${DISCOVERY_P2P_LIBP2P_PORT} enable=yes profile=any'
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_P2P_PORTS_UDP_RULE_NAME}" dir=in action=allow protocol=UDP localport=${DISCOVERY_P2P_LIBP2P_PORT} enable=yes profile=domain,private'
    Pop $R3
    ${If} $R3 != 0
       DetailPrint "Aviso: falha ao registrar regra de portas P2P (UDP). Codigo: $R3"

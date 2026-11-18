@@ -87,7 +87,7 @@ func (a *App) StartDebugConfigWatcher() {
 		if a.AgentConn != nil {
 			a.AgentConn.Reload()
 		}
-		a.EmitEvent("debug:config_updated", "config", cfg)
+		a.EmitEvent("debug:config_updated", "config", redactDebugConfig(cfg))
 	})
 	a.DebugSvc.StartWatcher()
 }
@@ -273,7 +273,8 @@ func mergeConfigPatch(current debug.Config, patch map[string]any) (debug.Config,
 }
 
 func configSetEffectiveData(cfg debug.Config, flags RuntimeFlags) (map[string]any, error) {
-	raw, err := json.Marshal(cfg)
+	redacted := redactDebugConfig(cfg)
+	raw, err := json.Marshal(redacted)
 	if err != nil {
 		return nil, err
 	}
@@ -281,6 +282,9 @@ func configSetEffectiveData(cfg debug.Config, flags RuntimeFlags) (map[string]an
 	if err := json.Unmarshal(raw, &data); err != nil {
 		return nil, err
 	}
+	delete(data, "authToken")
+	delete(data, "authTokenDpapi")
+	data["hasAuthToken"] = redacted.HasAuthToken
 	data["debugMode"] = flags.DebugMode
 	data["startMinimized"] = flags.StartMinimized
 	return data, nil
