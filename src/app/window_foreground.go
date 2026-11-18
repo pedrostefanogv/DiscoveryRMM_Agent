@@ -2,8 +2,6 @@ package app
 
 import (
 	"time"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // ── Trazer uma janela do agent para o PRIMEIRO PLANO ─────────────────────────
@@ -53,7 +51,7 @@ var windowRaiseRetryDelays = []time.Duration{
 // keepTopmost mantém a janela "sempre no topo" durante a exibição. É usado no
 // convite do chat de suporte; depois da resposta do usuário volta a false (uma
 // janela sempre no topo durante a conversa inteira atrapalharia o trabalho).
-func raiseWindowToFront(win application.Window, keepTopmost bool) bool {
+func raiseWindowToFront(win uiWindow, keepTopmost bool) bool {
 	if win == nil {
 		return false
 	}
@@ -83,7 +81,7 @@ func raiseWindowToFront(win application.Window, keepTopmost bool) bool {
 // alive devolve false quando a janela não é mais a janela corrente (foi fechada
 // ou substituída) e encerra as tentativas. stop encerra as tentativas quando o
 // contexto da aplicação acaba; pode ser nil.
-func scheduleWindowRaise(win application.Window, keepTopmost bool, alive func() bool, stop <-chan struct{}) {
+func scheduleWindowRaise(win uiWindow, keepTopmost bool, alive func() bool, stop <-chan struct{}) {
 	if win == nil {
 		return
 	}

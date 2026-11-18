@@ -12,8 +12,6 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
-
 	"discovery/app/core/platform"
 )
 
@@ -168,7 +166,7 @@ func (a *App) probeMainThreadWithin(timeout time.Duration) bool {
 	var once atomic.Bool
 	go func() {
 		defer func() { _ = recover() }()
-		application.InvokeSync(func() {
+		uiInvokeSync(func() {
 			if once.CompareAndSwap(false, true) {
 				close(done)
 			}

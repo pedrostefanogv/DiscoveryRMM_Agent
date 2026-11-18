@@ -4,8 +4,6 @@ import (
 	"errors"
 	"log"
 	"time"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // ── Criação preguiçosa da janela principal (otimização de RAM) ──────────────
@@ -27,7 +25,7 @@ import (
 
 // SetWindowFactory registra a fábrica da janela principal. Idempotente: a
 // última registrada vence (main.go registra uma única vez).
-func (a *App) SetWindowFactory(factory func() application.Window) {
+func (a *App) SetWindowFactory(factory func() uiWindow) {
 	a.windowMu.Lock()
 	a.windowFactory = factory
 	a.windowMu.Unlock()
@@ -41,7 +39,7 @@ func (a *App) SetWindowFactory(factory func() application.Window) {
 // evita corrida de dados na PRIMEIRA criação, quando a escrita acontece numa
 // goroutine diferente da leitura (clique no tray vs. handler de segunda
 // instância).
-func (a *App) ensureMainWindow() (application.Window, error) {
+func (a *App) ensureMainWindow() (uiWindow, error) {
 	for {
 		a.windowMu.Lock()
 		if a.mainWindow != nil {

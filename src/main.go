@@ -273,7 +273,7 @@ func main() {
 	})
 
 	// Guarda a referência da aplicação no App para acesso a eventos/janela/tray.
-	app.SetApplication(appInstance)
+	app.SetApplicationWails(appInstance)
 	// Conecta o serviço nativo de notificações ao App (toast de resposta do
 	// chat + clique no toast reabrindo a aba de chat).
 	app.SetNativeNotificationService(notifService)
@@ -299,7 +299,7 @@ func main() {
 	// do WebView2 (~230 MB medidos) sem nunca aparecer para o usuário. A fábrica
 	// abaixo é executada na primeira necessidade (clique no tray, toast, segunda
 	// instância) ou imediatamente quando a abertura é manual/por toast.
-	app.SetWindowFactory(func() application.Window {
+	app.SetWindowFactoryWails(func() application.Window {
 		window := appInstance.Window.NewWithOptions(application.WebviewWindowOptions{
 			Title:     "Discovery",
 			Width:     appkg.WindowWidth,

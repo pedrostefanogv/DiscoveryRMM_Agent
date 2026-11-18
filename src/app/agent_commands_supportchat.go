@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	wailsnotifications "github.com/wailsapp/wails/v3/pkg/services/notifications"
-
 	"discovery/app/agentcommands"
 	"discovery/app/supportchat"
 )
@@ -555,7 +553,7 @@ func (a *App) notifySupportChatInvite(invite supportchat.Invite) {
 		return
 	}
 
-	opts := wailsnotifications.NotificationOptions{
+	opts := uiNotificationOptions{
 		ID:    supportChatInviteNotificationID,
 		Title: "Suporte iniciou um chat",
 		Body:  buildSupportChatInviteMessage(invite),

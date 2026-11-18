@@ -1,8 +1,6 @@
 package app
 
-import (
-	"github.com/wailsapp/wails/v3/pkg/application"
-)
+import ()
 
 // ── Memória de posição da janela do chat ────────────────────────────────────
 //
@@ -19,13 +17,13 @@ import (
 
 // supportChatPlacementRecord é a posição lembrada da última janela do chat.
 type supportChatPlacementRecord struct {
-	screen *application.Screen
+	screen *uiScreen
 	x, y   int
 }
 
 // rememberSupportChatWindowPlacement guarda a posição da janela que está sendo
 // fechada.
-func (a *App) rememberSupportChatWindowPlacement(win application.Window) {
+func (a *App) rememberSupportChatWindowPlacement(win uiWindow) {
 	if a == nil || win == nil {
 		return
 	}

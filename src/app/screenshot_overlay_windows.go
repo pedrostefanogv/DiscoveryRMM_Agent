@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"syscall"
 	"unsafe"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
-	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 // ── Overlay de captura: JANELA DEDICADA cobrindo o desktop virtual ─────────
@@ -44,7 +41,7 @@ var (
 
 // enterOverlayBounds posiciona a janela do overlay sobre o desktop virtual,
 // garante o WebView visível e devolve a função de restauração.
-func (a *App) enterOverlayBounds(win application.Window, x, y, w, h int) (func(), error) {
+func (a *App) enterOverlayBounds(win uiWindow, x, y, w, h int) (func(), error) {
 	if win == nil {
 		return nil, fmt.Errorf("janela do overlay indisponivel")
 	}
@@ -88,10 +85,10 @@ func (a *App) enterOverlayBounds(win application.Window, x, y, w, h int) (func()
 	// Fechar/ocultar a janela do overlay durante a sessão encerra a captura e
 	// devolve as janelas. O abort roda em goroutine para não chamar a API do
 	// Wails dentro do callback do evento.
-	unregisterClose := win.RegisterHook(events.Common.WindowClosing, func(*application.WindowEvent) {
+	unregisterClose := win.RegisterHook(uiEventWindowClosing, func(uiWindowEvent) {
 		go a.abortScreenshotOverlay("janela de captura fechada")
 	})
-	unregisterHide := win.RegisterHook(events.Common.WindowHide, func(*application.WindowEvent) {
+	unregisterHide := win.RegisterHook(uiEventWindowHide, func(uiWindowEvent) {
 		go a.abortScreenshotOverlay("janela de captura ocultada")
 	})
 

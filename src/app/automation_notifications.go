@@ -22,8 +22,6 @@ package app
 import (
 	"strings"
 
-	wailsnotifications "github.com/wailsapp/wails/v3/pkg/services/notifications"
-
 	"discovery/app/core/automation"
 )
 
@@ -45,7 +43,7 @@ func (a *App) sendNativeTaskNotification(notificationID, title, message string) 
 // nativo real (o caminho do Chat IA segue o mesmo padrao).
 func (a *App) sendNativeNotificationOptions(
 	notificationID, title, message string,
-	send func(wailsnotifications.NotificationOptions) error,
+	send func(uiNotificationOptions) error,
 ) bool {
 	if a == nil || send == nil {
 		return false
@@ -59,7 +57,7 @@ func (a *App) sendNativeNotificationOptions(
 	// — o nome da tarefa/pacote e texto de origem externa e NAO pode virar
 	// comando. O zero-width space depois de $ e de crase quebra a interpolacao e
 	// nao aparece na tela.
-	opts := wailsnotifications.NotificationOptions{
+	opts := uiNotificationOptions{
 		ID:    id,
 		Title: neutralizeToastInterpolation(strings.TrimSpace(title)),
 		Body:  neutralizeToastInterpolation(strings.TrimSpace(message)),
@@ -67,7 +65,7 @@ func (a *App) sendNativeNotificationOptions(
 	}
 	if iconURL := a.ensureNotificationIcon(); iconURL != "" {
 		// Logo da aplicacao no proprio toast (mesmo tratamento do Chat IA).
-		opts.Attachments = []wailsnotifications.NotificationAttachment{
+		opts.Attachments = []uiNotificationAttachment{
 			{Path: iconURL, Type: "appLogoOverride"},
 		}
 	}

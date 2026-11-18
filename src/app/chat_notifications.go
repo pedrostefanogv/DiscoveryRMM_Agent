@@ -38,9 +38,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
-	wailsnotifications "github.com/wailsapp/wails/v3/pkg/services/notifications"
-
 	"discovery/app/core/platform"
 	"discovery/app/services/locale"
 )
@@ -99,15 +96,16 @@ func shouldNotifyChatResponse(state chatWindowState, chatTabActive bool) bool {
 	return !chatTabActive
 }
 
-// SetNativeNotificationService guarda o serviço nativo do Wails v3 e registra o
-// callback de clique: clicar no toast reabre a janela na aba de chat.
+// SetNativeNotifications guarda o serviço nativo (contrato local
+// uiNotifications) e registra o callback de clique: clicar no toast reabre a
+// janela na aba de chat.
 //
 // O slot OnNotificationResponse do serviço é ÚNICO — registramos um dispatcher
 // com fan-out (dispatchNativeNotification) em vez de um handler direto, para
-// que outros recursos possam se registrar sem derrubar o nosso.
-//
-//wails:ignore
-func (a *App) SetNativeNotificationService(ns *wailsnotifications.NotificationService) {
+// que outros recursos possam se registrar sem derrubar o nosso. O adapter do
+// Wails (app_ui_wails.go, tag "wailsui") converte os resultados nativos para
+// uiNotificationResult antes de chamar este setter.
+func (a *App) SetNativeNotifications(ns uiNotifications) {
 	if a == nil {
 		return
 	}
@@ -116,7 +114,7 @@ func (a *App) SetNativeNotificationService(ns *wailsnotifications.NotificationSe
 		return
 	}
 	ns.OnNotificationResponse(a.dispatchNativeNotification)
-	a.RegisterNativeNotificationHandler(func(result wailsnotifications.NotificationResult) {
+	a.RegisterNativeNotificationHandler(func(result uiNotificationResult) {
 		if result.Error != nil {
 			return
 		}
@@ -148,7 +146,7 @@ func (a *App) startNativeNotificationService(ctx context.Context) {
 	if a == nil || a.nativeNotifications == nil {
 		return
 	}
-	if err := a.nativeNotifications.ServiceStartup(ctx, application.ServiceOptions{}); err != nil {
+	if err := a.nativeNotifications.ServiceStartup(ctx); err != nil {
 		log.Printf("[notifications] serviço nativo indisponível; notificação do chat desabilitada: %v", err)
 		a.Logs.Append("[chat] notificação nativa do chat desabilitada: " + err.Error())
 		return
@@ -167,7 +165,7 @@ func (a *App) registerNotificationIcon() {
 	}
 	appID := "Discovery"
 	if a.app != nil {
-		if name := strings.TrimSpace(a.app.Config().Name); name != "" {
+		if name := strings.TrimSpace(a.app.AppName()); name != "" {
 			appID = name
 		}
 	}
@@ -219,7 +217,7 @@ func (a *App) stopNativeNotificationService() {
 // único callback e ele já está ocupado pelo dispatcher.
 //
 //wails:ignore
-func (a *App) RegisterNativeNotificationHandler(handler func(wailsnotifications.NotificationResult)) {
+func (a *App) RegisterNativeNotificationHandler(handler func(uiNotificationResult)) {
 	if a == nil || handler == nil {
 		return
 	}
@@ -230,12 +228,12 @@ func (a *App) RegisterNativeNotificationHandler(handler func(wailsnotifications.
 
 // dispatchNativeNotification entrega a resposta para todos os handlers
 // registrados (cópia da lista fora do lock).
-func (a *App) dispatchNativeNotification(result wailsnotifications.NotificationResult) {
+func (a *App) dispatchNativeNotification(result uiNotificationResult) {
 	if a == nil {
 		return
 	}
 	a.nativeNotifyHandlersMu.Lock()
-	handlers := make([]func(wailsnotifications.NotificationResult), len(a.nativeNotifyHandlers))
+	handlers := make([]func(uiNotificationResult), len(a.nativeNotifyHandlers))
 	copy(handlers, a.nativeNotifyHandlers)
 	a.nativeNotifyHandlersMu.Unlock()
 	for _, handler := range handlers {
@@ -365,7 +363,7 @@ func (a *App) deliverChatNotification(
 	state chatWindowState,
 	chatTabActive bool,
 	includePreview bool,
-	send func(wailsnotifications.NotificationOptions) error,
+	send func(uiNotificationOptions) error,
 ) bool {
 	if a == nil || send == nil {
 		return false
@@ -405,7 +403,7 @@ func (a *App) deliverChatNotification(
 	case chatNotifyQuestion:
 		dataKind = "chat.question"
 	}
-	opts := wailsnotifications.NotificationOptions{
+	opts := uiNotificationOptions{
 		ID:    chatNotificationID,
 		Title: title,
 		Body:  body,
@@ -418,7 +416,7 @@ func (a *App) deliverChatNotification(
 	if iconURL := a.ensureNotificationIcon(); iconURL != "" {
 		// Logo da aplicação no próprio toast (não depende do AppUserModelId nem
 		// do caminho COM/PowerShell do envio).
-		opts.Attachments = []wailsnotifications.NotificationAttachment{
+		opts.Attachments = []uiNotificationAttachment{
 			{Path: iconURL, Type: "appLogoOverride"},
 		}
 	}

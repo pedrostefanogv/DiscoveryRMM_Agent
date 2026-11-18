@@ -11,9 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
-	"github.com/wailsapp/wails/v3/pkg/events"
-
 	screencap "discovery/app/core/screen"
 	"discovery/app/supportchat"
 )
@@ -86,8 +83,8 @@ func supportChatShouldFloat(status string) bool {
 //     o chat não tomar a tela inteira enquanto o usuário trabalha;
 //   - MaxWidth/MaxHeight iguais ao tamanho inicial: nenhum caminho (duplo clique
 //     no título, atalho do sistema) pode ampliá-la além disso.
-func supportChatWindowOptions(width, height int) application.WebviewWindowOptions {
-	return application.WebviewWindowOptions{
+func supportChatWindowOptions(width, height int) uiWebviewWindowOptions {
+	return uiWebviewWindowOptions{
 		Name:   supportChatWindowName,
 		Title:  "Chat com o suporte",
 		Width:  width,
@@ -99,9 +96,9 @@ func supportChatWindowOptions(width, height int) application.WebviewWindowOption
 		MaxHeight: height,
 
 		DisableResize:         true,
-		CloseButtonState:      application.ButtonHidden,
-		MaximiseButtonState:   application.ButtonDisabled,
-		FullscreenButtonState: application.ButtonDisabled,
+		CloseButtonState:      uiButtonHidden,
+		MaximiseButtonState:   uiButtonDisabled,
+		FullscreenButtonState: uiButtonDisabled,
 
 		URL: "/chat-window.html",
 	}
@@ -114,7 +111,7 @@ func supportChatWindowOptions(width, height int) application.WebviewWindowOption
 // ou com escala de DPI alta (ex.: 1080p a 150% → ~1280x688 lógicos): como ela
 // não pode ser redimensionada nem maximizada, o rodapé (campo de texto e
 // "Enviar") ficava fora da tela e o usuário não tinha como alcançá-lo.
-func supportChatWindowSize(screen *application.Screen) (int, int) {
+func supportChatWindowSize(screen *uiScreen) (int, int) {
 	width, height := supportChatWindowWidth, supportChatWindowHeight
 	if screen == nil {
 		return width, height
@@ -140,7 +137,7 @@ func supportChatWindowSize(screen *application.Screen) (int, int) {
 // Telas sem PhysicalBounds (plataformas que não preenchem) caem no Bounds, que
 // no Windows continua em DIP — é um palpite razoável e nunca piora o
 // comportamento anterior (que ignorava o cursor).
-func screenContainingPhysicalPoint(screens []*application.Screen, pt application.Point) *application.Screen {
+func screenContainingPhysicalPoint(screens []*uiScreen, pt uiPoint) *uiScreen {
 	for _, s := range screens {
 		if s == nil {
 			continue
@@ -172,7 +169,7 @@ func screenContainingPhysicalPoint(screens []*application.Screen, pt application
 // BUG RELATADO: com dois monitores o convite podia nascer no monitor em que o
 // usuário não estava olhando e passar despercebido — junto com o "não aparece
 // por cima dos outros apps", isso dava a impressão de convite perdido.
-func supportChatPlacementScreen(screens []*application.Screen, cursor *application.Point, preferred *application.Screen) *application.Screen {
+func supportChatPlacementScreen(screens []*uiScreen, cursor *uiPoint, preferred *uiScreen) *uiScreen {
 	if cursor != nil {
 		if s := screenContainingPhysicalPoint(screens, *cursor); s != nil {
 			return s
@@ -200,7 +197,7 @@ func supportChatPlacementScreen(screens []*application.Screen, cursor *applicati
 // O AlwaysOnTop nas opções (e não só depois de exibir) evita o intervalo em que
 // a janela nasce atrás do app em uso — era justamente esse piscar/pular para
 // trás que confundia o usuário no convite.
-func supportChatWindowOptionsOn(width, height int, screen *application.Screen, float bool) application.WebviewWindowOptions {
+func supportChatWindowOptionsOn(width, height int, screen *uiScreen, float bool) uiWebviewWindowOptions {
 	opts := supportChatWindowOptions(width, height)
 	opts.AlwaysOnTop = float
 
@@ -224,7 +221,7 @@ func supportChatWindowOptionsOn(width, height int, screen *application.Screen, f
 	}
 
 	opts.Screen = screen
-	opts.InitialPosition = application.WindowXY
+	opts.InitialPosition = uiWindowXY
 	opts.X = x
 	opts.Y = y
 	return opts
@@ -238,14 +235,14 @@ func supportChatWindowOptionsOn(width, height int, screen *application.Screen, f
 //     conectada) — o usuário já tem o painel naquele ponto da tela e uma
 //     janela nova em outro lugar parece "não abriu";
 //  2. tela do cursor (ver supportChatPlacementScreen), centralizada.
-func (a *App) supportChatPlacementForNewWindow(wailsApp *application.App) (*application.Screen, *application.Point) {
+func (a *App) supportChatPlacementForNewWindow(uiAppRef uiApp) (*uiScreen, *uiPoint) {
 	a.supportChatMu.Lock()
 	last := a.supportChatLastPlacement
 	a.supportChatMu.Unlock()
 
-	var screens []*application.Screen
-	if wailsApp != nil && wailsApp.Screen != nil {
-		screens = wailsApp.Screen.GetAll()
+	var screens []*uiScreen
+	if uiAppRef != nil {
+		screens = uiAppRef.Screens()
 	}
 
 	if last != nil {
@@ -257,18 +254,18 @@ func (a *App) supportChatPlacementForNewWindow(wailsApp *application.App) (*appl
 			// de tarefas pode ter mudado de lugar entre as duas janelas).
 			work := screen.WorkArea
 			if work.Width > 0 && work.Height > 0 && last.x < work.Width && last.y < work.Height {
-				point := &application.Point{X: last.x, Y: last.y}
+				point := &uiPoint{X: last.x, Y: last.y}
 				return screen, point
 			}
 		}
 	}
 
-	return a.supportChatPlacementScreen(wailsApp), nil
+	return a.supportChatPlacementScreen(uiAppRef), nil
 }
 
 // sameSupportChatScreen compara duas telas pelos limites físicos (o Wails pode
 // devolver instâncias diferentes para a mesma tela).
-func sameSupportChatScreen(left, right *application.Screen) bool {
+func sameSupportChatScreen(left, right *uiScreen) bool {
 	if left == nil || right == nil {
 		return false
 	}
@@ -283,7 +280,7 @@ func (a *App) supportChatWindowURL(base string) string {
 		return base
 	}
 	return supportChatWindowOptionsWithContext(
-		application.WebviewWindowOptions{URL: base},
+		uiWebviewWindowOptions{URL: base},
 		a.supportChatService().State(),
 	).URL
 }
@@ -292,7 +289,7 @@ func (a *App) supportChatWindowURL(base string) string {
 // frontend já consegue desenhar no cabeçalho ANTES do primeiro snapshot
 // (atendente/chamado/sessão). O chat abre "com a conversa" mesmo com a rede
 // lenta, em vez de abrir vazio esperando o REST.
-func supportChatWindowOptionsWithContext(opts application.WebviewWindowOptions, state supportchat.State) application.WebviewWindowOptions {
+func supportChatWindowOptionsWithContext(opts uiWebviewWindowOptions, state supportchat.State) uiWebviewWindowOptions {
 	query := url.Values{}
 	if value := strings.TrimSpace(state.SessionID); value != "" {
 		query.Set("sessionId", value)
@@ -314,19 +311,19 @@ func supportChatWindowOptionsWithContext(opts application.WebviewWindowOptions, 
 
 // supportChatPlacementScreen resolve a tela do painel do chat (cursor → janela
 // principal → primária) a partir dos dados do Wails.
-func (a *App) supportChatPlacementScreen(wailsApp *application.App) *application.Screen {
-	var screens []*application.Screen
-	if wailsApp != nil && wailsApp.Screen != nil {
-		screens = wailsApp.Screen.GetAll()
+func (a *App) supportChatPlacementScreen(uiAppRef uiApp) *uiScreen {
+	var screens []*uiScreen
+	if uiAppRef != nil {
+		screens = uiAppRef.Screens()
 	}
 
 	// Cursor: coordenadas FÍSICAS do desktop virtual (multi-monitor).
-	var cursor *application.Point
+	var cursor *uiPoint
 	if info, err := screencap.GetCursorPos(); err == nil {
-		cursor = &application.Point{X: int(info.X), Y: int(info.Y)}
+		cursor = &uiPoint{X: int(info.X), Y: int(info.Y)}
 	}
 
-	var preferred *application.Screen
+	var preferred *uiScreen
 	if a.mainWindow != nil {
 		if s, err := a.mainWindow.GetScreen(); err == nil && s != nil {
 			preferred = s
@@ -420,7 +417,7 @@ func (a *App) supportChatWindowFloat() bool {
 
 // supportChatWindowAlive informa se a janela informada ainda é a janela corrente
 // do chat (usado pelas re-tentativas de trazer para a frente).
-func (a *App) supportChatWindowAlive(win application.Window) bool {
+func (a *App) supportChatWindowAlive(win uiWindow) bool {
 	a.supportChatMu.Lock()
 	defer a.supportChatMu.Unlock()
 	return win != nil && a.supportChatWin == win
@@ -431,7 +428,7 @@ func (a *App) supportChatWindowAlive(win application.Window) bool {
 //
 // O estado "sempre no topo" é decidido pelo estado do convite: pendente = true,
 // conversa ativa/encerrada = false.
-func (a *App) raiseSupportChatWindow(win application.Window, float bool) {
+func (a *App) raiseSupportChatWindow(win uiWindow, float bool) {
 	if win == nil {
 		return
 	}
@@ -946,7 +943,7 @@ func (a *App) createSupportChatWindow(hidden bool) {
 
 	opts := supportChatWindowOptionsOn(width, height, screen, float)
 	if position != nil {
-		opts.InitialPosition = application.WindowXY
+		opts.InitialPosition = uiWindowXY
 		opts.X = position.X
 		opts.Y = position.Y
 	}
@@ -957,7 +954,7 @@ func (a *App) createSupportChatWindow(hidden bool) {
 		opts.Hidden = true
 	}
 
-	win := app.Window.NewWithOptions(opts)
+	win := app.NewWebviewWindow(opts)
 	// Portão por janela: o hook consulta ESTA janela e não um estado global que
 	// sobrevive ao fechamento anterior.
 	allowClose := &atomic.Bool{}
@@ -968,7 +965,7 @@ func (a *App) createSupportChatWindow(hidden bool) {
 	trace.setWebview("novo")
 	trace.mark("janela")
 
-	win.RegisterHook(events.Common.WindowClosing, func(ev *application.WindowEvent) {
+	win.RegisterHook(uiEventWindowClosing, func(ev uiWindowEvent) {
 		if allowClose.Load() {
 			return
 		}
@@ -1098,7 +1095,7 @@ const supportChatContentDeadline = 4 * time.Second
 // essa navegação não acontece (window criada durante o relaunch, ambiente do
 // WebView2 criando, asset server ainda subindo), a janela improvisa o título e
 // fica vazia. Um Reload()/SetURL explícito resolve na maioria dos casos.
-func (a *App) ensureSupportChatWindowContent(win application.Window) {
+func (a *App) ensureSupportChatWindowContent(win uiWindow) {
 	if win == nil {
 		return
 	}

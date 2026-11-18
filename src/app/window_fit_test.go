@@ -2,8 +2,6 @@ package app
 
 import (
 	"testing"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // fakeWindow registra as chamadas feitas pelo clamp para verificação.
@@ -20,11 +18,10 @@ type fakeWindow struct {
 
 func (f *fakeWindow) Size() (int, int)     { return f.w, f.h }
 func (f *fakeWindow) Position() (int, int) { return f.x, f.y }
-func (f *fakeWindow) SetSize(width, height int) application.Window {
+func (f *fakeWindow) SetSize(width, height int) {
 	f.setSizeCalls++
 	f.w, f.h = width, height
 	f.finalW, f.finalH = width, height
-	return nil
 }
 func (f *fakeWindow) SetPosition(x, y int) {
 	f.setPosCalls++
@@ -38,8 +35,8 @@ func (f *fakeWindow) SetMinSize(minWidth, minHeight int) {
 
 func TestFitWindowToScreen_NoChangeWhenFits(t *testing.T) {
 	fw := &fakeWindow{w: 1280, h: 860, x: 100, y: 100}
-	screen := &application.Screen{
-		WorkArea: application.Rect{X: 0, Y: 0, Width: 1920, Height: 1040},
+	screen := &uiScreen{
+		WorkArea: uiRect{X: 0, Y: 0, Width: 1920, Height: 1040},
 	}
 	fitWindowToScreen(fw, screen)
 	if fw.setSizeCalls != 0 || fw.setPosCalls != 0 {
@@ -50,8 +47,8 @@ func TestFitWindowToScreen_NoChangeWhenFits(t *testing.T) {
 func TestFitWindowToScreen_ClampsSizeOnSmallScreen(t *testing.T) {
 	// Cenário 1080p @150%: WorkArea lógica ~1280x688 (taskbar 32 DIP).
 	fw := &fakeWindow{w: 1280, h: 860, x: 0, y: 0}
-	screen := &application.Screen{
-		WorkArea:    application.Rect{X: 0, Y: 0, Width: 1280, Height: 688},
+	screen := &uiScreen{
+		WorkArea:    uiRect{X: 0, Y: 0, Width: 1280, Height: 688},
 		ScaleFactor: 1.5,
 	}
 	fitWindowToScreen(fw, screen)
@@ -71,8 +68,8 @@ func TestFitWindowToScreen_RestoresMinSizeWhenPossible(t *testing.T) {
 	// Tela grande o suficiente para o clamp respeitar o MinSize original:
 	// só a largura é reduzida (ex.: janela mais larga que a tela).
 	fw := &fakeWindow{w: 2000, h: 860, x: 0, y: 0}
-	screen := &application.Screen{
-		WorkArea: application.Rect{X: 0, Y: 0, Width: 1600, Height: 1040},
+	screen := &uiScreen{
+		WorkArea: uiRect{X: 0, Y: 0, Width: 1600, Height: 1040},
 	}
 	fitWindowToScreen(fw, screen)
 	wantW := 1600 - 2*windowFitMargin // 1568
@@ -89,8 +86,8 @@ func TestFitWindowToScreen_RestoresMinSizeWhenPossible(t *testing.T) {
 func TestFitWindowToScreen_RepositionsOffscreenWindow(t *testing.T) {
 	// Janela posicionada acima do topo do monitor (y negativo).
 	fw := &fakeWindow{w: 1280, h: 860, x: 0, y: -400}
-	screen := &application.Screen{
-		WorkArea: application.Rect{X: 0, Y: 0, Width: 1920, Height: 1040},
+	screen := &uiScreen{
+		WorkArea: uiRect{X: 0, Y: 0, Width: 1920, Height: 1040},
 	}
 	fitWindowToScreen(fw, screen)
 	if fw.setSizeCalls != 0 {
@@ -104,8 +101,8 @@ func TestFitWindowToScreen_RepositionsOffscreenWindow(t *testing.T) {
 func TestFitWindowToScreen_RepositionsRightOverflow(t *testing.T) {
 	// Janela com canto direito fora da WorkArea.
 	fw := &fakeWindow{w: 1280, h: 860, x: 1800, y: 100}
-	screen := &application.Screen{
-		WorkArea: application.Rect{X: 0, Y: 0, Width: 1920, Height: 1040},
+	screen := &uiScreen{
+		WorkArea: uiRect{X: 0, Y: 0, Width: 1920, Height: 1040},
 	}
 	fitWindowToScreen(fw, screen)
 	wantX := 1920 - 1280 // 640
@@ -116,8 +113,8 @@ func TestFitWindowToScreen_RepositionsRightOverflow(t *testing.T) {
 
 func TestFitWindowToScreen_InvalidWorkArea(t *testing.T) {
 	fw := &fakeWindow{w: 1280, h: 860, x: 0, y: 0}
-	screen := &application.Screen{
-		WorkArea: application.Rect{X: 0, Y: 0, Width: 0, Height: 0},
+	screen := &uiScreen{
+		WorkArea: uiRect{X: 0, Y: 0, Width: 0, Height: 0},
 	}
 	fitWindowToScreen(fw, screen)
 	if fw.setSizeCalls != 0 || fw.setPosCalls != 0 {
@@ -129,5 +126,5 @@ func TestFitWindowToScreen_NilArgs(t *testing.T) {
 	// Não deve panicking com argumentos nulos.
 	fitWindowToScreen(nil, nil)
 	fitWindowToScreen(&fakeWindow{}, nil)
-	fitWindowToScreen(nil, &application.Screen{})
+	fitWindowToScreen(nil, &uiScreen{})
 }

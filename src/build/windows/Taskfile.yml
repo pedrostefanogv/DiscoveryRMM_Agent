@@ -32,7 +32,7 @@ tasks:
       APP_VERSION: '{{.APP_VERSION | default "0.0.0-dev"}}'
       GIT_COMMIT:
         sh: git rev-parse --short HEAD 2>/dev/null || echo unknown
-      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags "desktop,production" -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui -X discovery/app/core/buildinfo.Version={{.APP_VERSION}} -X discovery/app/core/buildinfo.Commit={{.GIT_COMMIT}}"{{else}}-buildvcs=false -gcflags=all="-l" -ldflags="-X discovery/app/core/buildinfo.Version={{.APP_VERSION}} -X discovery/app/core/buildinfo.Commit={{.GIT_COMMIT}}"{{end}}'
+      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags "desktop,production,wailsui" -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui -X discovery/app/core/buildinfo.Version={{.APP_VERSION}} -X discovery/app/core/buildinfo.Commit={{.GIT_COMMIT}}"{{else}}-tags "wailsui" -buildvcs=false -gcflags=all="-l" -ldflags="-X discovery/app/core/buildinfo.Version={{.APP_VERSION}} -X discovery/app/core/buildinfo.Commit={{.GIT_COMMIT}}"{{end}}'
     env:
       GOOS: windows
       CGO_ENABLED: '1'

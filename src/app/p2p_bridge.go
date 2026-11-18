@@ -223,7 +223,7 @@ func (a *App) SelectAndPublishP2PArtifact() (P2PArtifactView, error) {
 	if a.app == nil {
 		return P2PArtifactView{}, fmt.Errorf("runtime de aplicação indisponível")
 	}
-	selectedPath, err := a.app.Dialog.OpenFile().PromptForSingleSelection()
+	selectedPath, err := a.app.Dialog().OpenFile().PromptForSingleSelection()
 	if err != nil {
 		return P2PArtifactView{}, err
 	}

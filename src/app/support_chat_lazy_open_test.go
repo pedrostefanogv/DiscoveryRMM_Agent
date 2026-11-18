@@ -4,8 +4,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // Contrato da decisao pura do lazy load: enquanto a criacao preguicosa da
@@ -58,7 +56,7 @@ func TestMainWindowInitPendingState(t *testing.T) {
 // motivo — a reconciliacao/retomada cobre a abertura depois.
 func TestScheduleSupportChatOpenAfterLazyLoad_DesisteNoPrazo(t *testing.T) {
 	a := NewApp(AppStartupOptions{ServiceMode: true})
-	a.windowFactory = func() application.Window { return nil }
+	a.windowFactory = func() uiWindow { return nil }
 	a.windowInitStarted = time.Now()
 
 	guardado := supportChatLazyOpenWait
@@ -92,7 +90,7 @@ func TestScheduleSupportChatOpenAfterLazyLoad_DesisteNoPrazo(t *testing.T) {
 // cima de uma main thread congelada — desiste pelo caminho "travada".
 func TestScheduleSupportChatOpenAfterLazyLoad_CarenciaExpiradaSemJanela_DesisteComoTravada(t *testing.T) {
 	a := NewApp(AppStartupOptions{ServiceMode: true})
-	a.windowFactory = func() application.Window { return nil }
+	a.windowFactory = func() uiWindow { return nil }
 	a.windowInitStarted = time.Now().Add(-mainWindowInitGrace - time.Second)
 
 	a.scheduleSupportChatOpenAfterLazyLoad()

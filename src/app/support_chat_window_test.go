@@ -2,8 +2,6 @@ package app
 
 import (
 	"testing"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // Guarda de regressão do PAINEL do chat de suporte.
@@ -19,10 +17,10 @@ func TestSupportChatWindowOptions_PainelFixo(t *testing.T) {
 	if !opts.DisableResize {
 		t.Fatal("a janela do chat não pode ser redimensionável (DisableResize)")
 	}
-	if opts.CloseButtonState != application.ButtonHidden {
+	if opts.CloseButtonState != uiButtonHidden {
 		t.Fatalf("a janela do chat não deve ter botão de fechar; esperado ButtonHidden, obtido %v", opts.CloseButtonState)
 	}
-	if opts.MaximiseButtonState == application.ButtonEnabled {
+	if opts.MaximiseButtonState == uiButtonEnabled {
 		t.Fatalf("a janela do chat não pode ser maximizável; obtido %v", opts.MaximiseButtonState)
 	}
 	if opts.Width != supportChatWindowWidth || opts.Height != supportChatWindowHeight {
@@ -54,13 +52,13 @@ func TestSupportChatWindowOptions_PainelFixo(t *testing.T) {
 // tela, sem nenhum caminho de volta.
 func TestSupportChatWindowSize_CabeNaAreaDeTrabalho(t *testing.T) {
 	// Tela grande: tamanho nominal.
-	big := &application.Screen{WorkArea: application.Rect{Width: 1920, Height: 1040}, ScaleFactor: 1}
+	big := &uiScreen{WorkArea: uiRect{Width: 1920, Height: 1040}, ScaleFactor: 1}
 	if w, h := supportChatWindowSize(big); w != supportChatWindowWidth || h != supportChatWindowHeight {
 		t.Fatalf("tela grande deve manter o tamanho nominal; obtido %dx%d", w, h)
 	}
 
 	// 1080p a 150%: área de trabalho lógica ~1280x688 (menor que os 680 de altura).
-	scaled := &application.Screen{WorkArea: application.Rect{Width: 1280, Height: 688}, ScaleFactor: 1.5}
+	scaled := &uiScreen{WorkArea: uiRect{Width: 1280, Height: 688}, ScaleFactor: 1.5}
 	w, h := supportChatWindowSize(scaled)
 	if h != 688-2*windowFitMargin {
 		t.Fatalf("altura deveria ser limitada a %d; obtido %d", 688-2*windowFitMargin, h)
@@ -73,7 +71,7 @@ func TestSupportChatWindowSize_CabeNaAreaDeTrabalho(t *testing.T) {
 	}
 
 	// Tela minúscula: nada de dimensão negativa ou zero.
-	tiny := &application.Screen{WorkArea: application.Rect{Width: 40, Height: 30}, ScaleFactor: 2}
+	tiny := &uiScreen{WorkArea: uiRect{Width: 40, Height: 30}, ScaleFactor: 2}
 	w, h = supportChatWindowSize(tiny)
 	if w <= 0 || h <= 0 {
 		t.Fatalf("clamp não pode zerar/negativar o tamanho; obtido %dx%d", w, h)
@@ -83,7 +81,7 @@ func TestSupportChatWindowSize_CabeNaAreaDeTrabalho(t *testing.T) {
 	if w, h = supportChatWindowSize(nil); w != supportChatWindowWidth || h != supportChatWindowHeight {
 		t.Fatalf("sem screen deve manter o tamanho nominal; obtido %dx%d", w, h)
 	}
-	empty := &application.Screen{WorkArea: application.Rect{}}
+	empty := &uiScreen{WorkArea: uiRect{}}
 	if w, h = supportChatWindowSize(empty); w != supportChatWindowWidth || h != supportChatWindowHeight {
 		t.Fatalf("work area inválida deve manter o tamanho nominal; obtido %dx%d", w, h)
 	}
@@ -120,25 +118,25 @@ func TestSupportChatShouldFloat_ApenasDuranteOConvite(t *testing.T) {
 // (cursor) — com dois monitores o convite podia nascer no monitor "errado" e
 // passar despercebido.
 func TestSupportChatPlacementScreen_PrefereCursor(t *testing.T) {
-	primary := &application.Screen{
+	primary := &uiScreen{
 		IsPrimary:      true,
-		Bounds:         application.Rect{X: 0, Y: 0, Width: 1920, Height: 1080},
-		PhysicalBounds: application.Rect{X: 0, Y: 0, Width: 1920, Height: 1080},
+		Bounds:         uiRect{X: 0, Y: 0, Width: 1920, Height: 1080},
+		PhysicalBounds: uiRect{X: 0, Y: 0, Width: 1920, Height: 1080},
 	}
-	secondary := &application.Screen{
-		Bounds:         application.Rect{X: 1920, Y: 0, Width: 1280, Height: 1024},
-		PhysicalBounds: application.Rect{X: 1920, Y: 0, Width: 1280, Height: 1024},
+	secondary := &uiScreen{
+		Bounds:         uiRect{X: 1920, Y: 0, Width: 1280, Height: 1024},
+		PhysicalBounds: uiRect{X: 1920, Y: 0, Width: 1280, Height: 1024},
 	}
-	screens := []*application.Screen{primary, secondary}
+	screens := []*uiScreen{primary, secondary}
 
 	// Cursor no segundo monitor: a janela nasce lá.
-	cursor := application.Point{X: 2400, Y: 400}
+	cursor := uiPoint{X: 2400, Y: 400}
 	if got := supportChatPlacementScreen(screens, &cursor, primary); got != secondary {
 		t.Fatalf("cursor no monitor secundário deveria escolher o secundário; obtido %+v", got)
 	}
 
 	// Cursor no monitor primário.
-	cursor = application.Point{X: 100, Y: 100}
+	cursor = uiPoint{X: 100, Y: 100}
 	if got := supportChatPlacementScreen(screens, &cursor, secondary); got != primary {
 		t.Fatalf("cursor no monitor primário deveria escolher o primário; obtido %+v", got)
 	}
@@ -154,7 +152,7 @@ func TestSupportChatPlacementScreen_PrefereCursor(t *testing.T) {
 	}
 
 	// Cursor fora de qualquer tela (config estranha): cai na preferida.
-	cursor = application.Point{X: -5000, Y: -5000}
+	cursor = uiPoint{X: -5000, Y: -5000}
 	if got := supportChatPlacementScreen(screens, &cursor, primary); got != primary {
 		t.Fatalf("cursor fora das telas deveria cair na preferida; obtido %+v", got)
 	}
@@ -169,9 +167,9 @@ func TestSupportChatPlacementScreen_PrefereCursor(t *testing.T) {
 // nela e já "sempre no topo" quando é o convite. Criar sem AlwaysOnTop deixava
 // um intervalo em que ela aparecia atrás do app em uso.
 func TestSupportChatWindowOptionsOn_PosicionaECentraliza(t *testing.T) {
-	screen := &application.Screen{
+	screen := &uiScreen{
 		IsPrimary: true,
-		WorkArea:  application.Rect{X: 1920, Y: 0, Width: 1280, Height: 1024},
+		WorkArea:  uiRect{X: 1920, Y: 0, Width: 1280, Height: 1024},
 	}
 
 	opts := supportChatWindowOptionsOn(500, 600, screen, true)
@@ -182,7 +180,7 @@ func TestSupportChatWindowOptionsOn_PosicionaECentraliza(t *testing.T) {
 	if opts.Screen != screen {
 		t.Fatal("a tela escolhida precisa ir nas opções (Screen)")
 	}
-	if opts.InitialPosition != application.WindowXY {
+	if opts.InitialPosition != uiWindowXY {
 		t.Fatalf("posição inicial deveria ser WindowXY; obtido %v", opts.InitialPosition)
 	}
 	// X/Y relativos à WorkArea da tela escolhida.
@@ -206,13 +204,13 @@ func TestSupportChatWindowOptionsOn_PosicionaECentraliza(t *testing.T) {
 	}
 
 	// Área de trabalho inválida: não posiciona (nem gera X/Y negativo).
-	empty := &application.Screen{WorkArea: application.Rect{}}
+	empty := &uiScreen{WorkArea: uiRect{}}
 	if opts := supportChatWindowOptionsOn(500, 600, empty, false); opts.Screen != nil || opts.X != 0 || opts.Y != 0 {
 		t.Fatalf("work area inválida não deve posicionar a janela; obtido X=%d Y=%d", opts.X, opts.Y)
 	}
 
 	// Painel maior que a área de trabalho: X/Y nunca negativos.
-	tiny := &application.Screen{WorkArea: application.Rect{Width: 200, Height: 200}}
+	tiny := &uiScreen{WorkArea: uiRect{Width: 200, Height: 200}}
 	if opts := supportChatWindowOptionsOn(500, 600, tiny, false); opts.X < 0 || opts.Y < 0 {
 		t.Fatalf("X/Y não podem ser negativos; obtido X=%d Y=%d", opts.X, opts.Y)
 	}

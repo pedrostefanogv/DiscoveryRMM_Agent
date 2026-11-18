@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	wailsnotifications "github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
 
 func TestShouldNotifyChatResponse(t *testing.T) {
@@ -185,11 +183,11 @@ func TestChatNotificationTextFailureIsGeneric(t *testing.T) {
 
 // fakeSender captura as notificações entregues.
 type fakeSender struct {
-	sent []wailsnotifications.NotificationOptions
+	sent []uiNotificationOptions
 	err  error
 }
 
-func (f *fakeSender) send(opts wailsnotifications.NotificationOptions) error {
+func (f *fakeSender) send(opts uiNotificationOptions) error {
 	f.sent = append(f.sent, opts)
 	return f.err
 }
@@ -294,7 +292,7 @@ func TestSetChatTabActiveAndNilSafeNotification(t *testing.T) {
 	a.notifyChatResponseFailed("erro")
 	a.notifyChatQuestion("pergunta")
 	a.sendChatNotification(chatNotifyResponse, "resposta")
-	a.SetNativeNotificationService(nil)
+	a.SetNativeNotifications(nil)
 	// Lifecycle nil-safe (sem serviço registrado nada acontece).
 	a.startNativeNotificationService(context.Background())
 	a.stopNativeNotificationService()
@@ -330,11 +328,11 @@ func TestSetChatTabActiveResetsAbsence(t *testing.T) {
 func TestNativeNotificationFanOut(t *testing.T) {
 	a := NewApp(AppStartupOptions{})
 	var first, second int
-	a.RegisterNativeNotificationHandler(func(wailsnotifications.NotificationResult) { first++ })
-	a.RegisterNativeNotificationHandler(func(wailsnotifications.NotificationResult) { second++ })
+	a.RegisterNativeNotificationHandler(func(uiNotificationResult) { first++ })
+	a.RegisterNativeNotificationHandler(func(uiNotificationResult) { second++ })
 	a.RegisterNativeNotificationHandler(nil)
 
-	a.dispatchNativeNotification(wailsnotifications.NotificationResult{})
+	a.dispatchNativeNotification(uiNotificationResult{})
 	if first != 1 || second != 1 {
 		t.Fatalf("fan-out esperado first=1 second=1, got first=%d second=%d", first, second)
 	}

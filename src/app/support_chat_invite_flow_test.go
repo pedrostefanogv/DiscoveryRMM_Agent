@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
-
 	"discovery/app/supportchat"
 )
 
@@ -54,7 +52,7 @@ func TestSupportChatWindowMayOpen_SomenteAposAceite(t *testing.T) {
 // O painel criado no aceite precisa nascer no topo e centralizado (o aceite é
 // uma ação do usuário; a janela não pode nascer atrás do cartão/app em uso).
 func TestSupportChatWindowOptionsOn_ConviteEmAndamento(t *testing.T) {
-	screen := &application.Screen{IsPrimary: true, WorkArea: application.Rect{Width: 1920, Height: 1040}}
+	screen := &uiScreen{IsPrimary: true, WorkArea: uiRect{Width: 1920, Height: 1040}}
 	opts := supportChatWindowOptionsOn(supportChatWindowWidth, supportChatWindowHeight, screen, true)
 	if !opts.AlwaysOnTop {
 		t.Fatal("a janela do convite precisa nascer sempre no topo")

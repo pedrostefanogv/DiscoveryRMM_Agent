@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	wailsnotifications "github.com/wailsapp/wails/v3/pkg/services/notifications"
-
 	"discovery/app/core/automation"
 )
 
@@ -37,8 +35,8 @@ func TestSendNativeNotificationOptions_BuildsTaskToast(t *testing.T) {
 func TestSendNativeNotificationOptions_EmptyIDFallsBackAndErrorsAreReported(t *testing.T) {
 	a := NewApp(AppStartupOptions{})
 
-	var sent []wailsnotifications.NotificationOptions
-	capture := func(opts wailsnotifications.NotificationOptions) error {
+	var sent []uiNotificationOptions
+	capture := func(opts uiNotificationOptions) error {
 		sent = append(sent, opts)
 		return nil
 	}
@@ -49,7 +47,7 @@ func TestSendNativeNotificationOptions_EmptyIDFallsBackAndErrorsAreReported(t *t
 		t.Fatal("ID vazio deveria cair no identificador padrao do toast")
 	}
 
-	failing := func(wailsnotifications.NotificationOptions) error { return errors.New("boom") }
+	failing := func(uiNotificationOptions) error { return errors.New("boom") }
 	if a.sendNativeNotificationOptions("automation-1", "Titulo", "Corpo", failing) {
 		t.Fatal("erro do sender deve devolver false (caller cai no toast do agent)")
 	}

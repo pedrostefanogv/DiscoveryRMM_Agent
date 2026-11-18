@@ -4,9 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
-	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 // ── Janela DEDICADA do overlay de captura ───────────────────────────────────
@@ -39,14 +36,14 @@ const (
 )
 
 // screenshotOverlayWindow devolve a janela dedicada (nil quando ainda não existe).
-func (a *App) screenshotOverlayWindow() application.Window {
+func (a *App) screenshotOverlayWindow() uiWindow {
 	a.screenshotOverlayWinMu.Lock()
 	defer a.screenshotOverlayWinMu.Unlock()
 	return a.screenshotOverlayWin
 }
 
 // ensureScreenshotOverlayWindow cria (idempotente) a janela dedicada do overlay.
-func (a *App) ensureScreenshotOverlayWindow() (application.Window, error) {
+func (a *App) ensureScreenshotOverlayWindow() (uiWindow, error) {
 	a.screenshotOverlayWinMu.Lock()
 	if win := a.screenshotOverlayWin; win != nil {
 		a.screenshotOverlayWinMu.Unlock()
@@ -60,7 +57,7 @@ func (a *App) ensureScreenshotOverlayWindow() (application.Window, error) {
 
 	ready := make(chan struct{})
 	deliver := make(chan string, 1)
-	win := appInstance.Window.NewWithOptions(application.WebviewWindowOptions{
+	win := appInstance.NewWebviewWindow(uiWebviewWindowOptions{
 		Name:        screenshotOverlayWindowName,
 		Title:       "Seleção de captura",
 		Frameless:   true,
@@ -78,7 +75,7 @@ func (a *App) ensureScreenshotOverlayWindow() (application.Window, error) {
 
 	// Fechamento pelo usuário (Alt+F4): a sessão é encerrada e as janelas do
 	// chat/principal voltam. A janela é recriada na próxima captura.
-	win.RegisterHook(events.Common.WindowClosing, func(*application.WindowEvent) {
+	win.RegisterHook(uiEventWindowClosing, func(uiWindowEvent) {
 		go a.abortScreenshotOverlay("janela de captura fechada")
 		a.forgetScreenshotOverlayWindow(win)
 	})
@@ -89,7 +86,7 @@ func (a *App) ensureScreenshotOverlayWindow() (application.Window, error) {
 
 // forgetScreenshotOverlayWindow descarta as referências quando a janela do
 // overlay é fechada pelo usuário (a próxima captura cria uma nova).
-func (a *App) forgetScreenshotOverlayWindow(win application.Window) {
+func (a *App) forgetScreenshotOverlayWindow(win uiWindow) {
 	a.screenshotOverlayWinMu.Lock()
 	defer a.screenshotOverlayWinMu.Unlock()
 	if a.screenshotOverlayWin != win {
@@ -117,7 +114,7 @@ func (a *App) ScreenshotOverlayReady() {
 }
 
 // waitScreenshotOverlayReady espera a página da janela dedicada carregar.
-func (a *App) waitScreenshotOverlayReady(win application.Window) error {
+func (a *App) waitScreenshotOverlayReady(win uiWindow) error {
 	a.screenshotOverlayWinMu.Lock()
 	ready := a.screenshotOverlayReady
 	already := a.screenshotOverlayReadyFlag

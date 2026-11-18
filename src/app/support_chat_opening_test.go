@@ -5,8 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
-
 	"discovery/app/supportchat"
 )
 
@@ -71,13 +69,13 @@ func TestSupportChatWindowOptionsWithContext_LevaCabecalhoParaAURL(t *testing.T)
 }
 
 func TestSupportChatPlacementForNewWindow_PriorizaPosicaoAnterior(t *testing.T) {
-	screenA := &application.Screen{Bounds: application.Rect{X: 0, Y: 0, Width: 1920, Height: 1080}, WorkArea: application.Rect{X: 0, Y: 0, Width: 1920, Height: 1040}, IsPrimary: true}
-	screenB := &application.Screen{Bounds: application.Rect{X: 1920, Y: 0, Width: 1920, Height: 1080}, WorkArea: application.Rect{X: 1920, Y: 0, Width: 1920, Height: 1040}}
+	screenA := &uiScreen{Bounds: uiRect{X: 0, Y: 0, Width: 1920, Height: 1080}, WorkArea: uiRect{X: 0, Y: 0, Width: 1920, Height: 1040}, IsPrimary: true}
+	screenB := &uiScreen{Bounds: uiRect{X: 1920, Y: 0, Width: 1920, Height: 1080}, WorkArea: uiRect{X: 1920, Y: 0, Width: 1920, Height: 1040}}
 
 	app := &App{}
 	app.supportChatLastPlacement = &supportChatPlacementRecord{screen: screenB, x: 200, y: 120}
 
-	if !sameSupportChatScreen(screenB, &application.Screen{Bounds: screenB.Bounds}) {
+	if !sameSupportChatScreen(screenB, &uiScreen{Bounds: screenB.Bounds}) {
 		t.Fatal("a mesma tela deve ser reconhecida pelos limites, mesmo em outra instância")
 	}
 	if sameSupportChatScreen(screenA, screenB) {
@@ -186,5 +184,5 @@ func TestSupportChatUISpawnInProgress_UsaProgressoRecente(t *testing.T) {
 
 // fakeChatWindow é uma janela mínima para os testes de reuso (não abre nada).
 type fakeChatWindow struct {
-	application.Window
+	uiWindow
 }

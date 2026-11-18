@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
-
 	appsupport "discovery/app/support"
 )
 
@@ -175,8 +173,8 @@ func (a *App) ChooseTicketAttachmentSavePath(fileName, title string) (string, er
 	// SaveFileDialogStruct não expõe SetTitle no Wails v3 beta e o campo
 	// "message" é ignorado no diálogo nativo do Windows: o título real vem de
 	// SetOptions.
-	dlg := a.app.Dialog.SaveFile()
-	dlg.SetOptions(&application.SaveFileDialogOptions{
+	dlg := a.app.Dialog().SaveFile()
+	dlg.SetOptions(&uiSaveFileDialogOptions{
 		Title:                title,
 		Filename:             name,
 		Directory:            existingAttachmentDir(),

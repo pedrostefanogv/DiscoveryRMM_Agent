@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
-
 	"discovery/app/core/processutil"
 )
 
@@ -99,7 +97,7 @@ func (a *App) startTray() {
 	a.trayIconState.Store(trayIconStateUnknown)
 
 	// Cria o tray nativo do Wails v3.
-	tray := a.app.SystemTray.New()
+	tray := a.app.SystemTray().New()
 	a.systemTray = tray
 
 	// Ícone inicial (estado atual).
@@ -121,7 +119,7 @@ func (a *App) startTray() {
 	})
 
 	// Menu do tray.
-	menu := a.app.Menu.New()
+	menu := a.app.Menu().New()
 
 	// ── Submenu de status (informativo, itens desabilitados) ──
 	// Mostra o estado atual do agente de forma visível no tray.
@@ -134,7 +132,7 @@ func (a *App) startTray() {
 	a.trayStatusConnection.SetEnabled(false)
 
 	// ── Ações ──
-	menu.Add("Abrir").OnClick(func(_ *application.Context) {
+	menu.Add("Abrir").OnClick(func(_ *uiContext) {
 		a.safeTrayAction("tray-menu-open", func() {
 			a.ShowMainWindow()
 		})
@@ -145,7 +143,7 @@ func (a *App) startTray() {
 	if a.RuntimeFlags.DebugMode && a.GetDebugHTTPPort() > 0 {
 		displayURL := fmt.Sprintf("http://127.0.0.1:%d", a.GetDebugHTTPPort())
 		launchURL := a.GetDebugHTTPURL()
-		menu.Add("Abrir no navegador").OnClick(func(_ *application.Context) {
+		menu.Add("Abrir no navegador").OnClick(func(_ *uiContext) {
 			a.safeTrayAction("tray-menu-browser", func() {
 				cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", launchURL)
 				processutil.HideWindow(cmd)
@@ -159,7 +157,7 @@ func (a *App) startTray() {
 
 	menu.AddSeparator()
 
-	menu.Add("Sair").OnClick(func(_ *application.Context) {
+	menu.Add("Sair").OnClick(func(_ *uiContext) {
 		a.safeTrayAction("tray-menu-quit", func() {
 			a.RequestAppClose()
 			go a.QuitApp()

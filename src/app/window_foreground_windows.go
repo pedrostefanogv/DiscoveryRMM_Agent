@@ -6,8 +6,6 @@ import (
 	"os"
 	"syscall"
 	"unsafe"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // ── Forçar o PRIMEIRO PLANO no Win32 ────────────────────────────────────────
@@ -59,7 +57,7 @@ var (
 )
 
 // windowHandle devolve o HWND nativo da janela do Wails (0 quando indisponível).
-func windowHandle(win application.Window) uintptr {
+func windowHandle(win uiWindow) uintptr {
 	if win == nil {
 		return 0
 	}
@@ -79,7 +77,7 @@ func windowHandle(win application.Window) uintptr {
 // keepTopmost preserva o estado "sempre no topo" pedido pelo chamador: o
 // fallback do passo 3 devolve a janela para NOTOPMOST, então ela precisa ser
 // reafirmada no fim.
-func forceWindowToForeground(win application.Window, keepTopmost bool) bool {
+func forceWindowToForeground(win uiWindow, keepTopmost bool) bool {
 	hwnd := windowHandle(win)
 	if hwnd == 0 {
 		return false
@@ -167,7 +165,7 @@ func shouldAttachForegroundInput(foregroundPid, selfPid uint32, hung bool) bool 
 // Último recurso quando nem o "sempre no topo" nem o SetForegroundWindow deram
 // primeiro plano: o convite continua visível acima dos outros apps e o usuário
 // recebe o aviso piscando na barra.
-func flashWindowUntilFocused(win application.Window) {
+func flashWindowUntilFocused(win uiWindow) {
 	hwnd := windowHandle(win)
 	if hwnd == 0 {
 		return
@@ -181,7 +179,7 @@ func flashWindowUntilFocused(win application.Window) {
 }
 
 // stopWindowFlash interrompe o piscar iniciado por flashWindowUntilFocused.
-func stopWindowFlash(win application.Window) {
+func stopWindowFlash(win uiWindow) {
 	hwnd := windowHandle(win)
 	if hwnd == 0 {
 		return

@@ -1,3 +1,5 @@
+//go:build wailsui
+
 package app
 
 import (

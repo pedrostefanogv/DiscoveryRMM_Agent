@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"github.com/wailsapp/wails/v3/pkg/application"
-	wailsnotifications "github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"discovery/app/agentconfig"
 	"discovery/app/apiclient"
@@ -146,7 +144,7 @@ type App struct {
 	// independente da interface principal.
 	supportChatSvc *supportchat.Service
 	supportChatMu  sync.Mutex
-	supportChatWin application.Window
+	supportChatWin uiWindow
 	// supportChatAllowClose libera o fechamento programático da janela depois
 	// da confirmação do usuário (o hook de WindowClosing cancela o resto).
 	//
@@ -277,7 +275,7 @@ type App struct {
 	// UI nenhuma ("a tela fica escura na captura"). A janela dedicada é criada
 	// sob demanda e exibida pelo caminho normal do Wails (Show → WebView visível).
 	screenshotOverlayWinMu sync.Mutex
-	screenshotOverlayWin   application.Window
+	screenshotOverlayWin   uiWindow
 	// screenshotOverlayReady é fechado quando o frontend da janela do overlay
 	// reporta que carregou (binding ScreenshotOverlayReady): o build espera por
 	// ele antes de congelar a tela, para a janela nunca aparecer vazia.
@@ -365,15 +363,15 @@ type App struct {
 	// ── Wails v3 ──
 	// Referências explícitas à aplicação/janela do Wails v3.
 	// Substituem o acesso implícito via ctx do v2.
-	app        *application.App
-	mainWindow application.Window
-	systemTray *application.SystemTray
+	app        uiApp
+	mainWindow uiWindow
+	systemTray uiSystemTray
 
 	// windowMu serializa a criação preguiçosa da janela principal
 	// (EnsureMainWindow): tray, segunda instância e clique em toast podem pedir a
 	// janela quase ao mesmo tempo. Ver window_lazy.go.
 	windowMu      sync.Mutex
-	windowFactory func() application.Window
+	windowFactory func() uiWindow
 	// windowInitStarted marca o INÍCIO da primeira criação preguiçosa da janela
 	// principal. Enquanto a criação não termina (e por uma carência curta
 	// depois), a abertura da janela do chat é adiada — criar outra janela com
@@ -419,7 +417,7 @@ type App struct {
 	// nativeNotifications é o serviço nativo do Wails v3 (registrado em
 	// main.go); chatTabActive é reportado pelo frontend (SetChatTabActive) e a
 	// decisão final combina esse estado com foco/visibilidade reais da janela.
-	nativeNotifications *wailsnotifications.NotificationService
+	nativeNotifications uiNotifications
 	// nativeNotificationsStarted: o ServiceStartup do serviço nativo concluiu
 	// com sucesso (sem isso o notifier tem AppID/CLSID vazios).
 	nativeNotificationsStarted atomic.Bool
@@ -428,7 +426,7 @@ type App struct {
 	notificationIconDir string
 	// Fan-out do callback único de OnNotificationResponse do serviço nativo.
 	nativeNotifyHandlersMu sync.Mutex
-	nativeNotifyHandlers   []func(wailsnotifications.NotificationResult)
+	nativeNotifyHandlers   []func(uiNotificationResult)
 	chatTabActive          atomic.Bool
 	// chatNotifyPending: já avisamos nesta ausência do usuário; lastAt é o
 	// debounce mínimo entre envios.
@@ -467,9 +465,9 @@ type App struct {
 	companionIPCCapability map[string]interface{}
 
 	// Itens de status do menu do tray (atualizados dinamicamente).
-	trayStatusHostname   *application.MenuItem
-	trayStatusVersion    *application.MenuItem
-	trayStatusConnection *application.MenuItem
+	trayStatusHostname   uiMenuItem
+	trayStatusVersion    uiMenuItem
+	trayStatusConnection uiMenuItem
 }
 
 // deferredRestartState tracks pending deferred restart state.
@@ -1436,34 +1434,6 @@ func (a *App) Ctx() context.Context { return a.ctx }
 
 func (a *App) ClearMemoryCaches() { a.clearMemoryCaches() }
 
-// ── Wails v3: service lifecycle ──
-// ServiceStartup é chamado pelo Wails v3 durante a inicialização da aplicação.
-// Substitui o OnStartup do v2. O ctx recebido é o contexto da aplicação.
-func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
-	if err := a.RunCore(ctx); err != nil {
-		return err
-	}
-	// Serviço nativo de notificações (Wails v3), usado só pelo chat. O
-	// lifecycle é conduzido aqui — e não registrando o serviço em
-	// application.Options.Services — para não expor a API de notificações ao
-	// webview e para que uma falha de registro do toast não aborte o startup.
-	a.startNativeNotificationService(ctx)
-
-	// Retoma o chat de suporte quando existe sessão ativa (agent reiniciado no
-	// meio de uma conversa). Roda em goroutine com atraso curto para que a
-	// aplicação já consiga servir a nova janela.
-	go a.resumeSupportChatIfActive(3 * time.Second)
-	// Reconciliação periódica (só na UI: é ela que abre janelas).
-	go a.runSupportChatReconcileLoop()
-
-	// Autoproteção: a main thread presa no WebView2 (travamento de 20/10) não
-	// tem timeout no lado nativo — a UI passa a se encerrar sozinha quando a
-	// thread não responde, e o ui-watchdog do serviço relança em segundos.
-	a.startMainThreadWatchdog(ctx)
-
-	return nil
-}
-
 // RunCore inicia o ciclo de vida do App sem depender de tipos do Wails.
 // Usado pelo modo serviço (cmd/discovery-service) e pela UI (via
 // ServiceStartup). No modo serviço, startup() já pula os itens de UI.
@@ -1486,17 +1456,20 @@ func (a *App) ServiceShutdown() error {
 	return nil
 }
 
-// SetApplication guarda a referência da aplicação Wails v3.
+// SetApplication guarda a referência da aplicação (contrato local uiApp; o
+// adapter do Wails é injetado por SetApplicationWails no build taggado).
 //
 //wails:ignore
-func (a *App) SetApplication(app *application.App) {
+func (a *App) SetApplication(app uiApp) {
 	a.app = app
 }
 
-// SetMainWindow guarda a referência da janela principal.
+// SetMainWindow guarda a referência da janela principal (contrato local
+// uiWindow; o adapter do Wails é injetado por SetMainWindowWails no build
+// taggado).
 //
 //wails:ignore
-func (a *App) SetMainWindow(window application.Window) {
+func (a *App) SetMainWindow(window uiWindow) {
 	a.mainWindow = window
 }
 
@@ -1553,7 +1526,7 @@ func (a *App) EmitEvent(name string, data ...any) {
 		a.broadcastIPCEvent(name, data...)
 		return
 	}
-	a.app.Event.Emit(name, data...)
+	a.app.EmitEvent(name, data...)
 }
 
 // normalizeEventArgs converte a forma multi-argumento do EmitEvent

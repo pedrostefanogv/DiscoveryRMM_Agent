@@ -2,8 +2,6 @@ package app
 
 import (
 	"log"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // windowFitMargin é a margem lógica (DIP) deixada ao redor da janela quando
@@ -17,7 +15,7 @@ const windowFitMargin = 16
 type windowGeometry interface {
 	Size() (width int, height int)
 	Position() (x int, y int)
-	SetSize(width, height int) application.Window
+	SetSize(width, height int)
 	SetPosition(x, y int)
 }
 
@@ -56,7 +54,7 @@ func (a *App) FitWindowToWorkArea() {
 // fitWindowToScreen aplica o clamp de tamanho/posição usando a screen dada.
 // Ambos WorkArea e SetSize/SetPosition operam em unidades lógicas (DIP),
 // então nenhuma conversão manual de DPI é necessária.
-func fitWindowToScreen(window windowGeometry, screen *application.Screen) {
+func fitWindowToScreen(window windowGeometry, screen *uiScreen) {
 	if window == nil || screen == nil {
 		return
 	}
