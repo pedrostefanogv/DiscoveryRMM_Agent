@@ -265,8 +265,9 @@ else
   echo "[aviso] git rev-parse falhou; buildinfo.Commit ficara 'unknown'"
 fi
 
-// Tag wailsui: os metodos de wiring da UI (SetApplicationWails etc.) vivem
-// em arquivos taggados — sem a tag, o main.go da UI nao compila (App.RemoteDebugService undefined).
+# Tag wailsui: os metodos de wiring da UI (SetApplicationWails etc.) vivem
+# em arquivos taggados — sem a tag, o main.go da UI nao compila
+# (App.RemoteDebugService undefined).
 go build -tags "desktop,production,wailsui" -ldflags "$LDFLAGS" -o "$OUT_DIR/$OUTPUT_NAME" .
 popd >/dev/null
 
