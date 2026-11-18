@@ -148,7 +148,7 @@ fi
 # é necessário para regenerar bindings (frontend/bindings) e assets quando há
 # mudanças na API Go exposta ao frontend. Se não estiver instalado, instala
 # automaticamente via `go install`.
-WAILS3_BIN="${WAILS3_BIN:-$(command -v wails3 2>/dev/null) || true}"
+WAILS3_BIN="${WAILS3_BIN:-$(command -v wails3 2>/dev/null)}"
 if [[ -z "$WAILS3_BIN" ]]; then
   echo "[info] wails3 nao encontrado no PATH; instalando via go install..."
   # GOBIN defaults to $GOPATH/bin or $HOME/go/bin; garantimos que fica acessível.
@@ -256,7 +256,9 @@ else
   echo "[aviso] git rev-parse falhou; buildinfo.Commit ficara 'unknown'"
 fi
 
-go build -tags "desktop,production" -ldflags "$LDFLAGS" -o "$OUT_DIR/$OUTPUT_NAME" .
+// Tag wailsui: os metodos de wiring da UI (SetApplicationWails etc.) vivem
+// em arquivos taggados — sem a tag, o main.go da UI nao compila (App.RemoteDebugService undefined).
+go build -tags "desktop,production,wailsui" -ldflags "$LDFLAGS" -o "$OUT_DIR/$OUTPUT_NAME" .
 popd >/dev/null
 
 echo "[3/4] Build do discovery-service.exe (windows/amd64)..."
