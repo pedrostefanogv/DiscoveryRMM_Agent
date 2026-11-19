@@ -403,6 +403,9 @@ func atualizarMascaraAoVivo(m *mascaraRegiao, bufFaixa, bufJanela *[]byte) int {
 	// retângulo novo pintaria lixo — e lixo na área do cartão é vazamento.
 	if atual := mascaras[m.hwnd]; atual != nil && atual.ativa && atual.rect == rect {
 		atual.px = novo
+		// Marca a troca de conteúdo: o cache do patcher é invalidado por esta
+		// versão, nunca pelo endereço do buffer (ver mascaraRegiao.versao).
+		atual.versao++
 	}
 	mascarasMu.Unlock()
 	return custo
@@ -469,6 +472,7 @@ func atualizarMascaraPorBitBlt(m *mascaraRegiao, rect winui.Rect, bufFaixa *[]by
 	novo := make([]byte, len(px))
 	copy(novo, px)
 	atual.px = novo
+	atual.versao++
 	mascarasMu.Unlock()
 	return 1
 }

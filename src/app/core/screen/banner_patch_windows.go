@@ -210,6 +210,14 @@ type mascaraRegiao struct {
 	// máscara em vez de manter o quadro congelado para sempre (rede de segurança
 	// contra fantasma permanente em casos não previstos).
 	falhasConsecutivas int
+
+	// versao identifica a GERAÇÃO do conteúdo de px. Incrementada a cada troca
+	// do buffer de pixels (copy-on-write do refresh). O cache do patcher usa
+	// este contador — e não o endereço do slice — porque o alocador reusa
+	// endereços de buffers do mesmo tamanho, que é exatamente o caso do refresh.
+	// Endereço reusado com contador seria invisível ao cache (snapshot obsoleto);
+	// com o contador a troca é sempre detectada.
+	versao uint64
 }
 
 // mascaraMaxPixels limita a área da máscara (4 MP ≈ 16 MB de BGRA). O banner
@@ -225,7 +233,159 @@ var (
 		_, ok := winui.VisibleRect(hwnd)
 		return ok
 	}
+
+	// ── Cache do snapshot do patcher (Fase 3 da otimização do acesso remoto) ──
+	//
+	// PatchFrameBannerAt roda EM TODO FRAME do stream de tela. A versão
+	// anterior montava um []mascaraSnapshot novo (make + append) e pegava
+	// mascarasMu a cada frame — alocação e contenção de lock no caminho mais
+	// quente do pipeline, mesmo quando NÃO havia cartão nenhum na tela.
+	//
+	// Aqui o snapshot é montado UMA vez por mudança do conjunto de máscaras e
+	// reutilizado enquanto o estado não muda. A validade é decidida por
+	// fingerprintDoMapaMascaras (abaixo), que deriva um identificador do ESTADO
+	// REAL do mapa a cada frame.
+	//
+	// Por que fingerprint, e não um contador incrementado nas mutações: o mapa é
+	// mexido de vários lugares (captura, remoção, refresh). Um único caminho
+	// esquecido deixaria o patcher com um snapshot obsoleto — e snapshot
+	// obsoleto aqui significa o cartão do operador VAZANDO para o stream, o pior
+	// modo de falha deste arquivo. Derivar o identificador do conteúdo elimina
+	// essa classe de erro por construção.
+	//
+	// Nota de segurança: mascaraSnapshot guarda o cabeçalho do slice de pixels,
+	// e o refresh troca esse slice inteiro (copy-on-write). Um snapshot antigo
+	// segue lendo um buffer imutável — nunca corrompe; no pior caso mostra um
+	// frame de atraso, o mesmo comportamento do código anterior.
+	mascaraGeracaoDetectada uint64
+	mascaraSnapMu           sync.Mutex
+	// mascaraSnapCache é o snapshot PUBLICADO no momento — imutável após a
+	// publicação (nunca escrito de novo; a reconstrução aloca array novo).
+	mascaraSnapCache []mascaraSnapshot
+	mascaraSnapInit  bool
 )
+
+// fingerprintDoMapaMascaras deriva um identificador do estado ATUAL do mapa de
+// máscaras. DEVE ser chamada com mascarasMu em mãos.
+//
+// Por que fingerprint e não um contador incrementado nas mutações: o mapa é
+// mexido de vários lugares (captura, remoção, refresh, testes). Exigir que todo
+// chamador lembre de incrementar um contador é frágil — um único caminho
+// esquecido deixa o patcher com um snapshot obsoleto, o que significa o cartão
+// do operador VAZANDO para o stream (o pior modo de falha deste arquivo).
+// Derivar o identificador do próprio conteúdo elimina essa classe de erro:
+// qualquer mutação, de qualquer chamador, muda o fingerprint.
+//
+// O que entra no fingerprint: hwnd, retângulo, flag ativa, tamanho do buffer,
+// o ENDEREÇO do slice de pixels E um CONTADOR DE VERSÃO (mascaraRegiao.versao).
+//
+// Por que os DOIS, e não um só — cada um cobre a falha do outro:
+//
+//   - ENDEREÇO sozinho falha por REUSO DO ALOCADOR: o refresh troca o buffer a
+//     cada ciclo e o alocador reusa endereços de buffers do mesmo tamanho (que é
+//     exatamente o caso do refresh: mesma faixa, mesmo tamanho). Endereço
+//     reusado -> fingerprint inalterado -> snapshot obsoleto -> cartão do
+//     operador vazando para o stream.
+//
+//   - VERSÃO sozinha falha por DISCIPLINA DO CHAMADOR: depende de todo caminho
+//     que troque `px` lembrar de incrementar. Um caminho esquecido (código novo,
+//     teste, refactor) deixa o cache obsoleto em silêncio.
+//
+// Com os dois, qualquer troca de buffer altera o endereço OU a versão (na
+// prática, os dois), e o cache só sobrevive quando NADA mudou de fato.
+func fingerprintDoMapaMascaras() uint64 {
+	// FNV-1a sobre os campos que o patcher usa.
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	h := uint64(offset64)
+	mix := func(v uint64) {
+		for i := 0; i < 8; i++ {
+			h ^= v & 0xFF
+			h *= prime64
+			v >>= 8
+		}
+	}
+	mix(uint64(len(mascaras)))
+	for _, m := range mascaras {
+		if m == nil {
+			continue
+		}
+		mix(uint64(m.hwnd))
+		mix(uint64(uint32(m.rect.X)))
+		mix(uint64(uint32(m.rect.Y)))
+		mix(uint64(uint32(m.rect.W)))
+		mix(uint64(uint32(m.rect.H)))
+		if m.ativa {
+			mix(1)
+		} else {
+			mix(2)
+		}
+		mix(uint64(len(m.px)))
+		// Endereço do buffer: pega trocas que o chamador esqueceu de versionar.
+		if len(m.px) > 0 {
+			mix(uint64(uintptr(unsafe.Pointer(&m.px[0]))))
+		}
+		// Versão do conteúdo: pega reuso de endereço pelo alocador.
+		mix(m.versao)
+	}
+	return h
+}
+
+// snapshotMascaras devolve a lista imutável de máscaras ATIVAS para o patcher.
+//
+// Reutiliza o cache entre frames: só RECONSTRÓI o slice quando o fingerprint do
+// mapa muda. O que se economiza por frame não é o lock (o fingerprint é lido sob
+// mascarasMu a cada frame, porque é preciso ler o mapa para saber se mudou), e
+// sim a ALOCAÇÃO: a versão anterior fazia make + append de um slice novo em todo
+// frame, o que gerava pressão de GC constante durante a sessão inteira.
+//
+// Sem máscaras ativas o resultado é vazio e o caller sai imediatamente — é o
+// caso da esmagadora maioria dos frames (o cartão do agente só existe enquanto
+// há uma sessão de suporte com o aviso visível).
+func snapshotMascaras() []mascaraSnapshot {
+	mascaraSnapMu.Lock()
+	defer mascaraSnapMu.Unlock()
+
+	mascarasMu.Lock()
+	fp := fingerprintDoMapaMascaras()
+	if mascaraSnapInit && fp == mascaraGeracaoDetectada {
+		// Nada mudou desde o último frame: devolve o snapshot já montado.
+		// Este é o caminho quente (todo frame de toda sessão de tela).
+		//
+		// Custo do caminho cacheado: o fingerprint (O(nº de máscaras), tipicamente
+		// 1-2) — contra um make + append de slice por frame na versão anterior.
+		lista := mascaraSnapCache
+		mascarasMu.Unlock()
+		return lista
+	}
+
+	// Reconstrução: aloca um ARRAY NOVO, sempre.
+	//
+	// POR QUE NÃO reutilizar o array do cache anterior (a versão intermediária
+	// desta função fazia mascaraSnapCache[:0] + append): o slice devolvido ESCAPA
+	// daqui — o patcher itera-o FORA do lock. Pode haver MAIS DE UMA sessão de
+	// tela simultânea (teto por kind = 5 no servidor), cada uma com seu loop de
+	// captura chamando snapshotMascaras. Se A está iterando o array enquanto B
+	// reconstrói sobre ele (append reescreve elemento a elemento), A lê uma
+	// MISTURA de duas gerações — corrida de dados no sentido do Go memory model
+	// e, no pior caso prático, A patcheia o retângulo da máscara X com os pixels
+	// da máscara Y. Array imutável por geração elimina a classe inteira: quem já
+	// tem um snapshot continua lendo o seu, que ninguém mais escreve.
+	lista := make([]mascaraSnapshot, 0, len(mascaras))
+	for _, m := range mascaras {
+		if m.ativa {
+			lista = append(lista, mascaraSnapshot{hwnd: m.hwnd, rect: m.rect, px: m.px})
+		}
+	}
+	mascarasMu.Unlock()
+
+	mascaraSnapCache = lista
+	mascaraGeracaoDetectada = fp
+	mascaraSnapInit = true
+	return lista
+}
 
 // capturarMascaraRegiao lê os pixels da área da janela na tela física e guarda
 // como máscara. DEVE ser chamada com a janela ainda NÃO visível (antes de
@@ -710,18 +870,15 @@ func PatchFrameBannerAt(frame *Frame, originX, originY int) {
 		return
 	}
 
-	// Snapshot sob lock: o refresh (banner_mask_refresh_windows.go) troca o
-	// slice de pixels por um novo (copy-on-write). Copiar o cabeçalho do slice
-	// aqui garante que o patcher leia um buffer imutável — sem isso havia
-	// corrida entre a escrita do refresh e a leitura do frame.
-	mascarasMu.Lock()
-	lista := make([]mascaraSnapshot, 0, len(mascaras))
-	for _, m := range mascaras {
-		if m.ativa {
-			lista = append(lista, mascaraSnapshot{hwnd: m.hwnd, rect: m.rect, px: m.px})
-		}
-	}
-	mascarasMu.Unlock()
+	// Snapshot do patcher — CACHEADO por geração (ver snapshotMascaras).
+	//
+	// O refresh troca o slice de pixels por um novo (copy-on-write), então o
+	// cabeçalho do slice guardado aqui continua apontando para um buffer
+	// imutável: não há corrida entre a escrita do refresh e a leitura do frame.
+	//
+	// Sem máscaras ativas (o caso comum: só existe cartão quando há sessão de
+	// suporte) isto devolve nil e a função sai antes de qualquer trabalho.
+	lista := snapshotMascaras()
 	if len(lista) == 0 {
 		return
 	}

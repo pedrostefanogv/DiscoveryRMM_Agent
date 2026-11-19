@@ -39,6 +39,14 @@ type SessionScreen struct {
 	// Dirty rect detection
 	dirtyDetector *screen.DirtyDetector
 	useDirtyRect  bool // ativado apos primeiro frame completo
+	// hwDirtyRects: true quando o capturer ATIVO decide por hardware se a tela
+	// mudou (DXGI go-d3d/manual). Nesse caso o diff de SOFTWARE é PULADO — o
+	// capturer já bloqueou esperando uma mudança e devolveu "sem frame" quando
+	// a tela estava parada. Pagar a varredura de tiles (0,4-2,0 ms @1080p,
+	// medido em bench_test.go) depois de o hardware já ter respondido é custo
+	// puro, e era o maior custo de CPU do caminho quente. Reavaliado a cada
+	// troca de capturer (GDI↔DXGI), porque a capacidade muda com o capturer.
+	hwDirtyRects bool
 
 	// forceKeyFrame: quando true, o próximo frame capturado é enviado COMPLETO
 	// (key frame), ignorando dirty rects/tiles. Usado quando o viewer volta a
@@ -62,6 +70,13 @@ type SessionScreen struct {
 	lastSecureKeepLog time.Time
 
 	tileMode bool // quando true, envia apenas os tiles alterados (EncodeDirtyRects)
+
+	// tileScratch: buffers REUTILIZÁVEIS da codificação por tiles. Vive na sessão
+	// (não no worker) para sobreviver entre frames: sem ele, cada frame em tile
+	// mode alocava ~900 objetos e ~16 MB (medido em BenchmarkEncodeDirtyRects,
+	// Fase 0) — pressão de GC constante durante toda a sessão, competindo com a
+	// captura. O encode é sequencial na sessão, então não há corrida.
+	tileScratch screen.TileScratch
 
 	// Gate da ordem de canais (R↔B): enquanto o capturer não decidiu se os
 	// bytes estão em BGRA ou RGBA, os frames são DESCARTADOS (não publicados).
@@ -240,7 +255,12 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		fps = s.quality.Current().EffectiveFps()
 	}
 
-	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s\n", fps, s.currentCapturer().Name())
+	// Capacidade de dirty rects de hardware do capturer inicial (DXGI go-d3d/
+	// manual = sim; GDI = não). Define se o loop paga o diff de software.
+	_ = s.refreshHardwareDirtyRects(s.currentCapturer())
+
+	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s hw-dirty-rects=%v\n",
+		fps, s.currentCapturer().Name(), s.hwDirtyRects)
 
 	// ── Cursor separado (P2): publica posição/estado do cursor quando muda ──
 	if s.cursorSeparate && s.cursorSender != nil {
@@ -316,19 +336,44 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	encodeChan := make(chan encodeJob, 1) // buffer=1: captura nunca bloqueia se encoder ocupado
 	resultChan := make(chan frameResult, 2)
 
+	// encodeFree sinaliza que o worker de encode LIBEROU o slot (o item saiu do
+	// encodeChan). Substitui o polling de 1 ms do produtor.
+	//
+	// Por que isto existe (Fase 5 da otimização do acesso remoto, 2026-11-19):
+	// o produtor fazia "if len(encodeChan) >= 1 { time.Sleep(1ms); continue }".
+	// O sleep de 1 ms é busy-wait: sob carga (exatamente quando o encoder
+	// satura, que é quando esta espera acontece) o produtor acorda ~1000x por
+	// segundo só para checar de novo. Com o sinal, o produtor DORME até o
+	// worker liberar o slot e acorda imediatamente — sem atraso de até 1 ms no
+	// caminho, e sem consumo de CPU ocioso.
+	//
+	// Capacidade 1 + envio não-bloqueante: o sinal é um "aviso", não uma fila.
+	// Se o produtor ainda não estiver esperando, o aviso fica guardado e ele
+	// não dorme à toa na próxima volta.
+	encodeFree := make(chan struct{}, 1)
+
 	var encodeWg sync.WaitGroup
 	encodeWg.Add(1)
 	go func() {
 		defer encodeWg.Done()
 		for job := range encodeChan {
+			// O item saiu da fila: o slot está livre para a captura. Avisa o
+			// produtor (não-bloqueante: um aviso pendente já basta).
+			select {
+			case encodeFree <- struct{}{}:
+			default:
+			}
+
 			encStart := time.Now()
 			enc := s.getEncoder()
 			quality := s.quality.Current().EffectiveJpegQuality()
 			rawLen := int64(len(job.frame.Data))
 			var encoded []byte
 			if job.rects != nil {
-				// Modo tile: codifica apenas os rects alterados (economia de banda)
-				tiles, err := screen.EncodeDirtyRects(job.frame, job.rects, quality)
+				// Modo tile: codifica apenas os rects alterados (economia de banda).
+				// O scratch é DA SESSÃO (s.tileScratch) e sobrevive entre frames —
+				// sem ele cada frame alocava ~900 objetos/16 MB em tile mode.
+				tiles, err := screen.EncodeDirtyRectsScratch(job.frame, job.rects, quality, &s.tileScratch)
 				if err != nil {
 					log.Printf("[remote-session-screen] ERRO encode tiles: %v\n", err)
 					if job.pooled {
@@ -407,7 +452,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	var sent, skipped int64
 	var rawBytes, encBytes int64
 	var encodeTimeTotal time.Duration
-	var captureMsTotal, dirtyMsTotal, copyMsTotal float64
+	var captureMsTotal, dirtyMsTotal, copyMsTotal, maskMsTotal float64
 	consecutiveIdle := 0
 	curFps := fps
 	loopStart := time.Now()
@@ -477,6 +522,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				avgCapMs := float64(0)
 				avgDirtyMs := float64(0)
 				avgCopyMs := float64(0)
+				avgMaskMs := float64(0)
 				if rawBytes > 0 {
 					compRatio = float64(rawBytes) / float64(encBytes)
 				}
@@ -485,15 +531,20 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 					avgCapMs = captureMsTotal / float64(sent)
 					avgDirtyMs = dirtyMsTotal / float64(sent)
 					avgCopyMs = copyMsTotal / float64(sent)
+					avgMaskMs = maskMsTotal / float64(sent)
 				}
-				log.Printf("[remote-session-screen] %d env, %d idle, %d gate | comp %.1f:1 | cap=%.1fms dirty=%.1fms copy=%.1fms enc=%.1fms | fps=%d\n",
-					sent, totalIdle, gateWaits, compRatio, avgCapMs, avgDirtyMs, avgCopyMs, avgEncMs, curFps)
+				// mask= é o custo da reescrita da máscara do banner (0 quando o
+				// capturer contorna a região por conta própria ou não há cartão).
+				// dirty= passa a ser ~0 no caminho DXGI, que decide por hardware
+				// (ver hw-dirty-rects= no log de Start).
+				log.Printf("[remote-session-screen] %d env, %d idle, %d gate | comp %.1f:1 | cap=%.1fms dirty=%.1fms copy=%.1fms mask=%.1fms enc=%.1fms | fps=%d\n",
+					sent, totalIdle, gateWaits, compRatio, avgCapMs, avgDirtyMs, avgCopyMs, avgMaskMs, avgEncMs, curFps)
 				s.lastLogTime = time.Now()
 				sent, skipped = 0, 0
 				gateWaits = 0
 				rawBytes, encBytes = 0, 0
 				encodeTimeTotal = 0
-				captureMsTotal, dirtyMsTotal, copyMsTotal = 0, 0, 0
+				captureMsTotal, dirtyMsTotal, copyMsTotal, maskMsTotal = 0, 0, 0, 0
 			}
 			continue
 
@@ -526,9 +577,20 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			log.Printf("[remote-session-screen] recovery frame: qualidade recuperada, reenviando tela completa\n")
 		}
 
-		// Backpressure: nao captura se encoder estiver ocupado (buffer=1 cheio)
+		// Backpressure: nao captura se encoder estiver ocupado (buffer=1 cheio).
+		//
+		// Espera por SINAL (encodeFree), não polling: o worker avisa quando
+		// retira o job da fila. O select com ctx/stop mantém o encerramento
+		// responsivo — dormir aqui nunca pode atrasar o Stop da sessão.
 		if len(encodeChan) >= 1 {
-			time.Sleep(time.Millisecond)
+			select {
+			case <-encodeFree:
+				// Slot liberado: segue para capturar imediatamente.
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-s.stopCh:
+				return nil
+			}
 			continue
 		}
 
@@ -615,7 +677,9 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		// mascarado) e ANTES da escala/dirty detection: a máscara está em pixels
 		// físicos, então passamos a origem guardada do frame original — o
 		// tone mapping zera OriginX/OriginY.
+		maskStart := time.Now()
 		screen.PatchFrameBannerIfNeededAt(cap, frame, inputOriginX, inputOriginY)
+		maskMsTotal += float64(time.Since(maskStart).Microseconds()) / 1000.0
 
 		// ── Aplica escala (se necessario) ──
 		scaleFactor := q.ScaleFactor
@@ -631,12 +695,25 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 
 		// ── Dirty rect detection (timing) ──
-		// NOTA: go-d3d já faz HW dirty rects internamente em GetImage().
-		// Este software diff é REDUNDANTE quando usando go-d3d, mas mantido
-		// para fallback (DXGI manual/GDI). Em go-d3d, se a GPU disse que nada
-		// mudou, GetImage retorna ErrNoImageYet (timeout) — já tratado acima.
+		// Quando o capturer decide por HARDWARE se a tela mudou (DXGI go-d3d e
+		// manual), o diff de software é PULADO: o capturer já bloqueou esperando
+		// uma mudança e devolveu "sem frame" quando nada mudou (tratado no
+		// caminho de erro acima). Refazer a varredura de tiles aqui era custo
+		// puro — medido em 0,4 ms (tudo mudou) a 2,0 ms (tela ociosa, o regime
+		// mais comum) por frame a 1080p, segundo bench_test.go.
+		//
+		// O detector é MANTIDO nos fallbacks (GDI, e DXGI que não reporte a
+		// capacidade): lá a decisão de "mudou" só existe por software.
+		//
+		// `rects` nil com hwDirtyRects=true significa "não sei as regiões, mas a
+		// tela mudou" — o frame vai COMPLETO (decideFrameKind devolve jobRects
+		// nil), que é o comportamento correto e seguro: o modo tile depende de
+		// rects e simplesmente não se aplica nesse caminho.
 		dirtyStart := time.Now()
-		rects := s.dirtyDetector.Detect(frame)
+		var rects []screen.DirtyRect
+		if !s.hwDirtyRects {
+			rects = s.dirtyDetector.Detect(frame)
+		}
 		dirtyMs := float64(time.Since(dirtyStart).Microseconds()) / 1000.0
 		dirtyMsTotal += dirtyMs
 
@@ -647,8 +724,9 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		// o job de encode como frame completo.
 		keyframePending := s.forceKeyFrame.Load()
 
-		if len(rects) == 0 && s.useDirtyRect && !keyframePending {
-			// Idle: nada mudou
+		if frameIsIdle(s.hwDirtyRects, rects, s.useDirtyRect, keyframePending) {
+			// Idle: nada mudou (ver frameIsIdle — com hwDirtyRects isto NUNCA
+			// dispara: um frame RETORNADO pelo capturer já é uma mudança).
 			if !ownsFrame {
 				cap.ReleaseFrame()
 			} else {
@@ -739,6 +817,28 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 		loopStart = time.Now()
 	}
+}
+
+// frameIsIdle decide se o frame recém-capturado deve ser DESCARTADO por não
+// haver mudança (tela ociosa). Função PURA, extraída do loop para ser testável:
+// o bug que ela já escondeu (revisão 2, 2026-11-19) justifica a cerimônia.
+//
+// Semântica dos parâmetros:
+//   - hwDirtyRects: o capturer ativo decide por HARDWARE se a tela mudou. Nesse
+//     caso um frame RETORNADO significa "o hardware viu mudança" — o caso de
+//     tela ociosa chega como ERRO de timeout no AcquireNextFrame, nunca como
+//     frame. Retornar true aqui descartaria TODOS os frames após o primeiro e
+//     congelaria o stream na primeira imagem (foi exatamente o bug que esta
+//     função veio matar: o gate antigo via rects==nil do caminho HW e lia
+//     "idle", contradizendo o comentário que prometia frame completo).
+//   - rects: saída do diff de software (nil no caminho HW).
+//   - useDirtyRect: false no primeiro frame (ainda não há base comparativa).
+//   - keyframePending: pedido de redesenho completo do viewer — nunca idle.
+func frameIsIdle(hwDirtyRects bool, rects []screen.DirtyRect, useDirtyRect, keyframePending bool) bool {
+	if hwDirtyRects {
+		return false
+	}
+	return len(rects) == 0 && useDirtyRect && !keyframePending
 }
 
 // decideFrameKind decide COMO o frame capturado será enviado ao viewer:
@@ -943,12 +1043,17 @@ func (s *SessionScreen) swapCapturer(kind, reason string) {
 	s.usingDXGIFallback = kind == "dxgi"
 	s.capturerMu.Unlock()
 
+	// A capacidade de dirty rects de hardware muda com o capturer (GDI não tem;
+	// DXGI tem). Reavaliar ANTES de resetar o detector: se o novo capturer
+	// decide por hardware, o diff de software deixa de ser necessário.
+	s.refreshHardwareDirtyRects(newCap)
+
 	// Troca de capturer ⇒ possível mudança de resolução/formato: força key
 	// frame completo para o viewer re-sincronizar.
 	s.dirtyDetector.Reset()
 	s.useDirtyRect = false
 
-	log.Printf("[remote-session-screen] capturer trocado para %s (%s)\n", newCap.Name(), reason)
+	log.Printf("[remote-session-screen] capturer trocado para %s (%s) | hw-dirty-rects=%v\n", newCap.Name(), reason, s.hwDirtyRects)
 }
 
 // RequestKeyFrame força o próximo frame a ser enviado completo (key frame).
@@ -965,6 +1070,28 @@ func (s *SessionScreen) currentCapturer() screen.Capturer {
 	s.capturerMu.Lock()
 	defer s.capturerMu.Unlock()
 	return s.capturer
+}
+
+// refreshHardwareDirtyRects recalcula se o capturer ATIVO decide por hardware
+// que a tela mudou (ver HardwareDirtyRectsReporter em core/screen). Chamado
+// quando a capacidade pode ter mudado: início da sessão e em toda troca de
+// capturer (swapCapturer). É barato e roda no loop de captura, então não pode
+// alocar nem chamar o Windows — só uma consulta à interface.
+//
+// Devolve se houve MUDANÇA, para o chamador logar uma única vez por transição
+// (o loop roda a 30 fps; logar por frame inundaria o agent-service.log).
+func (s *SessionScreen) refreshHardwareDirtyRects(cap screen.Capturer) bool {
+	hw := false
+	if cap != nil {
+		if r, ok := cap.(screen.HardwareDirtyRectsReporter); ok {
+			hw = r.HasHardwareDirtyRects()
+		}
+	}
+	if hw == s.hwDirtyRects {
+		return false
+	}
+	s.hwDirtyRects = hw
+	return true
 }
 
 // SetInputLock anexa o gerenciador de bloqueio de entrada da sessão.

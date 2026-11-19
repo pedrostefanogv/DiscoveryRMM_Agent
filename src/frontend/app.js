@@ -465,35 +465,87 @@ async function clearLogs() {
 // Theme toggle
 // ---------------------------------------------------------------------------
 
+// Preferência de tema em 3 estados: "system" (padrão — segue o Windows),
+// "light" e "dark". A resolução/aplicação mora em js/theme-boot.js (carregado
+// no <head>); aqui ficam o ciclo do botão, o ícone e o listener do SO.
+
+var themeSystemListenerBound = false;
+
 function initTheme() {
-  var saved = localStorage.getItem('discovery-theme');
-  if (saved === 'dark') {
-    document.documentElement.setAttribute('data-theme', 'dark');
-    updateThemeIcon(true);
+  var pref = getThemePreference();
+  applyThemePreference(pref);
+  updateThemeIcon(pref);
+
+  // Modo "system": acompanha ao vivo a troca de tema do Windows.
+  if (!themeSystemListenerBound && systemDarkQuery) {
+    var onSystemThemeChange = function () {
+      var current = getThemePreference();
+      if (current !== 'system') return;
+      applyThemePreference(current);
+      updateThemeIcon(current);
+    };
+    if (typeof systemDarkQuery.addEventListener === 'function') {
+      systemDarkQuery.addEventListener('change', onSystemThemeChange);
+    } else if (typeof systemDarkQuery.addListener === 'function') {
+      systemDarkQuery.addListener(onSystemThemeChange);
+    }
+    themeSystemListenerBound = true;
   }
+}
+
+// nextThemePreference: ciclo sistema -> (oposto do sistema) -> (igual ao
+// sistema) -> sistema. Assim o 1º clique SEMPRE muda o visual (com o Windows
+// em escuro: sistema -> claro -> escuro -> sistema; em claro: sistema ->
+// escuro -> claro -> sistema).
+function nextThemePreference(pref) {
+  var systemTheme = systemPrefersDark() ? 'dark' : 'light';
+  var opposite = systemTheme === 'dark' ? 'light' : 'dark';
+  if (pref === 'system') return opposite;
+  if (pref === opposite) return systemTheme;
+  return 'system';
 }
 
 function toggleTheme() {
-  var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  if (isDark) {
-    document.documentElement.removeAttribute('data-theme');
-    localStorage.setItem('discovery-theme', 'light');
-  } else {
-    document.documentElement.setAttribute('data-theme', 'dark');
-    localStorage.setItem('discovery-theme', 'dark');
-  }
-  updateThemeIcon(!isDark);
+  var pref = setThemePreference(nextThemePreference(getThemePreference()));
+  applyThemePreference(pref);
+  updateThemeIcon(pref);
 }
 
-function updateThemeIcon(isDark) {
+function updateThemeIcon(pref) {
+  // Compat: chamadas antigas passavam boolean (isDark).
+  if (pref === true) pref = 'dark';
+  else if (pref === false) pref = 'light';
+  else if (pref !== 'light' && pref !== 'dark') pref = 'system';
+
+  // Tooltip/aria com o modo ATUAL. Troca a chave de i18n (e não só o texto)
+  // para a troca de idioma (applyTranslations) continuar traduzindo certo.
+  var themeBtn = document.getElementById('themeToggle');
+  if (themeBtn) {
+    var i18nKey = pref === 'dark' ? 'theme.modeDark' : pref === 'light' ? 'theme.modeLight' : 'theme.modeSystem';
+    themeBtn.setAttribute('data-i18n-title', i18nKey);
+    themeBtn.setAttribute('data-i18n-aria-label', i18nKey);
+    var label = typeof translate === 'function' ? translate(i18nKey) : '';
+    if (label) {
+      themeBtn.setAttribute('title', label);
+      themeBtn.setAttribute('aria-label', label);
+    }
+  }
+
   var themeIcon = document.getElementById('themeIcon');
-  // O botão de tema é só ícone (sem rótulo): a lua/sol abaixo é o estado, e o
-  // tooltip genérico ("Alternar tema") vem do data-i18n-title do partial.
+  // O botão de tema é só ícone (sem rótulo): o glifo mostra o modo ATUAL —
+  // sistema = círculo meio preenchido (auto), claro = sol, escuro = lua.
   // Ícones do padrão único: Material Symbols (fonts.google.com/icons, Rounded).
   if (themeIcon) {
     themeIcon.setAttribute('viewBox', '0 -960 960 960');
-    // Tema escuro ativo -> sol (clique volta ao claro); claro -> lua.
-    var glyph = isDark ? ["M480-360q50 0 85-35t35-85q0-50-35-85t-85-35q-50 0-85 35t-35 85q0 50 35 85t85 35Zm0 80q-83 0-141.5-58.5T280-480q0-83 58.5-141.5T480-680q83 0 141.5 58.5T680-480q0 83-58.5 141.5T480-280ZM80-440q-17 0-28.5-11.5T40-480q0-17 11.5-28.5T80-520h80q17 0 28.5 11.5T200-480q0 17-11.5 28.5T160-440H80Zm720 0q-17 0-28.5-11.5T760-480q0-17 11.5-28.5T800-520h80q17 0 28.5 11.5T920-480q0 17-11.5 28.5T880-440h-80ZM480-760q-17 0-28.5-11.5T440-800v-80q0-17 11.5-28.5T480-920q17 0 28.5 11.5T520-880v80q0 17-11.5 28.5T480-760Zm0 720q-17 0-28.5-11.5T440-80v-80q0-17 11.5-28.5T480-200q17 0 28.5 11.5T520-160v80q0 17-11.5 28.5T480-40ZM226-678l-43-42q-12-11-11.5-28t11.5-29q12-12 29-12t28 12l42 43q11 12 11 28t-11 28q-11 12-27.5 11.5T226-678Zm494 495-42-43q-11-12-11-28.5t11-27.5q11-12 27.5-11.5T734-282l43 42q12 11 11.5 28T777-183q-12 12-29 12t-28-12Zm-42-495q-12-11-11.5-27.5T678-734l42-43q11-12 28-11.5t29 11.5q12 12 12 29t-12 28l-43 42q-12 11-28 11t-28-11ZM183-183q-12-12-12-29t12-28l43-42q12-11 28.5-11t27.5 11q12 11 11.5 27.5T282-226l-42 43q-11 12-28 11.5T183-183Zm297-297Z"] : ["M480-120q-151 0-255.5-104.5T120-480q0-138 90-239.5T440-838q13-2 23 3.5t16 14.5q6 9 6.5 21t-7.5 23q-17 26-25.5 55t-8.5 61q0 90 63 153t153 63q31 0 61.5-9t54.5-25q11-7 22.5-6.5T819-479q10 5 15.5 15t3.5 24q-14 138-117.5 229T480-120Zm0-80q88 0 158-48.5T740-375q-20 5-40 8t-40 3q-123 0-209.5-86.5T364-660q0-20 3-40t8-40q-78 32-126.5 102T200-480q0 116 82 198t198 82Zm-10-270Z"];
+    if (pref === 'system') {
+      themeIcon.innerHTML =
+        '<path d="M480-840a360 360 0 1 0 0 720a360 360 0 1 0 0-720Zm0 60a300 300 0 1 1 0 600a300 300 0 1 1 0-600Z" fill="currentColor" fill-rule="evenodd"/>' +
+        '<path d="M480-780a300 300 0 0 0 0 600Z" fill="currentColor"/>';
+      return;
+    }
+    var isDark = pref === 'dark';
+    // Claro -> sol; escuro -> lua.
+    var glyph = !isDark ? ["M480-360q50 0 85-35t35-85q0-50-35-85t-85-35q-50 0-85 35t-35 85q0 50 35 85t85 35Zm0 80q-83 0-141.5-58.5T280-480q0-83 58.5-141.5T480-680q83 0 141.5 58.5T680-480q0 83-58.5 141.5T480-280ZM80-440q-17 0-28.5-11.5T40-480q0-17 11.5-28.5T80-520h80q17 0 28.5 11.5T200-480q0 17-11.5 28.5T160-440H80Zm720 0q-17 0-28.5-11.5T760-480q0-17 11.5-28.5T800-520h80q17 0 28.5 11.5T920-480q0 17-11.5 28.5T880-440h-80ZM480-760q-17 0-28.5-11.5T440-800v-80q0-17 11.5-28.5T480-920q17 0 28.5 11.5T520-880v80q0 17-11.5 28.5T480-760Zm0 720q-17 0-28.5-11.5T440-80v-80q0-17 11.5-28.5T480-200q17 0 28.5 11.5T520-160v80q0 17-11.5 28.5T480-40ZM226-678l-43-42q-12-11-11.5-28t11.5-29q12-12 29-12t28 12l42 43q11 12 11 28t-11 28q-11 12-27.5 11.5T226-678Zm494 495-42-43q-11-12-11-28.5t11-27.5q11-12 27.5-11.5T734-282l43 42q12 11 11.5 28T777-183q-12 12-29 12t-28-12Zm-42-495q-12-11-11.5-27.5T678-734l42-43q11-12 28-11.5t29 11.5q12 12 12 29t-12 28l-43 42q-12 11-28 11t-28-11ZM183-183q-12-12-12-29t12-28l43-42q12-11 28.5-11t27.5 11q12 11 11.5 27.5T282-226l-42 43q-11 12-28 11.5T183-183Zm297-297Z"] : ["M480-120q-151 0-255.5-104.5T120-480q0-138 90-239.5T440-838q13-2 23 3.5t16 14.5q6 9 6.5 21t-7.5 23q-17 26-25.5 55t-8.5 61q0 90 63 153t153 63q31 0 61.5-9t54.5-25q11-7 22.5-6.5T819-479q10 5 15.5 15t3.5 24q-14 138-117.5 229T480-120Zm0-80q88 0 158-48.5T740-375q-20 5-40 8t-40 3q-123 0-209.5-86.5T364-660q0-20 3-40t8-40q-78 32-126.5 102T200-480q0 116 82 198t198 82Zm-10-270Z"];
     themeIcon.innerHTML = glyph.map(function (d) {
       return '<path d="' + d + '" fill="currentColor"/>';
     }).join('');

@@ -533,6 +533,13 @@ func (c *dxgiCapturer) Close() error {
 	return nil
 }
 
+// HasHardwareDirtyRects informa que este capturer decide por HARDWARE se a tela
+// mudou: AcquireNextFrame usa IDXGIOutputDuplication com timeout de 200 ms e
+// devolve DXGI_ERROR_WAIT_TIMEOUT quando nada mudou (tratado como "sem frame").
+// O diff de software do pipeline é redundante aqui — ver
+// HardwareDirtyRectsReporter em capturer.go.
+func (c *dxgiCapturer) HasHardwareDirtyRects() bool { return true }
+
 func (c *dxgiCapturer) Name() string { return "dxgi" }
 
 var _ Capturer = (*dxgiCapturer)(nil)

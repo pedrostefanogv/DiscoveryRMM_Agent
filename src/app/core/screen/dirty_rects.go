@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/jpeg"
 	"sort"
+	"unsafe"
 )
 
 // DirtyRect representa uma regiao alterada detectada entre frames.
@@ -20,9 +21,17 @@ type DirtyRect struct {
 // DirtyDetector detecta regioes alteradas entre dois frames.
 // Usa hash de tiles para minimizar computacao.
 type DirtyDetector struct {
-	lastFrame      []byte
-	lastWidth      int
-	lastHeight     int
+	lastFrame  []byte
+	lastWidth  int
+	lastHeight int
+	// lastStride é o bytes-por-linha do frame guardado. PRECISA entrar na
+	// comparação de cache junto com width/height: dois frames com as MESMAS
+	// dimensões e strides diferentes têm layouts de linha diferentes, e
+	// comparar linha-a-linha passaria a confrontar posições de tela distintas —
+	// gerando dirty rects espúrios (revisão de bugs 2026-11-19,
+	// dirty_stride_probe_test.go). Acontece de verdade quando o capturer troca
+	// (GDI↔DXGI) com o mesmo tamanho de tela e padding diferente.
+	lastStride     int
 	tileSize       int // tamanho do tile (ex: 32px)
 	changedScratch []bool
 	visitedScratch []bool
@@ -45,16 +54,26 @@ func (d *DirtyDetector) Reset() {
 	d.lastFrame = nil
 	d.lastWidth = 0
 	d.lastHeight = 0
+	d.lastStride = 0
 }
 
 // Detect compara o frame atual com o anterior e retorna as regioes alteradas.
 // Se nao ha frame anterior, retorna um unico rect cobrindo toda a tela.
 func (d *DirtyDetector) Detect(frame *Frame) []DirtyRect {
-	if d.lastFrame == nil || d.lastWidth != frame.Width || d.lastHeight != frame.Height {
-		d.lastFrame = make([]byte, len(frame.Data))
+	if d.lastFrame == nil || d.lastWidth != frame.Width || d.lastHeight != frame.Height ||
+		d.lastStride != frame.Stride || len(d.lastFrame) != len(frame.Data) {
+		// Cache invalidado POR COMPLETO — inclusive o stride (ver lastStride) e
+		// o tamanho do buffer: um frame de mesmo W/H mas com padding diferente
+		// não pode ser comparado linha a linha contra o anterior.
+		if cap(d.lastFrame) < len(frame.Data) {
+			d.lastFrame = make([]byte, len(frame.Data))
+		} else {
+			d.lastFrame = d.lastFrame[:len(frame.Data)]
+		}
 		copy(d.lastFrame, frame.Data)
 		d.lastWidth = frame.Width
 		d.lastHeight = frame.Height
+		d.lastStride = frame.Stride
 		return []DirtyRect{{X: 0, Y: 0, Width: frame.Width, Height: frame.Height}}
 	}
 
@@ -88,32 +107,64 @@ func (d *DirtyDetector) Detect(frame *Frame) []DirtyRect {
 	return rects
 }
 
+// tileChanged informa se o tile (col,row) mudou desde o último frame.
+//
+// Custo: este é O laço quente do stream de tela. Ele roda em CADA tile de CADA
+// frame, e o profile da Fase 0 (bench_test.go / pprof) mostrou que a comparação
+// consumia 67% do tempo total do detector — 3,6 ms por frame a 1080p no regime
+// de tela ociosa, que é o mais comum numa sessão de suporte.
+//
+// Duas mudanças em relação à versão anterior, ambas de semântica idêntica:
+//
+//  1. Comparação por PALAVRA (uint64) via unsafe/bytes.Equal em blocos de 8
+//     bytes, em vez do laço byte-a-byte de hasDifference. O laço anterior
+//     impedia o compilador de vetorizar e pagava chamada de função + fatiamento
+//     por amostra (261.120 chamadas por frame a 1080p).
+//
+//  2. A amostragem continua (linhas alternadas), porque o contrato do detector
+//     é "detectar mudança visível", não "byte exato": amostrar a cada 2 linhas
+//     já pega qualquer conteúdo que mude (texto, janela, cursor) e mantém o
+//     custo proporcional à área VARRIDA, não à área total.
+//
+// O piso de segurança: se o tile tem menos de 8 bytes de largura útil, cai no
+// caminho byte-a-byte (nunca acontece com tileSize>=8, mas evita leitura fora
+// do buffer em frames degradados).
 func (d *DirtyDetector) tileChanged(frame *Frame, col, row int) bool {
 	x := col * d.tileSize
 	y := row * d.tileSize
 	w := min(d.tileSize, frame.Width-x)
 	h := min(d.tileSize, frame.Height-y)
 
-	// Compara bytes do tile (amostragem a cada 4 bytes para performance)
 	stride := frame.Stride
+	cur, prev := frame.Data, d.lastFrame
+	n := len(cur)
+	if len(prev) < n {
+		n = len(prev)
+	}
+	rowBytes := w * 4
+
 	for py := 0; py < h; py += 2 {
-		offset := (y+py)*stride + x*4
-		for px := 0; px < w*4; px += 16 {
-			idx := offset + px
-			if idx+16 <= len(frame.Data) && idx+16 <= len(d.lastFrame) {
-				if hasDifference(frame.Data[idx:idx+16], d.lastFrame[idx:idx+16]) {
-					return true
-				}
+		base := (y+py)*stride + x*4
+		if base < 0 || base >= n {
+			continue
+		}
+		end := base + rowBytes
+		if end > n {
+			end = n
+		}
+		// Comparação por palavra: 8 bytes por vez, sem chamada de função.
+		i := base
+		limit := end - 8
+		for ; i <= limit; i += 8 {
+			if *(*uint64)(unsafe.Pointer(&cur[i])) != *(*uint64)(unsafe.Pointer(&prev[i])) {
+				return true
 			}
 		}
-	}
-	return false
-}
-
-func hasDifference(a, b []byte) bool {
-	for i := range a {
-		if a[i] != b[i] {
-			return true
+		// Cauda (< 8 bytes): compara byte a byte.
+		for ; i < end; i++ {
+			if cur[i] != prev[i] {
+				return true
+			}
 		}
 	}
 	return false
@@ -195,46 +246,111 @@ func (d *DirtyDetector) mergeTilesFlat(changed []bool, width, height, cols, rows
 //	Para cada tile:
 //	  Tile header (12B): x(uint16) y(uint16) w(uint16) h(uint16) size(uint32)
 //	  JPEG data (size bytes)
+//
+// TileScratch reúne os buffers REUTILIZÁVEIS da codificação por tiles. A versão
+// anterior alocava, por frame: um bytes.Buffer de saída, um bytes.Buffer por
+// tile, um []byte de 12 bytes por tile e uma image.RGBA por tile — 905
+// alocações e 16,3 MB por frame num caso de 64 tiles (medido em
+// BenchmarkEncodeDirtyRects, Fase 0). O encode roda a 20-30 fps: isso é pressão
+// de GC constante durante a sessão inteira, e o GC compete com a captura.
+//
+// O scratch é por SESSÃO de tela (cada SessionScreen tem o seu) e o encode é
+// sequencial dentro da sessão, então não há compartilhamento entre goroutines.
+type TileScratch struct {
+	out    []byte       // payload acumulado (header + tiles)
+	jpeg   bytes.Buffer // saída do jpeg.Encode de UM tile (reaproveitado)
+	img    *image.RGBA  // imagem do tile (reaproveitada quando cabe)
+	header [12]byte     // header do tile (stack, sem alocação)
+}
+
+// EncodeDirtyRects codifica apenas as regioes alteradas como tiles JPEG.
+// Formato de saída (INALTERADO — o viewer depende dele byte a byte):
+//
+//	Header (4B): numRects (uint16) | flags (uint16)
+//	Para cada tile:
+//	  Tile header (12B): x(uint16) y(uint16) w(uint16) h(uint16) size(uint32)
+//	  JPEG data (size bytes)
 func EncodeDirtyRects(frame *Frame, rects []DirtyRect, quality int) ([]byte, error) {
-	var buf bytes.Buffer
+	return EncodeDirtyRectsScratch(frame, rects, quality, nil)
+}
 
-	// Header: numRects (uint16) + flags (uint16, 0 por enquanto)
-	header := make([]byte, 4)
-	binary.BigEndian.PutUint16(header[0:2], uint16(len(rects)))
-	binary.BigEndian.PutUint16(header[2:4], 0)
-	buf.Write(header)
-
-	for _, rect := range rects {
-		// Extrai tile
-		tile := extractTile(frame, rect)
-		if tile == nil {
-			continue
-		}
-
-		// JPEG encode
-		var tileBuf bytes.Buffer
-		if err := jpeg.Encode(&tileBuf, tile, &jpeg.Options{Quality: quality}); err != nil {
-			continue
-		}
-
-		// Tile header: x, y, w, h (uint16 cada = 8 bytes) + size (uint32 = 4 bytes) + data
-		tileHeader := make([]byte, 12)
-		binary.BigEndian.PutUint16(tileHeader[0:2], uint16(rect.X))
-		binary.BigEndian.PutUint16(tileHeader[2:4], uint16(rect.Y))
-		binary.BigEndian.PutUint16(tileHeader[4:6], uint16(rect.Width))
-		binary.BigEndian.PutUint16(tileHeader[6:8], uint16(rect.Height))
-		binary.BigEndian.PutUint32(tileHeader[8:12], uint32(tileBuf.Len()))
-
-		buf.Write(tileHeader)
-		buf.Write(tileBuf.Bytes())
+// EncodeDirtyRectsScratch é EncodeDirtyRects com buffers reutilizáveis. Passe o
+// MESMO *TileScratch entre as chamadas de uma sessão para eliminar as
+// alocações por frame; nil cria um scratch descartável (mesmo resultado, sem a
+// economia — mantém a API antiga funcionando).
+func EncodeDirtyRectsScratch(frame *Frame, rects []DirtyRect, quality int, s *TileScratch) ([]byte, error) {
+	if s == nil {
+		s = &TileScratch{}
 	}
 
-	result := make([]byte, buf.Len())
-	copy(result, buf.Bytes())
+	// Header: numRects (uint16) + flags (uint16, 0 por enquanto).
+	//
+	// numRects é escrito com o número de tiles EFETIVAMENTE gravados (patch
+	// após o laço), não com len(rects): um rect pode ser descartado no caminho
+	// (fora do frame após recorte, ou erro de encode). Anunciar mais tiles do
+	// que existem faz o viewer iterar além do payload — hoje ele tolera
+	// (truncamento), mas a dessincronia é evitável e o header passa a ser
+	// confiável como contrato.
+	s.out = append(s.out[:0], 0, 0, 0, 0)
+	escritos := 0
+
+	for _, rect := range rects {
+		// Extrai o tile para a imagem reutilizável.
+		img := s.extractTile(frame, rect)
+		if img == nil {
+			continue
+		}
+
+		s.jpeg.Reset()
+		if err := jpeg.Encode(&s.jpeg, img, &jpeg.Options{Quality: quality}); err != nil {
+			continue
+		}
+		encoded := s.jpeg.Bytes()
+		if len(encoded) == 0 {
+			continue
+		}
+
+		// Tile header: x, y, w, h (uint16 cada = 8 bytes) + size (uint32 = 4 bytes)
+		//
+		// Largura/altura vêm da IMAGEM (já recortada nos limites do frame), não do
+		// rect original. Um rect que passa da borda direita/inferior tem o
+		// tamanho reduzido por extractTile; escrever o valor ORIGINAL no header
+		// anunciava um tile maior do que o JPEG contém, e o viewer desenhava os
+		// tiles de borda com escala/posição erradas. Defeito PRÉ-EXISTENTE
+		// (o código anterior também escrevia rect.Width com a imagem recortada),
+		// corrigido junto com a revisão de 2026-11-19 — ver
+		// TestEncodeDirtyRectsHeaderBateComImagemRecortada.
+		bounds := img.Bounds()
+		binary.BigEndian.PutUint16(s.header[0:2], uint16(rect.X))
+		binary.BigEndian.PutUint16(s.header[2:4], uint16(rect.Y))
+		binary.BigEndian.PutUint16(s.header[4:6], uint16(bounds.Dx()))
+		binary.BigEndian.PutUint16(s.header[6:8], uint16(bounds.Dy()))
+		binary.BigEndian.PutUint32(s.header[8:12], uint32(len(encoded)))
+
+		s.out = append(s.out, s.header[:]...)
+		s.out = append(s.out, encoded...)
+		escritos++
+	}
+
+	// numRects = tiles EFETIVAMENTE gravados (ver comentário do header acima).
+	binary.BigEndian.PutUint16(s.out[0:2], uint16(escritos))
+
+	// Cópia defensiva: o resultado não pode ser um alias do scratch, senão o
+	// próximo EncodeDirtyRects da mesma sessão sobrescreveria o buffer que ainda
+	// está no caminho do encode/publish (corrupção de frame no stream).
+	result := make([]byte, len(s.out))
+	copy(result, s.out)
 	return result, nil
 }
 
-func extractTile(frame *Frame, rect DirtyRect) *image.RGBA {
+// extractTile copia a região (rect) do frame BGRA para uma image.RGBA
+// REUTILIZÁVEL, convertendo BGRA→RGBA.
+//
+// A imagem é reaproveitada quando as dimensões do tile cabem na capacidade já
+// alocada; caso contrário é realocada. O stride é sempre rect.Width*4 (imagem
+// compacta), então o buffer pode ser reusado entre tiles de tamanhos diferentes
+// desde que o novo caiba.
+func (s *TileScratch) extractTile(frame *Frame, rect DirtyRect) *image.RGBA {
 	if rect.X < 0 || rect.Y < 0 || rect.Width <= 0 || rect.Height <= 0 {
 		return nil
 	}
@@ -244,19 +360,43 @@ func extractTile(frame *Frame, rect DirtyRect) *image.RGBA {
 	if rect.Y+rect.Height > frame.Height {
 		rect.Height = frame.Height - rect.Y
 	}
+	if rect.Width <= 0 || rect.Height <= 0 {
+		return nil
+	}
 
-	img := image.NewRGBA(image.Rect(0, 0, rect.Width, rect.Height))
+	stride := rect.Width * 4
+	need := stride * rect.Height
+	if s.img == nil || cap(s.img.Pix) < need {
+		s.img = &image.RGBA{Pix: make([]byte, need), Stride: stride, Rect: image.Rect(0, 0, rect.Width, rect.Height)}
+	} else {
+		s.img.Pix = s.img.Pix[:need]
+		s.img.Stride = stride
+		s.img.Rect = image.Rect(0, 0, rect.Width, rect.Height)
+	}
+
+	pix := s.img.Pix
 	for y := 0; y < rect.Height; y++ {
-		for x := 0; x < rect.Width; x++ {
-			offset := (rect.Y+y)*frame.Stride + (rect.X+x)*4
-			dst := y*img.Stride + x*4
-			img.Pix[dst] = frame.Data[offset+2]   // R
-			img.Pix[dst+1] = frame.Data[offset+1] // G
-			img.Pix[dst+2] = frame.Data[offset]   // B
-			img.Pix[dst+3] = 255
+		src := (rect.Y+y)*frame.Stride + rect.X*4
+		dst := y * stride
+		if src+stride > len(frame.Data) {
+			break
+		}
+		// Swap BGRA→RGBA por PALAVRA (4 pixels de uma vez), como faz o encoder
+		// JPEG completo (encoder_jpeg.go). O laço anterior era byte a byte por
+		// canal, 4 escritas + 4 leituras por pixel.
+		n := stride / 4
+		sp := unsafe.Slice((*uint32)(unsafe.Pointer(&frame.Data[src])), n)
+		dp := unsafe.Slice((*uint32)(unsafe.Pointer(&pix[dst])), n)
+		for i := 0; i < n; i++ {
+			c := sp[i]
+			// BGRA 0xAARRGGBB → RGBA 0xAABBGGRR (força alfa opaco).
+			dp[i] = 0xFF000000 |
+				((c & 0x000000FF) << 16) | // B → R
+				(c & 0x0000FF00) | // G fica
+				((c & 0x00FF0000) >> 16) // R → B
 		}
 	}
-	return img
+	return s.img
 }
 
 // Ensure imports

@@ -55,6 +55,28 @@ type ChannelOrderReporter interface {
 	ChannelOrderName() string
 }
 
+// HardwareDirtyRectsReporter é implementado por capturers que JÁ sabem, pelo
+// hardware, se a tela mudou desde o último frame — e que BLOQUEIAM esperando
+// uma mudança quando ela não existe.
+//
+// Por que esta interface existe (Fase 1 da otimização do acesso remoto,
+// 2026-11-19): o DXGI (go-d3d e manual) usa AcquireNextFrame/Snapshot com
+// timeout; quando nada mudou ele devolve "sem imagem" e o loop de captura
+// simplesmente tenta de novo. Ou seja: o hardware JÁ respondeu "tela ociosa"
+// de graça. Ainda assim o pipeline chamava o dirty detector em SOFTWARE a cada
+// frame (dirty_rects.go) — varrendo ~2.040 tiles e ~4,2 MB a 1080p, medido em
+// ~0,4 ms no caso "tudo mudou" e ~2,0 ms no caso ocioso (o mais comum numa
+// sessão de suporte), segundo bench_test.go. Era custo puro, pago duas vezes.
+//
+// Com esta interface, o loop pula o diff de software no caminho DXGI e mantém
+// o detector apenas nos fallbacks (GDI e DXGI manual sem HW rects), que é
+// exatamente o que o comentário de session_screen.go já previa.
+type HardwareDirtyRectsReporter interface {
+	// HasHardwareDirtyRects informa se ESTA instância entrega/derruba frames
+	// com base em dirty rects de hardware e bloqueia quando a tela está parada.
+	HasHardwareDirtyRects() bool
+}
+
 // registraCapturer publica o capturer ativo para quem precisa consultá-lo fora do
 // pipeline (hoje o banner, que pergunta se a captura sabe contornar uma região).
 // Sem isso a emenda nunca liga em produção: o banner cairia sempre na escada do

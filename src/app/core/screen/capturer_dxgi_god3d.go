@@ -541,6 +541,13 @@ func (c *dxgiGoD3dCapturer) Close() error {
 	return nil
 }
 
+// HasHardwareDirtyRects informa que este capturer decide por HARDWARE se a tela
+// mudou. snapshotFrame chama dup.Snapshot(200), que bloqueia até 200 ms por uma
+// mudança e devolve ErrNoImageYet quando a tela está parada — o loop trata esse
+// erro como "nada mudou" e tenta de novo. O diff de software do pipeline é,
+// portanto, redundante aqui (ver HardwareDirtyRectsReporter em capturer.go).
+func (c *dxgiGoD3dCapturer) HasHardwareDirtyRects() bool { return true }
+
 func (c *dxgiGoD3dCapturer) Name() string {
 	// Nome canônico do contrato F17: "dxgi" (fallback GDI reporta "gdi").
 	return "dxgi"
