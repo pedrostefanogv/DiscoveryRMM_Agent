@@ -1777,42 +1777,66 @@ func (m *Manager) runRdpCleanPath(ctx context.Context, session *Session, rdpPort
 
 	log.Printf("[remote-session-rdp] WebRDP (RDCleanPath) ativo na sessao %s (porta %d)", session.ID, rdpPort)
 
-	// Uma sessao RDCleanPath por viewer. O modelo do site e 1 aba RDP por
-	// sessao (MaxConcurrentSessionsPerAgent=1), e o subject dedicado e por
-	// sessionID — nao ha multiplexacao a fazer aqui.
-	transport, err := rdcleanpath.NewNatsTransport(
-		session.ID,
-		m.natsStream, // implementa PublishRdpCleanpathOut
-		func(sessionID string, handler func(data []byte)) (func(), error) {
-			sub, subErr := m.natsStream.SubscribeToRdpCleanpathIn(sessionID, handler)
-			if subErr != nil {
-				return nil, subErr
-			}
-			return func() { _ = sub.Unsubscribe() }, nil
-		},
-	)
-	if err != nil {
-		log.Printf("[remote-session-rdp] ERRO ao criar transporte RDCleanPath sessao %s: %v", session.ID, err)
-		m.publishEvent(session.ID, "error", map[string]string{
-			"scope": "rdp",
-			"error": err.Error(),
+	// Loop de supervisao: cada tentativa do viewer (conexao inicial, "tentar
+	// novamente" apos falha, reconexao) abre um novo WebSocket para o MESMO
+	// subject. Cada Session consome UM request e encerra, entao precisamos
+	// recriar transporte e sessao a cada iteracao — servir UMA vez deixaria o
+	// retry do operador sem resposta (bug de usabilidade real).
+	for {
+		if ctx.Err() != nil {
+			break
+		}
+
+		// Transporte NOVO por tentativa: Session.Run fecha o transporte ao sair.
+		transport, err := rdcleanpath.NewNatsTransport(
+			session.ID,
+			m.natsStream, // implementa PublishRdpCleanpathOut
+			func(sessionID string, handler func(data []byte)) (func(), error) {
+				sub, subErr := m.natsStream.SubscribeToRdpCleanpathIn(sessionID, handler)
+				if subErr != nil {
+					return nil, subErr
+				}
+				return func() { _ = sub.Unsubscribe() }, nil
+			},
+		)
+		if err != nil {
+			log.Printf("[remote-session-rdp] ERRO ao criar transporte RDCleanPath sessao %s: %v", session.ID, err)
+			m.publishEvent(session.ID, "error", map[string]string{
+				"scope": "rdp",
+				"error": err.Error(),
+			})
+			return
+		}
+
+		rcSession := rdcleanpath.NewSession(rdcleanpath.SessionConfig{
+			Server: server,
+			Logf: func(format string, args ...any) {
+				log.Printf("[rdcleanpath] session=%s "+format, append([]any{session.ID}, args...)...)
+			},
 		})
-		return
-	}
-	defer func() { _ = transport.Close() }()
 
-	rcSession := rdcleanpath.NewSession(rdcleanpath.SessionConfig{
-		Server: server,
-		Logf: func(format string, args ...any) {
-			log.Printf("[rdcleanpath] session=%s "+format, append([]any{session.ID}, args...)...)
-		},
-	})
+		runErr := rcSession.Run(ctx, transport)
+		_ = transport.Close()
 
-	runErr := rcSession.Run(ctx, transport)
-	if runErr != nil && !errors.Is(runErr, context.Canceled) {
-		log.Printf("[remote-session-rdp] WebRDP encerrado com erro na sessao %s: %v", session.ID, runErr)
+		// Contexto encerrado (stop da sessao / logoff): sai do loop sem erro.
+		if ctx.Err() != nil {
+			break
+		}
+		// Timeout aguardando request e o caso NORMAL quando o operador sai da
+		// aba sem conectar: apenas volta a aguardar, sem poluir o log com erro.
+		if runErr != nil && !errors.Is(runErr, context.Canceled) && !isAwaitRequestTimeout(runErr) {
+			log.Printf("[remote-session-rdp] WebRDP encerrou com erro na sessao %s: %v (aguardando nova tentativa)", session.ID, runErr)
+		}
 	}
+
 	log.Printf("[remote-session-rdp] WebRDP (RDCleanPath) encerrado na sessao %s", session.ID)
+}
+
+// isAwaitRequestTimeout informa se o erro e o timeout normal de espera pelo
+// request inicial (viewer abriu e nao enviou nada). Nao e falha: o loop deve
+// apenas voltar a aguardar.
+func isAwaitRequestTimeout(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "timeout aguardando request")
 }
 
 // runProcessesSession inicia a sessão de processos/serviços remota.
