@@ -12,6 +12,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"discovery/app/core/remotesession/rdcleanpath"
 	"discovery/app/core/screen"
 )
 
@@ -618,6 +619,53 @@ func (h *NatsStreamHandler) PublishTunnelOut(sessionID string, data []byte) erro
 		return fmt.Errorf("nats connection unavailable")
 	}
 	subject := h.publishSubject(sessionID, "tunnel.out")
+	if subject == "" {
+		return fmt.Errorf("sessionId invalido")
+	}
+	return h.nc.Publish(subject, data)
+}
+
+// ── RDCleanPath (WebRDP no browser) ─────────────────────────────────────────
+//
+// O WebRDP usa subjects DEDICADOS, separados de .tunnel.in/.tunnel.out.
+// Motivo (decisao 3b): o canal do tunel carrega frames multiplexados do proxy LAN
+// (header binario 0x01) e JSON de controle (0x7B), enquanto o RDCleanPath carrega
+// DER (tag 0x30) seguido de bytes RDP crus. No site, RemoteProxy e RemoteRdp
+// derivam o subject do MESMO natsSubject: compartilhar o canal faria cada parser
+// descartar/corromper os bytes do outro, silenciosamente.
+//
+// O destino continua fail-closed em 127.0.0.1:<RDPPort> (ver rdcleanpath.Server);
+// o campo destination vindo do cliente e ignorado.
+
+// SubscribeToRdpCleanpathIn assina o subject dedicado de entrada do RDCleanPath.
+// O handler recebe BYTES CRUS (blocos), pois o request DER pode chegar
+// fragmentado em varias mensagens.
+func (h *NatsStreamHandler) SubscribeToRdpCleanpathIn(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
+	if h == nil || h.nc == nil {
+		return nil, fmt.Errorf("nats connection unavailable")
+	}
+	pattern := h.subscribePattern(sessionID, rdcleanpath.SuffixSubjectIn)
+	if pattern == "" {
+		return nil, fmt.Errorf("sessionId invalido")
+	}
+	sub, err := h.nc.Subscribe(pattern, func(msg *nats.Msg) {
+		handler(msg.Data)
+	})
+	if err != nil {
+		log.Printf("[remote-session-nats] SubscribeToRdpCleanpathIn erro: pattern=%s err=%v\n", pattern, err)
+	} else {
+		log.Printf("[remote-session-nats] SubscribeToRdpCleanpathIn ok: pattern=%s\n", pattern)
+	}
+	return sub, err
+}
+
+// PublishRdpCleanpathOut publica bytes no subject dedicado de saida do
+// RDCleanPath (response DER do handshake e, depois, bytes RDP crus do relay).
+func (h *NatsStreamHandler) PublishRdpCleanpathOut(sessionID string, data []byte) error {
+	if h == nil || h.nc == nil {
+		return fmt.Errorf("nats connection unavailable")
+	}
+	subject := h.publishSubject(sessionID, rdcleanpath.SuffixSubjectOut)
 	if subject == "" {
 		return fmt.Errorf("sessionId invalido")
 	}

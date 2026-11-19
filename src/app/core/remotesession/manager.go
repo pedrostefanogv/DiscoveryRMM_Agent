@@ -5,6 +5,7 @@ package remotesession
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"discovery/app/core/netproxy"
+	"discovery/app/core/remotesession/rdcleanpath"
 	"discovery/app/core/safego"
 	"discovery/app/core/screen"
 	"discovery/app/core/sessioncontrol"
@@ -1699,6 +1701,8 @@ func (m *Manager) runRdpSession(ctx context.Context, session *Session) {
 		Allowlist: allowlist,
 		RDPPort:   effPort,
 	})
+	// O tunel legado continua atendendo o mstsc via --rdp-tunnel (transporte
+	// binario multiplexado em .tunnel.in/.tunnel.out).
 	defer tunnel.Close()
 
 	if err := tunnel.Subscribe(runCtx); err != nil {
@@ -1721,7 +1725,94 @@ func (m *Manager) runRdpSession(ctx context.Context, session *Session) {
 		"rdpStatus":       rdpStatus,
 	})
 
+	// WebRDP no navegador (IronRDP WASM) via RDCleanPath, em subjects DEDICADOS
+	// (.rdp.cleanpath.in/.out). Roda em paralelo ao tunel legado porque os
+	// canais sao disjuntos: mixar no mesmo subject faria o RemoteProxy e o
+	// RemoteRdp interpretarem os bytes um do outro.
+	rdpCtx, rdpCancel := context.WithCancel(runCtx)
+	defer rdpCancel()
+	go m.runRdpCleanPath(rdpCtx, session, effPort, rdpStatus)
+
 	_ = tunnel.Run(runCtx)
+}
+
+// runRdpCleanPath atende o WebRDP do navegador (RDCleanPath) para uma sessao RDP.
+//
+// O RDCleanPath tem handshake e depois relay puro, entao o agent mantem uma
+// maquina de estados por conexao (ver pacote rdcleanpath). O destino e SEMPRE
+// 127.0.0.1:<port> — o campo destination vindo do cliente e ignorado, evitando
+// que o tunel vire um SSRF.
+func (m *Manager) runRdpCleanPath(ctx context.Context, session *Session, rdpPort int, rdpStatus RDPStatus) {
+	if m.natsStream == nil {
+		return
+	}
+
+	// Authenticate: valida o proxy_auth do cliente. Fail-closed — sem esta
+	// funcao o agent recusaria todos os requests (por design).
+	//
+	// O proxy_auth carrega o ticket efemero que a API emitiu para o handshake
+	// WebSocket. O agent NAO tem acesso ao store de tickets (ele vive na API),
+	// entao a validacao aqui e de FORMATO e PRESENCA: um proxy_auth vazio ou com
+	// tamanho absurdo e recusado. A autorizacao forte ja ocorreu na API
+	// (UserAuthMiddleware consome o ticket de uso unico antes do upgrade WS) e no
+	// JWT escopado do NATS, que so entrega os subjects desta sessao.
+	authFunc := func(ctx context.Context, proxyAuth, destination string) error {
+		if strings.TrimSpace(proxyAuth) == "" {
+			return fmt.Errorf("proxy_auth ausente")
+		}
+		if len(proxyAuth) > 4096 {
+			return fmt.Errorf("proxy_auth excede o tamanho maximo")
+		}
+		return nil
+	}
+
+	server := &rdcleanpath.Server{
+		RDPPort:          rdpPort,
+		AllowInsecureTLS: true, // RDP usa certificado self-signed; a cadeia vai ao cliente
+		Authenticate:     authFunc,
+		Logf: func(format string, args ...any) {
+			log.Printf("[rdcleanpath] session=%s "+format, append([]any{session.ID}, args...)...)
+		},
+	}
+
+	log.Printf("[remote-session-rdp] WebRDP (RDCleanPath) ativo na sessao %s (porta %d)", session.ID, rdpPort)
+
+	// Uma sessao RDCleanPath por viewer. O modelo do site e 1 aba RDP por
+	// sessao (MaxConcurrentSessionsPerAgent=1), e o subject dedicado e por
+	// sessionID — nao ha multiplexacao a fazer aqui.
+	transport, err := rdcleanpath.NewNatsTransport(
+		session.ID,
+		m.natsStream, // implementa PublishRdpCleanpathOut
+		func(sessionID string, handler func(data []byte)) (func(), error) {
+			sub, subErr := m.natsStream.SubscribeToRdpCleanpathIn(sessionID, handler)
+			if subErr != nil {
+				return nil, subErr
+			}
+			return func() { _ = sub.Unsubscribe() }, nil
+		},
+	)
+	if err != nil {
+		log.Printf("[remote-session-rdp] ERRO ao criar transporte RDCleanPath sessao %s: %v", session.ID, err)
+		m.publishEvent(session.ID, "error", map[string]string{
+			"scope": "rdp",
+			"error": err.Error(),
+		})
+		return
+	}
+	defer func() { _ = transport.Close() }()
+
+	rcSession := rdcleanpath.NewSession(rdcleanpath.SessionConfig{
+		Server: server,
+		Logf: func(format string, args ...any) {
+			log.Printf("[rdcleanpath] session=%s "+format, append([]any{session.ID}, args...)...)
+		},
+	})
+
+	runErr := rcSession.Run(ctx, transport)
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		log.Printf("[remote-session-rdp] WebRDP encerrado com erro na sessao %s: %v", session.ID, runErr)
+	}
+	log.Printf("[remote-session-rdp] WebRDP (RDCleanPath) encerrado na sessao %s", session.ID)
 }
 
 // runProcessesSession inicia a sessão de processos/serviços remota.
