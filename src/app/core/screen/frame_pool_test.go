@@ -21,23 +21,34 @@ func TestGetPooledFrame_BasicDimension(t *testing.T) {
 // TestFramePool_Reuse valida o ciclo Get-Put-Get: o MESMO buffer volta (reciclagem).
 // Drena antes buffers herdados de outros testes (ordem de execução é global
 // ao pacote) para o ciclo put/get ser determinístico.
+// Sob -race, o sync.Pool da stdlib descarta ~25% dos Put propositalmente; por
+// isso limitamos a até 16 tentativas sob -race (0.25^16 ≈ 2.3e-10) mantendo a
+// verificação estrita de 1 tentativa fora do modo -race.
 func TestFramePool_Reuse(t *testing.T) {
 	for i := 0; i < 32; i++ {
 		f := GetPooledFrame(640, 480, 640*4)
 		_ = f // descartado SEM Put — remove objetos pré-alocados do pool
 	}
 
-	f1 := GetPooledFrame(640, 480, 640*4)
-	buf1 := &f1.Data[:1][0] // endereço do primeiro byte
-	PutPooledFrame(f1)
-
-	f2 := GetPooledFrame(640, 480, 640*4)
-	buf2 := &f2.Data[:1][0]
-	defer PutPooledFrame(f2)
-
-	if buf1 != buf2 {
-		t.Fatalf("pool nao reciclou o buffer (enderecos diferentes)")
+	maxAttempts := 1
+	if poolRaceEnabled {
+		maxAttempts = 16
 	}
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		f1 := GetPooledFrame(640, 480, 640*4)
+		buf1 := &f1.Data[:1][0] // endereço do primeiro byte
+		PutPooledFrame(f1)
+
+		f2 := GetPooledFrame(640, 480, 640*4)
+		buf2 := &f2.Data[:1][0]
+		if buf1 == buf2 {
+			PutPooledFrame(f2)
+			return
+		}
+		// Não devolve f2 aqui para não poluir a tentativa seguinte.
+	}
+	t.Fatalf("pool nao reciclou o buffer (enderecos diferentes em %d tentativa(s))", maxAttempts)
 }
 
 // TestFramePool_SizeChange valida que um buffer incompativel (maior que 2x)

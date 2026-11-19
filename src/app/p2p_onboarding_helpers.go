@@ -19,7 +19,7 @@ import (
 // uso no auto-provisioning P2P. Retorna o deployKey, o expiresAt (RFC3339) e
 // erro.
 func (a *App) requestProvisioningToken(ctx context.Context) (deployKey, expiresAt string, err error) {
-	cfg := a.GetDebugConfig()
+	cfg := a.getDebugConfigInternal()
 	token := strings.TrimSpace(cfg.AuthToken)
 	agentID := strings.TrimSpace(cfg.AgentID)
 

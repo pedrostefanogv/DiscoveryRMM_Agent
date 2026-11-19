@@ -276,6 +276,7 @@ func TestHandleRequest_PutUsesTempNameAndRenames(t *testing.T) {
 func TestHandleRequest_PutFailsRemovesTemp(t *testing.T) {
 	tmp := t.TempDir()
 	srv := NewServer(tmp)
+	defer srv.Close()
 
 	tmpPath := filepath.Join(tmp, "app.exe.tmp")
 	finalPath := filepath.Join(tmp, "app.exe")
@@ -409,6 +410,7 @@ func TestHandleRequest_DeleteMissingFileFails(t *testing.T) {
 func TestHandleRequest_PutChunkOutOfRangeFails(t *testing.T) {
 	tmp := t.TempDir()
 	srv := NewServer(tmp)
+	defer srv.Close()
 
 	finalPath := filepath.Join(tmp, "app.exe")
 	tmpPath := finalPath + ".tmp"

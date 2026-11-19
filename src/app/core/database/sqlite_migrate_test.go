@@ -36,7 +36,7 @@ func TestM8_LegacyDatabaseMigratedAndRecreated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer db.Close()
+	RegisterTestCleanup(t, db, dir)
 
 	var version int
 	if err := db.conn.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -85,7 +85,7 @@ func TestM8_CurrentVersionPreservesData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open 2: %v", err)
 	}
-	defer db2.Close()
+	RegisterTestCleanup(t, db2, dir)
 
 	var version int
 	if err := db2.conn.QueryRow("PRAGMA user_version").Scan(&version); err != nil {

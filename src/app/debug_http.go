@@ -28,6 +28,7 @@ type ChatSSEInfo = debughttp.ChatSSEInfo
 // invocados ou listados via reflection HTTP (/api/<method>).
 var debugBlockedReflectionMethods = map[string]bool{
 	"GetChatSSEInfo":  true,
+	"GetDebugConfig":  true,
 	"GetDebugHTTPURL": true,
 }
 

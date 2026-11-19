@@ -111,12 +111,7 @@ func ResizeBGRA(src *Frame, scaleFactor float64) *Frame {
 	}
 
 	newStride := newW * 4
-	dst := &Frame{
-		Data:   make([]byte, newStride*newH),
-		Width:  newW,
-		Height: newH,
-		Stride: newStride,
-	}
+	dst := GetPooledFrame(newW, newH, newStride)
 
 	srcStride := src.Stride
 	srcW := src.Width

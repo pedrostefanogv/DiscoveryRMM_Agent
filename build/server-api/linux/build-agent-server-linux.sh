@@ -201,7 +201,7 @@ if [[ -n "$WAILS3_BIN" && "${WAILS3_REGEN_BINDINGS:-0}" == "1" ]]; then
   if [[ "$NEED_REGEN" -eq 1 ]]; then
     echo "[info] regenerando bindings do frontend com wails3..."
     pushd "$SRC_ROOT" >/dev/null
-    "$WAILS3_BIN" generate bindings -b -clean=true -d frontend/bindings ./... || {
+    "$WAILS3_BIN" generate bindings -b -clean=true -f "-tags wailsui" -d frontend/bindings ./... || {
       echo "[aviso] falha ao regenerar bindings; continuando com bindings existentes"
     }
     popd >/dev/null
@@ -215,7 +215,7 @@ fi
 # (window.go indefinido -> "API do Wails indisponivel", janela sem close/drag).
 if grep -rq "@wailsio/runtime" "$SRC_ROOT/frontend/bindings" 2>/dev/null; then
   echo "[erro] bindings npm-style (@wailsio/runtime) detectados — abortando build." >&2
-  echo "[dica] regenere com: wails3 generate bindings -b -clean=true -d frontend/bindings ./..." >&2
+  echo "[dica] regenere com: wails3 generate bindings -b -clean=true -f \"-tags wailsui\" -d frontend/bindings ./..." >&2
   exit 1
 fi
 

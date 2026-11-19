@@ -276,12 +276,7 @@ func linearToSRGBByte(v float32) byte {
 func ToneMapHDRToSDR(frame *Frame) *Frame {
 	w, h := frame.Width, frame.Height
 	stride := frame.Stride
-	out := &Frame{
-		Data:   make([]byte, w*h*4),
-		Width:  w,
-		Height: h,
-		Stride: w * 4,
-	}
+	out := GetPooledFrame(w, h, w*4)
 	src := frame.Data
 	dst := out.Data
 	for y := 0; y < h; y++ {

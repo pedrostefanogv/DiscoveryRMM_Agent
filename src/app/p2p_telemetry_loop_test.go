@@ -33,11 +33,7 @@ func TestStartP2PTelemetryLoopForcesInitialSendPastConsolidationGate(t *testing.
 	}))
 	defer server.Close()
 
-	db, err := database.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := database.OpenForTest(t)
 
 	engine := consolidation.New(db, agentID)
 	engine.Enable()
@@ -97,12 +93,12 @@ func TestStartP2PTelemetryLoopForcesInitialSendPastConsolidationGate(t *testing.
 // mantém o chamador do loop de telemetria. Foi exatamente a remoção desse
 // chamador na refatoração M5 (commit a6ddadd) que zerou as métricas P2P.
 func TestStartupWiresP2PTelemetryLoop(t *testing.T) {
-	source, err := os.ReadFile("app.go")
+	source, err := os.ReadFile("app_lifecycle.go")
 	if err != nil {
-		t.Fatalf("ler app.go: %v", err)
+		t.Fatalf("ler app_lifecycle.go: %v", err)
 	}
 	if !strings.Contains(string(source), "a.StartP2PTelemetryLoop(ctx)") {
-		t.Fatal("app.go nao inicia StartP2PTelemetryLoop: o core do agente deixaria de enviar telemetria P2P")
+		t.Fatal("app_lifecycle.go nao inicia StartP2PTelemetryLoop: o core do agente deixaria de enviar telemetria P2P")
 	}
 }
 

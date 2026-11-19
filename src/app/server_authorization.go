@@ -330,7 +330,7 @@ func (a *App) probeServerAuthorization() {
 	if a == nil {
 		return
 	}
-	cfg := a.GetDebugConfig()
+	cfg := a.getDebugConfigInternal()
 	if strings.TrimSpace(cfg.ApiServer) == "" || strings.TrimSpace(cfg.AuthToken) == "" {
 		// Sem credenciais: nenhum estado de "aguardando liberação" (a UI usa
 		// "aguardando provisionamento").

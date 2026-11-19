@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 
+	"discovery/app/core/platform"
 	debug "discovery/app/debug"
 )
 
@@ -78,17 +80,61 @@ func TestIPCRPCConfigSetPartialPatchPreservesFields(t *testing.T) {
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatalf("config persistida inválida: %v", err)
 	}
-	if persisted.ApiServer != "api.patch.local" || persisted.AuthToken != "token-original" {
+	if persisted.ApiServer != "api.patch.local" {
+		t.Fatalf("arquivo persistido não reflete apiServer do patch: %+v", persisted)
+	}
+	if runtime.GOOS == "windows" {
+		if persisted.AuthToken != "" {
+			t.Fatalf("arquivo persistido não deveria expor authToken em texto puro: %+v", persisted)
+		}
+		if !platform.IsProtectedSecret(persisted.AuthTokenDpapi) {
+			t.Fatalf("arquivo persistido deveria guardar authTokenDpapi (dpapi:v1:...): %+v", persisted)
+		}
+		unprotected, err := platform.UnprotectSecret(persisted.AuthTokenDpapi)
+		if err != nil || unprotected != "token-original" {
+			t.Fatalf("UnprotectSecret(authTokenDpapi) = (%q, %v), esperado (%q, nil)", unprotected, err, "token-original")
+		}
+	} else if persisted.AuthToken != "token-original" {
 		t.Fatalf("arquivo persistido não reflete o patch semântico: %+v", persisted)
 	}
 
-	// Resposta devolve a config EFETIVA.
+	// Resposta devolve a config EFETIVA com segredo redigido.
 	dataMap, _ := resp["data"].(map[string]any)
-	if dataMap["apiServer"] != "api.patch.local" || dataMap["authToken"] != "token-original" {
+	if dataMap["apiServer"] != "api.patch.local" {
 		t.Fatalf("data efetiva inesperada: %+v", dataMap)
+	}
+	if _, hasPlain := dataMap["authToken"]; hasPlain {
+		t.Fatalf("config:set vazou authToken em plaintext: %+v", dataMap)
+	}
+	if _, hasDpapi := dataMap["authTokenDpapi"]; hasDpapi {
+		t.Fatalf("config:set vazou authTokenDpapi: %+v", dataMap)
+	}
+	if has, _ := dataMap["hasAuthToken"].(bool); !has {
+		t.Fatalf("esperado hasAuthToken=true em config:set: %+v", dataMap)
 	}
 	if dataMap["debugMode"] != true || dataMap["startMinimized"] != true {
 		t.Fatalf("data efetiva sem runtime flags: %+v", dataMap)
+	}
+
+	// debug:get também não expõe authToken e sinaliza hasAuthToken=true.
+	getResp := a.ipcRPCDebugGet()
+	if ok, _ := getResp["ok"].(bool); !ok {
+		t.Fatalf("debug:get falhou: %+v", getResp)
+	}
+	getData, _ := getResp["data"].(map[string]any)
+	rawGetCfg, _ := json.Marshal(getData["config"])
+	var getCfgMap map[string]any
+	if err := json.Unmarshal(rawGetCfg, &getCfgMap); err != nil {
+		t.Fatalf("unmarshal debug:get config: %v", err)
+	}
+	if val, hasPlain := getCfgMap["authToken"]; hasPlain && val != "" {
+		t.Fatalf("debug:get vazou authToken: %+v", getCfgMap)
+	}
+	if _, hasDpapi := getCfgMap["authTokenDpapi"]; hasDpapi {
+		t.Fatalf("debug:get vazou authTokenDpapi: %+v", getCfgMap)
+	}
+	if has, _ := getCfgMap["hasAuthToken"].(bool); !has {
+		t.Fatalf("esperado hasAuthToken=true em debug:get: %+v", getCfgMap)
 	}
 }
 

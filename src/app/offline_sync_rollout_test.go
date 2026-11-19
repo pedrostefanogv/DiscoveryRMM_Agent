@@ -19,13 +19,7 @@ import (
 func newOfflineSyncTestApp(t *testing.T, rollout agentconfig.AgentRolloutConfig) *App {
 	t.Helper()
 
-	db, err := database.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-	})
+	db := database.OpenForTest(t)
 
 	a := &App{
 		CoreAgent: coreagent.CoreAgent{DB: db},

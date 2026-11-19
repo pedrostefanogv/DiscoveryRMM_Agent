@@ -28,7 +28,7 @@ func (a *App) supportChatService() *supportchat.Service {
 			a.Logs.Append(line)
 		},
 		GetDebugConfig: func() supportchat.DebugConfig {
-			cfg := a.GetDebugConfig()
+			cfg := a.getDebugConfigInternal()
 			return supportchat.DebugConfig{
 				AgentID:   cfg.AgentID,
 				ApiScheme: cfg.ApiScheme,

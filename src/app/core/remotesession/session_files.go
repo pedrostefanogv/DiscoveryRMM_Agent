@@ -58,6 +58,7 @@ func NewSessionFiles(sessionID string, natsStream *NatsStreamHandler, rootPath s
 // Start subscreve .files.req e processa requisições.
 func (sf *SessionFiles) Start(ctx context.Context) error {
 	defer close(sf.doneCh)
+	defer func() { _ = sf.server.Close() }()
 
 	sub, err := sf.natsStream.SubscribeToFilesReq(sf.sessionID, func(reqData []byte) []byte {
 		return sf.handleRequest(reqData)
@@ -76,9 +77,12 @@ func (sf *SessionFiles) Start(ctx context.Context) error {
 	// Fica null/ausente quando a sessão tem rootPath em subpasta (sandbox
 	// restrito, sem troca de volume).
 	_ = sf.natsStream.PublishFilesReady(sf.sessionID, map[string]any{
-		"rootPath": sf.server.RootPath(),
-		"status":   "ready",
-		"drives":   sf.server.AllowedDrives(),
+		"rootPath":       sf.server.RootPath(),
+		"status":         "ready",
+		"drives":         sf.server.AllowedDrives(),
+		"supportsBinary": true,
+		"binaryFrames":   true,
+		"dataSubject":    true,
 	})
 
 	select {
@@ -97,6 +101,7 @@ func (sf *SessionFiles) Stop() {
 		close(sf.stopCh)
 	}
 	<-sf.doneCh
+	_ = sf.server.Close()
 }
 
 // maxBinaryFileHeaderBytes espelha o teto do codec do viewer (fileFrameCodec.ts).
@@ -122,20 +127,50 @@ func decodeBinaryFileRequest(reqData []byte) (fileserver.FileSessionRequest, []b
 	return req, reqData[6+headerLen:], true
 }
 
-func (sf *SessionFiles) handleRequest(reqData []byte) []byte {
-	// Frame binário 'DF' (upload de chunks 256 KB — evita base64 +33% e JUMBO
-	// frames): converte para o FileSessionRequest com Data preenchida e segue
-	// o MESMO caminho de validação/sandbox/auditoria do JSON legado.
-	if binReq, payload, ok := decodeBinaryFileRequest(reqData); ok {
-		binReq.Data = payload
-		if b, err := json.Marshal(binReq); err == nil {
-			reqData = b
-		}
+// encodeBinaryFileFrame empacota uma FileSessionResponse no formato binário 'DF'
+// compatível com fileFrameCodec.ts: [0..1]='D','F' · [2..5]=headerLen BE ·
+// [6..6+headerLen)=JSON sem `data` · resto=bytes crus do chunk.
+func encodeBinaryFileFrame(header fileserver.FileSessionResponse, data []byte) ([]byte, error) {
+	header.Data = nil
+	hdrBytes, err := json.Marshal(header)
+	if err != nil {
+		return nil, err
 	}
+	if len(hdrBytes) == 0 || len(hdrBytes) > maxBinaryFileHeaderBytes {
+		return nil, fmt.Errorf("header 'DF' fora do limite (%d bytes)", len(hdrBytes))
+	}
+	frame := make([]byte, 6+len(hdrBytes)+len(data))
+	frame[0] = 'D'
+	frame[1] = 'F'
+	binary.BigEndian.PutUint32(frame[2:6], uint32(len(hdrBytes)))
+	copy(frame[6:6+len(hdrBytes)], hdrBytes)
+	if len(data) > 0 {
+		copy(frame[6+len(hdrBytes):], data)
+	}
+	return frame, nil
+}
 
-	var req fileserver.FileSessionRequest
-	if err := json.Unmarshal(reqData, &req); err != nil {
-		return sf.errorResponse("", "payload json inválido: "+err.Error())
+func (sf *SessionFiles) handleRequest(reqData []byte) []byte {
+	var (
+		req  fileserver.FileSessionRequest
+		isDF bool
+	)
+
+	// Frame binário 'DF' (upload de chunks 256 KB ou download 'get' binário):
+	// evita re-serializar o payload em JSON+base64 passando diretamente a
+	// FileSessionRequest estruturada para fileserver.Server.HandleSessionRequest.
+	if len(reqData) >= 2 && reqData[0] == 'D' && reqData[1] == 'F' {
+		binReq, payload, ok := decodeBinaryFileRequest(reqData)
+		if !ok {
+			return sf.errorResponse("", "frame binário 'DF' inválido")
+		}
+		binReq.Data = payload
+		req = binReq
+		isDF = true
+	} else {
+		if err := json.Unmarshal(reqData, &req); err != nil {
+			return sf.errorResponse("", "payload json inválido: "+err.Error())
+		}
 	}
 
 	if req.Version != 1 {
@@ -155,23 +190,32 @@ func (sf *SessionFiles) handleRequest(reqData []byte) []byte {
 	defer sf.server.SetProgressCallback(nil)
 
 	start := time.Now()
-	result := sf.server.HandleRequest(reqData)
+	resp := sf.server.HandleSessionRequest(req)
 	elapsed := time.Since(start)
 
 	log.Printf("[session-files] req=%s path=%s elapsed=%v", req.Action, req.Path, elapsed)
 
-	// Propaga o requestId na resposta para o viewer correlacionar.
-	// O server.HandleRequest retorna FileSessionResponse v1 sem requestId
-	// (ele não conhece a requisição) — preenche aqui.
-	var resp fileserver.FileSessionResponse
-	if err := json.Unmarshal(result, &resp); err == nil && resp.RequestID == "" {
+	if resp.RequestID == "" {
 		resp.RequestID = req.RequestID
-		if data, err := json.Marshal(resp); err == nil {
-			return data
+	}
+
+	// Download binário 'DF': quando o viewer pediu binário (frame 'DF' ou flag
+	// `binary: true`), publica os bytes crus em .files.data sem base64 (+33%).
+	if req.Action == "get" && resp.Success && (isDF || req.Binary) {
+		if frame, err := encodeBinaryFileFrame(resp, resp.Data); err == nil {
+			if pubErr := sf.natsStream.PublishFilesData(sf.sessionID, frame); pubErr == nil {
+				return nil
+			} else {
+				log.Printf("[session-files] falha ao publicar .files.data (fallback JSON .files.resp): %v", pubErr)
+			}
 		}
 	}
 
-	return result
+	out, err := json.Marshal(resp)
+	if err != nil {
+		return sf.errorResponse(req.RequestID, "serializar resposta: "+err.Error())
+	}
+	return out
 }
 
 func (sf *SessionFiles) errorResponse(requestID, msg string) []byte {

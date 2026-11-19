@@ -2,9 +2,12 @@ package database
 
 import (
 	"database/sql"
+	"flag"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +18,8 @@ import (
 
 // DB encapsula a conexão SQLite e operações de cache
 type DB struct {
-	conn *sql.DB
+	conn   *sql.DB
+	dbPath string
 
 	// Manutenção do WAL: checkpoint TRUNCATE + optimize periódicos.
 	maintenanceMu   sync.Mutex
@@ -195,7 +199,7 @@ func Open(dataDir string) (*DB, error) {
 
 	conn.SetMaxOpenConns(1) // SQLite funciona melhor com single connection
 
-	db := &DB{conn: conn}
+	db := &DB{conn: conn, dbPath: dbPath}
 	if err := db.initialize(); err != nil {
 		conn.Close()
 		return nil, err
@@ -739,7 +743,55 @@ func (db *DB) stopMaintenance() {
 	}
 }
 
-// Close encerra a manutenção, faz checkpoint/optimize best-effort e fecha a
+// TestT é o subconjunto mínimo de testing.TB usado por OpenForTest para evitar
+// importar o pacote testing em binários de produção.
+type TestT interface {
+	Helper()
+	TempDir() string
+	Cleanup(func())
+	Fatalf(format string, args ...any)
+}
+
+// OpenForTest abre um banco em t.TempDir() e registra cleanup que fecha o DB e
+// aguarda a liberação de handles transitórios do Windows (Defender/DELETE_PENDING)
+// antes do TempDir RemoveAll do pacote testing.
+func OpenForTest(t TestT) *DB {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("database.Open(%s): %v", dir, err)
+	}
+	RegisterTestCleanup(t, db, dir)
+	return db
+}
+
+// RegisterTestCleanup fecha db e remove o conteúdo de dir com retry em caso de
+// bloqueio transitório de arquivos SQLite no Windows.
+func RegisterTestCleanup(t TestT, db *DB, dir string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+		if runtime.GOOS == "windows" && strings.TrimSpace(dir) != "" {
+			removeAllWithRetry(dir, 2*time.Second)
+		}
+	})
+}
+
+func removeAllWithRetry(dir string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for {
+		err := os.RemoveAll(dir)
+		if err == nil || os.IsNotExist(err) || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Close encerra a manutenção, faz optimize/checkpoint best-effort e fecha a
 // conexão. Idempotente.
 func (db *DB) Close() error {
 	if db == nil {
@@ -748,20 +800,55 @@ func (db *DB) Close() error {
 	var err error
 	db.closeOnce.Do(func() {
 		db.stopMaintenance()
+		if oerr := db.Optimize(); oerr != nil {
+			log.Printf("[database] optimize no shutdown: %v", oerr)
+		}
 		// Best-effort: no encerramento o WAL é movido para o .db, reduzindo o
 		// -wal residual quando o agente para de forma limpa.
+		busy := false
 		if res, cerr := db.Checkpoint(); cerr != nil {
 			log.Printf("[database] wal_checkpoint no shutdown: %v", cerr)
 		} else if res.Busy {
+			busy = true
 			log.Printf("[database] wal_checkpoint no shutdown incompleto (outro processo ativo): %d/%d páginas",
 				res.Checkpointed, res.LogFrames)
-		}
-		if oerr := db.Optimize(); oerr != nil {
-			log.Printf("[database] optimize no shutdown: %v", oerr)
 		}
 		if db.conn != nil {
 			err = db.conn.Close()
 		}
+		if runtime.GOOS == "windows" && !busy && db.dbPath != "" {
+			timeout := 150 * time.Millisecond
+			if flag.Lookup("test.v") != nil {
+				timeout = 2 * time.Second
+			}
+			waitForSQLiteSidecarsCleared(db.dbPath, timeout)
+		}
 	})
 	return err
+}
+
+func waitForSQLiteSidecarsCleared(dbPath string, timeout time.Duration) {
+	dir := filepath.Dir(dbPath)
+	base := filepath.Base(dbPath)
+	deadline := time.Now().Add(timeout)
+	for {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		found := false
+		for _, entry := range entries {
+			switch entry.Name() {
+			case base + "-wal", base + "-shm", base + "-journal":
+				found = true
+			}
+			if found {
+				break
+			}
+		}
+		if !found || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }

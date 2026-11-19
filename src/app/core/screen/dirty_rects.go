@@ -20,10 +20,12 @@ type DirtyRect struct {
 // DirtyDetector detecta regioes alteradas entre dois frames.
 // Usa hash de tiles para minimizar computacao.
 type DirtyDetector struct {
-	lastFrame  []byte
-	lastWidth  int
-	lastHeight int
-	tileSize   int // tamanho do tile (ex: 32px)
+	lastFrame      []byte
+	lastWidth      int
+	lastHeight     int
+	tileSize       int // tamanho do tile (ex: 32px)
+	changedScratch []bool
+	visitedScratch []bool
 }
 
 // NewDirtyDetector cria um detector de dirty rects.
@@ -59,23 +61,26 @@ func (d *DirtyDetector) Detect(frame *Frame) []DirtyRect {
 	cols := (frame.Width + d.tileSize - 1) / d.tileSize
 	rows := (frame.Height + d.tileSize - 1) / d.tileSize
 
-	// Grid booleana de tiles alterados
-	changed := make([][]bool, rows)
-	for y := range changed {
-		changed[y] = make([]bool, cols)
+	gridSize := rows * cols
+	if cap(d.changedScratch) < gridSize {
+		d.changedScratch = make([]bool, gridSize)
+	} else {
+		d.changedScratch = d.changedScratch[:gridSize]
+		clear(d.changedScratch)
 	}
 
 	// Compara tiles
 	for row := 0; row < rows; row++ {
+		rowBase := row * cols
 		for col := 0; col < cols; col++ {
 			if d.tileChanged(frame, col, row) {
-				changed[row][col] = true
+				d.changedScratch[rowBase+col] = true
 			}
 		}
 	}
 
 	// Mergela retangulos adjacentes (union-find simplificado)
-	rects := d.mergeTiles(changed, frame.Width, frame.Height, cols, rows)
+	rects := d.mergeTilesFlat(d.changedScratch, frame.Width, frame.Height, cols, rows)
 
 	// Atualiza referencia
 	copy(d.lastFrame, frame.Data)
@@ -114,21 +119,26 @@ func hasDifference(a, b []byte) bool {
 	return false
 }
 
-func (d *DirtyDetector) mergeTiles(changed [][]bool, width, height, cols, rows int) []DirtyRect {
-	if len(changed) == 0 {
+func (d *DirtyDetector) mergeTilesFlat(changed []bool, width, height, cols, rows int) []DirtyRect {
+	if len(changed) == 0 || cols <= 0 || rows <= 0 {
 		return nil
 	}
 
-	visited := make([][]bool, rows)
-	for i := range visited {
-		visited[i] = make([]bool, cols)
+	gridSize := rows * cols
+	if cap(d.visitedScratch) < gridSize {
+		d.visitedScratch = make([]bool, gridSize)
+	} else {
+		d.visitedScratch = d.visitedScratch[:gridSize]
+		clear(d.visitedScratch)
 	}
+	visited := d.visitedScratch
 
 	var rects []DirtyRect
 
 	for row := 0; row < rows; row++ {
+		rowBase := row * cols
 		for col := 0; col < cols; col++ {
-			if !changed[row][col] || visited[row][col] {
+			if !changed[rowBase+col] || visited[rowBase+col] {
 				continue
 			}
 
@@ -138,7 +148,7 @@ func (d *DirtyDetector) mergeTiles(changed [][]bool, width, height, cols, rows i
 
 			// Expande para direita
 			endCol := col
-			for endCol+1 < cols && changed[row][endCol+1] && !visited[row][endCol+1] {
+			for endCol+1 < cols && changed[rowBase+endCol+1] && !visited[rowBase+endCol+1] {
 				endCol++
 			}
 
@@ -146,8 +156,9 @@ func (d *DirtyDetector) mergeTiles(changed [][]bool, width, height, cols, rows i
 			endRow := row
 		expandDown:
 			for endRow+1 < rows {
+				nextBase := (endRow + 1) * cols
 				for c := col; c <= endCol; c++ {
-					if !changed[endRow+1][c] || visited[endRow+1][c] {
+					if !changed[nextBase+c] || visited[nextBase+c] {
 						break expandDown
 					}
 				}
@@ -156,8 +167,9 @@ func (d *DirtyDetector) mergeTiles(changed [][]bool, width, height, cols, rows i
 
 			// Marca como visitado
 			for r := row; r <= endRow; r++ {
+				rBase := r * cols
 				for c := col; c <= endCol; c++ {
-					visited[r][c] = true
+					visited[rBase+c] = true
 				}
 			}
 

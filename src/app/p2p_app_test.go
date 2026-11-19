@@ -36,6 +36,9 @@ func TestResolveP2PTempDir(t *testing.T) {
 
 func TestClearAllP2PArtifacts(t *testing.T) {
 	root := t.TempDir()
+	// Registrar envutil.Reset ANTES de t.Setenv (LIFO): garante que o cache seja
+	// limpo DEPOIS que t.Setenv restaurar HOME/PROGRAMDATA/WINDIR no teardown.
+	t.Cleanup(envutil.Reset)
 	t.Setenv("HOME", root)
 	t.Setenv("PROGRAMDATA", root)
 	t.Setenv("WINDIR", root)

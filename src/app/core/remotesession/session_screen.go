@@ -46,10 +46,11 @@ type SessionScreen struct {
 	// e o viewer precisa da tela inteira para redesenhar sem esperar mudanças.
 	forceKeyFrame atomic.Bool
 
-	// Capturer: GDI é o PRIMÁRIO (padrão MeshAgent — funciona em qualquer
-	// desktop, incluindo logon/UAC/lock, e em VMs sem GPU). DXGI é apenas
-	// FALLBACK one-way: se a captura GDI falhar repetidamente, troca para
-	// DXGI e NUNCA volta (sem troca automática bidirecional).
+	// Capturer: em desktop normal, DXGI Desktop Duplication é o PRIMÁRIO
+	// (captura por GPU, suporte a HDR e dirty rects). GDI é o fallback em VMs
+	// sem GPU/sessões onde DXGI falha e o primário exclusivo em desktops
+	// seguros (Winlogon/UAC/lock, onde DXGI é bloqueado pela sessão). Em
+	// desktop normal a troca GDI↔DXGI é bidirecional.
 	capturerMu        sync.Mutex
 	monitorIndex      int
 	drawCursor        bool
@@ -137,30 +138,34 @@ func NewSessionScreenMonitor(sessionID string, natsStream *NatsStreamHandler, mo
 		log.Printf("[remote-session-screen] %s\n", msg)
 	})
 
-	// Capturer primário: GDI (padrão MeshAgent). DXGI fica como fallback
-	// dinâmico — só entra se o GDI falhar repetidamente (ver loop de captura).
-	// ORDEM IMPORTA PARA TELA DE LOGON: no desktop seguro (Winlogon) só o GDI
-	// BitBlt entrega frames confiáveis (DXGI congela/preto — IsSecureDesktop).
-	// A criação do capturador GDI pode falhar ANTES do primeiro attach de
-	// desktop (GetDC do desktop errado no worker spawnado em winsta0\winlogon).
-	// Nesse caso, anexa o thread ao input desktop ativo (CheckDesktopSwitch) e
-	// RE-TENTA o GDI uma vez antes de recorrer ao DXGI — garante que sessões
-	// abertas na tela de logon nasçam no capturer correto.
-	capturer, err := screen.NewGDICapturerMonitor(monitorIndex)
-	usingDXGI := false
-	if err != nil {
-		if _, aerr := screen.CheckDesktopSwitch(); aerr == nil {
+	// Capturer: DXGI-first em desktop normal (!IsSecureDesktop) via
+	// NewCapturerMode(monitorIndex, !cursorSeparate) para hardware dirty-rects,
+	// HDR e menor uso de CPU; GDI em desktop seguro (Winlogon/UAC — onde DXGI
+	// congela/preto) e como fallback quando DXGI não está disponível.
+	_, _ = screen.CheckDesktopSwitch()
+	const defaultCursorSeparate = true
+	var capturer screen.Capturer
+	var err error
+	if !screen.IsSecureDesktop() {
+		capturer, err = screen.NewCapturerMode(monitorIndex, !defaultCursorSeparate)
+		if err != nil {
 			capturer, err = screen.NewGDICapturerMonitor(monitorIndex)
 		}
+	} else {
+		capturer, err = screen.NewGDICapturerMonitor(monitorIndex)
 		if err != nil {
-			// GDI indisponível mesmo com desktop anexado (raro): DXGI direto.
-			capturer, err = screen.NewCapturerMode(monitorIndex, false)
-			if err != nil {
-				return nil, fmt.Errorf("screen capture: %w", err)
+			if _, aerr := screen.CheckDesktopSwitch(); aerr == nil {
+				capturer, err = screen.NewGDICapturerMonitor(monitorIndex)
 			}
-			usingDXGI = true
+			if err != nil {
+				capturer, err = screen.NewCapturerMode(monitorIndex, !defaultCursorSeparate)
+			}
 		}
 	}
+	if err != nil {
+		return nil, fmt.Errorf("screen capture: %w", err)
+	}
+	usingDXGI := capturer.Name() == "dxgi"
 
 	// Log de geometria (diagnóstico DPI/multi-monitor): região capturada
 	// dentro do desktop virtual físico. Se captura ≠ desktop inteiro, o
@@ -319,13 +324,16 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			encStart := time.Now()
 			enc := s.getEncoder()
 			quality := s.quality.Current().EffectiveJpegQuality()
+			rawLen := int64(len(job.frame.Data))
 			var encoded []byte
 			if job.rects != nil {
 				// Modo tile: codifica apenas os rects alterados (economia de banda)
 				tiles, err := screen.EncodeDirtyRects(job.frame, job.rects, quality)
 				if err != nil {
 					log.Printf("[remote-session-screen] ERRO encode tiles: %v\n", err)
-					screen.PutPooledFrame(job.frame)
+					if job.pooled {
+						screen.PutPooledFrame(job.frame)
+					}
 					continue
 				}
 				encoded = tiles
@@ -334,7 +342,9 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				encoded, err = enc.Encode(job.frame, quality)
 				if err != nil {
 					log.Printf("[remote-session-screen] ERRO encode: %v\n", err)
-					screen.PutPooledFrame(job.frame)
+					if job.pooled {
+						screen.PutPooledFrame(job.frame)
+					}
 					continue
 				}
 			}
@@ -358,7 +368,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				seq:      job.seq,
 				width:    job.width,
 				height:   job.height,
-				rawBytes: int64(len(job.frame.Data)),
+				rawBytes: rawLen,
 				encodeMs: encMs,
 				capW:     job.capW,
 				capH:     job.capH,
@@ -588,6 +598,8 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			tonemapped := screen.ToneMapHDRToSDR(frame)
 			if !ownsFrame {
 				cap.ReleaseFrame()
+			} else {
+				screen.PutPooledFrame(frame)
 			}
 			frame = tonemapped
 			ownsFrame = true
@@ -611,6 +623,8 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			resized := screen.ResizeBGRA(frame, scaleFactor)
 			if !ownsFrame {
 				cap.ReleaseFrame()
+			} else {
+				screen.PutPooledFrame(frame)
 			}
 			frame = resized
 			ownsFrame = true
@@ -637,6 +651,8 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			// Idle: nada mudou
 			if !ownsFrame {
 				cap.ReleaseFrame()
+			} else {
+				screen.PutPooledFrame(frame)
 			}
 			totalIdle++
 			consecutiveIdle++
@@ -652,7 +668,9 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		// Precisamos copiar ANTES de enviar ao encode worker, pois o próximo
 		// AcquireNextFrame() sobrescreve c.img.Pix.
 		copyStart := time.Now()
-		jobPooled := false
+		// Both paths yield a pooled frame: ToneMapHDRToSDR/ResizeBGRA allocate
+		// from framePool (ownsFrame=true) and !ownsFrame copies into framePool.
+		jobPooled := true
 		if !ownsFrame {
 			// Pool de frames (otimização de churn de GC): o copy era um
 			// make([]byte, len) por frame (~8 MB @1080p a 30fps ≈ 250 MB/s).
@@ -665,7 +683,6 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			frameCopy.Width = frame.Width
 			frameCopy.Height = frame.Height
 			frameCopy.Stride = frame.Stride
-			jobPooled = true
 			cap.ReleaseFrame()
 			frame = frameCopy
 		}

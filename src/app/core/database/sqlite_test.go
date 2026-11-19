@@ -59,14 +59,9 @@ func TestInventorySoftwareChanged_DetectsInstallSourceChange(t *testing.T) {
 }
 
 func TestSavePSADTBootstrapStatus(t *testing.T) {
-	dir := t.TempDir()
-	db, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
+	db := OpenForTest(t)
 
-	err = db.SavePSADTBootstrapStatus(PSADTBootstrapEntry{
+	err := db.SavePSADTBootstrapStatus(PSADTBootstrapEntry{
 		RequiredVersion:  "4.1.8",
 		Installed:        true,
 		InstalledVersion: "4.1.8",
@@ -79,14 +74,9 @@ func TestSavePSADTBootstrapStatus(t *testing.T) {
 }
 
 func TestSaveAndListNotificationEvent(t *testing.T) {
-	dir := t.TempDir()
-	db, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
+	db := OpenForTest(t)
 
-	err = db.SaveNotificationEvent(NotificationEventEntry{
+	err := db.SaveNotificationEvent(NotificationEventEntry{
 		NotificationID: "notif-1",
 		Mode:           "notify_only",
 		Severity:       "medium",
@@ -113,15 +103,10 @@ func TestSaveAndListNotificationEvent(t *testing.T) {
 }
 
 func TestUpsertAndListAutomationDeferState(t *testing.T) {
-	dir := t.TempDir()
-	db, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
+	db := OpenForTest(t)
 
 	now := time.Now().UTC()
-	err = db.UpsertAutomationDeferState(AutomationDeferStateEntry{
+	err := db.UpsertAutomationDeferState(AutomationDeferStateEntry{
 		AgentID:        "agent-1",
 		TaskID:         "task-1",
 		ExecutionID:    "exec-1",
@@ -157,14 +142,9 @@ func TestUpsertAndListAutomationDeferState(t *testing.T) {
 }
 
 func TestEnqueueAction(t *testing.T) {
-	dir := t.TempDir()
-	db, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
+	db := OpenForTest(t)
 
-	err = db.EnqueueAction(ActionQueueEntry{
+	err := db.EnqueueAction(ActionQueueEntry{
 		ActionID:    "action-1",
 		UserSID:     "S-1-5-21-123",
 		UserName:    "DESKTOP\\pedro",
@@ -210,14 +190,9 @@ func TestEnqueueAction(t *testing.T) {
 }
 
 func TestClaimAndCompleteAction(t *testing.T) {
-	dir := t.TempDir()
-	db, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
+	db := OpenForTest(t)
 
-	err = db.EnqueueAction(ActionQueueEntry{
+	err := db.EnqueueAction(ActionQueueEntry{
 		ActionID:    "action-2",
 		UserSID:     "S-1-5-21-456",
 		UserName:    "DESKTOP\\maria",

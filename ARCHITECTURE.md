@@ -1,225 +1,160 @@
 # Discovery Agent — Arquitetura e Índice de Código
 
-> **Propósito deste documento:** Guia de referência rápida para desenvolvedores e agentes de IA. Descreve a estrutura do projeto, responsabilidades de cada arquivo e como os componentes se relacionam.
+> **Propósito deste documento:** Guia de referência rápida para desenvolvedores e agentes de IA. Descreve a estrutura real do projeto, responsabilidades de cada módulo e como os componentes se relacionam.
 
 ---
 
 ## 1. Visão Geral
 
-O **Discovery Agent** é um aplicativo de inventário e gerenciamento de TI para Windows. Ele combina:
+O **Discovery Agent** é um agente de inventário, automação, acesso remoto e gerenciamento de TI para Windows. Ele combina:
 
-- **UI Desktop** via [Wails v3](https://wails.io/) (frontend HTML/JS + backend Go)
-- **Ferramentas MCP internas** para integração com o chat de IA embarcado no próprio agent
-- **Rede P2P** para distribuição de artefatos (instaladores, políticas) entre agentes na mesma rede local
-- **Automação** de tarefas via políticas baixadas do servidor central
+- **Arquitetura Dual-Binary (`discovery-service.exe` + `discovery-agent.exe`)**:
+  - Serviço Windows `SYSTEM` headless (`cmd/discovery-service` → `discovery-service.exe`), **sem Wails e sem WebView2**, responsável por toda a operação de core (NATS JetStream / `agentconn`, inventário, automação, P2P, self-update, remote session workers e servidor IPC).
+  - UI Companion Desktop (`src/main.go` → `discovery-agent.exe`) via [Wails v3](https://wails.io/) (`v3.1.0` em [src/go.mod](src/go.mod)), rodando na sessão do usuário e comunicando-se com o serviço via **Dual-Pipe IPC** (named pipes separados de leitura e gravação/admin).
+- **Acesso Remoto Completo**: tela remota (DXGI/GDI), terminal remoto (ConPTY com `RUN_AS`), transferência de arquivos binária (`fileserver`), administração de processos/serviços (`sysctrl`), Proxy LAN HTTP/WS (`netproxy` com allowlist fail-closed e proteção SSRF) e túnel RDP multiplexado sobre NATS (`session_tunnel` + `--rdp-tunnel`).
+- **Segurança Local Endurecida**: `authToken` protegido com DPAPI do Windows (`dpapi:v1:`), `config.json` e `debug_config.json` restritos a `SYSTEM`/`Administrators`, redação de segredos no IPC para a UI, `debug_http` autenticado por token e descomissionamento validado.
+- **Ferramentas MCP internas** para integração com o chat de IA embarcado e **Rede P2P** (`go-libp2p` sem WebRTC/pion, mDNS/UDP) para distribuição local de artefatos.
 
-> **Observação de verificação:** a validação ativa do workspace usa o fluxo de build do Wails e não `go build` direto, porque o frontend é processado via `//go:embed` e o CLI do Wails. A referência do código atual está alinhada com a versão `v3.1.0` declarada em [src/go.mod](src/go.mod).
+> **Regra de Build:** a validação e compilação oficiais usam **Wails CLI v3** (`cd src && wails3 build` — ver [AGENTS.md](AGENTS.md)), nunca `go build` direto para o binário de UI, pois o frontend e os bindings JS são processados e embedados pelo Wails v3. A referência atual está alinhada com `v3.1.0` em [src/go.mod](src/go.mod).
 
-### Modos de Execução
+### Modos de Execução e Binários
 
-| Modo          | Trigger | Descrição                                   |
-| ------------- | ------- | ------------------------------------------- |
-| GUI (Wails)   | padrão  | Janela desktop com system tray              |
-| MCP (interno) | n/a     | Tool calling interno do chat de IA do agent |
+| Binário / Modo | Entrypoint / Trigger | Descrição |
+| --- | --- | --- |
+| `discovery-service.exe` | `cmd/discovery-service/main.go` | Serviço Windows `SYSTEM` (headless): `RunServiceMode` → `RunCore`, NATS/JetStream, inventário, automação, P2P, self-update, workers (`--remote-session-worker`, `--terminal-dispatcher`) e IPC named pipes (`--rdp-tunnel` para forwarding local). Zero dependências Wails/WebView2. |
+| `discovery-agent.exe` | `main.go` (build tag `wailsui`) | UI Companion Wails v3 na sessão interativa com system tray, notificações nativas, chat IA, suporte e ponte IPC para o serviço. |
+| MCP (interno) | Registry `core/mcp` | Tool calling interno do chat de IA do agent (`AppBridge`). |
 
-### Componentes de Core e Binários
+### Componentes Principais
 
 | Componente | Caminho | Papel |
-| ---------- | ------- | ----- |
-| Serviço Windows | `cmd/discovery-service` → `discovery-service.exe` | Core do agente rodando como SYSTEM (NATS/agentconn, inventário, automação, P2P, self-update, IPC named pipes) — **sem UI, sem Wails, sem WebView2** |
-| UI Companion | `discovery-agent.exe` (Wails v3) | Janela/tray na sessão interativa; conversa com o serviço via IPC (modo companion) |
-| Proxy LAN | `app/core/netproxy` | Proxy HTTP/WS para destinos da rede interna do endpoint, com allowlist fail-closed, proteção SSRF e DNS único anti-TOCTOU |
-| Sessão remota | `app/core/remotesession` | Área de trabalho remota, terminal (ConPTY), arquivos, túnel RDP multiplexado sobre NATS (`session_tunnel`) e preflight RDP (`rdp_preflight`) |
-| Identidade/Segurança | `app/core/platform` | DPAPI para authToken, ACLs endurecidas (SYSTEM/Admins), verificação Authenticode |
+| --- | --- | --- |
+| Serviço Windows | `src/cmd/discovery-service` | Core do agente rodando como `SYSTEM` — **sem UI, sem Wails, sem WebView2** |
+| UI Companion | `src/main.go` + `src/app/app_ui_wails.go` | Aplicação Wails v3 (`-tags wailsui`), janela principal preguiçosa, tray e overlay de captura |
+| Core Hub (`package app`) | `src/app/app*.go` + `src/app/coreagent/` | `App` struct decomposto (`app.go`, `app_new.go`, `app_lifecycle.go`, `app_window_ui.go`, `app_connectivity.go`, `app_inventory_sync.go`, `app_power_idle.go`) + `CoreAgent` embed |
+| Proxy LAN | `src/app/core/netproxy` | Proxy HTTP/WS para destinos da rede interna do endpoint, com allowlist fail-closed, proteção SSRF e resolução DNS anti-TOCTOU |
+| Sessão Remota | `src/app/core/remotesession` | Orquestração de tela, terminal, arquivos, processos/serviços, túnel TCP/RDP multiplexado sobre NATS (`session_tunnel*`) e preflight RDP (`rdp_preflight*`) |
+| Captura / Terminal / Arquivos | `src/app/core/screen`, `core/terminal`, `core/fileserver`, `core/sysctrl` | Captura DXGI/GDI, ConPTY (`RUN_AS`), servidor de arquivos com protocolo binário `'DF'`, gerenciamento de processos/serviços Windows com guard fail-closed |
+| Identidade e Segurança | `src/app/core/platform` | DPAPI para `authToken`, ACLs endurecidas (`SYSTEM`/`Administrators`), elevação e verificação Authenticode |
+| Testes E2E e Contrato | `src/e2e/` | Suíte Tiers 1–2 validando limites de arquitetura, desacoplamento `discovery-service`, `gofmt`/`go vet`, CLI flags e contratos de documentação |
 
 ---
 
 ## 2. Estrutura de Diretórios
 
-> **Nota sobre o diretório `app/`:** a modularização está em andamento. Os domínios **debug**, **inventory**, **support** e **updates** já foram extraídos para subpacotes Go reais (`app/debug`, `app/inventory`, `app/support`, `app/updates`). O `package app` principal retém o hub central (`App` struct), os arquivos de bridge/delegate e os domínios P2P e automação que ainda possuem acoplamento direto ao estado central. A extração continua incrementalmente, preservando a API pública via bridges compatíveis.
-
 ```
-discovery/
-├── app/                        # Pacote principal da aplicação (package app)
-│   ├── appstore/               # Subpacote real: tipos e cache da app store
-│   │   └── types.go            # Item, Response, EffectivePolicy, PolicyCache
-│   ├── automation/             # Subpacote real: tipos da automação para UI
-│   │   └── types.go            # StateView, TaskView, ExecutionView
-│   ├── debug/                  # Subpacote real: domínio de conexão/debug extraído
-│   │   ├── config.go           # Config (DebugConfig): credenciais, TLS, NATS, flags
-│   │   ├── service.go          # Service: bootstrap de token/agentID, persistência, conectividade
-│   │   └── installer.go        # installerConfigPathCandidates + parser InstallerConfig
-│   ├── inventory/              # Subpacote real: domínio de inventário extraído
-│   │   ├── service.go          # Service: coleta, cache, installs, osquery, notificações
-│   │   └── sync.go             # Payloads de inventário para o servidor (agentHardwareEnvelope etc.)
-│   ├── netutil/                # Subpacote real: utilitários HTTP compartilhados
-│   │   └── headers.go          # SetAgentAuthHeaders — headers de autenticação usados pelas APIs
-│   ├── p2pmeta/                # Subpacote real: tipos e contratos leves do domínio P2P
-│   │   └── types.go            # Config, views, telemetry, onboarding, seed-plan e cache leve
-│   ├── support/                # Subpacote real: domínio de suporte/tickets extraído
-│   │   ├── service.go          # Service: criação de tickets, prioridade, serialização para API
-│   │   └── knowledge.go        # Knowledge base: fetch e cache de artigos de suporte
-│   ├── supportmeta/            # Subpacote real: DTOs e cache leve de chat/suporte/tickets
-│   │   └── types.go            # AgentInfo, workflow/tickets, knowledge base e cache leve
-│   ├── updates/                # Subpacote real: domínio de atualizações extraído
-│   │   ├── service.go          # Service: GetPendingUpdates, integração winget
-│   │   └── export.go           # Exporter: exportação de relatório de updates (Markdown/PDF)
-│   ├── Core
-│   │   ├── app.go              # App struct — hub central, lifecycle, NewApp()
-│   │   ├── types.go            # Tipos compartilhados e aliases compatíveis do pacote app
-│   │   ├── bridge.go           # AppBridge — expõe métodos App ao MCP registry
-│   │   ├── logging.go          # logBuffer — ring buffer em memória + arquivo
-│   │   └── memory.go           # CRUD de notas locais
-│   ├── Bridges (delegates para subpacotes)
-│   │   ├── debug_bridge.go     # GetDebugConfig/SetDebugConfig — delega a debug.Service
-│   │   ├── inventory_bridge.go # GetCatalog — delega a inventory.Service
-│   │   ├── inventory_export.go # getInventoryForExport — helper de export de inventário
-│   │   ├── logs_bridge.go      # GetLogs/ClearLogs — delega ao logBuffer
-│   │   ├── p2p_bridge.go       # applyP2PConfig — aplicação de config P2P ao coordinator
-│   │   ├── support_bridge.go   # GetAgentInfo e demais métodos — delega a support.Service
-│   │   ├── updates_bridge.go   # GetPendingUpdates — delega a updates.Service
-│   │   └── updates_helpers.go  # parseUpgradeOutput — wrapper sobre updates.ParseUpgradeOutput
-│   ├── Configuração e Conexão
-│   │   ├── agent_config.go     # AgentConfiguration: struct e loader (parse do JSON do servidor)
-│   │   ├── agent_config_helpers.go # Helpers de acesso a AgentConfiguration (GetAgentConfiguration etc.)
-│   │   ├── installer.go        # installerConfigPathCandidates — caminhos candidatos do config
-│   │   └── sync.go             # syncCoordinator — sync de políticas/resources do servidor
-│   ├── Inventário e App Store
-│   │   ├── store.go            # App store catalog + cache (ETag + SQLite)
-│   │   ├── printers.go         # Gerenciamento de impressoras
-│   │   └── export_redact.go    # getRedact() — flag de redação de PII para exports
-│   ├── Automação
-│   │   ├── automation.go       # Bridge entre core/automation.Service e frontend
-│   │   └── automation_p2p.go   # automationPackageManagerRouter: P2P vs HTTP vs winget
-│   ├── Notificações e Comandos
-│   │   ├── notification_center.go   # NotificationDispatchRequest, DispatchNotification, loop de resposta
-│   │   ├── command_result_outbox.go # Outbox pattern para resultados de comandos (SHA-256, retry)
-│   │   └── consolidation/           # ConsolidationEngine: janela realtime/1min/5min para eventos
-│   ├── Debug e Diagnóstico
-│   │   ├── remote_debug.go     # remoteDebugManager: debug remoto com streaming de logs
-│   │   └── psadt_debug_bridge.go # Bootstrap e diagnóstico do PSADT
-│   ├── P2P (app/p2p/ — núcleo do domínio)
-│   │   ├── p2p.go              # Coordinator — núcleo: discovery, lifecycle, estado
-│   │   ├── api.go              # Helpers de API: seed plan + telemetry (erros, retry, query)
-│   │   ├── onboarding.go       # Zero-touch: assinatura HMAC, ofertas, parse de credenciais
-│   │   ├── telemetry.go        # Outbox de telemetria: backoff, marshalling, limites
-│   │   ├── config.go           # Configuração P2P (normalização, defaults, seed plan)
-│   │   ├── helpers.go          # Helpers: SHA256, listen range, assinatura de replicação
-│   │   ├── p2p_chunks.go       # p2pChunkScheduler: swarm/chunks, bandwidth cap
-│   │   ├── p2p_cleanup.go      # Limpeza de artefatos expirados e arquivos temporários
-│   │   ├── p2p_cloud_bootstrap.go # Bootstrap via servidor externo (cloud seed)
-│   │   ├── p2p_discovery.go    # p2pDiscoveryProvider interface + mDNS e UDP broadcast
-│   │   ├── p2p_download.go     # Download de artefatos (single peer e helpers)
-│   │   ├── p2p_gossip.go       # Gossip pull: sincronização do índice de peers via libp2p
-│   │   ├── p2p_http.go         # TransferServer: servidor HTTP local P2P
-│   │   ├── p2p_libp2p.go       # p2pLibP2PProvider + p2pMultiProvider (DHT, bootstrap)
-│   │   ├── p2p_libp2p_transport.go # Transport layer libp2p (stream handling)
-│   │   ├── p2p_onboarding_http.go # HTTP handler de onboarding (GET/PUT /p2p/config/onboard)
-│   │   ├── p2p_peer_cache.go   # Cache persistente de peers conhecidos (até 128 entradas)
-│   │   ├── p2p_publish.go      # ListArtifacts e publicação de artefatos
-│   │   ├── p2p_replication.go  # Workers de replicação: push de artefatos entre peers
-│   │   ├── p2p_status.go       # Views de status P2P para UI
-│   │   └── p2p_transfer_progress.go # Progresso de transferência (upload/download)
-│   └── UI e Suporte
-│       ├── chat.go             # Chat AI: config, histórico, streaming, integração MCP
-│       ├── status.go           # GetStatusOverview — snapshot de saúde para UI
-│       ├── tray.go             # System tray: ícone, menu, heartbeat watchdog
-│       ├── ui_runtime.go       # Heartbeat/suspensão do runtime da UI para o watchdog
-│       ├── ui_runtime_windows.go # Probe Win32 (EnumWindows/IsHungAppWindow) para validar a janela principal
-│       └── ui_runtime_other.go # Fallback cross-platform sem probe nativo
-│
-├── core/                       # Pacotes internos (lógica sem dependência do App)
-│   ├── agentconn/              # Conexão NATS/WebSocket com servidor central
-│   │   └── runtime.go          # Runtime de conexão: config, reconexão, callbacks de ping e comandos
-│   ├── ai/                     # Serviço de chat AI (LLM OpenAI-compatible)
-│   │   ├── chat.go             # Service: SendMessage, StreamMessage, tool calling
-│   │   └── formatting_test.go  # Testes de formatação de mensagens
-│   ├── automation/             # Motor de automação (políticas, scripts, cron)
-│   │   ├── service.go          # Service: sync de políticas, execução, callbacks
-│   │   ├── executor.go         # Executa scripts PowerShell/Batch com timeout
-│   │   ├── client.go           # HTTP client para API de automação
-│   │   └── types.go            # Tipos: Task, Script, ExecutionRecord, State, PSADTPolicy
-│   ├── buildinfo/              # Informações de build
-│   │   └── version.go          # Version: variável de versão para uso em módulos internos
-│   ├── ctxutil/                # Utilitários de contexto
-│   │   └── timeout.go          # Timeout helpers
-│   ├── data/                   # HTTP client com cache ETag + SQLite
-│   │   └── http_client.go      # HTTPClient: GET com cache, retry, timeout
-│   ├── database/               # Persistência SQLite
-│   │   └── sqlite.go           # DB: CacheGet/SetJSON (KV+TTL), MemoryNotes CRUD
-│   ├── export/                 # Exportação de inventário
-│   │   ├── markdown.go         # Renderer Markdown via templates
-│   │   ├── pdf.go              # Renderer PDF via fpdf
-│   │   └── redaction.go        # Redação de PII (senhas, tokens, MACs, seriais)
-│   ├── inventory/              # Coleta de inventário do sistema
-│   │   ├── provider.go         # Orquestra osquery (preferred) + PowerShell (fallback)
-│   │   ├── osquery.go          # Subprocess-based query runner (fallback) + cache do binário
-│   │   ├── osquery_client.go   # osquery-go Thrift client: socket osqueryd / osqueryi socket mode
-│   │   ├── powershell.go       # Queries WMI/CIM via PowerShell (fallback Windows)
-│   │   ├── helpers.go          # Utilitários internos de parsing
-│   │   └── mappers.go          # Mapeia raw query results → models.InventoryReport
-│   ├── mcp/                    # MCP (Model Context Protocol) server e registry
-│   │   ├── server.go           # JSON-RPC 2.0 server (stdio)
-│   │   ├── tools.go            # Registry, Tool, Handler abstractions
-│   │   ├── register.go         # RegisterDiscoveryTools + interface AppBridge
-│   │   └── ping.go             # Ferramenta MCP de ping/diagnóstico
-│   ├── models/                 # Tipos de dados compartilhados
-│   │   └── (inventory.go, etc) # InventoryReport, HardwareInfo, SoftwareItem, UpgradeItem, etc.
-│   ├── printer/                # Gerenciamento de impressoras
-│   │   └── manager.go          # List, install, remove impressoras
-│   ├── processutil/            # Utilitários de processo
-│   │   └── (util.go)           # Run command, capture output, etc.
-│   ├── selfupdate/             # Auto-atualização do agente
-│   │   └── updater.go          # Updater: download + verificação SHA-256 + substituição binária
-│   ├── services/               # Serviços de alto nível (wrappers)
-│   │   ├── apps_service.go     # AppsService: install/uninstall/upgrade via winget
-│   │   ├── catalog_service.go  # CatalogService: fetch + cache do app store
-│   │   ├── inventory_service.go# InventoryService: coleta com timeout e progress
-│   │   └── printer_service.go  # PrinterService: wrapper do printer.Manager
-│   ├── remotedebug/            # Debug remoto (streaming de logs)
-│   │   └── service.go          # Sessões de debug remoto com streaming
-│   └── winget/                 # Cliente winget (Windows Package Manager)
-│       └── client.go           # Run winget commands, parse tabular output
-│
-├── frontend/                   # Frontend Web (HTML + vanilla JS)
-│   ├── index.html              # Shell principal da aplicação
-│   ├── app.js                  # Bootstrapper + catalog/packages view
-│   ├── styles.css              # Estilos globais
-│   ├── js/                     # Módulos JavaScript por funcionalidade
-│   │   ├── app-init.js         # Event bindings iniciais
-│   │   ├── app-status.js       # Painel de status de conexão
-│   │   ├── app-inventory.js    # Visualização de inventário
-│   │   ├── app-p2p.js          # Painel P2P
-│   │   ├── app-chat.js         # Interface de chat AI
-│   │   ├── app-automation.js   # Painel de automação
-│   │   ├── app-store-updates.js# Updates pendentes
-│   │   ├── app-support.js      # Tickets de suporte
-│   │   ├── app-knowledge.js    # Knowledge base
-│   │   ├── app-debug.js        # Painel de debug de conexão
-│   │   ├── app-utils.js        # Utilitários compartilhados
-│   │   └── app-window.js       # Chrome da janela (min/max/close)
-│   ├── partials/               # Fragmentos HTML (shell, sidebar, views)
-│   └── wailsjs/                # Bindings JS gerados pelo Wails (não editar)
-│       ├── go/app/App.js       # Métodos Go expostos ao JS (gerado; namespace window.go.app.App)
-│       └── runtime/            # Runtime Wails (window, events, etc.)
-│
-├── build/                      # Artefatos de build
-│   └── windows/                # Manifesto Windows, ícone, installer NSIS
-│
-├── DOCs/                       # Documentação técnica detalhada
-│   ├── P2P_SERVER_API_IMPLEMENTATION.md
-│   ├── p2p-api-contract.md
-│   ├── WATCHDOG_SYSTEM.md
-│   ├── WATCHDOG_SYSTEM.md
-│   ├── INSTALADOR_PAYLOAD_E_PARAMETROS.md
-│   └── ANALISE_DEPENDENCIAS.md
-│
-├── main.go                     # Entry point: inicia GUI Wails
-├── tray_embed.go               # Embed do ícone ICO (deve ficar na raiz por go:embed)
-├── startup_debug_keys_windows.go # Detecta Shift/Ctrl na inicialização (Windows)
-├── startup_debug_keys_other.go   # Stub para outras plataformas
-├── go.mod                      # Dependências Go
-├── build/config.yml            # Config do Wails v3 (build, nome, versão, ícones)
+Discovery/
+├── .github/workflows/          # CI: pr-checks.yml e release-agent-on-tag.yml
+├── build/scripts/              # Scripts PowerShell de build e empacotamento NSIS
+├── src/                        # Módulo Go principal (go.mod: module discovery)
+│   ├── main.go                 # Entry point UI (Wails v3, -tags wailsui)
+│   ├── tray_embed.go           # //go:embed dos ícones do system tray
+│   ├── startup_debug_keys_*.go # Detecta Shift/Ctrl no startup para DebugMode
+│   ├── Taskfile.yml            # Tarefas Wails v3 (generate bindings, build, package)
+│   ├── go.mod                  # Dependências Go (wails/v3 v3.1.0 + replace third_party/go-libp2p)
+│   ├── cmd/
+│   │   ├── discovery-service/  # Entry point headless do serviço Windows SYSTEM (0 deps Wails)
+│   │   └── *probe / webview-sim/ # Ferramentas auxiliares de diagnóstico e simulação
+│   ├── app/                    # Pacote principal (package app) + subpacotes de domínio
+│   │   ├── app.go              # Constantes, GetDataDir, WebView2UserDataPath, App struct, Ctx
+│   │   ├── app_new.go          # NewApp() e helpers de wiring (initCoreServices, initAutomationWiring, ...)
+│   │   ├── app_lifecycle.go    # RunCore, ServiceShutdown, startup, runCoreStartup, runStagedStartup, shutdown
+│   │   ├── app_window_ui.go    # SetApplication, SetMainWindow, Show/Hide/Minimise, QuitApp, EmitEvent
+│   │   ├── app_connectivity.go # Heartbeat metrics, NATS connected/connectivity callbacks, SendTestHeartbeat
+│   │   ├── app_inventory_sync.go # runPeriodicInventorySync, onPostBootstrapProvisioned, throttle, osquery check
+│   │   ├── app_power_idle.go   # deferredRestartState, beginActivity, idle release memory
+│   │   ├── app_ui_wails.go     # Adapters Wails v3 (//go:build wailsui)
+│   │   ├── ui_contracts.go     # Interfaces puras Go (uiApp, uiWindow, uiSystemTray, uiNotifications)
+│   │   ├── remote_services.go  # Adapters de serviços remotos Wails v3 (//go:build wailsui)
+│   │   ├── ipc_*.go            # Dual-Pipe IPC (canal leitura + canal admin), auth e companion RPC
+│   │   ├── coreagent/          # CoreAgent struct embutido em App e tipos desacoplados
+│   │   ├── agentcommands/      # Handlers modulares de comandos do agente
+│   │   ├── agentconfig/        # AgentConfiguration, defaults de PSADT/rollout e fetch
+│   │   ├── apiclient/          # Cliente HTTP autenticado para a API RMM
+│   │   ├── apimetrics/         # Telemetria de latência e erro por endpoint
+│   │   ├── appstore/           # Tipos, cache e loader de políticas da App Store
+│   │   ├── automation/         # Tipos de visão da automação para UI
+│   │   ├── consolidation/      # Consolidação de eventos (realtime / 1min / 5min)
+│   │   ├── customfields/       # Coleta e envio de custom fields
+│   │   ├── debug/              # Config (DPAPI), bootstrap de credenciais, persistência e ACL
+│   │   ├── debughttp/          # Servidor debug_http autenticado por token e broker SSE do chat
+│   │   ├── decommission/       # Validação de caminho/assinatura e execução de descomissionamento
+│   │   ├── installer/          # Descoberta e normalização de InstallerConfig
+│   │   ├── inventory/          # Service de inventário, Windows Update cache e sync payloads
+│   │   ├── logs/               # Ring buffer thread-safe, sanitização de tokens e persistência
+│   │   ├── netutil/            # Headers X-Agent-ID / Bearer e sanitização de erros HTTP
+│   │   ├── p2p/                # Coordinator P2P, chunk scheduler, gossip, mDNS/UDP/libp2p, onboarding
+│   │   ├── p2pmeta/            # DTOs e cache leve do domínio P2P
+│   │   ├── services/           # chat, hardwareid (TPM EK + SMBIOS), locale, memory, notifications, psadt
+│   │   ├── status/             # Formatação de servidor/transporte e fallback de Overview
+│   │   ├── support/            # Service de chamados e knowledge base
+│   │   ├── supportchat/        # Chat de suporte em tempo real vinculado ao chamado
+│   │   ├── supportmeta/        # DTOs e cache de suporte/chat
+│   │   ├── sync/               # Coordenador de sincronização periódica e manifest
+│   │   ├── syncmeta/           # Metadados de sincronização
+│   │   ├── uiruntime/          # Probe nativo de responsividade da janela
+│   │   ├── updates/            # Upgrades pendentes (winget) e exportador (Markdown/PDF)
+│   │   └── core/               # Pacotes internos leaf (proibido importar discovery/app ou Wails)
+│   │       ├── agentconn/      # Conexão NATS/WSS, JetStream, reconexão, heartbeat e dispatch
+│   │       ├── ai/             # Cliente LLM OpenAI-compatible + tool calling MCP
+│   │       ├── automation/     # Motor de automação, cron, executor e variáveis de ambiente seguras
+│   │       ├── buildinfo/      # Version / CommitForReport via ldflags e VCS stamping
+│   │       ├── chocolatey/     # Cliente Chocolatey
+│   │       ├── consent/        # Políticas e modelo de consentimento remoto
+│   │       ├── ctxutil/        # Helpers de contexto
+│   │       ├── data/           # HTTPClient com cache ETag/SQLite
+│   │       ├── database/       # Persistência SQLite (modernc.org/sqlite, WAL, outboxes, cache, memórias)
+│   │       ├── dto/            # DTOs compartilhados do core
+│   │       ├── envutil/        # Helpers de variáveis de ambiente
+│   │       ├── errutil/        # Utilitários de erro
+│   │       ├── export/         # Renderers Markdown/PDF e redação de PII
+│   │       ├── fileserver/     # Servidor de arquivos remoto com handle cache e framing binário 'DF'
+│   │       ├── inventory/      # Coletor nativo Windows + osquery Thrift + PowerShell fallback
+│   │       ├── logger/         # Logging estruturado do core
+│   │       ├── logstore/       # Banco unificado de logs (logs.db)
+│   │       ├── maintenance/    # Cálculo de janelas de manutenção (IANA)
+│   │       ├── mcp/            # Registry MCP e AppBridge
+│   │       ├── memlimit/       # Relaxamento controlado de memória do runtime Go
+│   │       ├── models/         # Modelos compartilhados (InventoryReport, UpgradeItem, etc.)
+│   │       ├── netproxy/       # Proxy LAN HTTP/WS + allowlist SSRF-safe + anti-TOCTOU
+│   │       ├── nettable/       # Tabela de conexões de rede
+│   │       ├── notifyui/       # Contratos de notificação da UI
+│   │       ├── platform/       # DPAPI, ACLs SYSTEM/Admins, paths ProgramData, Authenticode
+│   │       ├── printer/        # Gerenciamento de impressoras
+│   │       ├── processutil/    # Execução de processos, Job Objects, eficiência, tokens de sessão
+│   │       ├── remotedebug/    # Sessões de debug remoto sobre NATS
+│   │       ├── remotesession/  # Gerenciador de acesso remoto, workers, tunnel TCP/RDP e preflight
+│   │       ├── runtimediag/    # Diagnóstico periódico de heap/GC/goroutines
+│   │       ├── safego/         # Lançamento de goroutines com recovery de panic e stack trace
+│   │       ├── screen/         # Captura de tela DXGI Desktop Duplication / GDI
+│   │       ├── screenshot/     # Captura assistida do chat IA, política e rate limiter
+│   │       ├── selfupdate/     # Auto-atualização via P2P/HTTP com verificação SHA-256
+│   │       ├── services/       # Wrappers de domínio (CatalogService, AppsService, InventoryService, PrinterService)
+│   │       ├── sessioncontrol/ # Codec único e allowlist fechada de frames de controle (512B max)
+│   │       ├── sessionlive/    # Estado de sessão remota ativa
+│   │       ├── sysctrl/        # Processos/serviços Windows com guard fail-closed para DCs e serviços críticos
+│   │       ├── terminal/       # Pseudo-console ConPTY e controle de execução SYSTEM vs usuário
+│   │       ├── thirdparty/     # Provedores de patches de terceiros (choco/winget)
+│   │       ├── tlsutil/        # Cliente HTTP e pinagem/validação TLS
+│   │       ├── windowsupdate/  # Cliente WUA (COM) para inventário de patches Windows
+│   │       ├── winget/         # Cliente Winget
+│   │       └── winui/          # Helpers Win32 nativos
+│   ├── frontend/               # Frontend Web (HTML + vanilla JS + módulos ES)
+│   │   ├── index.html          # Shell principal da aplicação
+│   │   ├── app.js              # Bootstrapper da interface
+│   │   ├── wails-bridge.js     # Bridge Wails v3: importa ./bindings/discovery/app/app.js e /wails/runtime.js
+│   │   ├── bindings/           # Bindings JS gerados por `wails3 generate bindings` (não editar)
+│   │   │   └── discovery/app/app.js
+│   │   ├── js/                 # Módulos JavaScript por funcionalidade
+│   │   ├── partials/           # Fragmentos HTML (shell, sidebar, views)
+│   │   └── styles/             # Folhas de estilo modulares
+│   ├── e2e/                    # Testes E2E Tiers 1–2 (boundaries, F14 decoupling, F18 CLI/go.mod)
+│   ├── build/                  # Configuração Wails v3 (config.yml, windows/project.nsi, Taskfile.yml)
+│   └── third_party/go-libp2p/  # Fork local de go-libp2p sem transporte WebRTC (pion/webrtc removido)
+├── AGENTS.md                   # Regras obrigatórias de build Wails v3
+├── BRANCHING.md                # Fluxo de branches (dev → beta → release → lts)
+├── SECURITY.md                 # Política de segurança
+├── README.md                   # Visão geral e guia rápido
 └── ARCHITECTURE.md             # Este arquivo
 ```
 
@@ -228,385 +163,178 @@ discovery/
 ## 3. Diagrama de Dependências
 
 ```
-main.go ──────────────────────────────────── startup_debug_keys_*.go
+cmd/discovery-service/main.go (SYSTEM, sem Wails/WebView2)
    │
-   ├──► package app (app/)
-   │         │
-   │         ├── App struct (app.go)
-   │         │      ├── startup/shutdown lifecycle
-   │         │      └── Wails context management
-   │         │
-   │         ├── Subpacotes extraídos (app/debug, app/inventory, app/support, app/updates, app/netutil)
-   │         │      ├── debug.Service: credenciais, bootstrap, InstallerConfig
-   │         │      ├── inventory.Service: coleta, cache, sync payloads
-   │         │      ├── support.Service: tickets, knowledge base
-   │         │      └── updates.Service: winget upgrade, exporter
-   │         │
-   │         ├── Bridges (app/*_bridge.go)
-   │         │      └── Delegam para subpacotes, expõem métodos ao frontend/MCP
-   │         │
-   │         ├── Notificações e Comandos
-   │         │      ├── notification_center.go: DispatchNotification (Wails events)
-   │         │      ├── command_result_outbox.go: outbox pattern para resultados
-   │         │      └── consolidation_engine.go: janelas de consolidação de eventos
-   │         │
-   │         ├── P2P domain (app/p2p/ — núcleo; bridges na raiz de app/)
-   │         │      ├── Coordinator: descoberta + replicação + gossip
-   │         │      ├── TransferServer: HTTP local P2P
-   │         │      ├── p2pChunkScheduler: swarm downloads
-   │         │      ├── p2pPeerCache: cache persistente de peers
-   │         │      ├── Providers: mDNS, UDP, libp2p (DHT)
-   │         │      ├── Cloud bootstrap: seed externo via servidor
-   │         │      ├── Onboarding: boot sem servidor (zero-touch)
-   │         │      └── API/Telemetry: helpers de seed plan + outbox
-   │         │
-   │         └── Shared (chat.go, sync.go, store.go, ...)
+   └──► package app (RunCore → startup → runCoreStartup → runStagedStartup)
+           ├──► app/coreagent        (CoreAgent embed e tipos desacoplados)
+           ├──► app/debug, inventory, support, updates, p2p, sync, automation, ...
+           ├──► Dual-Pipe IPC        (IPCServer: pipe leitura + pipe admin)
+           └──► app/core/*           (leaf packages: zero imports de discovery/app ou Wails)
+                   ├── agentconn, automation, database, inventory, selfupdate
+                   ├── netproxy, remotesession, fileserver, screen, terminal, sysctrl
+                   ├── sessioncontrol, platform (DPAPI/ACL), safego, tlsutil
+                   └── ...
+
+main.go (-tags wailsui, sessão do usuário)
    │
-   ├──► core/agentconn    # Conexão servidor (NATS/WS + dispatch de comandos)
-   ├──► core/ai           # LLM chat service
-   ├──► core/automation   # Motor de automação
-   ├──► core/buildinfo    # Versão de build para pacotes internos
-   ├──► core/database     # SQLite KV cache
-   ├──► core/inventory    # Coleta de inventário
-   ├──► core/mcp          # MCP server + registry + ping
-   ├──► core/models       # Tipos compartilhados
-   ├──► core/selfupdate   # Auto-atualização do binário
-   ├──► core/services     # Wrappers de serviços
-   └──► core/remotedebug  # Debug remoto (streaming de logs)
+   ├──► package app (app_ui_wails.go, remote_services.go, app_window_ui.go)
+   │       ├──► Wails v3 Application (`github.com/wailsapp/wails/v3 v3.1.0`)
+   │       ├──► frontend/wails-bridge.js → bindings/discovery/app/app.js + /wails/runtime.js
+   │       └──► IPCClient (conecta aos named pipes do discovery-service.exe)
+   └──► startup_debug_keys_*.go
 ```
+
+> **Invariante de Desacoplamento (`TestF14_T1_*`):**
+> - `./cmd/discovery-service` possui **0 dependências transitivas** de `github.com/wailsapp/wails/*`, `webview2` ou `pion/webrtc`.
+> - Nenhum pacote em `./app/core/...` importa `discovery/app` ou `github.com/wailsapp/wails/*`.
 
 ---
 
-## 4. Índice Completo de Arquivos
+## 4. Índice de Arquivos Chave
 
-### Raiz
+### Raiz de `src/`
 
-| Arquivo                         | Responsabilidade                                                                                                                                                   |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `main.go`                       | Entry point. Inicia GUI Wails com system tray e opções de startup.                                                                                                 |
-| `tray_embed.go`                 | Apenas o `//go:embed` do ícone `.ico`. Deve ficar na raiz: `//go:embed` não permite paths com `..`. Os bytes são passados ao App via `AppStartupOptions.TrayIcon`. |
-| `startup_debug_keys_windows.go` | Detecta Shift/Ctrl pressionados no startup via `GetAsyncKeyState` (Windows API).                                                                                   |
-| `startup_debug_keys_other.go`   | Stub que retorna `false` em plataformas não-Windows.                                                                                                               |
+| Arquivo | Responsabilidade |
+| --- | --- |
+| `main.go` | Entry point da UI Companion Wails v3 (`-tags wailsui`). Configura single-instance, tray, janela principal preguiçosa e serviços Wails (`App`, `RemoteDebugService`, `RemoteSessionService`). |
+| `cmd/discovery-service/main.go` | Entry point headless do serviço Windows `SYSTEM` e modo worker (`--remote-session-worker`, `--terminal-dispatcher`, `--rdp-tunnel`). |
+| `tray_embed.go` | `//go:embed` dos ícones do system tray passados via `AppStartupOptions`. |
+| `startup_debug_keys_*.go` | Detecta Shift/Ctrl na inicialização do Windows para ativar `DebugMode`. |
 
-### Package `app/`
+### Decomposição do Hub `src/app/` (`app*.go`)
 
-`app/` está organizado por domínio, com subpacotes Go reais extraídos progressivamente a partir do `package app`. O `package app` principal ainda mantém o hub central (`App` struct) e os arquivos de bridge que delegam para os subpacotes.
-
-#### Core
-
-| Arquivo      | Responsabilidade                                                                                                                                     |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.go`     | `App` struct central. Campos de estado, `NewApp()`, `startup()`, `shutdown()`, `beginActivity()`, lifecycle helpers.                                 |
-| `types.go`   | Tipos compartilhados usados por quase todo o pacote: `AppStartupOptions`, `RuntimeFlags`, `P2PConfig`, `P2PMetrics`, views de UI e tipos auxiliares. |
-| `bridge.go`  | Implementa a interface `AppBridge` esperada por `core/mcp/register.go`. Converte resultados internos → JSON para ferramentas MCP.                    |
-| `logging.go` | `logBuffer`: ring buffer thread-safe, persistência opcional em arquivo e sanitização de tokens.                                                      |
-| `memory.go`  | CRUD de notas locais via SQLite.                                                                                                                     |
-
-#### Subpacotes extraídos de `app/`
-
-| Subpacote         | Arquivo        | Responsabilidade                                                                         |
-| ----------------- | -------------- | ---------------------------------------------------------------------------------------- |
-| `app/debug`       | `config.go`    | `Config` (DebugConfig): credenciais de conexão, flags TLS, NATS, InstallerConfig.        |
-| `app/debug`       | `service.go`   | `Service`: bootstrap de token/agentID, persistência multi-path, status de conectividade. |
-| `app/debug`       | `installer.go` | `installerConfigPathCandidates()` + parser de `InstallerConfig`.                         |
-| `app/inventory`   | `service.go`   | `Service`: coleta de inventário, installs/upgrades, cache, notificações para UI.         |
-| `app/inventory`   | `sync.go`      | Constrói payloads `agentHardwareEnvelope`/`agentSoftwareEnvelope` para POST no servidor. |
-| `app/support`     | `service.go`   | `Service`: criação de tickets, normalização de prioridade, serialização para API.        |
-| `app/support`     | `knowledge.go` | Fetch e cache de artigos da knowledge base.                                              |
-| `app/updates`     | `service.go`   | `Service`: `GetPendingUpdates()` — executa `winget upgrade` e parseia saída.             |
-| `app/updates`     | `export.go`    | `Exporter`: exportação de relatório de atualizações pendentes.                           |
-| `app/netutil`     | `headers.go`   | `SetAgentAuthHeaders()` — aplica headers de autenticação usados pelas APIs.              |
-| `app/appstore`    | `types.go`     | `Item`, `Response`, `EffectivePolicy`, `PolicyCache` do app store.                       |
-| `app/automation`  | `types.go`     | `StateView`, `TaskView`, `ExecutionView` — tipos de UI da automação.                     |
-| `app/p2pmeta`     | `types.go`     | Config, views, telemetry, onboarding, seed-plan e cache leve do domínio P2P.             |
-| `app/supportmeta` | `types.go`     | `AgentInfo`, workflow/tickets, knowledge base e cache leve.                              |
-
-#### Bridges (delegates para subpacotes)
-
-| Arquivo               | Responsabilidade                                                               |
-| --------------------- | ------------------------------------------------------------------------------ |
-| `debug_bridge.go`     | `GetDebugConfig`/`SetDebugConfig` — delega a `debug.Service`.                  |
-| `inventory_bridge.go` | `GetCatalog` — delega a `inventory.Service`.                                   |
-| `inventory_export.go` | `getInventoryForExport` — helper que obtém inventário do cache ou coleta novo. |
-| `logs_bridge.go`      | `GetLogs`/`ClearLogs` — delega ao ring buffer interno.                         |
-| `p2p_bridge.go`       | `applyP2PConfig` — aplica nova config P2P ao coordinator.                      |
-| `support_bridge.go`   | `GetAgentInfo` e demais métodos de suporte — delega a `support.Service`.       |
-| `support_log.go`      | `supportLogf` — helper de logging do domínio de suporte.                       |
-| `updates_bridge.go`   | `GetPendingUpdates` — delega a `updates.Service`.                              |
-| `updates_helpers.go`  | `parseUpgradeOutput` — wrapper sobre `updates.ParseUpgradeOutput`.             |
-| `export_redact.go`    | `getRedact()` — expõe flag de redação de PII para o export pipeline.           |
-
-#### Configuração e Conexão
-
-| Arquivo                   | Responsabilidade                                                                                                 |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `agent_config.go`         | `AgentConfiguration`: struct e loader (parse do JSON de políticas do servidor).                                  |
-| `agent_config_helpers.go` | `GetAgentConfiguration` e helpers de acesso a configuração do agente.                                            |
-| `installer.go`            | `installerConfigPathCandidates` — wrapper/bridge no package app para paths de config.                            |
-| `sync.go`                 | `syncCoordinator`: polling de manifest do servidor, download incremental de resources e deduplicação de eventos. |
-
-#### Inventário e App Store
-
-| Arquivo       | Responsabilidade                                                                   |
-| ------------- | ---------------------------------------------------------------------------------- |
-| `store.go`    | Fetch e cache do app store (`AppStoreResponse`). Cache em memória + SQLite + ETag. |
-| `printers.go` | Listagem, instalação e remoção de impressoras.                                     |
-
-#### Automação
-
-| Arquivo             | Responsabilidade                                                                               |
-| ------------------- | ---------------------------------------------------------------------------------------------- |
-| `automation.go`     | Bridge entre `core/automation.Service` e frontend. Traduz estado e enums para a UI.            |
-| `automation_p2p.go` | `automationPackageManagerRouter`: decide se instalação usa P2P (swarm), HTTP ou winget nativo. |
-
-#### Notificações e Comandos
-
-| Arquivo                    | Responsabilidade                                                                                                   |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `notification_center.go`   | `NotificationDispatchRequest`, `DispatchNotification()`: envio e aguardo de resposta do usuário via Wails eventos. |
-| `command_result_outbox.go` | Outbox pattern para resultados de comandos: deduplicação SHA-256, retry com timestamp.                             |
-| `consolidation/`           | `consolidation.Engine`: janelas de consolidação de eventos (realtime / 1min / 5min).                               |
-
-#### Debug e Diagnóstico
-
-| Arquivo                 | Responsabilidade                                                              |
-| ----------------------- | ----------------------------------------------------------------------------- |
-| `remote_debug.go`       | `remoteDebugManager`: sessão de debug remoto com streaming de logs do agente. |
-| `psadt_debug_bridge.go` | Bootstrap e diagnóstico do PSADT (PowerShell App Deploy Toolkit).             |
-
-#### P2P (pacote `app/p2p/`)
-
-| Arquivo                    | Responsabilidade                                                                                              |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `p2p.go`                   | `Coordinator`: núcleo do P2P, lifecycle, estado e orquestração.                                               |
-| `api.go`                   | Helpers de API: `APIResponseError`, `RetryAfterFromResponse`, `DistributionStatusEndpointWithOptions`.        |
-| `onboarding.go`            | Zero-touch: `ComputeOnboardingSignature`, `BuildOnboardingOffer`, `ParseZeroTouchRegisterResponse`.           |
-| `telemetry.go`             | Outbox de telemetria: `TelemetryRetryBackoff`, `MarshalTelemetryPayload` e limites.                           |
-| `config.go`                | Configuração P2P: normalização, valores default, seed plan.                                                   |
-| `helpers.go`               | Helpers: `ComputeFileSHA256`, `ListenInRange`, `SignReplicationControl`, `ParsePortFromURL`.                  |
-| `p2p_chunks.go`            | `p2pChunkScheduler`: divide artefatos em chunks, distribui entre peers e aplica bandwidth cap.                |
-| `p2p_cleanup.go`           | Limpeza de artefatos expirados e arquivos temporários do diretório P2P.                                       |
-| `p2p_cloud_bootstrap.go`   | Bootstrap via servidor externo: obtém peers iniciais quando não há descoberta local.                          |
-| `p2p_discovery.go`         | `p2pDiscoveryProvider` interface + providers: `p2pMDNSProvider` e UDP broadcast.                              |
-| `p2p_download.go`          | Download de artefatos de um único peer e helpers de verificação.                                              |
-| `p2p_gossip.go`            | Gossip pull: `pullPeerGossip()` — sincronização do índice de artefatos entre peers via libp2p.                |
-| `p2p_http.go`              | `TransferServer`: HTTP local para servir artefatos e receber onboarding.                                      |
-| `p2p_libp2p.go`            | `p2pLibP2PProvider` e `p2pMultiProvider`: integração libp2p com DHT, bootstrap estático (hybrid/libp2p-only). |
-| `p2p_libp2p_transport.go`  | Transport layer libp2p (stream handling).                                                                     |
-| `p2p_onboarding_http.go`   | HTTP handler de onboarding (GET/PUT `/p2p/config/onboard`).                                                   |
-| `p2p_peer_cache.go`        | Cache persistente de peers conhecidos (até 128 entradas) entre reinicializações.                              |
-| `p2p_publish.go`           | `ListArtifacts` e publicação de artefatos para os peers.                                                      |
-| `p2p_replication.go`       | Workers de replicação: `replicateArtifactToPeerNow()` — push com validação e token auth.                      |
-| `p2p_status.go`            | Views de status P2P para UI (peers, artefatos, modo).                                                         |
-| `p2p_transfer_progress.go` | Progresso de transferência (upload/download) emitido via eventos.                                             |
-
-> **Bridges na raiz de `app/`** (`p2p_bridge.go`, `p2p_api.go`, `p2p_onboarding.go`, `p2p_telemetry_outbox.go`, etc.) permanecem no `package app` delegando para `app/p2p/` — os métodos exportados são bound pelo Wails e não podem ser movidos.
-
-#### UI, Apresentação e Suporte
-
-| Arquivo                 | Responsabilidade                                                                                       |
-| ----------------------- | ------------------------------------------------------------------------------------------------------ |
-| `chat.go`               | Config de chat, histórico em memória, streaming e integração com `core/ai` e `core/mcp`.               |
-| `status.go`             | `GetStatusOverview()` → `StatusOverview`: snapshot de saúde geral para a UI.                           |
-| `tray.go`               | System tray: ícone, menu, heartbeat watchdog e ações de janela.                                        |
-| `ui_runtime.go`         | Heartbeat, suspensão e recovery do runtime da UI integrados ao watchdog.                               |
-| `ui_runtime_windows.go` | Probe nativo Win32 (`EnumWindows`, `IsHungAppWindow`) para validar responsividade da janela principal. |
-| `ui_runtime_other.go`   | Fallback cross-platform quando o probe nativo não existe.                                              |
-| `tray_embed.go` (raiz)  | `//go:embed` dos ícones PNG 32x32 do systray (normal, provisioning, offline).                          |
-
-### Package `core/`
-
-| Pacote        | Arquivo                | Responsabilidade                                                                                                                                                                                       |
-| ------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `agentconn`   | `runtime.go`           | Conexão persistente com servidor central (NATS/WebSocket). Config loader, reconexão automática, callbacks de ping e dispatch de comandos.                                                              |
-| `ai`          | `chat.go`              | `Service`: SendMessage/StreamMessage para LLM OpenAI-compatible. Tool calling via MCP registry.                                                                                                        |
-| `automation`  | `service.go`           | Motor de automação: sync de políticas, cron scheduling, execução de tasks, callback polling.                                                                                                           |
-| `automation`  | `executor.go`          | Executa scripts PowerShell/Batch com timeout e captura de output.                                                                                                                                      |
-| `automation`  | `client.go`            | HTTP client para API de automação com headers de autenticação.                                                                                                                                         |
-| `automation`  | `types.go`             | Tipos: `AutomationTask`, `AutomationScript`, `State`, `PSADTPolicy`, enums de escopo e ação.                                                                                                           |
-| `buildinfo`   | `version.go`           | `Version`: variável de versão para consumo por pacotes internos (complementa `app.Version`).                                                                                                           |
-| `ctxutil`     | `timeout.go`           | Helpers de timeout/cancelamento de contexto.                                                                                                                                                           |
-| `data`        | `http_client.go`       | `HTTPClient`: GET com cache ETag, SQLite cache, retry, timeout configurável.                                                                                                                           |
-| `database`    | `sqlite.go`            | `DB`: KV store com TTL (`CacheGetJSON`/`CacheSetJSON`), CRUD de `MemoryNote`. Schema: `kv_cache`, `memory_notes`.                                                                                      |
-| `export`      | `markdown.go`          | Renderer Markdown de `InventoryReport` via template Go.                                                                                                                                                |
-| `export`      | `pdf.go`               | Renderer PDF de `InventoryReport` via biblioteca fpdf.                                                                                                                                                 |
-| `export`      | `redaction.go`         | `RedactHardware()`: mascara seriais, MACs, passwords, tokens.                                                                                                                                          |
-| `inventory`   | `provider.go`          | `Provider`: orquestra coleta — osquery preferred, PowerShell como fallback. Progress callback para UI.                                                                                                 |
-| `inventory`   | `osquery.go`           | Subprocess-based query runner (fallback) + cache do binário osqueryi.                                                                                                                                  |
-| `inventory`   | `osquery_client.go`    | osquery-go Thrift client: conecta ao socket do osqueryd (se disponível) ou inicia osqueryi em modo socket para executar todas as queries via uma única conexão, sem overhead de subprocesso por query. |
-| `inventory`   | `powershell.go`        | Queries WMI/CIM via `powershell.exe` (fallback quando osquery não disponível).                                                                                                                         |
-| `inventory`   | `mappers.go`           | Mapeia resultados brutos de queries → `models.InventoryReport`.                                                                                                                                        |
-| `mcp`         | `server.go`            | `Server`: JSON-RPC 2.0 via stdio. Endpoints: `initialize`, `tools/list`, `tools/call`.                                                                                                                 |
-| `mcp`         | `tools.go`             | `Registry`, `Tool`, `Handler`. Registro, dispatch e conversão de schemas.                                                                                                                              |
-| `mcp`         | `register.go`          | `RegisterDiscoveryTools()` + interface `AppBridge`. Registra todas as ferramentas Discovery.                                                                                                           |
-| `mcp`         | `ping.go`              | Ferramenta MCP de ping/diagnóstico de conectividade.                                                                                                                                                   |
-| `models`      | `inventory.go`         | `InventoryReport`: schema universal de inventário. `HardwareInfo`, `SoftwareItem`, `UpgradeItem`, `PrinterInfo`, etc.                                                                                  |
-| `printer`     | `manager.go`           | `Manager`: list/install/remove impressoras via Windows Print Spooler.                                                                                                                                  |
-| `processutil` | `(util.go)`            | Executa processos externos, captura stdout/stderr, timeout.                                                                                                                                            |
-| `selfupdate`  | `updater.go`           | `Updater`: download de nova versão do binário, verificação SHA-256 e substituição atômica do executável.                                                                                               |
-| `services`    | `apps_service.go`      | `AppsService`: wrapper de `winget.Client` para install/uninstall/upgrade.                                                                                                                              |
-| `services`    | `catalog_service.go`   | `CatalogService`: fetch e cache do catálogo de aplicativos.                                                                                                                                            |
-| `services`    | `inventory_service.go` | `InventoryService`: coleta com timeout e progress callback.                                                                                                                                            |
-| `services`    | `printer_service.go`   | `PrinterService`: wrapper do `printer.Manager`.                                                                                                                                                        |
-| `remotedebug` | `service.go`           | Sessões de debug remoto com streaming de logs do agente.                                                                                                                                               |
-| `winget`      | `client.go`            | `Client`: executa `winget` commands e faz parse da saída tabular no formato Windows.                                                                                                                   |
-
-### Frontend `frontend/`
-
-| Arquivo                   | Responsabilidade                                                                           |
-| ------------------------- | ------------------------------------------------------------------------------------------ |
-| `index.html`              | Shell HTML principal. Chrome da janela customizado (drag bar, min/max/close).              |
-| `app.js`                  | Bootstrap da aplicação, view de catálogo/packages. Expõe `getApp()` → `window.go.app.App`. |
-| `styles.css`              | Estilos globais (variáveis CSS, layout, componentes).                                      |
-| `js/app-init.js`          | Event bindings iniciais (cards, search, botões de tab).                                    |
-| `js/app-status.js`        | Polling de status de conexão e versão.                                                     |
-| `js/app-inventory.js`     | Visualização de inventário em árvore/tabela.                                               |
-| `js/app-p2p.js`           | Painel P2P: peers, artefatos, configuração.                                                |
-| `js/app-chat.js`          | Interface de chat AI: input, histórico, streaming.                                         |
-| `js/app-automation.js`    | Painel de automação: tasks, scripts, status.                                               |
-| `js/app-store-updates.js` | Lista de updates pendentes (winget upgrade).                                               |
-| `js/app-support.js`       | Formulário e listagem de tickets de suporte.                                               |
-| `js/app-debug.js`         | Painel de configuração de conexão/debug.                                                   |
-| `js/app-utils.js`         | Debounce, formatação de bytes, helpers DOM.                                                |
-| `js/app-window.js`        | Chrome handlers: min/max/close, status bar polling.                                        |
-| `wailsjs/go/app/App.js`   | Bindings JS gerados pelo Wails (não editar manualmente).                                   |
-| `wailsjs/runtime/`        | Runtime Wails (events, window, dialog — não editar).                                       |
+| Arquivo | Responsabilidade |
+| --- | --- |
+| `app.go` | `Version`, constantes de janela/timeouts, `GetDataDir()`, `WebView2UserDataPath()`, definição da `App` struct (com `coreagent.CoreAgent` embutido), `GetRuntimeFlags()`, `SetContext()`, `Ctx()`, `GetServiceHealth()`. |
+| `app_new.go` | Construtor `NewApp(opts)` decomposto em helpers coesos (`initCoreServices`, `initAutomationWiring`, `initConnectivityAndRemote`, `initInventoryWiring`, `initSelfUpdater`, `initSupportAndDebug`). |
+| `app_lifecycle.go` | `RunCore()`, `ServiceShutdown()`, `startup()`, `runCoreStartup()`, `runStagedStartup()`, `serviceAgentConnDelay()`, `shutdown()`, `GetStartupError()`, `startupLogf()`, `safeGo()`. |
+| `app_window_ui.go` | `SetApplication()`, `SetMainWindow()`, `ShowMainWindow()`, `HideMainWindow()`, `MinimiseMainWindow()`, `QuitApp()`, `EmitEvent()`, `normalizeEventArgs()`, `RequestAppClose()`, `ShouldHideOnClose()`, `IsTrayReady()`, `hideWindowOnStartup()`, `ClearMemoryCaches()`. |
+| `app_connectivity.go` | `getHeartbeatMetrics()`, `mergeHeartbeatMetrics()`, `getKnownP2PPeers()`, `onNatsConnected()`, `onConnectivityChange()`, `SendTestHeartbeat()`, `GetAgentConfiguration()`, `featureEnabled()`, estado zero-touch. |
+| `app_inventory_sync.go` | `runPeriodicInventorySync()`, `isInventoryProvisioned()`, `applyStartupThrottleConfig()`, `onPostBootstrapProvisioned()`, `ensureOsqueryInstalled()`. |
+| `app_power_idle.go` | `deferredRestartState`, `cancelDeferredRestart()`, `scheduleDeferredRestart()`, `beginActivity()`, `applyIdleMode()`, `scheduleIdleRelease()`, `cancelIdleRelease()`, `releaseIdleMemory()`. |
 
 ---
 
 ## 5. Fluxos Principais
 
-### Startup (GUI Mode)
+### Startup Dual-Binary (Serviço + UI Companion)
 
 ```
-main()
-  └─► NewApp(opts)           // inicializa todos os serviços
-  └─► wails.Run()
-        └─► app.startup(ctx)
-              ├─► a.startTray(icon)     // system tray
-              ├─► database.Open()       // SQLite
-              ├─► collectInventory()    // goroutine
-              ├─► agentConn.Run()       // goroutine: conexão servidor
-              ├─► syncCoord.Run()       // goroutine: sync de políticas
-              ├─► p2pCoord.Run()        // goroutine: P2P discovery
-              ├─► automationSvc.Run()   // goroutine: cron + callbacks
+1. discovery-service.exe (Sessão 0 / SYSTEM)
+   main() → RunServiceMode()
+     └─► NewApp(ServiceMode: true)
+     └─► RunCore(ctx) → startup(ctx)
+           ├─► StartIPCServer()                // Dual-Pipe IPC (leitura + admin)
+           ├─► runCoreStartup(ctx)
+           │     ├─► RemoteDebug.Startup()     // lifecycle no serviço
+           │     ├─► database.Open()           // SQLite WAL + manutenção periódica
+           │     ├─► resumeAgentDecommissionIfPending()
+           │     └─► runStagedStartup(ctx)
+           │           ├─► Phase 1 (2s): inventário inicial
+           │           ├─► Phase 2 (1s svc): bootstrap DPAPI + AgentConn.Run (NATS/WSS)
+           │           ├─► Phase 3 (10s): AutomationSvc, AutoUpdateSvc, SyncSvc, P2PCoord, APIHealthProbe
+           │           └─► Phase 4 (12s): SelfUpdater, outbox/inventory cleanup + WUA probes
+           └─► startUIWatchdog(ctx)            // relança UI companion na sessão interativa
+
+2. discovery-agent.exe (Sessão do usuário, -tags wailsui)
+   main()
+     └─► NewApp(ServiceMode: false)
+     └─► application.New(...)                  // Wails v3 runtime + system tray + lazy mainWindow
+     └─► ServiceStartup(ctx) → RunCore(ctx) → startup(ctx)
+           ├─► startIPCClient()                // conecta ao serviço via named pipes (sem DB local)
+           ├─► EnsureChatSSEServer()           // SSE autenticado para chat nativo
+           ├─► startTray()                     // systray + menu dinâmico
+           └─► applyIdleMode(true)             // modo econômico quando minimizado/ocioso
 ```
 
-### P2P Artifact Distribution
+### Acesso Remoto, Proxy LAN e Túnel RDP
 
 ```
-p2pCoordinator.Run()
-  ├─► discoveryTick()              // mDNS/UDP/libp2p: descobre peers
-  ├─► p2pTransferServer.Start()   // HTTP server local (porta 41080-41120)
-  └─► replicationWorkers (x2)
-        └─► replicateArtifactToPeerNow()
-              ├─► validatePeer()
-              ├─► fetchArtifactFromLocal()
-              └─► pushToRemotePeer()     // HTTP PUT com token auth
-
-// Download (swarm ou single):
-DownloadArtifactSwarm()
-  └─► p2pChunkScheduler.Schedule()
-        ├─► splitIntoChunks()
-        ├─► assignChunksToPeers()
-        └─► downloadParallel() + bandwidth cap
+Console Web (DiscoveryRMM_Site) ──► API WS/NATS ──► discovery-service.exe (agentconn)
+  ├─► Tela / Terminal / Arquivos / Processos:
+  │     └─► remotesession.Manager → spawn worker (--remote-session-worker / --terminal-dispatcher)
+  │           ├─► screen (DXGI-first + GDI fallback)
+  │           ├─► terminal (ConPTY, RUN_AS fail-closed para usuário sem fallback para SYSTEM)
+  │           ├─► fileserver (handle cache + protocolo binário 'DF')
+  │           └─► sysctrl (guard fail-closed para serviços críticos / DC)
+  └─► Proxy LAN & Túnel RDP:
+        ├─► netproxy: HTTP/WS local allowlist SSRF-safe + anti-TOCTOU DNS
+        └─► session_tunnel (.tunnel.in / .tunnel.out): multiplexação TCP sobre NATS + --rdp-tunnel
 ```
 
-### Agent Onboarding (sem servidor)
+### P2P Artifact Distribution & Onboarding
 
 ```
-p2pOnboardingState.RunOnboardingLoop()
-  ├─► isAgentConfigured()? → skip
-  ├─► GetActivePeers()
-  ├─► requestOnboardingFromPeer()   // GET /p2p/config/onboard
-  │     └─► HMAC-SHA256 validation
-  └─► persistCredentials()
-```
-
-### MCP Tool Calling (Interno)
-
-```
-UI Chat interno → ai.Service
-  └─► tools/call {name, args}
-        └─► Registry.Call(name, args)
-              └─► AppBridge.{method}()  // app.bridge.go
+p2p.Coordinator.Run()
+  ├─► discoveryTick()             // mDNS / UDP / go-libp2p DHT (sem WebRTC/pion)
+  ├─► TransferServer              // HTTP local P2P
+  ├─► replicationWorkers          // push validado entre peers
+  └─► DownloadArtifactByIDSwarm() // download paralelo em chunks + verificação SHA-256
 ```
 
 ---
 
-## 6. Padrões de Código
+## 6. Padrões de Código e Convenções
 
-### Onde adicionar cada tipo de funcionalidade
-
-| Tipo de mudança                              | Onde implementar                                                                  |
-| -------------------------------------------- | --------------------------------------------------------------------------------- |
-| Nova feature de UI (método Go para frontend) | `app/{dominio}_bridge.go` ou `app/{dominio}.go` — método em `*App `               |
-| Nova ferramenta MCP                          | `core/mcp/register.go` (interface) + `app/bridge.go` (implementação)              |
-| Nova query de inventário                     | `core/inventory/osquery.go` ou `powershell.go` + mapper em `mappers.go`           |
-| Nova lógica de inventário (negócio)          | `app/inventory/service.go` ou `app/inventory/sync.go`                             |
-| Nova fonte de dados P2P                      | `app/p2p/` (núcleo: `p2p.go`, `p2p_discovery.go`) + bridge em `app/p2p_bridge.go` |
-| Nova política de automação                   | `core/automation/types.go` (tipo) + `service.go` (execução)                       |
-| Persistência de novo dado                    | `core/database/sqlite.go` (schema + métodos)                                      |
-| Novo export format                           | `core/export/` (renderer) + `app/updates/export.go` (orquestrador)                |
-| Nova configuração de debug/conexão           | `app/debug/config.go` (campo) + `app/debug/service.go` (lógica)                   |
-| Auto-atualização do binário                  | `core/selfupdate/updater.go`                                                      |
-| Nova notificação para usuário                | `app/notification_center.go` (`DispatchNotification`)                             |
-
-### Convenções
-
-- **Métodos de UI** (chamados pelo JS): receptor `*App`, exportados, retornam tipos serializáveis JSON
-- **Goroutines**: usar `safego.Go()` (via `a.safeGo`) para monitoramento e recuperação de panics
-- **Logging**: `a.logs.append("[modulo] mensagem")` — ring buffer acessível via `GetLogs()` no frontend
-- **Config persistence**: SQLite `CacheSetJSON` / `CacheGetJSON` — nunca gravar credenciais em texto simples sem necessidade
-- **Cross-domain calls**: `app/` pode importar qualquer `core/`; `core/` não deve importar `app/`
-- **Organização física do `app/`**: manter arquivos no mesmo diretório enquanto forem `package app`. Separação em subpastas exige subpacotes Go e refatoração explícita de imports e bindings.
+- **Métodos expostos ao frontend**: receptor `*App` em `package app`, exportados e compatíveis com `wails3 generate bindings` (`window.go.app.App.*`). Métodos internos em `*App` que não devem virar bindings levam `//wails:ignore`.
+- **Separação Core vs UI**: `src/app/core/*` **nunca** importa `discovery/app` nem `github.com/wailsapp/wails/v3`. Código dependente do Wails v3 fica isolado atrás da build tag `//go:build wailsui` (`app_ui_wails.go`, `remote_services.go`).
+- **Goroutines**: usar `a.safeGo(...)` (`core/safego.Go`) para captura de panics e stack trace.
+- **Segurança de segredos e configuração**: `authToken`/`deployToken` protegidos com Windows DPAPI (`platform.ProtectSecret`), arquivos restritos a `SYSTEM`/`Administrators`, e DTOs redigidos via `redactDebugConfig` no IPC para a UI.
 
 ---
 
-## 8. Build e Desenvolvimento
+## 7. Build, Testes e Desenvolvimento
 
-### Comandos
+### Comandos Oficiais (Wails v3)
 
-```bash
-# Desenvolvimento (hot-reload)
-wails dev
+```powershell
+# A partir de Discovery/src:
+cd src
 
-# Build produção (Windows)
-wails build -platform windows/amd64
+# Build completo de produção (discovery-agent.exe + discovery-service.exe em src/bin/)
+wails3 build
 
-# Testes Go
-go test ./...
+# Desenvolvimento com hot-reload
+wails3 dev -config ./build/config.yml
 
-# Verificação de erros
-go build ./...
+# Gerar bindings JS v3 manualmente (frontend/bindings/discovery/app/app.js)
+wails3 generate bindings -b -clean=true -f "-tags wailsui" -d frontend/bindings ./...
 ```
 
-### ldflags (versão)
+> **Importante:** Nunca use `go build` diretamente para compilar o binário GUI `discovery-agent.exe` — ele não processa assets nem bindings do frontend. Consulte [AGENTS.md](AGENTS.md).
 
-A variável `Version` principal está em `discovery/app`. O pacote `app/core/buildinfo` expõe uma cópia para uso por pacotes internos. Ao fazer build com versão explícita:
+### Verificação Estática e Testes Go
 
-```bash
-wails build -ldflags "-X discovery/app.Version=1.2.3 -X discovery/app/core/buildinfo.Version=1.2.3"
-# ou (go build direto)
-go build -ldflags "-X discovery/app.Version=1.2.3 -X discovery/app/core/buildinfo.Version=1.2.3"
+```powershell
+cd src
+$env:GOWORK = "off"
+$env:CGO_ENABLED = "1"
+
+gofmt -l ./app ./cmd ./e2e
+go vet ./app/... ./cmd/discovery-service/... ./e2e/...
+go vet -tags wailsui .
+go test -race ./app/... -timeout 600s
+go test -v ./e2e -run "TestF14_|TestF18_"
 ```
 
-### Wails JS Bindings
+### Wails v3 JS Bindings
 
-Os arquivos em `frontend/wailsjs/go/app/` são **gerados automaticamente** pelo Wails ao rodar `wails dev` ou `wails build`. O namespace JS é `window.go.app.App.*`.
+Os arquivos em `src/frontend/bindings/` (incluindo `src/frontend/bindings/discovery/app/app.js`) são **gerados automaticamente** pelo `wails3 generate bindings` / `wails3 build`. O módulo [src/frontend/wails-bridge.js](src/frontend/wails-bridge.js) importa os bindings v3 e `/wails/runtime.js`, expondo `window.go.app.App.*` e `window.wails` para os scripts da UI.
 
 ---
 
-## 7. Dependências Notáveis
+## 8. Dependências Notáveis
 
-| Dependência          | Uso                                                                              |
-| -------------------- | -------------------------------------------------------------------------------- |
-| `wails/v3`           | Framework GUI desktop (runtime, bindings, window management, system tray nativo) |
-| `libp2p/go-libp2p`   | Stack P2P (DHT, mDNS, TCP/QUIC transport)                                        |
-| `grandcat/zeroconf`  | mDNS discovery (modo legacy P2P)                                                 |
-| `robfig/cron/v3`     | Cron scheduling para automação                                                   |
-| `nats-io/nats.go`    | Comunicação com servidor central via NATS                                        |
-| `modernc.org/sqlite` | SQLite driver (pure Go, sem CGO)                                                 |
-| `go-pdf/fpdf`        | Geração de PDFs                                                                  |
-| `samber/lo`          | Utilities funcionais (map, filter, etc.)                                         |
-| `google/uuid`        | Geração de UUIDs para IDs de peers/artifacts                                     |
+| Dependência | Uso |
+| --- | --- |
+| `github.com/wailsapp/wails/v3` (`v3.1.0`) | Framework GUI desktop para `discovery-agent.exe` (bindings, runtime, janelas, tray nativo) |
+| `github.com/libp2p/go-libp2p` (fork `./third_party/go-libp2p`) | Stack P2P (DHT, mDNS, TCP/QUIC; transporte `pion/webrtc` removido) |
+| `github.com/nats-io/nats.go` | Comunicação com servidor central via NATS / WebSocket e JetStream |
+| `modernc.org/sqlite` | Driver SQLite pure Go (cache local, outboxes duráveis, logs) |
+| `github.com/robfig/cron/v3` | Agendamento cron para automação |
+| `github.com/kirides/go-d3d` | Captura de tela de baixa latência via DXGI Desktop Duplication |
+| `github.com/google/go-tpm` | Leitura da Endorsement Key (EK) do TPM 2.0 para identidade de hardware |
+| `github.com/osquery/osquery-go` | Cliente Thrift opcional para coleta via socket `osquery` |
+| `github.com/go-pdf/fpdf` | Geração de relatórios em PDF |
+| `github.com/gorilla/websocket` | Suporte WebSocket para proxy LAN / túneis |
+| `github.com/Microsoft/go-winio` | Named pipes Windows com DACLs explícitas para o Dual-Pipe IPC |

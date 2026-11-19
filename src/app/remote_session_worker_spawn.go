@@ -110,7 +110,7 @@ func injectWorkerRuntimeHints(a *App, payload map[string]any) {
 		return
 	}
 	if a != nil {
-		cfg := a.GetDebugConfig()
+		cfg := a.getDebugConfigInternal()
 		if v := strings.TrimSpace(cfg.AuthToken); v != "" {
 			payload["authToken"] = v
 		}

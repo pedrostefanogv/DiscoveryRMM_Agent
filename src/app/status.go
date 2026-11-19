@@ -17,7 +17,7 @@ type StatusOverview = status.Overview
 // GetStatusOverview returns a user-friendly status summary for the Status tab.
 func (a *App) GetStatusOverview() StatusOverview {
 	agent := a.GetAgentStatus()
-	cfg := a.GetDebugConfig()
+	cfg := a.getDebugConfigInternal()
 	out := StatusOverview{
 		Connected:           agent.Connected,
 		TransportConnected:  agent.TransportConnected,
@@ -105,7 +105,7 @@ func (a *App) GetStatusOverview() StatusOverview {
 	}
 
 	if a.CoreAgent.DB != nil {
-		agentID := strings.TrimSpace(a.GetDebugConfig().AgentID)
+		agentID := strings.TrimSpace(a.getDebugConfigInternal().AgentID)
 		if agentID != "" {
 			if n, err := a.CoreAgent.DB.CountPendingCommandResultOutbox(agentID); err == nil {
 				out.PendingCommandResults = n

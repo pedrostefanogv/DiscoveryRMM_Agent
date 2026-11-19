@@ -392,6 +392,7 @@ func (h *NatsStreamHandler) SubscribeToTermIn(sessionID string, handler func(dat
 	if err != nil {
 		log.Printf("[remote-session-nats] SubscribeToTermIn erro: pattern=%s err=%v\n", pattern, err)
 	} else {
+		_ = h.nc.Flush()
 		log.Printf("[remote-session-nats] SubscribeToTermIn ok: pattern=%s\n", pattern)
 	}
 	return sub, err
@@ -463,6 +464,19 @@ func (h *NatsStreamHandler) PublishFilesProgress(sessionID string, data any) err
 	payload, _ := json.Marshal(data)
 	subject := h.publishSubject(sessionID, "files.progress")
 	return h.nc.Publish(subject, payload)
+}
+
+// PublishFilesData publica um frame binário 'DF' no canal dedicado .files.data
+// (agent -> viewer).
+func (h *NatsStreamHandler) PublishFilesData(sessionID string, data []byte) error {
+	if h == nil || h.nc == nil {
+		return fmt.Errorf("nats connection unavailable")
+	}
+	subject := h.publishSubject(sessionID, "files.data")
+	if subject == "" {
+		return fmt.Errorf("sessionId invalido")
+	}
+	return h.nc.Publish(subject, data)
 }
 
 // SubscribeToProcReq subscreve a requisicoes de processos/servicos

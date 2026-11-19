@@ -15,6 +15,7 @@ export {
     AutomationStateView,
     ChatConfig,
     ChatMessage,
+    ChatSSEInfo,
     CloseTicketInput,
     CreateTicketInput,
     DebugConfig,

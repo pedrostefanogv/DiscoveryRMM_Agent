@@ -225,7 +225,7 @@ func (a *App) ipcRPCPendingCounts() map[string]any {
 	if a.CoreAgent.DB == nil {
 		return out
 	}
-	agentID := a.GetDebugConfig().AgentID
+	agentID := a.getDebugConfigInternal().AgentID
 	if agentID == "" {
 		return out
 	}

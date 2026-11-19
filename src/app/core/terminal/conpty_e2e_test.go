@@ -114,3 +114,16 @@ func TestConPTYEndToEnd(t *testing.T) {
 	t.Fatalf("sem eco do marcador (backend=%s, %d bytes). Suspeita: STARTF_USESTDHANDLES removido do startupInfoEx. Saida: %q",
 		backend, len(got), got)
 }
+
+func TestCoordToUintptrPacking(t *testing.T) {
+	got := coordToUintptr(COORD{X: 80, Y: 25})
+	want := uintptr(80 | (25 << 16))
+	if got != want {
+		t.Fatalf("coordToUintptr({80,25}) = %#x, want %#x", got, want)
+	}
+	got2 := coordToUintptr(COORD{X: 120, Y: 40})
+	want2 := uintptr(120 | (40 << 16))
+	if got2 != want2 {
+		t.Fatalf("coordToUintptr({120,40}) = %#x, want %#x", got2, want2)
+	}
+}

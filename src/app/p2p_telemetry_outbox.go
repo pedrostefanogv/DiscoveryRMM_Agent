@@ -21,7 +21,7 @@ func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
 	}
 	status := a.GetP2PDebugStatus()
 	payload := P2PTelemetryPayload{
-		AgentID:         strings.TrimSpace(a.GetDebugConfig().AgentID),
+		AgentID:         strings.TrimSpace(a.getDebugConfigInternal().AgentID),
 		CollectedAtUTC:  time.Now().UTC().Format(time.RFC3339),
 		Metrics:         status.Metrics,
 		CurrentSeedPlan: status.CurrentSeedPlan,

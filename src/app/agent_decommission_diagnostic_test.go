@@ -11,11 +11,7 @@ import (
 func newTestDecommissionApp(t *testing.T) *App {
 	t.Helper()
 
-	db, err := database.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("falha ao abrir database: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := database.OpenForTest(t)
 
 	app := &App{ctx: context.Background()}
 	app.CoreAgent.DB = db

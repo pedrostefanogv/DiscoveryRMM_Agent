@@ -21,11 +21,7 @@ func TestLoadEffectiveAppStorePolicyServesStaleWhenFetchFails(t *testing.T) {
 	app.DebugSvc = nil
 
 	// DB real com política persistida e EXPIRADA (fetchedAt 8 dias atrás).
-	db, err := database.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("falha ao abrir database: %v", err)
-	}
-	defer db.Close()
+	db := database.OpenForTest(t)
 	app.CoreAgent.DB = db
 
 	stalePolicy := AppStoreEffectivePolicy{

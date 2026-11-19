@@ -132,7 +132,7 @@ func (a *App) applyAgentConfiguration(cfg agentconfig.AgentConfiguration) {
 
 	// Consolidation engine: propagar políticas de janela quando disponíveis.
 	if a.ConsolEngine != nil {
-		a.ConsolEngine.SetAgentID(strings.TrimSpace(a.GetDebugConfig().AgentID))
+		a.ConsolEngine.SetAgentID(strings.TrimSpace(a.getDebugConfigInternal().AgentID))
 		a.ConsolEngine.ApplyAgentConfig(cfg)
 	}
 }

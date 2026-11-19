@@ -57,11 +57,7 @@ func TestFetchByInstallationTypeFollowsCursorAndRequestsPaged(t *testing.T) {
 	}))
 	defer server.Close()
 
-	db, err := database.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("database.Open: %v", err)
-	}
-	defer db.Close()
+	db := database.OpenForTest(t)
 
 	enabled := true
 	svc := New(Deps{
@@ -119,11 +115,7 @@ func TestFetchByInstallationTypeHandlesLegacySinglePage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	db, err := database.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("database.Open: %v", err)
-	}
-	defer db.Close()
+	db := database.OpenForTest(t)
 
 	enabled := true
 	svc := New(Deps{

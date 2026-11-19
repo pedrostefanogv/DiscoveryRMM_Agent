@@ -121,3 +121,27 @@ func TestMaintenanceStartIsIdempotentAndStopsOnClose(t *testing.T) {
 		t.Fatalf("Close idempotente: %v", err)
 	}
 }
+
+func TestCloseClearsWALSidecarsAndAllowsImmediateRemoveAll(t *testing.T) {
+	for i := 0; i < 10; i++ {
+		dir := t.TempDir()
+		db, err := Open(dir)
+		if err != nil {
+			t.Fatalf("iter %d Open: %v", i, err)
+		}
+		if _, err := db.conn.Exec("INSERT INTO cache(key, value, expires_at) VALUES('k', 'v', NULL)"); err != nil {
+			t.Fatalf("iter %d insert: %v", i, err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("iter %d Close: %v", i, err)
+		}
+		for _, suffix := range []string{"-wal", "-shm"} {
+			if _, statErr := os.Stat(filepath.Join(dir, "discovery.db"+suffix)); !os.IsNotExist(statErr) {
+				t.Fatalf("iter %d sidecar %s still present after Close: %v", i, suffix, statErr)
+			}
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatalf("iter %d RemoveAll(%s) after Close: %v", i, dir, err)
+		}
+	}
+}

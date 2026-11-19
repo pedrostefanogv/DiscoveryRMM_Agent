@@ -18,7 +18,7 @@ func newTestAppStoreApp() *App {
 	app := &App{ctx: context.Background()}
 	app.AppStoreSvc = appstore.New(appstore.Deps{
 		GetDebugConfig: func() appstore.DebugConfig {
-			cfg := app.GetDebugConfig()
+			cfg := app.getDebugConfigInternal()
 			return appstore.DebugConfig{
 				ApiScheme: cfg.ApiScheme,
 				ApiServer: cfg.ApiServer,

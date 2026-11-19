@@ -11,7 +11,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	debugsvc "discovery/app/debug"
 	"discovery/app/debughttp"
 	"discovery/app/logs"
 )
@@ -179,7 +181,7 @@ func TestEnsureChatSSEServer_RequiresTokenAndValidHost(t *testing.T) {
 func TestServeDebugAPI_BlocksTokenDisclosureMethods(t *testing.T) {
 	a, srv := newTestDebugHTTPApp(t, false)
 
-	for _, method := range []string{"GetChatSSEInfo", "GetDebugHTTPURL"} {
+	for _, method := range []string{"GetChatSSEInfo", "GetDebugConfig", "GetDebugHTTPURL"} {
 		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:18080/api/"+method, nil)
 		req.Host = "127.0.0.1:18080"
 		req.Header.Set("Authorization", "Bearer "+srv.AuthToken)
@@ -206,8 +208,74 @@ func TestServeDebugAPI_BlocksTokenDisclosureMethods(t *testing.T) {
 		t.Fatalf("unmarshal list: %v", err)
 	}
 	for _, m := range body.Methods {
-		if m == "GetChatSSEInfo" || m == "GetDebugHTTPURL" {
+		if m == "GetChatSSEInfo" || m == "GetDebugConfig" || m == "GetDebugHTTPURL" {
 			t.Fatalf("blocked method %s exposed in /api/ list", m)
 		}
+	}
+}
+
+func TestGetDebugConfig_RedactsAuthTokenAndBlocksHTTPReflection(t *testing.T) {
+	a, srv := newTestDebugHTTPApp(t, false)
+	cfgPath := t.TempDir() + `\debug_config.json`
+	a.DebugSvc = debugsvc.NewService(debugsvc.Options{
+		ConfigPaths:     func() []string { return []string{cfgPath} },
+		WatcherInterval: time.Hour,
+		HardenFileACL:   func(string) error { return nil },
+	})
+	const secretToken = "mdz_secret_debug_token_do_not_leak"
+	if err := a.DebugSvc.SetConfig(DebugConfig{
+		ApiScheme: "https",
+		ApiServer: "api.example.local",
+		AuthToken: secretToken,
+		AgentID:   "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7",
+	}); err != nil {
+		t.Fatalf("seed SetConfig: %v", err)
+	}
+
+	// 1. Exported GetDebugConfig() must always redact AuthToken/AuthTokenDpapi and set HasAuthToken.
+	publicCfg := a.GetDebugConfig()
+	if publicCfg.AuthToken != "" || publicCfg.AuthTokenDpapi != "" {
+		t.Fatalf("App.GetDebugConfig() leaked secret fields: %+v", publicCfg)
+	}
+	if !publicCfg.HasAuthToken {
+		t.Fatalf("App.GetDebugConfig() expected HasAuthToken=true, got %+v", publicCfg)
+	}
+	if publicCfg.ApiServer != "api.example.local" {
+		t.Fatalf("App.GetDebugConfig() ApiServer = %q, want api.example.local", publicCfg.ApiServer)
+	}
+
+	// 2. Internal getter retains the live token for core Go services.
+	internalCfg := a.getDebugConfigInternal()
+	if internalCfg.AuthToken != secretToken {
+		t.Fatalf("getDebugConfigInternal() AuthToken = %q, want %q", internalCfg.AuthToken, secretToken)
+	}
+
+	// 3. HTTP reflection /api/GetDebugConfig must be blocked with 403 Forbidden.
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:18080/api/GetDebugConfig", nil)
+	req.Host = "127.0.0.1:18080"
+	req.Header.Set("Authorization", "Bearer "+srv.AuthToken)
+	rec := httptest.NewRecorder()
+	a.serveDebugAPI(rec, req, srv)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("/api/GetDebugConfig status = %d, want 403 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), secretToken) {
+		t.Fatalf("/api/GetDebugConfig body leaked secret token")
+	}
+
+	// 4. Saving other fields via SetDebugConfig with blank authToken preserves existing token.
+	if err := a.SetDebugConfig(DebugConfig{
+		ApiScheme: "https",
+		ApiServer: "api2.example.local",
+		AuthToken: "",
+		AgentID:   "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7",
+	}); err != nil {
+		t.Fatalf("SetDebugConfig with blank authToken failed: %v", err)
+	}
+	if got := a.getDebugConfigInternal().AuthToken; got != secretToken {
+		t.Fatalf("SetDebugConfig wiped AuthToken: got %q, want %q", got, secretToken)
+	}
+	if got := a.GetDebugConfig(); got.AuthToken != "" || !got.HasAuthToken || got.ApiServer != "api2.example.local" {
+		t.Fatalf("GetDebugConfig after update unexpected: %+v", got)
 	}
 }

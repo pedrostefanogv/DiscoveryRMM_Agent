@@ -33,14 +33,14 @@
 
 |     | PT_BR                                                    | EN                                                 |
 | --- | -------------------------------------------------------- | -------------------------------------------------- |
-| 🖥️  | Modo GUI desktop ou serviço Windows headless             | Desktop GUI or headless Windows Service            |
-| 📦  | Inventário de hardware e software (osquery + PowerShell) | Hardware/software inventory (osquery + PowerShell) |
-| ⚙️  | Automação operacional e execução de tarefas              | Operational automation and task execution          |
-| 🔗  | Distribuição P2P com descoberta local                    | P2P distribution with local discovery              |
-| 🤖  | Integração com chat/IA e ferramentas MCP                 | Chat/AI integration and MCP tooling                |
-| 🎛️  | Acesso remoto: desktop, terminal, arquivos, Proxy LAN (HTTP/WS com allowlist SSRF-safe) e túnel RDP sobre NATS | Remote access: desktop, terminal, files, LAN proxy (HTTP/WS, SSRF-safe allowlist) and RDP tunnel over NATS |
-| 🔐  | Segurança local: authToken via DPAPI + ACL SYSTEM, debug HTTP autenticado por token, decommission com validação de caminho/assinatura | Local hardening: DPAPI authToken + SYSTEM ACL, token-authenticated debug HTTP, decommission path/signature validation |
-| 📥  | Instalador NSIS, bootstrap online, versionamento por tag | NSIS installer, online bootstrap, tag versioning   |
+| 🖥️  | Serviço Windows headless (`discovery-service.exe`) + UI Companion Wails v3 (`discovery-agent.exe`) via Dual-Pipe IPC | Headless Windows Service (`discovery-service.exe`) + Wails v3 Companion UI (`discovery-agent.exe`) via Dual-Pipe IPC |
+| 📦  | Inventário de hardware e software (WMI/CIM nativo + osquery + PowerShell) | Hardware/software inventory (native WMI/CIM + osquery + PowerShell) |
+| ⚙️  | Automação operacional, janelas de manutenção e execução de tarefas via NATS JetStream | Operational automation, maintenance windows and task execution over NATS JetStream |
+| 🔗  | Distribuição P2P com descoberta local (mDNS/UDP/libp2p) | P2P distribution with local discovery (mDNS/UDP/libp2p) |
+| 🤖  | Integração com chat/IA, chat de suporte e ferramentas MCP internas | AI chat integration, support chat and internal MCP tooling |
+| 🎛️  | Acesso remoto: desktop (DXGI/GDI), terminal (ConPTY), arquivos, Proxy LAN (HTTP/WS com allowlist SSRF-safe) e túnel RDP multiplexado sobre NATS | Remote access: desktop (DXGI/GDI), terminal (ConPTY), files, LAN proxy (HTTP/WS, SSRF-safe allowlist) and multiplexed RDP tunnel over NATS |
+| 🔐  | Segurança local: `authToken` via DPAPI + ACL `SYSTEM`, Dual-Pipe IPC autenticado, `debug_http` autenticado por token, descomissionamento com validação de caminho/assinatura | Local hardening: DPAPI `authToken` + `SYSTEM` ACL, authenticated Dual-Pipe IPC, token-authenticated `debug_http`, decommission path/signature validation |
+| 📥  | Instalador NSIS, bootstrap online, auto-update, versionamento por tag | NSIS installer, online bootstrap, self-update, tag versioning |
 
 ---
 
@@ -124,10 +124,21 @@ Detalhes em [BRANCHING.md](BRANCHING.md).
 
 ## 🛠️ Build (Contribuidores / Contributors)
 
-**PT_BR:** este projeto usa GitHub Actions para build oficial. Para desenvolvimento local consulte [ARCHITECTURE.md](ARCHITECTURE.md).
-**EN:** official builds run on GitHub Actions. For local development see [ARCHITECTURE.md](ARCHITECTURE.md).
+**PT_BR:** este projeto usa **Wails v3** (`src/build/config.yml` e `src/Taskfile.yml`) e GitHub Actions para build oficial. Para desenvolvimento local consulte [ARCHITECTURE.md](ARCHITECTURE.md) e [AGENTS.md](AGENTS.md).
+**EN:** this project uses **Wails v3** (`src/build/config.yml` and `src/Taskfile.yml`) and GitHub Actions for official builds. For local development see [ARCHITECTURE.md](ARCHITECTURE.md) and [AGENTS.md](AGENTS.md).
 
-Requisitos mínimos / Minimum requirements: Windows 10+, Go 1.26+, NSIS no `PATH`.
+Requisitos mínimos / Minimum requirements: Windows 10+, Go 1.26+, Wails CLI v3 (`wails3`), NSIS no `PATH`.
+
+```powershell
+# Build completo dos dois binários (src/bin/discovery-agent.exe e src/bin/discovery-service.exe)
+# NUNCA use `go build` diretamente para a UI — o frontend é processado pelo Wails v3.
+cd src
+wails3 build
+
+# Modo de desenvolvimento com hot-reload
+cd src
+wails3 dev -config ./build/config.yml
+```
 
 ### Instalador: o serviço é obrigatório no payload
 
@@ -135,7 +146,7 @@ O `project.nsi` **falha em tempo de compilação** se `ARG_SERVICE_AMD64_BINARY`
 (`!error`), porque um instalador sem `discovery-service.exe` instala a UI em modo standalone,
 escreve `discovery-service.exe ausente — serviço não registrado` no `installer.log` e ainda
 reporta "Instalacao concluida com sucesso". O `File` do serviço fica no `project.nsi` (e **não**
-no `wails_tools.nsh`, que é auto-gerado por `wails build` e perde patches manuais).
+no `wails_tools.nsh`, que é auto-gerado por `cd src && wails3 build` e perde patches manuais).
 
 ```powershell
 # correto (gera e embute os dois binários)

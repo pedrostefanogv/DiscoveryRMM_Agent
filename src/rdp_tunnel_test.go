@@ -249,3 +249,206 @@ func TestRDPTunnel_PreflightOnlyMode(t *testing.T) {
 		t.Fatalf("preflight-only com Ready=false retornou exit code %d, want 2", code)
 	}
 }
+
+func TestRDPTunnel_TicketSentAsQueryParam(t *testing.T) {
+	// 1. resolveRDPTunnelWSURL preserves query params and sets ?ticket=abc
+	cfg, _, err := parseRDPTunnelConfig(
+		[]string{
+			"--rdp-tunnel",
+			"--api-url=https://rmm.example.com/base?foo=bar",
+			"--agent-id=ag-1",
+			"--session-id=sess-1",
+			"--ticket=abc",
+		},
+		func(string) string { return "" },
+		nil,
+		io.Discard,
+	)
+	if err != nil {
+		t.Fatalf("parseRDPTunnelConfig: %v", err)
+	}
+	wsURL, err := resolveRDPTunnelWSURL(cfg)
+	if err != nil {
+		t.Fatalf("resolveRDPTunnelWSURL: %v", err)
+	}
+	if !strings.Contains(wsURL, "foo=bar") || !strings.Contains(wsURL, "ticket=abc") {
+		t.Fatalf("expected preserved query params + ticket=abc in %q", wsURL)
+	}
+
+	// 2. End-to-end WS upgrade receives ?ticket=abc and no Authorization header / no JWT in query
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	var (
+		gotTicket string
+		gotAuth   string
+		gotQuery  string
+		mu        sync.Mutex
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotTicket = r.URL.Query().Get("ticket")
+		gotAuth = r.Header.Get("Authorization")
+		gotQuery = r.URL.RawQuery
+		mu.Unlock()
+		c, uerr := upgrader.Upgrade(w, r, nil)
+		if uerr != nil {
+			return
+		}
+		defer c.Close()
+		_, _, _ = c.ReadMessage()
+	}))
+	defer srv.Close()
+
+	wsTarget := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/remote-sessions/ag-1/sess-1/tunnel/ws?foo=bar"
+	cfgDirect := rdpTunnelConfig{
+		ListenAddr: "127.0.0.1:0",
+		WSURL:      wsTarget,
+		Ticket:     "abc",
+		Token:      "long-lived-jwt-must-not-appear",
+	}
+	resolvedDirect, err := resolveRDPTunnelWSURL(cfgDirect)
+	if err != nil {
+		t.Fatalf("resolveRDPTunnelWSURL(ws-url): %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fwd, err := startRDPTunnelForwarder(ctx, cfgDirect, resolvedDirect)
+	if err != nil {
+		t.Fatalf("startRDPTunnelForwarder: %v", err)
+	}
+	defer fwd.Close()
+
+	mu.Lock()
+	tk, auth, rawQ := gotTicket, gotAuth, gotQuery
+	mu.Unlock()
+	if tk != "abc" {
+		t.Fatalf("WS upgrade ticket = %q, want abc (query=%q)", tk, rawQ)
+	}
+	if auth != "" {
+		t.Fatalf("expected empty Authorization header when ?ticket= is used (UserAuthMiddleware.cs:74), got %q", auth)
+	}
+	if strings.Contains(rawQ, "long-lived-jwt") || !strings.Contains(rawQ, "foo=bar") {
+		t.Fatalf("unexpected WS query %q", rawQ)
+	}
+}
+
+func TestRDPTunnel_TokenExchangeToTicketAndSafeFallback(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+
+	t.Run("exchanges_token_for_single_use_ticket", func(t *testing.T) {
+		var (
+			ticketPostAuth string
+			wsTicket       string
+			wsAuth         string
+			mu             sync.Mutex
+		)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost && r.URL.Path == "/api/v1/remote-sessions/ag-1/sess-1/tunnel/ticket" {
+				mu.Lock()
+				ticketPostAuth = r.Header.Get("Authorization")
+				mu.Unlock()
+				_ = json.NewEncoder(w).Encode(map[string]any{"ticket": "tk-short-1", "expiresInSeconds": 60})
+				return
+			}
+			if r.URL.Path == "/api/v1/remote-sessions/ag-1/sess-1/tunnel/ws" {
+				mu.Lock()
+				wsTicket = r.URL.Query().Get("ticket")
+				wsAuth = r.Header.Get("Authorization")
+				mu.Unlock()
+				c, err := upgrader.Upgrade(w, r, nil)
+				if err == nil {
+					defer c.Close()
+					_, _, _ = c.ReadMessage()
+				}
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		cfg := rdpTunnelConfig{
+			ListenAddr: "127.0.0.1:0",
+			APIURL:     srv.URL,
+			AgentID:    "ag-1",
+			SessionID:  "sess-1",
+			Token:      "jwt-session-token",
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		effCfg, wsURL, err := prepareRDPTunnelConnection(ctx, cfg, io.Discard)
+		if err != nil {
+			t.Fatalf("prepareRDPTunnelConnection: %v", err)
+		}
+		if effCfg.Ticket != "tk-short-1" {
+			t.Fatalf("expected exchanged ticket tk-short-1, got %q", effCfg.Ticket)
+		}
+		fwd, err := startRDPTunnelForwarder(ctx, effCfg, wsURL)
+		if err != nil {
+			t.Fatalf("startRDPTunnelForwarder: %v", err)
+		}
+		defer fwd.Close()
+
+		mu.Lock()
+		defer mu.Unlock()
+		if ticketPostAuth != "Bearer jwt-session-token" {
+			t.Fatalf("ticket POST Authorization = %q, want Bearer jwt-session-token", ticketPostAuth)
+		}
+		if wsTicket != "tk-short-1" || wsAuth != "" {
+			t.Fatalf("WS upgrade expected ?ticket=tk-short-1 and empty Authorization, got ticket=%q auth=%q", wsTicket, wsAuth)
+		}
+	})
+
+	t.Run("fallback_to_bearer_header_if_ticket_endpoint_unavailable", func(t *testing.T) {
+		var (
+			wsAuth  string
+			wsQuery string
+			mu      sync.Mutex
+		)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/remote-sessions/ag-1/sess-1/tunnel/ws" {
+				mu.Lock()
+				wsAuth = r.Header.Get("Authorization")
+				wsQuery = r.URL.RawQuery
+				mu.Unlock()
+				c, err := upgrader.Upgrade(w, r, nil)
+				if err == nil {
+					defer c.Close()
+					_, _, _ = c.ReadMessage()
+				}
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		cfg := rdpTunnelConfig{
+			ListenAddr: "127.0.0.1:0",
+			APIURL:     srv.URL,
+			AgentID:    "ag-1",
+			SessionID:  "sess-1",
+			Token:      "jwt-session-token",
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		effCfg, wsURL, err := prepareRDPTunnelConnection(ctx, cfg, io.Discard)
+		if err != nil {
+			t.Fatalf("prepareRDPTunnelConnection: %v", err)
+		}
+		if effCfg.Ticket != "" {
+			t.Fatalf("expected empty ticket on fallback, got %q", effCfg.Ticket)
+		}
+		fwd, err := startRDPTunnelForwarder(ctx, effCfg, wsURL)
+		if err != nil {
+			t.Fatalf("startRDPTunnelForwarder: %v", err)
+		}
+		defer fwd.Close()
+
+		mu.Lock()
+		defer mu.Unlock()
+		if wsAuth != "Bearer jwt-session-token" {
+			t.Fatalf("WS fallback Authorization = %q, want Bearer jwt-session-token", wsAuth)
+		}
+		if strings.Contains(wsQuery, "jwt-session-token") {
+			t.Fatalf("JWT leaked in WS URL query string: %q", wsQuery)
+		}
+	})
+}

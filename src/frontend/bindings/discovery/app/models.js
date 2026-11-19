@@ -20,6 +20,9 @@ import * as coreagent$0 from "./coreagent/models.js";
 import * as debug$0 from "./debug/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as debughttp$0 from "./debughttp/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as p2p$0 from "./p2p/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -176,6 +179,16 @@ export class ChatMessage {
         return new ChatMessage(/** @type {Partial<ChatMessage>} */($$parsedSource));
     }
 }
+
+/**
+ * ChatSSEInfo expõe porta, URL e token do servidor SSE local para o webview nativo.
+ */
+export const ChatSSEInfo = debughttp$0.ChatSSEInfo;
+
+/**
+ * ChatSSEInfo expõe porta, URL e token do servidor SSE local para o webview nativo.
+ * @typedef {debughttp$0.ChatSSEInfo} ChatSSEInfo
+ */
 
 export const CloseTicketInput = supportmeta$0.CloseTicketInput;
 
@@ -870,6 +883,14 @@ export const p2pDiscoveredPeer = p2pmeta$0.DiscoveredPeer;
 
 /**
  * @typedef {p2pmeta$0.DiscoveredPeer} p2pDiscoveredPeer
+ */
+
+/**
+ * uiNotifications é o contrato local do serviço nativo de notificações do
+ * Wails v3 (*wailsnotifications.NotificationService). O ServiceStartup local
+ * não recebe opções: o adapter repassa application.ServiceOptions{} (o mesmo
+ * DefaultServiceOptions que o Wails passaria).
+ * @typedef {any} uiNotifications
  */
 
 // Private type creation functions

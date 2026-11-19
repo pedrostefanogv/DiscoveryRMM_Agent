@@ -111,23 +111,23 @@ func runRDPTunnelCLI(args []string) int {
 		return 1
 	}
 
-	wsURL, err := resolveRDPTunnelWSURL(cfg)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	effCfg, wsURL, err := prepareRDPTunnelConnection(ctx, cfg, os.Stderr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[rdp-tunnel] erro de URL: %v\n", err)
 		return 1
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	fwd, err := startRDPTunnelForwarder(ctx, cfg, wsURL)
+	fwd, err := startRDPTunnelForwarder(ctx, effCfg, wsURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[rdp-tunnel] falha ao conectar: %v\n", err)
 		return 1
 	}
 	defer fwd.Close()
 
-	if cfg.PreflightOnly {
+	if effCfg.PreflightOnly {
 		status, pErr := fwd.RequestPreflight(ctx, rdpTunnelPreflightTimeout)
 		if pErr != nil {
 			fmt.Fprintf(os.Stderr, "[rdp-tunnel] erro no preflight: %v\n", pErr)
@@ -147,7 +147,7 @@ func runRDPTunnelCLI(args []string) int {
 	}
 
 	fmt.Fprintf(os.Stderr, "[rdp-tunnel] ouvindo em %s -> %s (target=%s:%d)\n",
-		fwd.Addr(), wsURL, cfg.TargetHost, cfg.TargetPort)
+		fwd.Addr(), redactRDPTunnelURL(wsURL), effCfg.TargetHost, effCfg.TargetPort)
 
 	// Preflight informativo ao iniciar (nao fatal).
 	go func() {
@@ -187,7 +187,7 @@ func printRDPTunnelHelp(w io.Writer) {
 	fmt.Fprintln(w, "  --token-stdin              Le Bearer token da primeira linha do stdin")
 	fmt.Fprintln(w, "  --token-file=<caminho>     Le Bearer token de arquivo")
 	fmt.Fprintln(w, "  --token=<jwt>              Bearer token na linha de comando (evite; prefira DISCOVERY_TUNNEL_TOKEN)")
-	fmt.Fprintln(w, "  --ticket=<ticket>          Ticket de tunel enviado via header X-Tunnel-Ticket")
+	fmt.Fprintln(w, "  --ticket=<ticket>          Ticket de tunel de uso unico enviado via ?ticket=<ticket>")
 	fmt.Fprintln(w, "  --preflight-only           Consulta status RDP do host remoto, imprime JSON e sai")
 	fmt.Fprintln(w, "  --insecure                 Permite TLS nao verificado (apenas laboratorio)")
 	fmt.Fprintln(w, "  --tls-pin-hash=<sha256>    Exige pin SHA-256 do certificado TLS da API")
@@ -337,6 +337,11 @@ func resolveRDPTunnelWSURL(cfg rdpTunnelConfig) (string, error) {
 		if u.Host == "" {
 			return "", fmt.Errorf("ws-url sem host")
 		}
+		if ticket := strings.TrimSpace(cfg.Ticket); ticket != "" {
+			q := u.Query()
+			q.Set("ticket", ticket)
+			u.RawQuery = q.Encode()
+		}
 		return u.String(), nil
 	}
 
@@ -367,9 +372,119 @@ func resolveRDPTunnelWSURL(cfg rdpTunnelConfig) (string, error) {
 	basePath := strings.TrimRight(u.Path, "/")
 	u.Path = fmt.Sprintf("%s/api/v1/remote-sessions/%s/%s/tunnel/ws",
 		basePath, url.PathEscape(agentID), url.PathEscape(sessionID))
+	q := u.Query()
+	if ticket := strings.TrimSpace(cfg.Ticket); ticket != "" {
+		q.Set("ticket", ticket)
+	}
+	u.RawQuery = q.Encode()
+	u.Fragment = ""
+	return u.String(), nil
+}
+
+func resolveRDPTunnelTicketURL(cfg rdpTunnelConfig) (string, error) {
+	apiRaw := strings.TrimSpace(cfg.APIURL)
+	agentID := strings.TrimSpace(cfg.AgentID)
+	sessionID := strings.TrimSpace(cfg.SessionID)
+	if apiRaw == "" || agentID == "" || sessionID == "" {
+		return "", fmt.Errorf("api-url/agent-id/session-id ausentes")
+	}
+	if !strings.Contains(apiRaw, "://") {
+		apiRaw = "https://" + apiRaw
+	}
+	u, err := url.Parse(apiRaw)
+	if err != nil {
+		return "", fmt.Errorf("api-url invalida: %w", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https", "wss":
+		u.Scheme = "https"
+	case "http", "ws":
+		u.Scheme = "http"
+	default:
+		return "", fmt.Errorf("esquema api-url invalido: %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("api-url sem host")
+	}
+	basePath := strings.TrimRight(u.Path, "/")
+	u.Path = fmt.Sprintf("%s/api/v1/remote-sessions/%s/%s/tunnel/ticket",
+		basePath, url.PathEscape(agentID), url.PathEscape(sessionID))
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String(), nil
+}
+
+func exchangeRDPTunnelTicket(ctx context.Context, cfg rdpTunnelConfig) (string, error) {
+	ticketURL, err := resolveRDPTunnelTicketURL(cfg)
+	if err != nil {
+		return "", err
+	}
+	if cfg.Insecure {
+		tlsutil.SetConfigAllowInsecureTLS(true)
+	}
+	client := tlsutil.NewHTTPClient(10 * time.Second)
+	if strings.TrimSpace(cfg.TLSPinHash) != "" {
+		client.Transport = &http.Transport{
+			TLSClientConfig: tlsutil.PinnedTLSConfig(cfg.TLSPinHash, true),
+		}
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ticketURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.Token))
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var body struct {
+		Ticket string `json:"ticket"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 16*1024)).Decode(&body); err != nil {
+		return "", err
+	}
+	ticket := strings.TrimSpace(body.Ticket)
+	if ticket == "" {
+		return "", fmt.Errorf("resposta sem ticket")
+	}
+	return ticket, nil
+}
+
+func prepareRDPTunnelConnection(ctx context.Context, cfg rdpTunnelConfig, stderr io.Writer) (rdpTunnelConfig, string, error) {
+	if strings.TrimSpace(cfg.Ticket) == "" &&
+		strings.TrimSpace(cfg.Token) != "" &&
+		strings.TrimSpace(cfg.WSURL) == "" &&
+		strings.TrimSpace(cfg.APIURL) != "" &&
+		strings.TrimSpace(cfg.AgentID) != "" &&
+		strings.TrimSpace(cfg.SessionID) != "" {
+		ticket, err := exchangeRDPTunnelTicket(ctx, cfg)
+		if err == nil && ticket != "" {
+			cfg.Ticket = ticket
+		} else if err != nil && stderr != nil {
+			fmt.Fprintf(stderr, "[rdp-tunnel] aviso troca de ticket falhou (%v); usando Bearer header no WS\n", err)
+		}
+	}
+	wsURL, err := resolveRDPTunnelWSURL(cfg)
+	return cfg, wsURL, err
+}
+
+func redactRDPTunnelURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	q := u.Query()
+	if q.Has("ticket") {
+		q.Set("ticket", "REDACTED")
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
 }
 
 func startRDPTunnelForwarder(ctx context.Context, cfg rdpTunnelConfig, wsURL string) (*rdpTunnelForwarder, error) {
@@ -381,12 +496,23 @@ func startRDPTunnelForwarder(ctx context.Context, cfg rdpTunnelConfig, wsURL str
 		dialer.TLSClientConfig = tlsutil.PinnedTLSConfig(cfg.TLSPinHash, true)
 	}
 
-	headers := http.Header{}
-	if cfg.Token != "" {
-		headers.Set("Authorization", "Bearer "+cfg.Token)
+	ticket := strings.TrimSpace(cfg.Ticket)
+	if ticket != "" {
+		if u, uerr := url.Parse(wsURL); uerr == nil {
+			q := u.Query()
+			if q.Get("ticket") == "" {
+				q.Set("ticket", ticket)
+				u.RawQuery = q.Encode()
+				wsURL = u.String()
+			}
+		}
 	}
-	if cfg.Ticket != "" {
-		headers.Set("X-Tunnel-Ticket", cfg.Ticket)
+
+	headers := http.Header{}
+	// UserAuthMiddleware.cs:74 only checks ?ticket= when Authorization header is empty;
+	// never put long-lived JWT in URL query strings.
+	if ticket == "" && strings.TrimSpace(cfg.Token) != "" {
+		headers.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.Token))
 	}
 
 	conn, resp, err := dialer.DialContext(ctx, wsURL, headers)

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -146,11 +147,7 @@ func TestValidateUninstallerPathRejectsUntrustedPaths(t *testing.T) {
 func TestResumeAgentDecommissionIfPending_RejectsPoisonedCachePath(t *testing.T) {
 	resetDecommissionTestState(t)
 
-	db, err := database.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("database.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := database.OpenForTest(t)
 
 	poisonedPath := filepath.Join(t.TempDir(), uninstallerFileName)
 	if err := os.WriteFile(poisonedPath, []byte("evil"), 0o600); err != nil {
@@ -163,9 +160,9 @@ func TestResumeAgentDecommissionIfPending_RejectsPoisonedCachePath(t *testing.T)
 		t.Fatalf("CacheSetJSON: %v", err)
 	}
 
-	launched := false
+	var launched atomic.Bool
 	launchAgentUninstaller = func(string) (uint32, error) {
-		launched = true
+		launched.Store(true)
 		return 99, nil
 	}
 
@@ -175,7 +172,7 @@ func TestResumeAgentDecommissionIfPending_RejectsPoisonedCachePath(t *testing.T)
 	a.resumeAgentDecommissionIfPending()
 
 	time.Sleep(100 * time.Millisecond)
-	if launched {
+	if launched.Load() {
 		t.Fatal("uninstaller envenenado no cache SQLite não deveria ter sido executado")
 	}
 	var after agentDecommissionRequest
@@ -308,10 +305,12 @@ func TestHandleAgentDecommissionCommand_RetriesAfterLaunchFailure(t *testing.T) 
 	agentDecommissionResolveUninstaller = func() (string, error) { return "C:/tmp/uninstall.exe", nil }
 	validateUninstallerPathFn = func(p string) (string, error) { return p, nil }
 
-	var attempts int
+	var attempts atomic.Int32
+	attemptDone := make(chan int32, 4)
 	launchAgentUninstaller = func(string) (uint32, error) {
-		attempts++
-		if attempts == 1 {
+		n := attempts.Add(1)
+		attemptDone <- n
+		if n == 1 {
 			return 0, errors.New("CreateProcess falhou (teste)")
 		}
 		return 7, nil
@@ -319,16 +318,41 @@ func TestHandleAgentDecommissionCommand_RetriesAfterLaunchFailure(t *testing.T) 
 
 	app := &App{}
 	app.handleAgentDecommissionCommand(nil, nil)
-	time.Sleep(300 * time.Millisecond)
+
+	select {
+	case n := <-attemptDone:
+		if n != 1 {
+			t.Fatalf("esperado tentativa 1, obtido %d", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("primeira tentativa de lançamento não executou")
+	}
+
+	// Aguarda runAgentUninstaller liberar agentDecommissionLaunching após retornar erro.
+	deadline := time.Now().Add(2 * time.Second)
+	for agentDecommissionLaunching.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("trava agentDecommissionLaunching não foi liberada após falha")
+		}
+		time.Sleep(time.Millisecond)
+	}
 
 	// A primeira tentativa falhou e liberou a trava: um novo pedido (purge,
 	// reentrega ou novo delete no painel) precisa tentar novamente. Sem isso o
-	// marcador bloqueava a mÁ¡quina para sempre.
+	// marcador bloqueava a máquina para sempre.
 	app.handleAgentDecommissionCommand(nil, nil)
-	time.Sleep(300 * time.Millisecond)
 
-	if attempts != 2 {
-		t.Fatalf("esperado 2 tentativas após falha de lanÁçamento, obtido %d", attempts)
+	select {
+	case n := <-attemptDone:
+		if n != 2 {
+			t.Fatalf("esperado tentativa 2, obtido %d", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("segunda tentativa de lançamento não executou")
+	}
+
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("esperado 2 tentativas após falha de lançamento, obtido %d", got)
 	}
 }
 
@@ -339,9 +363,11 @@ func TestHandleAgentDecommissionCommand_IsIdempotent(t *testing.T) {
 	agentDecommissionResolveUninstaller = func() (string, error) { return "C:/tmp/uninstall.exe", nil }
 	validateUninstallerPathFn = func(p string) (string, error) { return p, nil }
 
-	var launches int
+	var launches atomic.Int32
+	launched := make(chan struct{}, 2)
 	launchAgentUninstaller = func(string) (uint32, error) {
-		launches++
+		launches.Add(1)
+		launched <- struct{}{}
 		return 1, nil
 	}
 
@@ -349,9 +375,13 @@ func TestHandleAgentDecommissionCommand_IsIdempotent(t *testing.T) {
 	app.handleAgentDecommissionCommand(nil, nil)
 	app.handleAgentDecommissionCommand(nil, nil)
 
-	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-launched:
+	case <-time.After(5 * time.Second):
+		t.Fatal("uninstaller não foi lançado")
+	}
 
-	if launches != 1 {
-		t.Fatalf("esperado exatamente um lanÁçamento, obtido %d", launches)
+	if got := launches.Load(); got != 1 {
+		t.Fatalf("esperado exatamente um lançamento, obtido %d", got)
 	}
 }

@@ -173,12 +173,26 @@ export class Config {
              */
             this["apiServer"] = "";
         }
-        if (!("authToken" in $$source)) {
+        if (/** @type {any} */(false)) {
             /**
              * @member
-             * @type {string}
+             * @type {string | undefined}
              */
-            this["authToken"] = "";
+            this["authToken"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["authTokenDpapi"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["hasAuthToken"] = undefined;
         }
         if (!("natsServer" in $$source)) {
             /**
@@ -339,6 +353,13 @@ export class InstallerConfig {
         }
         if (/** @type {any} */(false)) {
             /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["deployTokenDpapi"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * AutoProvisioning controla a participação local no fluxo de zero-touch
              * auto-provisioning via P2P (endpoint /p2p/config/onboard). Quando ausente,
              * o agente assume o comportamento padrão definido pela configuração do
@@ -362,6 +383,13 @@ export class InstallerConfig {
              * @type {string | undefined}
              */
             this["authToken"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["authTokenDpapi"] = undefined;
         }
         if (/** @type {any} */(false)) {
             /**
@@ -445,18 +473,18 @@ export class InstallerConfig {
      * @returns {InstallerConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField12_0 = $$createType1;
-        const $$createField13_0 = $$createType2;
-        const $$createField14_0 = $$createType3;
+        const $$createField14_0 = $$createType1;
+        const $$createField15_0 = $$createType2;
+        const $$createField16_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("agentUpdate" in $$parsedSource) {
-            $$parsedSource["agentUpdate"] = $$createField12_0($$parsedSource["agentUpdate"]);
+            $$parsedSource["agentUpdate"] = $$createField14_0($$parsedSource["agentUpdate"]);
         }
         if ("p2p" in $$parsedSource) {
-            $$parsedSource["p2p"] = $$createField13_0($$parsedSource["p2p"]);
+            $$parsedSource["p2p"] = $$createField15_0($$parsedSource["p2p"]);
         }
         if ("chatLog" in $$parsedSource) {
-            $$parsedSource["chatLog"] = $$createField14_0($$parsedSource["chatLog"]);
+            $$parsedSource["chatLog"] = $$createField16_0($$parsedSource["chatLog"]);
         }
         return new InstallerConfig(/** @type {Partial<InstallerConfig>} */($$parsedSource));
     }

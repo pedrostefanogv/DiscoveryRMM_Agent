@@ -10,7 +10,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 )
 
 // FileInfo representa metadados de um arquivo/diretorio.
@@ -46,6 +48,7 @@ type FileSessionRequest struct {
 	ChunkIndex  *int     `json:"chunkIndex,omitempty"` // nil = sem chunk (arquivo inteiro)
 	ChunkSize   int      `json:"chunkSize,omitempty"`
 	TotalChunks int      `json:"totalChunks,omitempty"`
+	Binary      bool     `json:"binary,omitempty"`
 }
 
 // FileSessionResponse representa uma resposta versionada (v1).
@@ -90,7 +93,7 @@ type Server struct {
 	// (ex.: rootPath "C:\" e o operador abre "D:\"). Fica DESLIGADO por
 	// padrão quando o root é um subdiretório — nesse caso o sandbox continua
 	// restrito à árvore do rootPath.
-	allowOtherVolumes bool
+	allowOtherVolumes atomic.Bool
 
 	// M29: auditoria de operações mutantes (put/delete/rename/mkdir/move/copy/
 	// unzip) — injetada pela SessionFiles; log local + evento ao servidor quando
@@ -99,7 +102,10 @@ type Server struct {
 	audit   func(action, path, newPath string, ok bool, errMsg string)
 	// progressFn é chamado durante operações longas (copy/move/zip) para
 	// reportar progresso (bytes processados / total). Pode ser nil.
+	progressMu sync.RWMutex
 	progressFn func(loaded, total int64)
+
+	handles *handleCache
 }
 
 // NewServer cria um novo servidor de arquivos.
@@ -109,24 +115,41 @@ type Server struct {
 // como no Explorer. Para um sandbox em subpasta a navegação continua
 // restrita à árvore de basePath.
 func NewServer(basePath string) *Server {
+	return newServerWithHandleCache(basePath, defaultMaxOpenHandles, defaultOpenHandleTTL)
+}
+
+func newServerWithHandleCache(basePath string, maxHandles int, handleTTL time.Duration) *Server {
 	clean := normalizeVolumeRootPath(basePath)
-	return &Server{basePath: clean, allowOtherVolumes: isVolumeRootPath(clean)}
+	s := &Server{
+		basePath: clean,
+		handles:  newHandleCache(maxHandles, handleTTL),
+	}
+	s.allowOtherVolumes.Store(isVolumeRootPath(clean))
+	return s
+}
+
+// Close fecha todos os handles em cache mantidos pelo servidor.
+func (s *Server) Close() error {
+	if s != nil && s.handles != nil {
+		s.handles.Close()
+	}
+	return nil
 }
 
 // SetAllowOtherVolumes liga/desliga a navegação para outras unidades lógicas.
 func (s *Server) SetAllowOtherVolumes(allow bool) {
-	s.allowOtherVolumes = allow
+	s.allowOtherVolumes.Store(allow)
 }
 
 // AllowOtherVolumes informa se a troca de disco está habilitada.
 func (s *Server) AllowOtherVolumes() bool {
-	return s.allowOtherVolumes
+	return s.allowOtherVolumes.Load()
 }
 
 // AllowedDrives devolve as unidades oferecíveis ao viewer. Retorna nil quando
 // a sessão é restrita a uma subpasta (sem troca de disco).
 func (s *Server) AllowedDrives() []DriveInfo {
-	if !s.allowOtherVolumes {
+	if !s.allowOtherVolumes.Load() {
 		return nil
 	}
 	return ListDrives()
@@ -134,13 +157,18 @@ func (s *Server) AllowedDrives() []DriveInfo {
 
 // SetProgressCallback define o callback de progresso para operações longas.
 func (s *Server) SetProgressCallback(fn func(loaded, total int64)) {
+	s.progressMu.Lock()
 	s.progressFn = fn
+	s.progressMu.Unlock()
 }
 
 // reportProgress invoca o callback de progresso, se definido.
 func (s *Server) reportProgress(loaded, total int64) {
-	if s.progressFn != nil {
-		s.progressFn(loaded, total)
+	s.progressMu.RLock()
+	fn := s.progressFn
+	s.progressMu.RUnlock()
+	if fn != nil {
+		fn(loaded, total)
 	}
 }
 
@@ -171,6 +199,19 @@ func (s *Server) HandleRequest(raw []byte) []byte {
 	}
 
 	return s.marshal(s.dispatch(req.Action, req.Path, req.NewPath, req.Data, req.ChunkIndex, req.ChunkSize, req.TotalChunks, req.Paths))
+}
+
+// HandleSessionRequest processa uma FileSessionRequest estruturada sem
+// re-serialização JSON/base64 (usada pelo canal binário 'DF').
+func (s *Server) HandleSessionRequest(req FileSessionRequest) FileSessionResponse {
+	if req.Version != 1 {
+		return s.errorResponse(req.RequestID, "versão não suportada")
+	}
+	resp := s.dispatch(req.Action, req.Path, req.NewPath, req.Data, req.ChunkIndex, req.ChunkSize, req.TotalChunks, req.Paths)
+	if resp.RequestID == "" {
+		resp.RequestID = req.RequestID
+	}
+	return resp
 }
 
 func (s *Server) dispatch(action, path, newPath string, data []byte, chunkIndex *int, chunkSize, totalChunks int, paths []string) FileSessionResponse {
@@ -361,25 +402,45 @@ func (s *Server) handleGet(path string, chunkIndex *int, chunkSize int) FileSess
 		chunkIndex = &zero
 	}
 
-	if *chunkIndex >= totalChunks {
+	if *chunkIndex < 0 || *chunkIndex >= totalChunks {
 		return s.errorResponse("", fmt.Sprintf("chunk %d fora do range (0-%d)", *chunkIndex, totalChunks-1))
 	}
 
-	f, err := os.Open(fullPath)
-	if err != nil {
-		return s.errorResponse("", "abrir arquivo: "+err.Error())
-	}
-	defer f.Close()
-
-	offset := int64(*chunkIndex * chunkSize)
-	if _, err := f.Seek(offset, 0); err != nil {
-		return s.errorResponse("", "seek: "+err.Error())
-	}
-
+	offset := int64(*chunkIndex) * int64(chunkSize)
 	buf := make([]byte, chunkSize)
-	n, err := f.Read(buf)
-	if err != nil && err != io.EOF {
-		return s.errorResponse("", "ler chunk: "+err.Error())
+	var n int
+	if s.handles != nil {
+		h, err := s.handles.acquireRead(fullPath)
+		if err != nil {
+			return s.errorResponse("", "abrir arquivo: "+err.Error())
+		}
+		h.ioMu.Lock()
+		if _, err = h.file.Seek(offset, 0); err != nil {
+			h.ioMu.Unlock()
+			_ = s.handles.release(h, true)
+			return s.errorResponse("", "seek: "+err.Error())
+		}
+		n, err = h.file.Read(buf)
+		h.ioMu.Unlock()
+		if err != nil && err != io.EOF {
+			_ = s.handles.release(h, true)
+			return s.errorResponse("", "ler chunk: "+err.Error())
+		}
+		_ = s.handles.release(h, false)
+	} else {
+		f, err := os.Open(fullPath)
+		if err != nil {
+			return s.errorResponse("", "abrir arquivo: "+err.Error())
+		}
+		defer f.Close()
+
+		if _, err := f.Seek(offset, 0); err != nil {
+			return s.errorResponse("", "seek: "+err.Error())
+		}
+		n, err = f.Read(buf)
+		if err != nil && err != io.EOF {
+			return s.errorResponse("", "ler chunk: "+err.Error())
+		}
 	}
 
 	return s.okResponse(nil, buf[:n], info.Size(), *chunkIndex, totalChunks)
@@ -415,13 +476,11 @@ func (s *Server) handlePut(path string, data []byte, chunkIndex *int, chunkSize,
 	// mesmo .tmp. O frontend envia o `path` final real; o .tmp e interno.
 	tmpPath := fullPath + ".tmp"
 
-	// Garante que um .tmp orfão de um upload anterior abortado seja removido
-	// quando um novo upload do mesmo arquivo começar pelo chunk 0.
-	if chunkIndex != nil && *chunkIndex == 0 {
-		_ = os.Remove(tmpPath)
-	}
-
 	if chunkIndex == nil {
+		if s.handles != nil {
+			s.handles.invalidatePath(tmpPath)
+			s.handles.invalidatePath(fullPath)
+		}
 		// Upload único (arquivo pequeno): escreve no .tmp e renomeia.
 		if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 			_ = os.Remove(tmpPath)
@@ -444,29 +503,79 @@ func (s *Server) handlePut(path string, data []byte, chunkIndex *int, chunkSize,
 	if totalChunks <= 0 {
 		totalChunks = 1
 	}
-	if *chunkIndex >= totalChunks {
+	if *chunkIndex < 0 || *chunkIndex >= totalChunks {
 		return s.errorResponse("", fmt.Sprintf("chunk %d fora do range (0-%d)", *chunkIndex, totalChunks-1))
 	}
 
-	// Chunk 0: trunca o .tmp (remove restos de uploads anteriores).
-	// Chunk > 0 (resume): abre o .tmp que ja existe SEM O_CREATE — se o .tmp
-	// nao existir, significa que o upload anterior foi abortado/limpo; cria-lo
-	// do zero aqui geraria um arquivo com "buracos" no disco. Forcar o viewer
-	// a recomecar do chunk 0 e o comportamento correto.
+	isFirst := *chunkIndex == 0
+	isLast := *chunkIndex+1 >= totalChunks
+	offset := int64(*chunkIndex) * int64(chunkSize)
+
+	if s.handles != nil {
+		h, err := s.handles.acquireWrite(tmpPath, isFirst)
+		if err != nil {
+			if !isFirst && os.IsNotExist(err) {
+				return s.errorResponse("", "upload interrompido: recomece do chunk 0")
+			}
+			return s.errorResponse("", "abrir arquivo: "+err.Error())
+		}
+
+		h.ioMu.Lock()
+		if _, err := h.file.Seek(offset, 0); err != nil {
+			h.ioMu.Unlock()
+			_ = s.handles.release(h, true)
+			_ = os.Remove(tmpPath)
+			return s.errorResponse("", "seek: "+err.Error())
+		}
+		if _, err := h.file.Write(data); err != nil {
+			h.ioMu.Unlock()
+			_ = s.handles.release(h, true)
+			_ = os.Remove(tmpPath)
+			return s.errorResponse("", "escrever chunk: "+err.Error())
+		}
+		if isLast {
+			if err := h.file.Sync(); err != nil {
+				h.ioMu.Unlock()
+				_ = s.handles.release(h, true)
+				_ = os.Remove(tmpPath)
+				return s.errorResponse("", "sincronizar arquivo: "+err.Error())
+			}
+		}
+		h.ioMu.Unlock()
+
+		if isLast {
+			if err := s.handles.release(h, true); err != nil {
+				_ = os.Remove(tmpPath)
+				return s.errorResponse("", "fechar arquivo: "+err.Error())
+			}
+			s.handles.invalidatePath(fullPath)
+			if err := os.Rename(tmpPath, fullPath); err != nil {
+				_ = os.Remove(tmpPath)
+				return s.errorResponse("", "finalizar upload: "+err.Error())
+			}
+		} else {
+			_ = s.handles.release(h, false)
+		}
+		return s.okResponse(nil, nil, int64(len(data)), *chunkIndex, totalChunks)
+	}
+
+	// Fallback sem cache de handles
+	if isFirst {
+		_ = os.Remove(tmpPath)
+	}
 	flags := os.O_WRONLY
-	if *chunkIndex == 0 {
+	if isFirst {
 		flags |= os.O_CREATE | os.O_TRUNC
 	}
 
 	f, err := os.OpenFile(tmpPath, flags, 0644)
 	if err != nil {
-		if *chunkIndex > 0 && os.IsNotExist(err) {
+		if !isFirst && os.IsNotExist(err) {
 			return s.errorResponse("", "upload interrompido: recomece do chunk 0")
 		}
 		return s.errorResponse("", "abrir arquivo: "+err.Error())
 	}
 
-	offset := int64(*chunkIndex * chunkSize)
 	if _, err := f.Seek(offset, 0); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmpPath)
@@ -484,7 +593,7 @@ func (s *Server) handlePut(path string, data []byte, chunkIndex *int, chunkSize,
 	}
 
 	// Ultimo chunk: renomeia o .tmp para o nome final (arquivo completo).
-	if *chunkIndex+1 >= totalChunks {
+	if isLast {
 		if err := os.Rename(tmpPath, fullPath); err != nil {
 			_ = os.Remove(tmpPath)
 			return s.errorResponse("", "finalizar upload: "+err.Error())
@@ -498,6 +607,11 @@ func (s *Server) handleDelete(path string) FileSessionResponse {
 	fullPath, err := s.safePath(path)
 	if err != nil {
 		return s.errorResponse("", err.Error())
+	}
+
+	if s.handles != nil {
+		s.handles.invalidatePath(fullPath + ".tmp")
+		s.handles.invalidatePrefix(fullPath)
 	}
 
 	// Limpa um eventual .tmp órfão (upload cancelado/abortado) associado ao
@@ -544,6 +658,10 @@ func (s *Server) handleRename(path, newPath string) FileSessionResponse {
 	if err != nil {
 		return s.errorResponse("", err.Error())
 	}
+	if s.handles != nil {
+		s.handles.invalidatePrefix(oldFull)
+		s.handles.invalidatePath(newFull)
+	}
 	if err := os.Rename(oldFull, newFull); err != nil {
 		return s.errorResponse("", "renomear: "+err.Error())
 	}
@@ -572,6 +690,10 @@ func (s *Server) handleMove(path, newPath string) FileSessionResponse {
 	newFull, err := s.safePath(newPath)
 	if err != nil {
 		return s.errorResponse("", err.Error())
+	}
+	if s.handles != nil {
+		s.handles.invalidatePrefix(oldFull)
+		s.handles.invalidatePath(newFull)
 	}
 	// Garante diretorio pai do destino
 	if err := os.MkdirAll(filepath.Dir(newFull), 0755); err != nil {
@@ -650,6 +772,9 @@ func (s *Server) handleCopy(path, newPath string) FileSessionResponse {
 	if err != nil {
 		return s.errorResponse("", err.Error())
 	}
+	if s.handles != nil {
+		s.handles.invalidatePrefix(dst)
+	}
 
 	info, err := os.Stat(src)
 	if err != nil {
@@ -716,6 +841,9 @@ func (s *Server) handleZipMany(path, newPath string, paths []string) FileSession
 	if err != nil {
 		return s.errorResponse("", err.Error())
 	}
+	if s.handles != nil {
+		s.handles.invalidatePrefix(dst)
+	}
 
 	// Garante extensão .zip no destino.
 	if !strings.HasSuffix(strings.ToLower(dst), ".zip") {
@@ -743,6 +871,9 @@ func (s *Server) handleZipMany(path, newPath string, paths []string) FileSession
 
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return s.errorResponse("", "zip: criar destino: "+err.Error())
+	}
+	if s.handles != nil {
+		s.handles.invalidatePath(dst)
 	}
 
 	f, err := os.Create(dst)
@@ -815,6 +946,9 @@ func (s *Server) handleUnzip(path, newPath string) FileSessionResponse {
 	if err != nil {
 		return s.errorResponse("", err.Error())
 	}
+	if s.handles != nil {
+		s.handles.invalidatePrefix(dst)
+	}
 
 	zr, err := zip.OpenReader(src)
 	if err != nil {
@@ -824,6 +958,9 @@ func (s *Server) handleUnzip(path, newPath string) FileSessionResponse {
 
 	if err := os.MkdirAll(dst, 0755); err != nil {
 		return s.errorResponse("", "unzip: criar destino: "+err.Error())
+	}
+	if s.handles != nil {
+		s.handles.invalidatePrefix(dst)
 	}
 
 	// Total de bytes a extrair (soma dos tamanhos não-compactados).
@@ -985,7 +1122,7 @@ func (s *Server) safePath(rel string) (string, error) {
 	// Volume diferente: liberado somente quando a sessão permite trocar de disco
 	// (rootPath é raiz de volume) e full está numa unidade lógica existente.
 	// Caminhos UNC (\\host\share) continuam bloqueados.
-	if s.allowOtherVolumes && isAllowedVolumePath(full) {
+	if s.allowOtherVolumes.Load() && isAllowedVolumePath(full) {
 		return full, nil
 	}
 

@@ -300,7 +300,7 @@ func (a *App) StartP2PTelemetryLoop(ctx context.Context) {
 }
 
 func (a *App) p2pAPIAuthEndpoint(path string) (string, string, string, error) {
-	cfg := a.GetDebugConfig()
+	cfg := a.getDebugConfigInternal()
 	scheme := cfg.APIScheme()
 	server := strings.TrimSpace(cfg.ApiServer)
 	token := strings.TrimSpace(cfg.AuthToken)

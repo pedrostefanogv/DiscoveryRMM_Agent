@@ -51,11 +51,17 @@ const (
 //   - hOutput: handle de escrita do pipe de saída (stdout do processo filho)
 //
 // Retorna o HPCON e qualquer erro.
+// coordToUintptr packs COORD{X, Y} by value for the Windows x64 ABI (4-byte struct
+// passed in register: X in bits 0..15, Y in bits 16..31).
+func coordToUintptr(size COORD) uintptr {
+	return uintptr(uint32(uint16(size.X)) | (uint32(uint16(size.Y)) << 16))
+}
+
 func CreatePseudoConsole(size COORD, hInput, hOutput syscall.Handle) (HPCON, error) {
 	var hpc HPCON
 
 	r1, _, e1 := procCreatePseudoConsole.Call(
-		uintptr(unsafe.Pointer(&size)),
+		coordToUintptr(size),
 		uintptr(hInput),
 		uintptr(hOutput),
 		uintptr(PSEUDOCONSOLE_FLAG_NONE),
@@ -73,7 +79,7 @@ func CreatePseudoConsole(size COORD, hInput, hOutput syscall.Handle) (HPCON, err
 func ResizePseudoConsole(hpc HPCON, size COORD) error {
 	r1, _, e1 := procResizePseudoConsole.Call(
 		uintptr(hpc),
-		uintptr(unsafe.Pointer(&size)),
+		coordToUintptr(size),
 	)
 
 	if r1 != 0 {

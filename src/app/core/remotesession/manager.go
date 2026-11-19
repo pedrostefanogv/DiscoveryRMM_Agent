@@ -245,12 +245,10 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		proxyPolicy = &parsedPolicy
 	}
 
-	// Consentimento: desktop (screen/all) e TERMINAL. Um start de terminal com
-	// consent.required=true não pode conceder um shell remoto sem prompt
-	// (shell = execução de comandos na máquina do usuário). Arquivos, proxy e
-	// processos seguem sem prompt, como antes.
+	// Consentimento: desktop (screen/all), terminal, proxy e rdp (espelha
+	// RemoteConsentPolicy.AppliesTo da API). Arquivos e processos seguem sem prompt.
 	consentCfg := ParseConsentConfig(payload)
-	consentKind := kind == "screen" || kind == "all" || kind == "terminal"
+	consentKind := kind == KindScreen || kind == KindAll || kind == KindTerminal || kind == KindProxy || kind == KindRdp
 	if consentCfg != nil && consentKind {
 		skipConsent := false
 		// REPLAY do worker (watchdog de crash/logoff): a sessão pode JÁ ter sido
@@ -381,7 +379,7 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	// Banner local (click-through) + ícone da bandeja: exibidos na sessão
 	// interativa e excluídos da captura. A desconexão mora no ícone — o banner
 	// não captura cliques (ver screen/session_banner_windows.go).
-	if kind == "screen" || kind == "all" {
+	if kind == KindScreen || kind == KindAll || kind == KindProxy || kind == KindRdp {
 		if bannerCfg := ParseBannerConfig(payload); bannerCfg != nil && bannerCfg.Enabled {
 			monitorIndex := toInt(payload["monitorIndex"], 0)
 			if m.newTray != nil {

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Papeis que podem emitir mensagens pelo canal de controle.
@@ -94,7 +95,26 @@ func NewEnvelope(from, typ, sessionID string, seq uint64, payload map[string]any
 	}
 }
 
-// Encode serializa o envelope validando tipo (allow-list) e tamanho.
+func validateSessionID(raw string) (string, error) {
+	id := strings.TrimSpace(raw)
+	if id == "" {
+		return "", fmt.Errorf("sessionId ausente no envelope de controle")
+	}
+	for i := 0; i < len(id); i++ {
+		b := id[i]
+		if b < 0x20 || b == 0x7f || b == '*' || b == '>' {
+			return "", fmt.Errorf("sessionId invalido no envelope de controle")
+		}
+	}
+	for _, r := range id {
+		if unicode.IsSpace(r) {
+			return "", fmt.Errorf("sessionId invalido no envelope de controle")
+		}
+	}
+	return id, nil
+}
+
+// Encode serializa o envelope validando tipo (allow-list), sessionId e tamanho.
 func Encode(env Envelope, allowed TypeSet) ([]byte, error) {
 	if env.Version == 0 {
 		env.Version = 1
@@ -102,6 +122,11 @@ func Encode(env Envelope, allowed TypeSet) ([]byte, error) {
 	if !allowed.Has(env.Type) {
 		return nil, fmt.Errorf("tipo de controle invalido: %q", env.Type)
 	}
+	sessionID, err := validateSessionID(env.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	env.SessionID = sessionID
 	payload, err := json.Marshal(env)
 	if err != nil {
 		return nil, err
@@ -114,7 +139,7 @@ func Encode(env Envelope, allowed TypeSet) ([]byte, error) {
 
 // Decode desserializa e valida um frame de controle recebido.
 // Erros: payload vazio/grande, JSON invalido, tipo fora da allow-list, from
-// desconhecido ou sessionId ausente.
+// desconhecido ou sessionId ausente/invalido.
 func Decode(raw []byte, allowed TypeSet) (Envelope, error) {
 	if len(raw) == 0 {
 		return Envelope{}, fmt.Errorf("payload de controle vazio")
@@ -132,10 +157,11 @@ func Decode(raw []byte, allowed TypeSet) (Envelope, error) {
 	if env.From == "" || !IsRole(env.From) {
 		return Envelope{}, fmt.Errorf("from invalido: %q", env.From)
 	}
-	env.SessionID = strings.TrimSpace(env.SessionID)
-	if env.SessionID == "" {
-		return Envelope{}, fmt.Errorf("sessionId ausente no envelope de controle")
+	sessionID, err := validateSessionID(env.SessionID)
+	if err != nil {
+		return Envelope{}, err
 	}
+	env.SessionID = sessionID
 	env.Version = 1
 	return env, nil
 }

@@ -248,11 +248,7 @@ func main() {
 			// do agente (admin/SYSTEM) e já concentra config/logs/DB.
 			WebviewUserDataPath: appkg.WebView2UserDataPath(),
 		},
-		Services: []application.Service{
-			application.NewService(app),
-			application.NewService(app.RemoteDebugService()),
-			application.NewService(app.RemoteSessionService()),
-		},
+		Services: buildWailsServices(app),
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
@@ -272,11 +268,9 @@ func main() {
 		},
 	})
 
-	// Guarda a referência da aplicação no App para acesso a eventos/janela/tray.
-	app.SetApplicationWails(appInstance)
-	// Conecta o serviço nativo de notificações ao App (toast de resposta do
-	// chat + clique no toast reabrindo a aba de chat).
-	app.SetNativeNotificationService(notifService)
+	// Guarda a referência da aplicação no App e conecta o serviço nativo de
+	// notificações (toast de resposta do chat + clique no toast reabrindo a aba).
+	wireWailsApp(app, appInstance, notifService)
 
 	// Garante que o diretório de dados do WebView2 existe antes da janela
 	// ser criada (evita falha de criação do EBWebView em contexto SYSTEM).
@@ -299,7 +293,7 @@ func main() {
 	// do WebView2 (~230 MB medidos) sem nunca aparecer para o usuário. A fábrica
 	// abaixo é executada na primeira necessidade (clique no tray, toast, segunda
 	// instância) ou imediatamente quando a abertura é manual/por toast.
-	app.SetWindowFactoryWails(func() application.Window {
+	wireWailsWindowFactory(app, func() application.Window {
 		window := appInstance.Window.NewWithOptions(application.WebviewWindowOptions{
 			Title:     "Discovery",
 			Width:     appkg.WindowWidth,

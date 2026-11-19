@@ -3,7 +3,9 @@
 package platform
 
 import (
+	"encoding/binary"
 	"fmt"
+	"runtime"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -53,19 +55,14 @@ func ProcessIntegrityLevel() IntegrityLevel {
 // O spawn do worker pode entregar um token de usuário (Medium) mesmo quando
 // o serviço é SYSTEM (fallback), e só a leitura do token em si revela isso.
 func TokenIntegrityLevel(tok windows.Token) IntegrityLevel {
-	label, err := getTokenIntegrityLabel(tok)
-	if err != nil {
+	level, ok := getTokenIntegrityRID(tok)
+	if !ok {
 		return IntegrityUnknown
 	}
-	sid := label.Label.Sid
-	if sid == nil {
-		return IntegrityUnknown
-	}
-	// Para SID de integridade há apenas 1 sub-authority: o RID (nível).
-	var level uint32
-	if sid.SubAuthorityCount() > 0 {
-		level = sid.SubAuthority(0)
-	}
+	return integrityLevelFromRID(level)
+}
+
+func integrityLevelFromRID(level uint32) IntegrityLevel {
 	switch {
 	case level >= 0x4000:
 		return IntegritySystem
@@ -93,21 +90,52 @@ func IntegritySupportsUipiInjection(level IntegrityLevel) bool {
 	return level == IntegrityHigh || level == IntegritySystem
 }
 
-// getTokenIntegrityLabel lê o TOKEN_MANDATORY_LABEL (TOKEN_INTEGRITY_LEVEL)
-// de um token qualquer (o corrente ou um duplicado do worker).
-func getTokenIntegrityLabel(tok windows.Token) (*windows.Tokenmandatorylabel, error) {
-	token := tok
+// getTokenIntegrityRID lê o TOKEN_MANDATORY_LABEL (TOKEN_INTEGRITY_LEVEL)
+// e decodifica o RID da SID diretamente dos bytes do buffer devolvido pelo
+// kernel, evitando getSidSubAuthorityCount/getSidSubAuthority em x/sys/windows
+// (que reconvertem uintptr de volta para unsafe.Pointer e disparam checkptr
+// sob `go test -race`).
+func getTokenIntegrityRID(tok windows.Token) (uint32, bool) {
 	var size uint32
-	_ = windows.GetTokenInformation(token, windows.TokenIntegrityLevel, nil, 0, &size)
-	if size == 0 {
-		return nil, fmt.Errorf("tamanho do label de integridade desconhecido")
+	_ = windows.GetTokenInformation(tok, windows.TokenIntegrityLevel, nil, 0, &size)
+	minHeader := uint32(unsafe.Sizeof(windows.Tokenmandatorylabel{}))
+	if size < minHeader+8 {
+		return 0, false
 	}
-	buf := make([]byte, size)
+	words := make([]uint64, (size+7)/8)
+	raw := unsafe.Slice((*byte)(unsafe.Pointer(&words[0])), len(words)*8)
 	var returned uint32
-	if err := windows.GetTokenInformation(token, windows.TokenIntegrityLevel, &buf[0], size, &returned); err != nil {
-		return nil, err
+	if err := windows.GetTokenInformation(tok, windows.TokenIntegrityLevel, &raw[0], size, &returned); err != nil {
+		return 0, false
 	}
-	return (*windows.Tokenmandatorylabel)(unsafe.Pointer(&buf[0])), nil
+	if returned < minHeader || int(returned) > len(raw) {
+		return 0, false
+	}
+	label := (*windows.Tokenmandatorylabel)(unsafe.Pointer(&words[0]))
+	if label.Label.Sid == nil {
+		return 0, false
+	}
+	baseAddr := uintptr(unsafe.Pointer(&raw[0]))
+	sidAddr := uintptr(unsafe.Pointer(label.Label.Sid))
+	if sidAddr < baseAddr || sidAddr >= baseAddr+uintptr(returned) {
+		return 0, false
+	}
+	sidBytes := make([]byte, int(uintptr(returned)-(sidAddr-baseAddr)))
+	copy(sidBytes, raw[int(sidAddr-baseAddr):int(returned)])
+	runtime.KeepAlive(words)
+	return parseIntegrityRIDFromSIDBytes(sidBytes)
+}
+
+func parseIntegrityRIDFromSIDBytes(sidBytes []byte) (uint32, bool) {
+	if len(sidBytes) < 8 || sidBytes[0] != 1 {
+		return 0, false
+	}
+	subCount := int(sidBytes[1])
+	if subCount < 1 || len(sidBytes) < 8+subCount*4 {
+		return 0, false
+	}
+	offset := 8 + (subCount-1)*4
+	return binary.LittleEndian.Uint32(sidBytes[offset : offset+4]), true
 }
 
 // ElevationReport descreve o contexto de privilégio do processo, útil para

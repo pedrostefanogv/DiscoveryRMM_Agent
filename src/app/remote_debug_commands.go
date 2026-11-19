@@ -315,6 +315,17 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 				return true, 0, "ok", ""
 
 			case act == "start":
+				if isInteractiveRemoteSessionKind(kind) || requiresInteractiveConsentOrBanner(kind, parsedPayload) {
+					// Injeta o token VIVO em memória no payload do worker (bug
+					// 2026-09-20): o worker lia o token do debug_config.json, que fica
+					// VELHO após a rotação P2P (persistida só no config.json).
+					injectWorkerRuntimeHints(a, parsedPayload)
+					if err := spawnRemoteSessionWorker(parent, parsedPayload); err != nil {
+						log.Printf("[remote-session] ERRO: worker não spawnado — sessao %s (%s): %v\n", sid, act, err)
+						return true, 1, "", "remote session sem sessão interativa: " + err.Error()
+					}
+					return true, 0, "ok", ""
+				}
 				if isHeadlessRemoteSessionKind(kind) {
 					if a.RemoteSessionMgr == nil {
 						log.Printf("[remote-session] ERRO: remoteSessionMgr nil em ServiceMode — sessao %s (%s)\n", sid, kind)
@@ -326,17 +337,6 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 						return true, 0, "ok", errMsg
 					}
 					return true, 1, "", "remotesession: " + errMsg
-				}
-				if isInteractiveRemoteSessionKind(kind) {
-					// Injeta o token VIVO em memória no payload do worker (bug
-					// 2026-09-20): o worker lia o token do debug_config.json, que fica
-					// VELHO após a rotação P2P (persistida só no config.json).
-					injectWorkerRuntimeHints(a, parsedPayload)
-					if err := spawnRemoteSessionWorker(parent, parsedPayload); err != nil {
-						log.Printf("[remote-session] ERRO: worker não spawnado — sessao %s (%s): %v\n", sid, act, err)
-						return true, 1, "", "remote session sem sessão interativa: " + err.Error()
-					}
-					return true, 0, "ok", ""
 				}
 				if a.RemoteSessionMgr != nil {
 					if _, errMsg := a.RemoteSessionMgr.HandleCommand(parent, parsedPayload); errMsg != "" {
@@ -467,6 +467,19 @@ func isInteractiveRemoteSessionKind(kind string) bool {
 	}
 }
 
+func requiresInteractiveConsentOrBanner(kind string, payload map[string]any) bool {
+	if kind != remotesession.KindProxy && kind != remotesession.KindRdp {
+		return false
+	}
+	if consent := remotesession.ParseConsentConfig(payload); consent != nil && consent.Mode == "prompt" {
+		return true
+	}
+	if banner := remotesession.ParseBannerConfig(payload); banner != nil && banner.Enabled {
+		return true
+	}
+	return false
+}
+
 func payloadString(m map[string]any, key string) string {
 	if m == nil {
 		return ""
@@ -497,7 +510,7 @@ func refreshServiceRemoteConsentRuntime(a *App) {
 	if a == nil || a.DebugSvc == nil {
 		return
 	}
-	cfg := a.GetDebugConfig()
+	cfg := a.getDebugConfigInternal()
 	if cfg.IsProvisioned() {
 		configureRemoteConsentRuntime(
 			workerAPIBase(WorkerDebugConfig{ApiScheme: cfg.APIScheme(), ApiServer: cfg.ApiServer}),

@@ -7,6 +7,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -140,5 +142,27 @@ func TestDispatchWithContextNoNativeFallback(t *testing.T) {
 	}
 	if resp.AgentAction != "rendered" {
 		t.Fatalf("esperado rendered, got %s", resp.AgentAction)
+	}
+}
+
+func TestNewApp_NonServiceModeDoesNotLoadDiskSecrets(t *testing.T) {
+	programData := t.TempDir()
+	t.Setenv("ProgramData", programData)
+
+	cfgDir := filepath.Join(programData, "Discovery")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	diskJSON := `{"apiScheme":"https","apiServer":"api.disk.local","authToken":"disk-secret-token","agentId":"8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"}`
+	if err := os.WriteFile(filepath.Join(cfgDir, "debug_config.json"), []byte(diskJSON), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	a := NewApp(AppStartupOptions{ServiceMode: false})
+	if got := a.getDebugConfigInternal().AuthToken; got != "" {
+		t.Fatalf("non-ServiceMode NewApp loaded AuthToken from disk: %q", got)
+	}
+	if got := a.GetDebugConfig(); got.AuthToken != "" || got.HasAuthToken {
+		t.Fatalf("non-ServiceMode GetDebugConfig unexpected: %+v", got)
 	}
 }

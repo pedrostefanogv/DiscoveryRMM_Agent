@@ -35,14 +35,18 @@ jobs:
           cache: true
           cache-dependency-path: src/go.sum
 
-      # O pacote main depende de Wails + CGO + frontend embedded — excluir da verificacao.
-      # Verifica apenas os subpacotes de logica de negocio.
+      # Verifica todos os pacotes (com e sem tag wailsui): main, app, cmd/discovery-service e e2e.
       # NOTA (auditoria 2026-10-21): "./internal/..." apontava para um diretorio que
       # nao existe em src/ — o Go emite apenas um warning e o job ficava verde.
       - name: go vet
         working-directory: src
         shell: pwsh
-        run: go vet ./app/...
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go vet ./...
+          go vet -tags wailsui ./...
+          go vet ./cmd/discovery-service/... ./e2e/...
 
       # Falha o PR se houver arquivo .go fora do formato (regressao de gofmt).
       - name: gofmt check
@@ -78,4 +82,7 @@ jobs:
         shell: pwsh
         env:
           CGO_ENABLED: "1"
-        run: go test -race ./app/... -timeout 300s
+        run: |
+          go test -race -tags wailsui .
+          go test -race .
+          go test -race ./app/... -timeout 300s

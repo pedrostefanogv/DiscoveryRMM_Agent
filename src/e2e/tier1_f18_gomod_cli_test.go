@@ -26,7 +26,7 @@ func TestF18_T1_GoModToolchainAndDirectDepsValid(t *testing.T) {
 	required := []string{
 		"github.com/wailsapp/wails/v3 v3.1.",
 		"github.com/nats-io/nats-server/v2 v2.15.",
-		"github.com/nats-io/nats.go v1.55.",
+		"github.com/nats-io/nats.go v1.56.",
 		"github.com/Microsoft/go-winio v0.6.",
 	}
 	for _, req := range required {

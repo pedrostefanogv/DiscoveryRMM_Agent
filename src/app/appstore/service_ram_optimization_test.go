@@ -44,12 +44,7 @@ func newTestService(t *testing.T, db *database.DB) *Service {
 
 func openTestDB(t *testing.T) *database.DB {
 	t.Helper()
-	db, err := database.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("database.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	return db
+	return database.OpenForTest(t)
 }
 
 func TestReadPersistedPolicyMigratesLegacyV1ToCompressedV2(t *testing.T) {

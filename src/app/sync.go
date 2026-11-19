@@ -15,7 +15,7 @@ import (
 func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 	if a.AgentConfigSvc == nil {
 		a.AgentConfigSvc = agentconfig.New(agentconfig.FetchDeps{
-			GetDebugConfig: a.GetDebugConfig,
+			GetDebugConfig: a.getDebugConfigInternal,
 		})
 	}
 	result, err := a.AgentConfigSvc.Fetch(ctx)

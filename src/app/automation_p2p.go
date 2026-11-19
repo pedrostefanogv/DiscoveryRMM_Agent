@@ -329,7 +329,7 @@ func (m *automationPackageManagerRouter) shouldUseP2PForWingetInstall() bool {
 	if m == nil || m.app == nil || m.fallback == nil {
 		return false
 	}
-	if !m.app.GetDebugConfig().P2PWingetInstallEnabled() {
+	if !m.app.getDebugConfigInternal().P2PWingetInstallEnabled() {
 		return false
 	}
 	p2pCfg := m.app.GetP2PConfig()

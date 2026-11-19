@@ -79,7 +79,7 @@ func (a *App) ensureCompanionNats() error {
 		}
 	}
 
-	cfg := a.GetDebugConfig()
+	cfg := a.getDebugConfigInternal()
 	agentCfg := a.GetAgentConfiguration()
 
 	agentID := strings.TrimSpace(cfg.AgentID)

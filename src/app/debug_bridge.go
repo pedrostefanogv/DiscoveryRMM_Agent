@@ -8,7 +8,16 @@ import (
 	"time"
 )
 
+// GetDebugConfig retorna a configuração de debug para a UI/bindings Wails com
+// segredos (AuthToken/AuthTokenDpapi) sempre redigidos.
 func (a *App) GetDebugConfig() DebugConfig {
+	return redactDebugConfig(a.getDebugConfigInternal())
+}
+
+// getDebugConfigInternal retorna a configuração de debug completa (incluindo
+// AuthToken em memória no processo de serviço/core) para consumo exclusivo de
+// serviços internos Go.
+func (a *App) getDebugConfigInternal() DebugConfig {
 	if a == nil || a.DebugSvc == nil {
 		return DebugConfig{}
 	}
@@ -63,6 +72,9 @@ func (a *App) SetDebugConfig(cfg DebugConfig) error {
 		a.DebugSvc.AdoptExternalConfig(cfg)
 		return nil
 	}
+	if tok := strings.TrimSpace(cfg.AuthToken); tok == "" || tok == "********" {
+		cfg.AuthToken = a.DebugSvc.GetConfig().AuthToken
+	}
 	return a.DebugSvc.SetConfig(cfg)
 }
 
@@ -114,6 +126,9 @@ func (a *App) TestDebugConnection(cfg DebugConfig) (string, error) {
 			return "", fmt.Errorf("%s", errMsg)
 		}
 		return ipcRPCDataOutput(resp), nil
+	}
+	if tok := strings.TrimSpace(cfg.AuthToken); tok == "" || tok == "********" {
+		cfg.AuthToken = a.DebugSvc.GetConfig().AuthToken
 	}
 	return a.DebugSvc.TestConnection(cfg)
 }

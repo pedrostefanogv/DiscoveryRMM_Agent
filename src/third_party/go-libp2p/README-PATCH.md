@@ -1,6 +1,6 @@
-# Fork local do go-libp2p v0.51.0 — sem transporte WebRTC
+﻿# Fork local do go-libp2p v0.52.0 — sem transporte WebRTC
 
-Fork local do módulo github.com/libp2p/go-libp2p v0.51.0 com uma única
+Fork local do módulo github.com/libp2p/go-libp2p v0.52.0 com uma única
 alteração: remoção do transporte WebRTC (pion/webrtc/v4) dos transportes
 padrão e do grafo de DI do config.NewNode.
 

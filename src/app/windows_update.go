@@ -55,7 +55,7 @@ func windowsUpdateAgentJitter(agentID string, spread time.Duration) time.Duratio
 func windowsUpdateInitialDelay(_ context.Context, a *App) time.Duration {
 	agentID := ""
 	if a != nil {
-		agentID = strings.TrimSpace(a.GetDebugConfig().AgentID)
+		agentID = strings.TrimSpace(a.getDebugConfigInternal().AgentID)
 	}
 	return windowsUpdateInitialDelayDefault + windowsUpdateAgentJitter(agentID, windowsUpdateJitterMax)
 }

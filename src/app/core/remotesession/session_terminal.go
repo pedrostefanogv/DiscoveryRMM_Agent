@@ -1450,15 +1450,20 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 	// O PowerShell/pwsh NÃO passa por aqui: o init vai embutido no command
 	// line do spawn (-EncodedCommand, ver terminal/shell_integration.go) e
 	// nunca é ecoado no viewer.
-	var shell terminal.IShell
-	var shRunAs string
-	var err error
-	var pendingIntegrationInit string
-	var injectIntegrationOnce sync.Once
+	var (
+		initMu                 sync.Mutex
+		initShell              terminal.IShell
+		pendingIntegrationInit string
+		injectIntegrationOnce  sync.Once
+	)
 	coalescer := newOutputCoalescer(func(output string) {
-		if pendingIntegrationInit != "" {
+		initMu.Lock()
+		sh := initShell
+		initCmd := pendingIntegrationInit
+		initMu.Unlock()
+		if sh != nil && initCmd != "" {
 			injectIntegrationOnce.Do(func() {
-				if werr := shell.WriteStdin(pendingIntegrationInit + "\r"); werr != nil {
+				if werr := sh.WriteStdin(initCmd + "\r"); werr != nil {
 					log.Printf("[session-terminal] init de integracao de shell falhou: %v", werr)
 				}
 			})
@@ -1487,7 +1492,7 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 	// REMOVE a sequência do fluxo (o viewer não pode renderizar ESC ] 633 como
 	// lixo) e atualiza o estado da sessão, mesmo fragmentada entre chunks.
 	scanner := &osc633Scanner{}
-	shell, shRunAs, err = terminal.NewShellInteractiveRunAs(shellKind, cols, rows, func(output string) {
+	shell, shRunAs, err := terminal.NewShellInteractiveRunAs(shellKind, cols, rows, func(output string) {
 		clean, cwds := scanner.Scan(output)
 		for _, c := range cwds {
 			st.applyReportedCwd(c)
@@ -1541,8 +1546,12 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 	// no command line do spawn): POSTERGADA até o PRIMEIRO output do shell
 	// (o prompt) — injetar no spawn ecoa o script no viewer. Fallback de 3s
 	// cobre shells que não produzem output imediato.
-	pendingIntegrationInit = buildShellIntegrationInit(shell.ShellKind(), st.termBackend)
-	if pendingIntegrationInit != "" {
+	initCmd := buildShellIntegrationInit(shell.ShellKind(), st.termBackend)
+	initMu.Lock()
+	initShell = shell
+	pendingIntegrationInit = initCmd
+	initMu.Unlock()
+	if initCmd != "" {
 		injectGen := st.consoleGen
 		go func() {
 			select {
@@ -1557,7 +1566,7 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 				return
 			}
 			injectIntegrationOnce.Do(func() {
-				if werr := shell.WriteStdin(pendingIntegrationInit + "\r"); werr != nil {
+				if werr := shell.WriteStdin(initCmd + "\r"); werr != nil {
 					log.Printf("[session-terminal] init de integracao de shell falhou: %v", werr)
 				}
 			})

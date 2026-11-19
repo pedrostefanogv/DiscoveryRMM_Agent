@@ -19,7 +19,7 @@ tasks:
     generates:
       - frontend/bindings/**/*
     cmds:
-      - wails3 generate bindings -b -clean=true -d frontend/bindings ./...
+      - wails3 generate bindings -b -clean=true -f "-tags wailsui" -d frontend/bindings ./...
 
   # Guarda de regressao: o gerador SEM `-b` emite imports npm-style
   # (@wailsio/runtime), que sao bare module specifiers - quebram o WebView2
