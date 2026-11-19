@@ -508,6 +508,46 @@ func (h *NatsStreamHandler) PublishProcReady(sessionID string, data any) error {
 	return h.nc.Publish(subject, payload)
 }
 
+// SubscribeToRegistryReq subscreve as requisicoes de navegacao/edicao do
+// Registro do Windows.
+//
+// O handler devolve o payload de resposta, publicado em .registry.resp. Mesmo
+// contrato de SubscribeToProcReq: o handler roda na goroutine do callback do
+// NATS, entao operacoes de registro (que podem bloquear em I/O) sao aceitaveis
+// aqui pelo mesmo motivo que em processos — sao operacoes curtas e limitadas,
+// e o guard recusa antes de qualquer syscall pesado.
+func (h *NatsStreamHandler) SubscribeToRegistryReq(sessionID string, handler func(reqData []byte) []byte) (*nats.Subscription, error) {
+	if h == nil || h.nc == nil {
+		return nil, fmt.Errorf("nats connection unavailable")
+	}
+	pattern := h.subscribePattern(sessionID, "registry.req")
+	respSubject := h.publishSubject(sessionID, "registry.resp")
+	if pattern == "" || respSubject == "" {
+		return nil, fmt.Errorf("sessionId invalido")
+	}
+	sub, err := h.nc.Subscribe(pattern, func(msg *nats.Msg) {
+		resp := handler(msg.Data)
+		if resp != nil {
+			_ = h.nc.Publish(respSubject, resp)
+		}
+	})
+	if err != nil {
+		log.Printf("[remote-session-nats] SubscribeToRegistryReq erro: pattern=%s err=%v\n", pattern, err)
+	} else {
+		log.Printf("[remote-session-nats] SubscribeToRegistryReq ok: pattern=%s\n", pattern)
+	}
+	return sub, err
+}
+
+// PublishRegistryReady notifica o viewer que a sessao de registro esta pronta
+// (subscribe em registry.req ativo). Mesmo padrao anti-race de proc.ready.
+func (h *NatsStreamHandler) PublishRegistryReady(sessionID string, data any) error {
+	payload, _ := json.Marshal(data)
+	subject := h.publishSubject(sessionID, "registry.ready")
+	log.Printf("[remote-session-nats] PublishRegistryReady: subject=%s\n", subject)
+	return h.nc.Publish(subject, payload)
+}
+
 // SubscribeToProxyReq subscreve a requisicoes de proxy HTTP.
 func (h *NatsStreamHandler) SubscribeToProxyReq(sessionID string, handler func(reqData []byte) []byte) (*nats.Subscription, error) {
 	if h == nil || h.nc == nil {

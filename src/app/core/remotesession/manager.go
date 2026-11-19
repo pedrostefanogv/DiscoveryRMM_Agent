@@ -226,7 +226,7 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	// consumia a vaga do kind no mapa de sessões ("uma por kind"). Recusa o
 	// start na fonte — nada é criado e o servidor recebe o erro.
 	switch kind {
-	case KindScreen, KindAll, KindTerminal, KindFiles, KindProcesses, KindProxy, KindRdp:
+	case KindScreen, KindAll, KindTerminal, KindFiles, KindProcesses, KindProxy, KindRdp, KindRegistry:
 	default:
 		log.Printf("[remote-session] handleStart: kind não suportado %q sessionId=%s — rejeitando\n", kind, sessionID)
 		return false, "kind não suportado: " + kind
@@ -239,6 +239,10 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	if kind == KindRdp && rights.Has(RightsNoRdp) {
 		log.Printf("[remote-session] handleStart: rdp bloqueado por rights (NoRdp) sessionId=%s\n", sessionID)
 		return false, "rdp bloqueado por restricao da sessao (NoRdp)"
+	}
+	if kind == KindRegistry && rights.Has(RightsNoRegistry) {
+		log.Printf("[remote-session] handleStart: registro bloqueado por rights (NoRegistry) sessionId=%s\n", sessionID)
+		return false, "registro bloqueado por restricao da sessao (NoRegistry)"
 	}
 
 	var proxyPolicy *ProxyPolicy
@@ -446,6 +450,12 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 			m.runProcessesSession(ctx, session)
 		}, func(line string) {
 			fmt.Printf("[remote-session-processes] %s\n", line)
+		})
+	case "registry":
+		safego.Go(func() {
+			m.runRegistrySession(ctx, session)
+		}, func(line string) {
+			fmt.Printf("[remote-session-registry] %s\n", line)
 		})
 	case "proxy":
 		safego.Go(func() {
@@ -1869,6 +1879,43 @@ func (m *Manager) runProcessesSession(ctx context.Context, session *Session) {
 		log.Printf("[remote-session-processes] sessão encerrada: %v", err)
 	} else {
 		log.Printf("[remote-session-processes] sessão encerrada normalmente para %s", session.ID)
+	}
+}
+
+// runRegistrySession inicia a sessao de navegacao/edicao do Registro.
+//
+// Espelha runProcessesSession: sem banner/tray (o registro nao altera a tela do
+// usuario, e o precedente de Processos tambem nao exibe aviso local). O
+// consentimento, quando a politica exigir, ja foi resolvido em handleStart.
+func (m *Manager) runRegistrySession(ctx context.Context, session *Session) {
+	defer close(session.doneCh)
+
+	if m.natsStream == nil {
+		return
+	}
+	closeReason := "registry-ended"
+	defer func() {
+		m.closeSession(session.ID, closeReason)
+	}()
+
+	sr := NewSessionRegistry(session.ID, m.natsStream)
+	log.Printf("[remote-session-registry] sessao de registro iniciada para %s", session.ID)
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-session.stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	if err := sr.Start(ctx); err != nil {
+		log.Printf("[remote-session-registry] sessao encerrada: %v", err)
+	} else {
+		log.Printf("[remote-session-registry] sessao encerrada normalmente para %s", session.ID)
 	}
 }
 

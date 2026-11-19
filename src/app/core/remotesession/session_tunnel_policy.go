@@ -22,6 +22,10 @@ const (
 	RemoteSessionKindAll       RemoteSessionKind = 4
 	RemoteSessionKindProcesses RemoteSessionKind = 5
 	RemoteSessionKindRdp       RemoteSessionKind = 6
+	// RemoteSessionKindRegistry e o editor/visualizador do Registro do Windows.
+	// Valor 7 e ADITIVO: espelha Discovery.Core.Enums.RemoteSessionKind.Registry
+	// na API. Nao renumerar os anteriores.
+	RemoteSessionKindRegistry RemoteSessionKind = 7
 )
 
 const (
@@ -31,6 +35,7 @@ const (
 	KindProcesses = "processes"
 	KindProxy     = "proxy"
 	KindRdp       = "rdp"
+	KindRegistry  = "registry"
 	KindAll       = "all"
 )
 
@@ -47,6 +52,9 @@ const (
 	RightsNoEvents     RemoteSessionRights = 32
 	RightsNoProxy      RemoteSessionRights = 64
 	RightsNoRdp        RemoteSessionRights = 128
+	// RightsNoRegistry remove o canal do Registro da credencial do viewer.
+	// Espelha RemoteSessionRights.NoRegistry (256) na API. Bit seguinte livre.
+	RightsNoRegistry RemoteSessionRights = 256
 )
 
 // Has retorna true se a flag estiver presente na mascara.
@@ -54,7 +62,7 @@ func (r RemoteSessionRights) Has(flag RemoteSessionRights) bool {
 	return r&flag != 0
 }
 
-// ParseRemoteSessionKind normaliza kind em string canonica ou inteiro (0..6).
+// ParseRemoteSessionKind normaliza kind em string canonica ou inteiro (0..7).
 func ParseRemoteSessionKind(raw any) string {
 	switch v := raw.(type) {
 	case string:
@@ -91,6 +99,8 @@ func remoteSessionKindIntToString(k RemoteSessionKind) string {
 		return KindProcesses
 	case RemoteSessionKindRdp:
 		return KindRdp
+	case RemoteSessionKindRegistry:
+		return KindRegistry
 	default:
 		return ""
 	}

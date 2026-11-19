@@ -11,7 +11,7 @@ O **Discovery Agent** é um agente de inventário, automação, acesso remoto e 
 - **Arquitetura Dual-Binary (`discovery-service.exe` + `discovery-agent.exe`)**:
   - Serviço Windows `SYSTEM` headless (`cmd/discovery-service` → `discovery-service.exe`), **sem Wails e sem WebView2**, responsável por toda a operação de core (NATS JetStream / `agentconn`, inventário, automação, P2P, self-update, remote session workers e servidor IPC).
   - UI Companion Desktop (`src/main.go` → `discovery-agent.exe`) via [Wails v3](https://wails.io/) (`v3.1.0` em [src/go.mod](src/go.mod)), rodando na sessão do usuário e comunicando-se com o serviço via **Dual-Pipe IPC** (named pipes separados de leitura e gravação/admin).
-- **Acesso Remoto Completo**: tela remota (DXGI/GDI), terminal remoto (ConPTY com `RUN_AS`), transferência de arquivos binária (`fileserver`), administração de processos/serviços (`sysctrl`), Proxy LAN HTTP/WS (`netproxy` com allowlist fail-closed e proteção SSRF) e túnel RDP multiplexado sobre NATS (`session_tunnel` + `--rdp-tunnel`).
+- **Acesso Remoto Completo**: tela remota (DXGI/GDI), terminal remoto (ConPTY com `RUN_AS`), transferência de arquivos binária (`fileserver`), administração de processos/serviços (`sysctrl`), editor/visualizador do Registro do Windows (`winregistry` com guard fail-closed), Proxy LAN HTTP/WS (`netproxy` com allowlist fail-closed e proteção SSRF) e túnel RDP multiplexado sobre NATS (`session_tunnel` + `--rdp-tunnel`).
 - **Segurança Local Endurecida**: `authToken` protegido com DPAPI do Windows (`dpapi:v1:`), `config.json` e `debug_config.json` restritos a `SYSTEM`/`Administrators`, redação de segredos no IPC para a UI, `debug_http` autenticado por token e descomissionamento validado.
 - **Ferramentas MCP internas** para integração com o chat de IA embarcado e **Rede P2P** (`go-libp2p` sem WebRTC/pion, mDNS/UDP) para distribuição local de artefatos.
 
@@ -34,7 +34,7 @@ O **Discovery Agent** é um agente de inventário, automação, acesso remoto e 
 | Core Hub (`package app`) | `src/app/app*.go` + `src/app/coreagent/` | `App` struct decomposto (`app.go`, `app_new.go`, `app_lifecycle.go`, `app_window_ui.go`, `app_connectivity.go`, `app_inventory_sync.go`, `app_power_idle.go`) + `CoreAgent` embed |
 | Proxy LAN | `src/app/core/netproxy` | Proxy HTTP/WS para destinos da rede interna do endpoint, com allowlist fail-closed, proteção SSRF e resolução DNS anti-TOCTOU |
 | Sessão Remota | `src/app/core/remotesession` | Orquestração de tela, terminal, arquivos, processos/serviços, túnel TCP/RDP multiplexado sobre NATS (`session_tunnel*`) e preflight RDP (`rdp_preflight*`) |
-| Captura / Terminal / Arquivos | `src/app/core/screen`, `core/terminal`, `core/fileserver`, `core/sysctrl` | Captura DXGI/GDI, ConPTY (`RUN_AS`), servidor de arquivos com protocolo binário `'DF'`, gerenciamento de processos/serviços Windows com guard fail-closed |
+| Captura / Terminal / Arquivos | `src/app/core/screen`, `core/terminal`, `core/fileserver`, `core/sysctrl`, `core/winregistry` | Captura DXGI/GDI, ConPTY (`RUN_AS`), servidor de arquivos com protocolo binário `'DF'`, gerenciamento de processos/serviços Windows com guard fail-closed, navegação/edição do Registro com guard fail-closed e codec de valor byte-exato |
 | Identidade e Segurança | `src/app/core/platform` | DPAPI para `authToken`, ACLs endurecidas (`SYSTEM`/`Administrators`), elevação e verificação Authenticode |
 | Testes E2E e Contrato | `src/e2e/` | Suíte Tiers 1–2 validando limites de arquitetura, desacoplamento `discovery-service`, `gofmt`/`go vet`, CLI flags e contratos de documentação |
 
@@ -133,6 +133,7 @@ Discovery/
 │   │       ├── sessioncontrol/ # Codec único e allowlist fechada de frames de controle (512B max)
 │   │       ├── sessionlive/    # Estado de sessão remota ativa
 │   │       ├── sysctrl/        # Processos/serviços Windows com guard fail-closed para DCs e serviços críticos
+│   │       ├── winregistry/    # Registro do Windows: navegação/edição com guard fail-closed e codec byte-exato
 │   │       ├── terminal/       # Pseudo-console ConPTY e controle de execução SYSTEM vs usuário
 │   │       ├── thirdparty/     # Provedores de patches de terceiros (choco/winget)
 │   │       ├── tlsutil/        # Cliente HTTP e pinagem/validação TLS
@@ -171,7 +172,7 @@ cmd/discovery-service/main.go (SYSTEM, sem Wails/WebView2)
            ├──► Dual-Pipe IPC        (IPCServer: pipe leitura + pipe admin)
            └──► app/core/*           (leaf packages: zero imports de discovery/app ou Wails)
                    ├── agentconn, automation, database, inventory, selfupdate
-                   ├── netproxy, remotesession, fileserver, screen, terminal, sysctrl
+                   ├── netproxy, remotesession, fileserver, screen, terminal, sysctrl, winregistry
                    ├── sessioncontrol, platform (DPAPI/ACL), safego, tlsutil
                    └── ...
 
@@ -256,7 +257,12 @@ Console Web (DiscoveryRMM_Site) ──► API WS/NATS ──► discovery-servic
   │           ├─► screen (DXGI-first + GDI fallback)
   │           ├─► terminal (ConPTY, RUN_AS fail-closed para usuário sem fallback para SYSTEM)
   │           ├─► fileserver (handle cache + protocolo binário 'DF')
-  │           └─► sysctrl (guard fail-closed para serviços críticos / DC)
+  │           ├─► sysctrl (guard fail-closed para serviços críticos / DC)
+│           └─► winregistry (guard fail-closed; Run/RunOnce = leitura apenas)
+  ├─► Registro do Windows:
+  │     └─► SessionRegistry (.registry.req / .registry.resp / .registry.ready)
+  │           ├─► winregistry.guard (FAIL-CLOSED: SAM/SECURITY/LSA nunca; Run/RunOnce só leitura)
+  │           └─► winregistry.ops (ListKey paginado, Get/Set/Delete, Create/Delete/Rename, Export)
   └─► Proxy LAN & Túnel RDP:
         ├─► netproxy: HTTP/WS local allowlist SSRF-safe + anti-TOCTOU DNS
         └─► session_tunnel (.tunnel.in / .tunnel.out): multiplexação TCP sobre NATS + --rdp-tunnel
