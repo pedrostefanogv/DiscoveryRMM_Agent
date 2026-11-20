@@ -145,6 +145,42 @@ func probeChannelOrderDetailed(candidate, reference *Frame) (ChannelOrder, strin
 		return ChannelOrderUnknown, "geometria inválida (frame vazio)"
 	}
 
+	// ── Stride SEGURO (correção do segfault de 2026-11-20) ───────────────────
+	//
+	// Os offsets de pixel são calculados com Frame.Stride, mas o guard de
+	// limites só conhece len(Frame.Data) — e Stride é um campo INDEPENDENTE do
+	// tamanho da slice. O contrato do pipeline diz que Data é um buffer
+	// REUTILIZADO entre frames (c.frameBuf no DXGI, c.dibBits na DIB section do
+	// GDI) e válido só ATÉ o próximo AcquireNextFrame; entre a recriação do
+	// buffer e o frame seguinte, ou quando a geometria encolhe e o buffer
+	// mantém o tamanho antigo, Stride pode exceder o que o buffer comporta.
+	//
+	// Com isso a checagem "co+3 >= len(Data)" PASSAVA em alguns pares (x,y) e o
+	// índice já caía além da página mapeada: fatal error: fault com endereço
+	// sempre terminando em 0x...000 (página não commitada). O worker morria na
+	// PRIMEIRA tentativa de calibração, antes de publicar qualquer frame, e o
+	// watchdog o relançava a cada ~2 s — 88 faults e 44 relançamentos só em
+	// 2026-11-20, com a sessão remota nunca funcionando nesta máquina.
+	//
+	// Aqui derivamos o stride EFETIVO do buffer: nunca confiamos no Stride
+	// declarado para indexar. Se ele for inválido (<=0) ou não couber no
+	// buffer, usamos a largura em bytes (4 por pixel, contrato BGRA do
+	// pipeline). O stride efetivo é ainda limitado para que a última linha
+	// amostrada caiba em Data — sem isso, um Stride "válido" mas maior que o
+	// buffer real voltaria a estourar.
+	candWin := safeFrameWindow(candidate, w, h)
+	refWin := safeFrameWindow(reference, w, h)
+	if !candWin.ok() || !refWin.ok() {
+		return ChannelOrderUnknown, "frame sem linhas utilizáveis no buffer (stride/janela inválida)"
+	}
+	// Amostra apenas a INTERSEÇÃO das janelas seguras: cada frame pode ter uma
+	// geometria de buffer diferente (é justamente o caso do incidente).
+	rows := min(candWin.rows, refWin.rows)
+	if rows <= 0 {
+		return ChannelOrderUnknown, "frames sem linhas em comum no buffer"
+	}
+	candStride, refStride := candWin.stride, refWin.stride
+
 	stepX := max(1, w/probeGridX)
 	stepY := max(1, h/probeGridY)
 
@@ -153,9 +189,11 @@ func probeChannelOrderDetailed(candidate, reference *Frame) (ChannelOrder, strin
 	candDiff := make([]float64, 0, probeGridX*probeGridY)
 	refDiff := make([]float64, 0, probeGridX*probeGridY)
 
-	for y := 0; y < h; y += stepY {
-		cRow := y * candidate.Stride
-		rRow := y * reference.Stride
+	// Itera SOMENTE rows (janela segura), nunca h: era exatamente aqui que o
+	// índice saía da página mapeada quando o buffer tinha menos de h linhas.
+	for y := 0; y < rows; y += stepY {
+		cRow := y * candStride
+		rRow := y * refStride
 		for x := 0; x < w; x += stepX {
 			co := cRow + x*4
 			ro := rRow + x*4
@@ -203,6 +241,99 @@ func probeChannelOrderDetailed(candidate, reference *Frame) (ChannelOrder, strin
 		return ChannelOrderRGBA, fmt.Sprintf("corr (R-B) %.2f ⇒ RGBA (swap)", dCorr)
 	}
 	return ChannelOrderUnknown, fmt.Sprintf("corr (R-B) %.2f inconclusiva", dCorr)
+}
+
+// frameSafeWindow descreve a região de frame.Data que pode ser indexada com
+// segurança, derivada do buffer REAL — nunca do Stride declarado.
+type frameSafeWindow struct {
+	stride int // bytes por linha, seguro para indexar
+	rows   int // quantas linhas do frame cabem no buffer com este stride
+}
+
+// ok informa se há pelo menos uma linha amostrável.
+func (fw frameSafeWindow) ok() bool { return fw.stride > 0 && fw.rows > 0 }
+
+// safeFrameWindow deriva o stride e o número de linhas que cabem de fato em
+// frame.Data, para uma amostragem que vai até a coluna w-1.
+//
+// Por que existe: Frame.Stride é declarado pelo capturer e NÃO é validado
+// contra len(Frame.Data). O pipeline reutiliza o buffer entre frames
+// (frameBuf no DXGI, dibBits na DIB do GDI), então existe uma janela real em
+// que Stride > o que o buffer comporta — indexar com o Stride declarado lia
+// fora da página mapeada e derrubava o worker de sessão (ver comentário em
+// probeChannelOrderDetailed).
+//
+// Devolver só o stride seria insuficiente: um stride que caiba em UMA linha
+// ainda estoura na linha h-1 quando o buffer tem menos de h linhas. Por isso a
+// função devolve as DUAS dimensões da janela segura — o chamador itera apenas
+// as rows devolvidas.
+//
+// Regras:
+//  1. Stride declarado válido (>= w*4) → usa ele; senão cai para w*4 (largura
+//     em bytes no contrato BGRA de 4 bytes/pixel).
+//  2. rows = min(h, len(Data)/stride) — nunca ultrapassa o buffer.
+//  3. Buffer sem nem uma linha completa → janela inválida (ok()==false).
+func safeFrameWindow(frame *Frame, w, h int) frameSafeWindow {
+	if frame == nil || w <= 0 || h <= 0 {
+		return frameSafeWindow{}
+	}
+	n := len(frame.Data)
+	minRow := w * 4
+	if minRow <= 0 || n < minRow {
+		return frameSafeWindow{}
+	}
+
+	stride := frame.Stride
+	if stride < minRow {
+		stride = minRow
+	}
+	// Stride maior que o buffer inteiro não pode indexar nem a primeira linha.
+	if stride > n {
+		stride = minRow
+		if stride > n {
+			return frameSafeWindow{}
+		}
+	}
+
+	rows := n / stride
+	if rows > h {
+		rows = h
+	}
+	if rows <= 0 {
+		return frameSafeWindow{}
+	}
+	return frameSafeWindow{stride: stride, rows: rows}
+}
+
+// safeFrameStride mantém a API de stride isolado (usada nos testes e por
+// chamadores que só precisam do passo de linha). Devolve 0 quando não há
+// nenhuma linha amostrável.
+func safeFrameStride(frame *Frame, w, h int) int {
+	fw := safeFrameWindow(frame, w, h)
+	if !fw.ok() {
+		return 0
+	}
+	return fw.stride
+}
+
+// copyFrameData devolve uma CÓPIA do frame com Data em memória própria.
+//
+// Existe porque alguns capturers entregam Data como slice sobre memória que
+// eles mesmos liberam: o gdiCapturer expõe os pixels da DIB section
+// (unsafe.Slice sobre c.dibBits) e Close() destrói a DIB. Quem precisa manter o
+// frame depois do Close() DEVE copiar — foi a falta disso que produziu o
+// use-after-free da calibração de canais (ver tryResolve).
+//
+// Devolve o próprio frame quando não há nada a copiar (nil ou Data vazio),
+// para não alocar em vão.
+func copyFrameData(frame *Frame) *Frame {
+	if frame == nil || len(frame.Data) == 0 {
+		return frame
+	}
+	cp := *frame // copia os metadados (Width/Height/Stride/OriginX/OriginY)
+	cp.Data = make([]byte, len(frame.Data))
+	copy(cp.Data, frame.Data)
+	return &cp
 }
 
 // variance devolve a variância populacional de xs.
@@ -393,6 +524,28 @@ func (cc *channelCalibrator) tryResolve(candidate *Frame) {
 	if cc.disabled || cc.verified {
 		return
 	}
+	// ── Defesa em profundidade: a calibração NUNCA pode derrubar a sessão ────
+	//
+	// A sonda de canais é ACESSÓRIA: sem ela o frame sai com a seed/cache
+	// (BGRA por padrão), que é o comportamento histórico e perfeitamente
+	// utilizável. Um panic aqui, em contrapartida, mata o worker de sessão e o
+	// watchdog o relança em loop — foi o que aconteceu em 2026-11-20 (88
+	// faults), com a sessão remota inutilizável e sem nenhuma mensagem útil ao
+	// operador.
+	//
+	// O panic de índice fora do buffer (leitura de página não mapeada) NÃO é
+	// recuperável pelo recover do Go — por isso a correção real é o stride
+	// seguro em probeChannelOrderDetailed. Este recover cobre os demais modos
+	// de falha (aritmética, slice, referência nil) e garante que a classe de
+	// defeito "calibração derruba a sessão" não volte por outro caminho.
+	defer func() {
+		if rec := recover(); rec != nil {
+			cc.disabled = true
+			cc.verified = true
+			cc.lastReason = fmt.Sprintf("panic na calibração: %v", rec)
+			debugf("calibração de canais DESATIVADA por panic (%v) — mantendo %s (a sessão continua)", rec, cc.order)
+		}
+	}()
 	// Modo verificação: já há ordem decidida (seed determinística/cache) e a
 	// calibração só confere — com orçamento curto de tentativas.
 	verifying := cc.resolved
@@ -444,6 +597,29 @@ func (cc *channelCalibrator) tryResolve(candidate *Frame) {
 		reference, err = gdi.AcquireNextFrame()
 		gdi.ReleaseFrame()
 		_ = gdi.Close()
+	}
+	// ── CÓPIA OBRIGATÓRIA da referência (use-after-free corrigido 2026-11-20) ──
+	//
+	// O gdiCapturer entrega Data como uma slice SOBRE a memória da DIB section
+	// (unsafe.Slice(c.dibBits, ...), ver capturer_gdi.go:221) e o Close() logo
+	// acima destrói essa DIB (releaseCached → DeleteObject). Sem esta cópia,
+	// reference.Data é uma slice PENDENTE: a sonda a lê nas linhas seguintes,
+	// depois do free.
+	//
+	// É o MESMO use-after-free já documentado em capturer_dxgi_god3d.go:314-320
+	// ("um use-after-free que já se manifestou como segfault") — lá o
+	// captureFirstFrameGDI copia os pixels exatamente por isso; na calibração a
+	// cópia faltava. Sintoma no incidente: leituras caindo em página não
+	// commitada (fatal error: fault com endereço sempre 0x...000) enquanto o
+	// probe varria a referência.
+	//
+	// Fica no caminho COMUM (fora do else) de propósito: o contrato "o
+	// calibrador é dono da memória que recebe" vale para QUALQUER origem de
+	// referência — GDI real ou a injetada por refFn nos testes. Deixar a cópia
+	// dentro do else fazia o caminho de teste exercitar um contrato diferente
+	// do de produção, que é justamente como um use-after-free passa batido.
+	if err == nil && reference != nil {
+		reference = copyFrameData(reference)
 	}
 	if err != nil {
 		// Falha transitória (ex.: troca de desktop): tenta de novo no próximo
