@@ -147,12 +147,12 @@ func normalizeCommandType(raw any) string {
 }
 
 // isPowerActionWireType identifica comandos de energia (restart/reboot/
-// shutdown) já no formato de wire. Espelha app/agentcommands.
-// IsPowerActionCommandType — a lista fica duplicada aqui de propósito para o
-// pacote core não depender da camada app.
+// shutdown e o genérico "poweraction") já no formato de wire. Espelha
+// app/agentcommands.IsPowerActionCommandType — a lista fica duplicada aqui de
+// propósito para o pacote core não depender da camada app.
 func isPowerActionWireType(cmdType string) bool {
 	switch normalizeCommandType(cmdType) {
-	case "restart", "reboot", "shutdown":
+	case "restart", "reboot", "shutdown", "poweraction":
 		return true
 	default:
 		return false

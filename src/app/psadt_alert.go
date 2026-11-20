@@ -283,12 +283,20 @@ func resolvePowerShellExe() string {
 
 // executeSystemPowerAction executa o restart/shutdown no SO (shutdown.exe).
 // delaySeconds == 0 executa imediatamente; force=true adiciona /f.
+// O verbo "restart-firmware" usa shutdown.exe /r /fw (reinício direto no setup
+// do firmware) — recurso exclusivo de boot UEFI, que o handler valida antes.
 func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySeconds int, force bool, message string) (int, string, string) {
 	flag := "/s"
 	label := "shutdown"
-	if action == "restart" || action == "reboot" {
+	firmwareBoot := false
+	switch {
+	case action == "restart" || action == "reboot":
 		flag = "/r"
 		label = "restart"
+	case action == powerActionRestartFirmware:
+		flag = "/r"
+		label = "restart-firmware"
+		firmwareBoot = true
 	}
 
 	shutdownExe := resolveShutdownExe()
@@ -306,6 +314,9 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 	}
 
 	args := []string{flag, "/t", fmt.Sprintf("%d", delaySeconds)}
+	if firmwareBoot {
+		args = append(args, "/fw")
+	}
 	if force {
 		args = append(args, "/f")
 	}

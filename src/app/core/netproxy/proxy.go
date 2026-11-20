@@ -345,6 +345,14 @@ func (p *Proxy) handleHTTPStream(ctx context.Context, req ProxyRequest, emit fun
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
+		// A conexao FALHOU depois de passar pela allowlist: registra o motivo.
+		// Sem isto, falhas de transporte ficavam fora da auditoria — e o caso
+		// mais comum e justamente o certificado autoassinado
+		// ("x509: certificate signed by unknown authority"), em que o operador
+		// conclui que o destino esta inacessivel sem nenhum rastro do porque.
+		// O destino era permitido (allowed=true) mas nao foi alcancado.
+		p.auditNotifica(targetHost, targetPort, false, err.Error(), "transport")
+
 		return p.emitResponse(emit, ProxyResponse{
 			RequestID: req.RequestID,
 			Success:   false,

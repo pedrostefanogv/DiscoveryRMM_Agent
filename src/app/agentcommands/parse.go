@@ -201,8 +201,16 @@ func ParseTicketChatInvitePayload(payload any) (supportchat.Invite, error) {
 
 // ── Power Action Commands ──
 
+// PowerActionRestartFirmware é o verbo (campo action) do comando genérico
+// "poweraction" que reinicia a máquina direto no setup do firmware (BIOS/UEFI).
+// Só é executável em máquinas com boot UEFI — o handler valida antes.
+const PowerActionRestartFirmware = "restart-firmware"
+
 // PowerCommandPayload representa o payload de um comando de power.
 type PowerCommandPayload struct {
+	// Action só é usado no cmdType genérico "poweraction" (ex.:
+	// "restart-firmware"). Vazio nos tipos legados restart/reboot/shutdown.
+	Action       string `json:"action"`
 	DelaySeconds int    `json:"delaySeconds"`
 	Force        bool   `json:"force"`
 	Message      string `json:"message"`
@@ -211,10 +219,12 @@ type PowerCommandPayload struct {
 	NotifyUser   bool   `json:"notifyUser"`   // aviso Fluent com contador antes de agir
 }
 
-// IsPowerActionCommandType verifica se o cmdType é restart/reboot/shutdown.
+// IsPowerActionCommandType verifica se o cmdType pertence à família de energia:
+// restart/reboot (legados), shutdown (legado) e "poweraction" (genérico, com o
+// verbo no campo action do payload — ex.: restart no firmware/BIOS).
 func IsPowerActionCommandType(cmdType string) bool {
 	switch strings.ToLower(strings.TrimSpace(cmdType)) {
-	case "restart", "reboot", "shutdown":
+	case "restart", "reboot", "shutdown", "poweraction":
 		return true
 	default:
 		return false
@@ -295,6 +305,7 @@ func ParsePowerCommandPayload(payload any) PowerCommandPayload {
 	}
 
 	return PowerCommandPayload{
+		Action:       strings.ToLower(toString(m["action"])),
 		DelaySeconds: toInt(m["delaySeconds"]),
 		Force:        toBool(m["force"]),
 		Message:      toString(m["message"]),

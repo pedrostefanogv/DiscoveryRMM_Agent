@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"discovery/app/agentcommands"
@@ -11,6 +12,11 @@ import (
 // ── Power Action Commands ──
 
 type powerCommandPayload = agentcommands.PowerCommandPayload
+
+// powerActionRestartFirmware é o verbo do comando genérico "poweraction" que
+// reinicia a máquina direto no setup do firmware (BIOS/UEFI). Espelha
+// agentcommands.PowerActionRestartFirmware.
+const powerActionRestartFirmware = agentcommands.PowerActionRestartFirmware
 
 // isPowerActionCommandType checks whether cmdType is a restart/reboot/shutdown command.
 func isPowerActionCommandType(cmdType string) bool {
@@ -98,4 +104,56 @@ func (a *App) scheduleSilentPowerAction(action string, pp powerCommandPayload) {
 		_, _, _ = a.executeSystemPowerAction(context.Background(), action, 0, force, "")
 	})
 	a.silentPowerMu.Unlock()
+}
+
+// resolvePowerVerb traduz o cmdType (e, no tipo genérico "poweraction", o campo
+// action do payload) no verbo interno consumido por executeSystemPowerAction.
+// Tipos legados: restart/reboot → "restart"; shutdown → "shutdown".
+func resolvePowerVerb(cmdType string, pp powerCommandPayload) string {
+	switch strings.ToLower(strings.TrimSpace(cmdType)) {
+	case "shutdown":
+		return "shutdown"
+	case "poweraction":
+		return strings.ToLower(strings.TrimSpace(pp.Action))
+	default:
+		return "restart"
+	}
+}
+
+// handleFirmwareRestart executa o verbo "restart-firmware": reinicia a máquina
+// direto no setup do firmware (BIOS/UEFI) via shutdown.exe /r /fw.
+//
+// Fluxo próprio, mais simples que restart/shutdown: o operador pediu
+// explicitamente o setup do firmware, que reinicia a máquina logo em seguida —
+// não há contador/adiamento do PSADT. O delay (quando informado) é contado pelo
+// timer interno silencioso, como no modo notifyUser=false.
+//
+// Capacidade: em BIOS legado (Legacy/CSM) o /fw é recusado pelo Windows. Nesse
+// caso devolvemos uma falha TIPADA no contrato (status=failed + message clara)
+// em vez de agendar um reinício inútil.
+func (a *App) handleFirmwareRestart(parent context.Context, pp powerCommandPayload) (bool, int, string, string) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	a.cancelDeferredRestart()
+	a.cancelSilentPowerAction()
+
+	if ok, reason := firmwareBootSupportFunc(); !ok {
+		msg := "reinicio no firmware (BIOS/UEFI) indisponivel: " + reason
+		a.Logs.Append(fmt.Sprintf("[agent] %s [UNSUPPORTED] %s", powerActionRestartFirmware, reason))
+		return true, 1, newPowerOutput("failed", powerActionRestartFirmware, msg).line(), msg
+	}
+
+	a.warnInteractivePowerOutsideMaintenanceWindow(powerActionRestartFirmware)
+
+	if pp.DelaySeconds > 0 {
+		a.scheduleSilentPowerAction(powerActionRestartFirmware, pp)
+		msg := fmt.Sprintf("reinicio no firmware agendado em %ds", pp.DelaySeconds)
+		out := newPowerOutput("scheduled", powerActionRestartFirmware, msg)
+		out.DelaySeconds = pp.DelaySeconds
+		return true, 0, out.line(), ""
+	}
+
+	exitCode, output, errText := a.executePowerWithContract(parent, powerActionRestartFirmware, pp.Force, pp.Message)
+	return true, exitCode, output, errText
 }
