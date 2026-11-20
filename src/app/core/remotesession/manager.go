@@ -83,9 +83,9 @@ type Manager struct {
 	// (permitido ou barrado). Injetado de fora para evitar ciclo de import
 	// (o pacote app ja importa remotesession) — mesmo padrao do consentReporter.
 	proxyAuditReporter func(ctx context.Context, sessionID, host string, port int, allowed bool, reason, mode string) error
-	interactiveUser func() string
-	newBanner       func(BannerOptions) (SessionBanner, error)
-	newTray         func(TrayOptions) (SessionTray, error)
+	interactiveUser    func() string
+	newBanner          func(BannerOptions) (SessionBanner, error)
+	newTray            func(TrayOptions) (SessionTray, error)
 	// sessionStatus consulta o estado autoritativo da sessão no servidor
 	// (usado no replay do worker para não repetir/ressuscitar consentimento).
 	sessionStatus RemoteSessionStatusFetcher

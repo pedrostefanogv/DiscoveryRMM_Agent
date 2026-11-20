@@ -118,6 +118,18 @@ func Handshake(ctx context.Context, cfg HandshakeConfig) (*HandshakeResult, erro
 		ServerName:         serverName,
 		InsecureSkipVerify: cfg.InsecureSkipVerify, //nolint:gosec // RDP usa self-signed; a cadeia vai ao cliente
 		MinVersion:         tls.VersionTLS12,
+		// NUNCA negociar TLS 1.3 com o TermService.
+		//
+		// O CredSSP/NLA NAO funciona sobre TLS 1.3: nessa versao o certificado
+		// do servidor e enviado CIFRADO dentro do handshake, e o channel binding
+		// do CredSSP ("tls-server-end-point") depende do certificado visivel.
+		// O Schannel do Windows espera CredSSP sobre TLS 1.2.
+		//
+		// Sintoma com TLS 1.3 (observado em producao): o handshake TLS COMPLETA,
+		// o agent registra "handshake ok; iniciando relay", e ~100 ms depois o
+		// TermService aborta com "remote error: tls: internal error" ao receber
+		// o token CredSSP. O viewer retenta em loop e a tela fica preta.
+		MaxVersion: tls.VersionTLS12,
 	})
 
 	tlsCtx, tlsCancel := context.WithTimeout(ctx, tlsHandshakeTimeout)
