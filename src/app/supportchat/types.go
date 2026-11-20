@@ -181,10 +181,27 @@ const inviteExpiryGrace = 2 * time.Minute
 // Envelope é o contrato do stream do chat de suporte (JSON camelCase; espelha
 // Discovery.Core.DTOs.TicketChatEnvelope).
 type Envelope struct {
-	EventType       string   `json:"eventType"`
-	SessionID       string   `json:"sessionId"`
-	TicketID        string   `json:"ticketId"`
-	AgentID         string   `json:"agentId"`
+	EventType string `json:"eventType"`
+	SessionID string `json:"sessionId"`
+	// TicketID e AgentID são OMITIDOS quando vazios.
+	//
+	// BUG CORRIGIDO (mensagens do usuário final não chegavam ao console): sem
+	// omitempty, o json.Marshal emitia "ticketId":"" e "agentId":"" nas conversas
+	// AVULSAS (sem chamado). Do outro lado o contrato do servidor é
+	// TicketChatEnvelope com TicketId (Guid?) / AgentId (Guid), e "" não é Guid
+	// válido: o System.Text.Json lançava
+	// "The JSON value could not be converted to System.Nullable`1[System.Guid]. Path: $.ticketId"
+	// o envelope era DESCARTADO pelo catch do HandleSupportChatMessageAsync e a
+	// mensagem do usuário final nunca era persistida — o console do suporte ficava
+	// sem ela, embora o agent tivesse recebido PubAck do JetStream (o envio
+	// "funcionava" do lado da máquina).
+	//
+	// O AgentID é sempre sobrescrito pelo id do SUBJECT na ingestão do servidor
+	// (proteção contra spoofing), então omiti-lo não perde informação; o
+	// agente/serviço continua preenchendo o campo no estado local.
+	TicketID string `json:"ticketId,omitempty"`
+	AgentID  string `json:"agentId,omitempty"`
+
 	Sequence        int64    `json:"sequence,omitempty"`
 	AuthorKind      string   `json:"authorKind,omitempty"`
 	AuthorName      string   `json:"authorName,omitempty"`
