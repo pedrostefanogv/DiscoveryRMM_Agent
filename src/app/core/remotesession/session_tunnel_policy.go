@@ -186,6 +186,15 @@ const DefaultProxyMaxResponseBytes int64 = 10 * 1024 * 1024
 
 // ProxyPolicy representa a politica efetiva de proxy/tunel extraida do payload de start.
 type ProxyPolicy struct {
+	// Enabled=false desliga o gate de CIDR/porta ("liberado geral" escolhido pelo
+	// operador). As protecoes SSRF INCONDICIONAIS continuam valendo mesmo assim
+	// (link-local, multicast, 169.254.x.x, IMDS) — ver netproxy.IsUnconditionalSSRF.
+	//
+	// Default FALSE no zero-value do struct, e o parser so liga quando o payload
+	// diz explicitamente true. Como o servidor sempre envia a chave, o default
+	// seguro do Go nao causa bloqueio surpresa; e se um payload antigo nao tiver
+	// a chave, o gate de allowlist fica ATIVO (fail-closed).
+	Enabled            bool
 	Allowlist          []string
 	AllowedPorts       []int
 	MaxResponseBytes   int64
@@ -198,6 +207,10 @@ type ProxyPolicy struct {
 // ParseProxyPolicy extrai a politica fail-closed de proxy/rdp do payload de start.
 func ParseProxyPolicy(payload map[string]any, kind string) ProxyPolicy {
 	policy := ProxyPolicy{
+		// Fail-closed: sem payload explicito, o gate de allowlist fica ATIVO.
+		// O servidor atual sempre manda "enabled"; isto protege contra payload
+		// antigo/incompleto (que antes virava bloqueio total por omissao).
+		Enabled:          true,
 		MaxResponseBytes: DefaultProxyMaxResponseBytes,
 		AllowLoopback:    false,
 		RdpHost:          "127.0.0.1",
@@ -212,6 +225,14 @@ func ParseProxyPolicy(payload map[string]any, kind string) ProxyPolicy {
 		proxyMap = pm
 	}
 	if proxyMap != nil {
+		// "enabled" e o modo "liberado geral": o servidor manda false quando o
+		// operador escolhe liberar tudo, e true no modo allowlist. Sem ler esta
+		// chave, "open" chegava com allowlist vazia e o gate fail-closed
+		// bloqueava TODO destino — exatamente o "allowlist vazia: acesso
+		// bloqueado para ..." que aparecia na tela do proxy.
+		if en, ok := proxyMap["enabled"].(bool); ok {
+			policy.Enabled = en
+		}
 		policy.Allowlist = parseStringSlice(proxyMap["allowlist"])
 		if len(policy.Allowlist) == 0 {
 			policy.Allowlist = parseStringSlice(proxyMap["defaultAllowlist"])
@@ -280,6 +301,20 @@ func BuildProxyAllowlist(policy ProxyPolicy, kind string, resolvedRdpPort int) (
 		}
 		return al, nil
 	}
+
+	// "Liberado geral" (enabled=false): desliga o gate de CIDR/porta.
+	//
+	// ATENCAO: isto NAO abre as protecoes SSRF incondicionais. O
+	// netproxy.Allowlist continua barrando link-local, multicast, 169.254.x.x e
+	// o endpoint de metadados de nuvem mesmo com enabled=false — ver
+	// isUnconditionalSSRF em allowlist.go, que roda ANTES do gate.
+	// "Liberado geral" (enabled=false): desliga o gate de CIDR/porta.
+	//
+	// ATENCAO: isto NAO abre as protecoes SSRF incondicionais. O
+	// netproxy.Allowlist continua barrando link-local, multicast, 169.254.x.x e
+	// o endpoint de metadados de nuvem mesmo com enabled=false — ver
+	// isUnconditionalSSRF em allowlist.go, que roda ANTES do gate.
+	al.SetEnabled(policy.Enabled)
 
 	al.SetAllowLoopback(policy.AllowLoopback)
 	for _, entry := range policy.Allowlist {

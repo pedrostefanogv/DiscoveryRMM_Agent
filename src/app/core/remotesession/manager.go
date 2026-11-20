@@ -396,7 +396,17 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	// Banner local (click-through) + ícone da bandeja: exibidos na sessão
 	// interativa e excluídos da captura. A desconexão mora no ícone — o banner
 	// não captura cliques (ver screen/session_banner_windows.go).
-	if kind == KindScreen || kind == KindAll || kind == KindProxy || kind == KindRdp {
+	//
+	// KindRdp NÃO entra aqui: o banner "Sessão remota em andamento" é um aviso
+	// para o usuário LOCAL de que a tela DELE está sendo vista. No acesso via
+	// túnel RDP isso não se aplica — o RDP abre um LOGON SEPARADO no
+	// TermService, sem espelhar o console de quem está na máquina. O banner ali
+	// é ruído (aparecia sobre o próprio desktop remoto) e induz a uma leitura
+	// errada de que o operador está vendo a sessão do usuário local.
+	//
+	// O CONSENTIMENTO continua valendo para RDP (ver consentKind em handleStart):
+	// são controles distintos — o banner informa, o consentimento autoriza.
+	if kind == KindScreen || kind == KindAll || kind == KindProxy {
 		if bannerCfg := ParseBannerConfig(payload); bannerCfg != nil && bannerCfg.Enabled {
 			monitorIndex := toInt(payload["monitorIndex"], 0)
 			if m.newTray != nil {
