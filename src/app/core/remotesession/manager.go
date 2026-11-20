@@ -1725,6 +1725,29 @@ func (m *Manager) runRdpSession(ctx context.Context, session *Session) {
 		return
 	}
 
+	// ── ORDEM CRÍTICA (corrige perda do RDCleanPath Request) ────────────────
+	//
+	// O .proxy.ready diz ao site "pode conectar". O site então abre o WebSocket,
+	// e o IronRDP publica o RDCleanPath Request em .rdp.cleanpath.in.
+	//
+	// Se publicarmos .proxy.ready ANTES de o worker assinar .rdp.cleanpath.in,
+	// existe uma janela (medida em ~78 ms no log de produção) em que o Request
+	// chega ao NATS SEM ASSINANTE. O NATS não retém mensagens: o Request é
+	// descartado, e o agent espera 15 s em vão ("timeout aguardando request").
+	//
+	// Por isso o transporte RDCleanPath é criado AGORA, de forma síncrona, e só
+	// depois publicamos ready. A execução da sessão continua em goroutine.
+	rdpTransport, rdpErr := m.subscribeRdpCleanPath(session.ID)
+	if rdpErr != nil {
+		closeReason = "subscribe-cleanpath-failed"
+		log.Printf("[remote-session-rdp] ERRO ao assinar rdp.cleanpath.in sessao %s: %v", session.ID, rdpErr)
+		m.publishEvent(session.ID, "error", map[string]string{
+			"scope": "rdp",
+			"error": rdpErr.Error(),
+		})
+		return
+	}
+
 	_ = m.natsStream.PublishProxyReady(session.ID, map[string]any{
 		"status":          "ready",
 		"mode":            KindRdp,
@@ -1741,9 +1764,32 @@ func (m *Manager) runRdpSession(ctx context.Context, session *Session) {
 	// RemoteRdp interpretarem os bytes um do outro.
 	rdpCtx, rdpCancel := context.WithCancel(runCtx)
 	defer rdpCancel()
-	go m.runRdpCleanPath(rdpCtx, session, effPort, rdpStatus)
+	go m.runRdpCleanPath(rdpCtx, session, effPort, rdpStatus, rdpTransport)
 
 	_ = tunnel.Run(runCtx)
+}
+
+// subscribeRdpCleanPath cria o transporte e ASSINA .rdp.cleanpath.in de forma
+// SÍNCRONA, devolvendo apenas quando a inscrição está registrada no servidor.
+//
+// Precisa ser síncrono: o chamador só publica .proxy.ready (que libera o viewer
+// a conectar) DEPOIS desta função retornar. Caso contrário o Request pode ser
+// publicado antes de existir assinante e ser descartado pelo NATS.
+func (m *Manager) subscribeRdpCleanPath(sessionID string) (*rdcleanpath.NatsTransport, error) {
+	if m.natsStream == nil {
+		return nil, fmt.Errorf("nats stream indisponivel")
+	}
+	return rdcleanpath.NewNatsTransport(
+		sessionID,
+		m.natsStream, // implementa PublishRdpCleanpathOut
+		func(id string, handler func(data []byte)) (func(), error) {
+			sub, subErr := m.natsStream.SubscribeToRdpCleanpathIn(id, handler)
+			if subErr != nil {
+				return nil, subErr
+			}
+			return func() { _ = sub.Unsubscribe() }, nil
+		},
+	)
 }
 
 // runRdpCleanPath atende o WebRDP do navegador (RDCleanPath) para uma sessao RDP.
@@ -1752,7 +1798,11 @@ func (m *Manager) runRdpSession(ctx context.Context, session *Session) {
 // maquina de estados por conexao (ver pacote rdcleanpath). O destino e SEMPRE
 // 127.0.0.1:<port> — o campo destination vindo do cliente e ignorado, evitando
 // que o tunel vire um SSRF.
-func (m *Manager) runRdpCleanPath(ctx context.Context, session *Session, rdpPort int, rdpStatus RDPStatus) {
+// O parametro initialTransport e o transporte JÁ ASSINADO criado por
+// subscribeRdpCleanPath antes de o agent publicar .proxy.ready — é o que fecha
+// a janela de corrida em que o RDCleanPath Request era descartado pelo NATS por
+// não haver assinante ainda.
+func (m *Manager) runRdpCleanPath(ctx context.Context, session *Session, rdpPort int, rdpStatus RDPStatus, initialTransport *rdcleanpath.NatsTransport) {
 	if m.natsStream == nil {
 		return
 	}
@@ -1792,30 +1842,27 @@ func (m *Manager) runRdpCleanPath(ctx context.Context, session *Session, rdpPort
 	// subject. Cada Session consome UM request e encerra, entao precisamos
 	// recriar transporte e sessao a cada iteracao — servir UMA vez deixaria o
 	// retry do operador sem resposta (bug de usabilidade real).
+	//
+	// A PRIMEIRA iteracao usa initialTransport (assinar antes do .proxy.ready).
+	// As seguintes criam transporte novo, pois Session.Run fecha o transporte ao
+	// sair — e cada assinatura precisa existir ANTES de o viewer reconectar.
+	transport := initialTransport
 	for {
 		if ctx.Err() != nil {
 			break
 		}
 
-		// Transporte NOVO por tentativa: Session.Run fecha o transporte ao sair.
-		transport, err := rdcleanpath.NewNatsTransport(
-			session.ID,
-			m.natsStream, // implementa PublishRdpCleanpathOut
-			func(sessionID string, handler func(data []byte)) (func(), error) {
-				sub, subErr := m.natsStream.SubscribeToRdpCleanpathIn(sessionID, handler)
-				if subErr != nil {
-					return nil, subErr
-				}
-				return func() { _ = sub.Unsubscribe() }, nil
-			},
-		)
-		if err != nil {
-			log.Printf("[remote-session-rdp] ERRO ao criar transporte RDCleanPath sessao %s: %v", session.ID, err)
-			m.publishEvent(session.ID, "error", map[string]string{
-				"scope": "rdp",
-				"error": err.Error(),
-			})
-			return
+		if transport == nil {
+			var err error
+			transport, err = m.subscribeRdpCleanPath(session.ID)
+			if err != nil {
+				log.Printf("[remote-session-rdp] ERRO ao assinar cleanpath sessao %s: %v", session.ID, err)
+				m.publishEvent(session.ID, "error", map[string]string{
+					"scope": "rdp",
+					"error": err.Error(),
+				})
+				return
+			}
 		}
 
 		rcSession := rdcleanpath.NewSession(rdcleanpath.SessionConfig{
@@ -1827,6 +1874,8 @@ func (m *Manager) runRdpCleanPath(ctx context.Context, session *Session, rdpPort
 
 		runErr := rcSession.Run(ctx, transport)
 		_ = transport.Close()
+		// Próxima iteração (retry) precisa de assinatura nova.
+		transport = nil
 
 		// Contexto encerrado (stop da sessao / logoff): sai do loop sem erro.
 		if ctx.Err() != nil {
