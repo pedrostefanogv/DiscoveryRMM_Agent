@@ -79,6 +79,10 @@ type Manager struct {
 	// sessão: worker (sessão interativa) ou UI standalone.
 	consentPrompt   func(context.Context, ConsentRequest) ConsentDecision
 	consentReporter func(context.Context, string, ConsentDecision) error
+	// proxyAuditReporter reporta ao servidor cada destino tentado pelo proxy
+	// (permitido ou barrado). Injetado de fora para evitar ciclo de import
+	// (o pacote app ja importa remotesession) — mesmo padrao do consentReporter.
+	proxyAuditReporter func(ctx context.Context, sessionID, host string, port int, allowed bool, reason, mode string) error
 	interactiveUser func() string
 	newBanner       func(BannerOptions) (SessionBanner, error)
 	newTray         func(TrayOptions) (SessionTray, error)
@@ -123,6 +127,13 @@ func (m *Manager) SetConsentPrompt(fn func(context.Context, ConsentRequest) Cons
 // SetConsentReporter injeta o reporte da decisão ao servidor (HTTP agent-auth).
 func (m *Manager) SetConsentReporter(fn func(context.Context, string, ConsentDecision) error) {
 	m.consentReporter = fn
+}
+
+// SetProxyAuditReporter injeta o reporte de destino do proxy ao servidor
+// (HTTP agent-auth). Sem ele a auditoria de conexao do proxy fica inativa no
+// agent — o servidor nao ve o destino, porque o trafego nao passa pela API.
+func (m *Manager) SetProxyAuditReporter(fn func(ctx context.Context, sessionID, host string, port int, allowed bool, reason, mode string) error) {
+	m.proxyAuditReporter = fn
 }
 
 // SetInteractiveUser injeta o detector de usuário interativo (WTS).
@@ -1598,10 +1609,28 @@ func (m *Manager) runProxySession(ctx context.Context, session *Session) {
 		return
 	}
 
+	// Auditoria de destino: o trafego do proxy nao passa pela API, entao o
+	// destino (e o bloqueio) so chegam ao servidor se o agent reportar.
+	// Best-effort: a goroutine isola latencia/falha de rede do caminho da
+	// requisicao, para que auditar nunca atrase a navegacao do operador.
+	sessionID := session.ID
 	httpProxy := netproxy.NewProxyWithConfig(allowlist, netproxy.ProxyConfig{
 		MaxResponseBytes:      policy.MaxResponseBytes,
 		NatsMaxPayloadBytes:   m.natsStream.EffectiveMaxPayloadBytes(),
 		InsecureTLSSkipVerify: policy.InsecureSkipVerify,
+		Audit: func(host string, port int, allowed bool, reason, mode string) {
+			reporter := m.proxyAuditReporter
+			if reporter == nil {
+				return
+			}
+			safego.Go(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := reporter(ctx, sessionID, host, port, allowed, reason, mode); err != nil {
+					log.Printf("[remote-session-proxy] auditoria de destino %s:%d falhou: %v", host, port, err)
+				}
+			}, nil)
+		},
 	})
 	defer httpProxy.Close()
 

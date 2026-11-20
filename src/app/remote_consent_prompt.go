@@ -148,6 +148,9 @@ func wireRemoteConsentManager(mgr *remotesession.Manager) {
 	}
 	mgr.SetConsentPrompt(remoteConsentPrompt)
 	mgr.SetConsentReporter(reportRemoteConsentDecision)
+	// Auditoria de destino do proxy: o trafego nao passa pela API, entao o
+	// destino/bloqueio so chegam ao servidor por este reporte.
+	mgr.SetProxyAuditReporter(reportRemoteProxyDestination)
 	mgr.SetInteractiveUser(remoteConsentInteractiveUser)
 	// Estado autoritativo da sessão no servidor (usado no replay do worker).
 	mgr.SetSessionStatusFetcher(fetchRemoteSessionStatus)
@@ -294,6 +297,50 @@ func reportRemoteSessionStop(ctx context.Context, sessionID, reason string) erro
 	}
 	body, _ := json.Marshal(map[string]any{"reason": reason})
 	url := strings.TrimRight(apiBase, "/") + "/api/v1/agent-auth/me/remote-sessions/" + sessionID + "/stop"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	_ = netutil.SetAgentAuthHeadersWithAgentID(req, token, remoteConsentAgent())
+	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// reportRemoteProxyDestination informa ao servidor uma tentativa de acesso do
+// proxy a um destino (permitida ou barrada pela allowlist).
+//
+// Por que o AGENTE reporta: o trafego do proxy nao passa pela API (viewer →
+// NATS → agent), entao o servidor nao ve o destino. Sem este reporte a
+// auditoria de conexao nao teria como responder "quem acessou o que".
+//
+// Best-effort de proposito: falha de auditoria NUNCA pode impedir a navegacao
+// do operador — o erro e apenas devolvido para o chamador logar.
+func reportRemoteProxyDestination(ctx context.Context, sessionID, host string, port int, allowed bool, reason, mode string) error {
+	apiBase, token := remoteConsentEndpoint()
+	if apiBase == "" || token == "" {
+		return fmt.Errorf("endpoint/token indisponivel")
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"host":    host,
+		"port":    port,
+		"allowed": allowed,
+		"reason":  reason,
+		"mode":    mode,
+	})
+	if err != nil {
+		return err
+	}
+
+	url := strings.TrimRight(apiBase, "/") + "/api/v1/agent-auth/me/remote-sessions/" + sessionID + "/proxy-destination"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err

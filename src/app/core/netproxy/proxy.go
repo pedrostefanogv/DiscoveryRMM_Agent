@@ -35,6 +35,28 @@ type ProxyConfig struct {
 	RequestTimeout        time.Duration
 	InsecureTLSSkipVerify bool
 	MaxConcurrentWS       int
+
+	// Audit, quando definido, e chamado a cada tentativa de acesso a um destino
+	// (permitida ou barrada pela allowlist). Existe porque o trafego do proxy
+	// NAO passa pela API (viewer -> NATS -> agent): sem este callback o servidor
+	// nao tem como auditar "quem acessou o que, quando e se foi barrado".
+	//
+	// Roda FORA do caminho critico de erro: uma falha de auditoria nunca pode
+	// impedir a navegacao do operador (o chamador so loga).
+	Audit func(host string, port int, allowed bool, reason, mode string)
+}
+
+// auditNotifica dispara o callback de auditoria de forma tolerante a falhas.
+// De proposito NAO propaga erro: auditoria e observabilidade, nao controle.
+func (p *Proxy) auditNotifica(host string, port int, allowed bool, reason, mode string) {
+	if p == nil || p.cfg.Audit == nil {
+		return
+	}
+	defer func() {
+		// Um panic no callback de auditoria jamais pode derrubar a sessao.
+		_ = recover()
+	}()
+	p.cfg.Audit(host, port, allowed, reason, mode)
 }
 
 // Proxy gerencia requisicoes HTTP reversas e WebSockets para dispositivos na rede local.
@@ -251,8 +273,11 @@ func (p *Proxy) handleHTTPStream(ctx context.Context, req ProxyRequest, emit fun
 		})
 	}
 
-	parsedURL, _, _, err := parseAndValidateURL(req.URL, "http", "https")
+	parsedURL, targetHost, targetPort, err := parseAndValidateURL(req.URL, "http", "https")
 	if err != nil {
+		// URL malformada: nao ha destino valido para auditar, mas registramos a
+		// tentativa para nao perder o rastro de um viewer adulterado.
+		p.auditNotifica(req.URL, 0, false, "URL invalida: "+err.Error(), "invalid")
 		return p.emitResponse(emit, ProxyResponse{
 			RequestID: req.RequestID,
 			Success:   false,
@@ -306,6 +331,16 @@ func (p *Proxy) handleHTTPStream(ctx context.Context, req ProxyRequest, emit fun
 	}
 	if httpReq.Header.Get("User-Agent") == "" {
 		httpReq.Header.Set("User-Agent", "DiscoveryRMM-NetProxy/1.0")
+	}
+
+	// Decisao da allowlist ANTES de discar: registra o destino tentado.
+	// O erro do DialAllowed e exatamente a mensagem que o operador ve na tela
+	// ("allowlist vazia: acesso bloqueado para ...", "IP fora da allowlist",
+	// "porta N nao permitida", "SSRF bloqueado"): aqui ele vira auditoria.
+	if _, verr := p.allowlist.ResolveAndValidate(reqCtx, targetHost, targetPort); verr != nil {
+		p.auditNotifica(targetHost, targetPort, false, verr.Error(), "allowlist")
+	} else {
+		p.auditNotifica(targetHost, targetPort, true, "", "allowlist")
 	}
 
 	resp, err := p.client.Do(httpReq)
