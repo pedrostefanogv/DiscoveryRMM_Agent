@@ -101,6 +101,7 @@ type Update struct {
 	IsInstalled    bool `json:"isInstalled"`
 	IsDownloaded   bool `json:"isDownloaded"`
 	IsMandatory    bool `json:"isMandatory"`
+	IsOptional     bool `json:"isOptional,omitempty"`
 	IsHidden       bool `json:"isHidden"`
 	RequiresReboot bool `json:"requiresReboot"`
 

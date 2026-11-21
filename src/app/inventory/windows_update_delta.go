@@ -36,7 +36,7 @@ const (
 )
 
 // windowsUpdateCapabilities lista o que este agente sabe enviar.
-var windowsUpdateCapabilities = []string{"delta_inventory", "severity_provenance", "update_type"}
+var windowsUpdateCapabilities = []string{"delta_inventory", "severity_provenance", "update_type", "optional_flag"}
 
 // DeltaPlan e o resultado do planejamento do delta.
 type DeltaPlan struct {

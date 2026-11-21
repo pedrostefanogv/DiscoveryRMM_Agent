@@ -100,9 +100,10 @@ type SessionScreen struct {
 	cursorSender   *screen.CursorSpriteSender
 	cursorStopCh   chan struct{}
 
-	frameSeq uint64
-	stopCh   chan struct{}
-	doneCh   chan struct{}
+	frameSeq        uint64
+	webrtcSendFrame func([]byte) bool
+	stopCh          chan struct{}
+	doneCh          chan struct{}
 
 	// Estatisticas para log/metrics
 	lastLogTime     time.Time
@@ -130,6 +131,16 @@ const (
 	// disponível — e a calibração continua tentando corrigir.
 	channelGateMaxWait = 1500 * time.Millisecond
 )
+
+// SetWebRtcSendFrame registra o envio opcional de frames pelo data channel WebRTC.
+// Quando retorna false (canal ainda não aberto, buffer cheio ou acima do teto SCTP),
+// o consumer cai automaticamente para PublishFrame no NATS.
+func (s *SessionScreen) SetWebRtcSendFrame(fn func([]byte) bool) {
+	if s == nil {
+		return
+	}
+	s.webrtcSendFrame = fn
+}
 
 // NewSessionScreen cria uma nova sessao de screen capture.
 // monitorIndex permite selecionar um monitor (0 = primário); use -1 para o padrão.
@@ -441,6 +452,9 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	go func() {
 		defer wg.Done()
 		for job := range frameChan {
+			if s.webrtcSendFrame != nil && s.webrtcSendFrame(job.data) {
+				continue
+			}
 			if err := s.natsStream.PublishFrame(s.sessionID, job.data); err != nil {
 				log.Printf("[remote-session-screen] ERRO ao publicar frame: %v\n", err)
 			}

@@ -447,10 +447,11 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	session.controlSub = controlSub
 
 	// Estado inicial do transporte. Quando o WebRTC é autorizado mas ainda não
-	// conectou, publicamos "webrtc" com o motivo vazio: o console mostra
-	// "negociando" e o fallback (se ocorrer) atualiza via .control.
+	// conectou, começamos em NATS com motivo "aguardando negociação WebRTC":
+	// só promovemos para "webrtc" em handleWebRtcPeerState quando o peer
+	// connection atingir "connected", evitando selo verde mentiroso.
 	if useWebRtc {
-		session.SetTransportState(TransportStateWebRtc, "")
+		session.SetTransportState(TransportStateNats, "aguardando negociação WebRTC")
 	} else {
 		reason := webRtcSkipReason
 		if reason == "" && transport == "webrtc" {
@@ -470,19 +471,27 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 			sessionID,
 			webRtcPolicy,
 			func(answerSDP string) error {
-				frame, err := EncodeSignalFrame(SignalFrame{Kind: SignalKindAnswer, SDP: answerSDP})
+				gen := m.webRtcSessionFor(sessionID).Generation()
+				frame, err := EncodeSignalFrame(SignalFrame{
+					Kind:       SignalKindAnswer,
+					SDP:        answerSDP,
+					Generation: gen,
+				})
 				if err != nil {
 					return err
 				}
 				return m.natsStream.PublishWebRtcOut(sessionID, frame)
 			},
 			func(candidate string) error {
-				// O candidato é repassado ao stack de mídia da sessão. Sem stack
-				// ligado, isto é um no-op registrado — não um erro fatal, porque
-				// um candidato que chega antes do stack subir é normal no trickle.
-				log.Printf("[remote-session-webrtc] candidato ICE recebido: session=%s bytes=%d\n",
-					sessionID, len(candidate))
-				return nil
+				ws := m.webRtcSessionFor(sessionID)
+				if ws == nil {
+					return nil
+				}
+				stack := ws.MediaStack()
+				if stack == nil {
+					return nil
+				}
+				return stack.AddCandidate(candidate)
 			},
 			func(reason string) {
 				// Fallback: a sessão CONTINUA, agora pelo NATS. O estado vai para
@@ -514,6 +523,9 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 			func(data []byte) { m.handleWebRtcFiles(sessionID, data) },
 			func(state string) { m.handleWebRtcPeerState(sessionID, state) },
 		)
+		m.webrtcSessions[sessionID].SetRdpHandler(func(data []byte) {
+			m.handleWebRtcRdp(sessionID, data)
+		})
 
 		go m.runWebRtcSignaling(ctx, sessionID)
 	}
@@ -1342,6 +1354,17 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 			screenSession.inputCtrl.HandleInput(data)
 		},
 	})
+	screenSession.SetWebRtcSendFrame(func(data []byte) bool {
+		ws := m.webRtcSessionFor(session.ID)
+		if ws == nil {
+			return false
+		}
+		stack := ws.MediaStack()
+		if stack == nil || !stack.IsConnected() {
+			return false
+		}
+		return stack.Send(WebRtcChannelMedia, data)
+	})
 
 	// ── KVM input lock (bloqueio de teclado/mouse do host remoto) ──
 	// O estado autoritativo é publicado no .control; a liberação é garantida
@@ -1700,6 +1723,20 @@ func (m *Manager) runFilesSession(ctx context.Context, session *Session) {
 	}
 
 	sf := NewSessionFiles(session.ID, m.natsStream, rootPath)
+	sf.SetWebRtcSend(func(data []byte) bool {
+		ws := m.webRtcSessionFor(session.ID)
+		if ws == nil {
+			return false
+		}
+		stack := ws.MediaStack()
+		if stack == nil || !stack.IsConnected() {
+			return false
+		}
+		return stack.Send(WebRtcChannelFiles, data)
+	})
+	m.RegisterWebRtcDataSink(session.ID, webrtcDataSink{
+		onFiles: sf.HandleWebRtcRequest,
+	})
 	log.Printf("[remote-session-files] sessão de arquivos iniciada para %s (root=%s)", session.ID, rootPath)
 
 	// Context que encerra quando stopCh fecha (sessão encerrada/expirou)
@@ -1936,6 +1973,20 @@ func (m *Manager) runRdpSession(ctx context.Context, session *Session) {
 		})
 		return
 	}
+	rdpTransport.SetWebRtcSend(func(data []byte) bool {
+		ws := m.webRtcSessionFor(session.ID)
+		if ws == nil {
+			return false
+		}
+		stack := ws.MediaStack()
+		if stack == nil || !stack.IsConnected() {
+			return false
+		}
+		return stack.Send(WebRtcChannelRdp, data)
+	})
+	m.RegisterWebRtcDataSink(session.ID, webrtcDataSink{
+		onRdp: rdpTransport.Deliver,
+	})
 
 	_ = m.natsStream.PublishProxyReady(session.ID, map[string]any{
 		"status":          "ready",
@@ -2317,30 +2368,50 @@ func (m *Manager) runWebRtcSignaling(ctx context.Context, sessionID string) {
 		return
 	}
 
+	// Fila serializada fora do callback NATS: HandleFrame pode esperar até 8 s
+	// no ICE gathering e não deve bloquear o dispatcher da conexão NATS.
+	frameCh := make(chan []byte, 32)
+
 	sub, err := m.natsStream.SubscribeToWebRtcIn(sessionID, func(data []byte) {
-		ws := m.webRtcSessionFor(sessionID)
-		if ws == nil {
-			return
-		}
-		if err := ws.HandleFrame(data); err != nil {
-			// HandleFrame já aplicou a política de falha (fallback ou
-			// encerramento). Aqui só registramos para diagnóstico.
-			log.Printf("[remote-session-webrtc] frame rejeitado: session=%s err=%v\n", sessionID, err)
+		buf := append([]byte(nil), data...)
+		select {
+		case frameCh <- buf:
+		default:
+			log.Printf("[remote-session-webrtc] fila de sinalização cheia; frame descartado: session=%s\n", sessionID)
 		}
 	})
 	if err != nil {
 		log.Printf("[remote-session-webrtc] falha ao assinar .webrtc.in: session=%s err=%v\n", sessionID, err)
-		// Sem canal de sinalização o WebRTC não tem como negociar: cai para NATS
-		// em vez de deixar a sessão esperando um offer que nunca será lido.
-		m.markTransportFallback(sessionID, "falha ao assinar o canal de sinalização")
+		// Sem canal de sinalização o WebRTC não tem como negociar: aplica a
+		// política de falha (fallback para NATS ou encerramento explícito).
+		if ws := m.webRtcSessionFor(sessionID); ws != nil {
+			ws.Fail("falha ao assinar o canal de sinalização")
+		} else {
+			m.markTransportFallback(sessionID, "falha ao assinar o canal de sinalização")
+		}
 		return
 	}
 	defer sub.Unsubscribe()
 
-	select {
-	case <-ctx.Done():
-	case <-session.stopCh:
-	case <-session.doneCh:
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-session.stopCh:
+			return
+		case <-session.doneCh:
+			return
+		case buf := <-frameCh:
+			ws := m.webRtcSessionFor(sessionID)
+			if ws == nil {
+				continue
+			}
+			if err := ws.HandleFrame(buf); err != nil {
+				// HandleFrame já aplicou a política de falha (fallback ou
+				// encerramento). Aqui só registramos para diagnóstico.
+				log.Printf("[remote-session-webrtc] frame rejeitado: session=%s err=%v\n", sessionID, err)
+			}
+		}
 	}
 }
 
@@ -2367,10 +2438,13 @@ type webrtcDataSink struct {
 	onTunnel func([]byte)
 	// onFiles entrega um chunk do servidor de arquivos (formato 'DF').
 	onFiles func([]byte)
+	// onRdp entrega bytes do canal dedicado RDCleanPath (WebRDP).
+	onRdp func([]byte)
 }
 
 // RegisterWebRtcDataSink registra os pontos de entrega do caminho de dados desta
-// sessão. Chamado pela goroutine da sessão quando ela sobe, e removido no
+// sessão fazendo merge dos callbacks não-nulos (uma sessão KindAll pode
+// registrar input, tunnel e files em goroutines separadas). Removido no
 // encerramento (closeSessionLocked). Idempotente.
 func (m *Manager) RegisterWebRtcDataSink(sessionID string, sink webrtcDataSink) {
 	m.mu.Lock()
@@ -2378,7 +2452,20 @@ func (m *Manager) RegisterWebRtcDataSink(sessionID string, sink webrtcDataSink) 
 	if m.webrtcDataSinks == nil {
 		m.webrtcDataSinks = make(map[string]webrtcDataSink)
 	}
-	m.webrtcDataSinks[sessionID] = sink
+	cur := m.webrtcDataSinks[sessionID]
+	if sink.onInput != nil {
+		cur.onInput = sink.onInput
+	}
+	if sink.onTunnel != nil {
+		cur.onTunnel = sink.onTunnel
+	}
+	if sink.onFiles != nil {
+		cur.onFiles = sink.onFiles
+	}
+	if sink.onRdp != nil {
+		cur.onRdp = sink.onRdp
+	}
+	m.webrtcDataSinks[sessionID] = cur
 }
 
 // dataSinkFor devolve o ponto de entrega da sessão (zero value quando não há).
@@ -2445,6 +2532,18 @@ func (m *Manager) handleWebRtcFiles(sessionID string, data []byte) {
 	sink.onFiles(data)
 }
 
+// handleWebRtcRdp entrega bytes do canal dedicado RDCleanPath (WebRDP).
+func (m *Manager) handleWebRtcRdp(sessionID string, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	sink := m.dataSinkFor(sessionID)
+	if sink.onRdp == nil {
+		return
+	}
+	sink.onRdp(data)
+}
+
 // handleWebRtcPeerState traduz o estado do peer connection para o indicador.
 //
 // "connected" promove a sessão para WebRTC; "failed"/"disconnected" acionam o
@@ -2465,9 +2564,13 @@ func (m *Manager) handleWebRtcPeerState(sessionID, state string) {
 		m.publishTransportEvent(sessionID, session)
 
 	case "failed":
-		// O ICE desistiu: cai para NATS (se autorizado) e o indicador mostra o
-		// motivo em vez de um selo verde mentiroso.
-		m.markTransportFallback(sessionID, "conexão WebRTC falhou (ICE não estabeleceu)")
+		// O ICE desistiu: aplica a política de falha (fallback para NATS ou
+		// encerramento explícito quando FallbackToNats == false).
+		if ws := m.webRtcSessionFor(sessionID); ws != nil {
+			ws.Fail("conexão WebRTC falhou (ICE não estabeleceu)")
+		} else {
+			m.markTransportFallback(sessionID, "conexão WebRTC falhou (ICE não estabeleceu)")
+		}
 
 	case "disconnected":
 		// Transitório: não cai para NATS ainda (o ICE pode se recuperar). O
@@ -2475,7 +2578,13 @@ func (m *Manager) handleWebRtcPeerState(sessionID, state string) {
 		log.Printf("[remote-session-webrtc] peer connection desconectado (aguardando recuperação): session=%s\n", sessionID)
 
 	case "closed":
-		m.markTransportFallback(sessionID, "peer connection encerrado")
+		// Ignora o evento "closed" disparado pelo próprio teardown normal da
+		// sessão (closeSessionLocked chama ws.Close() antes do peerConn.Close()).
+		ws := m.webRtcSessionFor(sessionID)
+		if ws == nil || ws.IsClosed() {
+			return
+		}
+		ws.Fail("peer connection encerrado")
 	}
 }
 

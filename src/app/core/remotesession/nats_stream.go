@@ -544,6 +544,18 @@ func (h *NatsStreamHandler) PublishFilesData(sessionID string, data []byte) erro
 	return h.nc.Publish(subject, data)
 }
 
+// PublishFilesResp publica uma resposta JSON de arquivos em .files.resp.
+func (h *NatsStreamHandler) PublishFilesResp(sessionID string, data []byte) error {
+	if h == nil || h.nc == nil {
+		return fmt.Errorf("nats connection unavailable")
+	}
+	subject := h.publishSubject(sessionID, "files.resp")
+	if subject == "" {
+		return fmt.Errorf("sessionId invalido")
+	}
+	return h.nc.Publish(subject, data)
+}
+
 // SubscribeToProcReq subscreve a requisicoes de processos/servicos
 // (listProcesses/killProcess/listServices/startService/stopService/restartService).
 // O handler retorna o payload de resposta, publicado em .proc.resp.

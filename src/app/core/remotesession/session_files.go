@@ -18,9 +18,37 @@ type SessionFiles struct {
 	sessionID  string
 	natsStream *NatsStreamHandler
 	server     *fileserver.Server
+	webrtcSend func([]byte) bool
 
 	stopCh chan struct{}
 	doneCh chan struct{}
+}
+
+// SetWebRtcSend registra a função de envio pelo data channel WebRTC ("files").
+// Quando retorna false (canal fechado ou acima do teto SCTP), o fluxo cai para NATS.
+func (sf *SessionFiles) SetWebRtcSend(fn func([]byte) bool) {
+	if sf == nil {
+		return
+	}
+	sf.webrtcSend = fn
+}
+
+// HandleWebRtcRequest processa uma requisição recebida pelo data channel "files"
+// e devolve a resposta pelo mesmo canal, caindo para NATS se o envio falhar.
+func (sf *SessionFiles) HandleWebRtcRequest(reqData []byte) {
+	if sf == nil {
+		return
+	}
+	resp := sf.handleRequest(reqData)
+	if resp == nil {
+		return
+	}
+	if sf.webrtcSend != nil && sf.webrtcSend(resp) {
+		return
+	}
+	if sf.natsStream != nil {
+		_ = sf.natsStream.PublishFilesResp(sf.sessionID, resp)
+	}
 }
 
 // NewSessionFiles cria um gerenciador de sessão de arquivos.
@@ -200,9 +228,13 @@ func (sf *SessionFiles) handleRequest(reqData []byte) []byte {
 	}
 
 	// Download binário 'DF': quando o viewer pediu binário (frame 'DF' ou flag
-	// `binary: true`), publica os bytes crus em .files.data sem base64 (+33%).
+	// `binary: true`), publica os bytes crus sem base64 (+33%) — preferindo o
+	// data channel WebRTC quando conectado e caindo para .files.data no NATS.
 	if req.Action == "get" && resp.Success && (isDF || req.Binary) {
 		if frame, err := encodeBinaryFileFrame(resp, resp.Data); err == nil {
+			if sf.webrtcSend != nil && sf.webrtcSend(frame) {
+				return nil
+			}
 			if pubErr := sf.natsStream.PublishFilesData(sf.sessionID, frame); pubErr == nil {
 				return nil
 			} else {

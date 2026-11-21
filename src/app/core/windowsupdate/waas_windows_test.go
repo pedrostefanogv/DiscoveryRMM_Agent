@@ -58,6 +58,15 @@ func TestAppendWaaSFeatureUpdate(t *testing.T) {
 	if !u.IsPending || u.IsInstalled {
 		t.Fatalf("item deveria ser pendente: %+v", u)
 	}
+	if !u.IsOptional {
+		t.Fatalf("upgrade fora de end-of-support deveria ser opcional: %+v", u)
+	}
+
+	eos := waasFeatureAssessment{IsOutOfDate: true, IsEndOfSupport: true, UpToDateOSBuild: "10.0.26300.1"}
+	eosUpdates := appendWaaSFeatureUpdate(nil, eos, "24H2")
+	if len(eosUpdates) != 1 || eosUpdates[0].IsOptional {
+		t.Fatalf("upgrade em end-of-support nao deveria ser opcional: %+v", eosUpdates)
+	}
 
 	// Ja existe um upgrade vindo do WUA: nao duplica.
 	withUpgrade := []Update{{Title: "Windows 11, version 26H2", Classification: "Upgrades", UpdateType: "feature"}}

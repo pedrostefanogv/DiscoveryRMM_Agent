@@ -54,9 +54,10 @@ type SubscribeFunc func(sessionID string, handler func(data []byte)) (cancel fun
 // O transporte e orientado a eventos: o NATS entrega os blocos via handler.
 // Recv() bloqueia ate haver um bloco disponivel, um erro ou o fechamento.
 type NatsTransport struct {
-	sessionID string
-	pub       Publisher
-	cancelSub func()
+	sessionID  string
+	pub        Publisher
+	cancelSub  func()
+	webrtcSend func([]byte) bool
 
 	mu      sync.Mutex
 	queue   [][]byte
@@ -64,6 +65,25 @@ type NatsTransport struct {
 	closed  bool
 	failErr error
 	once    sync.Once
+}
+
+// SetWebRtcSend registra o envio opcional via data channel WebRTC ("rdp-cleanpath").
+// Quando retorna false, Send cai automaticamente para PublishRdpCleanpathOut.
+func (tr *NatsTransport) SetWebRtcSend(fn func([]byte) bool) {
+	if tr == nil {
+		return
+	}
+	tr.mu.Lock()
+	tr.webrtcSend = fn
+	tr.mu.Unlock()
+}
+
+// Deliver entrega bytes recebidos pelo data channel WebRTC na mesma fila do NATS.
+func (tr *NatsTransport) Deliver(data []byte) {
+	if tr == nil {
+		return
+	}
+	tr.onData(data)
 }
 
 // NewNatsTransport cria o transporte e registra a assinatura de entrada.
@@ -114,15 +134,19 @@ func (tr *NatsTransport) onData(data []byte) {
 	}
 }
 
-// Send publica bytes ao cliente no subject dedicado de saida.
+// Send publica bytes ao cliente via WebRTC (quando conectado) ou no subject dedicado de saida.
 func (tr *NatsTransport) Send(data []byte) error {
 	tr.mu.Lock()
 	closed := tr.closed
+	webrtcSend := tr.webrtcSend
 	tr.mu.Unlock()
 	if closed {
 		return ErrTransportClosed
 	}
 	if len(data) == 0 {
+		return nil
+	}
+	if webrtcSend != nil && webrtcSend(data) {
 		return nil
 	}
 	return tr.pub.PublishRdpCleanpathOut(tr.sessionID, data)

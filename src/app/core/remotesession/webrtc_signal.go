@@ -124,6 +124,7 @@ type WebRtcSession struct {
 	onControlFrame    func([]byte)
 	onTunnelFrame     func([]byte)
 	onFilesFrame      func([]byte)
+	onRdpFrame        func([]byte)
 	onPeerStateChange func(string)
 
 	// onAnswer é chamado quando a resposta SDP estiver pronta (injetado pelo
@@ -177,6 +178,16 @@ func (w *WebRtcSession) Negotiating() bool {
 	return w.negotiating
 }
 
+// IsClosed informa se a sessão WebRTC já foi encerrada.
+func (w *WebRtcSession) IsClosed() bool {
+	if w == nil {
+		return true
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closed
+}
+
 // Close marca a sessão como encerrada: frames tardios passam a ser descartados
 // em vez de reabrir uma negociação morta.
 func (w *WebRtcSession) Close() {
@@ -215,6 +226,20 @@ func (w *WebRtcSession) SetDataHandlers(
 	w.onTunnelFrame = onTunnel
 	w.onFilesFrame = onFiles
 	w.onPeerStateChange = onPeerStateChange
+}
+
+// SetRdpHandler registra o callback do canal dedicado de WebRDP (rdp-cleanpath).
+func (w *WebRtcSession) SetRdpHandler(onRdp func([]byte)) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.onRdpFrame = onRdp
+	stack := w.stack
+	w.mu.Unlock()
+	if stack != nil {
+		stack.SetRdpHandler(onRdp)
+	}
 }
 
 // HandleFrame processa um frame de sinalização vindo do viewer.
@@ -361,6 +386,7 @@ func (w *WebRtcSession) mediaStack() *WebRtcMediaStack {
 			w.onFilesFrame,
 			w.onPeerStateChange,
 		)
+		w.stack.SetRdpHandler(w.onRdpFrame)
 	}
 
 	return w.stack
@@ -375,6 +401,15 @@ func (w *WebRtcSession) MediaStack() *WebRtcMediaStack {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.stack
+}
+
+// Fail aplica a política de falha para falhas externas à decodificação do frame
+// (como falha de ICE no peer connection ou falha ao assinar o canal de sinalização).
+func (w *WebRtcSession) Fail(reason string) {
+	if w == nil {
+		return
+	}
+	w.fail(reason)
 }
 
 // fail aplica a política de falha: cai para NATS ou encerra, sempre com motivo.

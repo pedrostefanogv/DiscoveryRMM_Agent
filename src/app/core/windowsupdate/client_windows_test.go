@@ -94,3 +94,64 @@ func TestVariantInt64ReadsMaxDownloadSizeTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestIsOptionalUpdate(t *testing.T) {
+	cases := []struct {
+		name             string
+		browseOnly       bool
+		autoSelectKnown  bool
+		autoSelect       bool
+		isMandatory      bool
+		isBeta           bool
+		deploymentAction int
+		title            string
+		want             bool
+	}{
+		{name: "mandatory never optional", browseOnly: true, isMandatory: true, want: false},
+		{name: "browseOnly is optional", browseOnly: true, want: true},
+		{name: "deploymentAction optional", deploymentAction: wuaDeploymentActionOptional, want: true},
+		{name: "beta is optional", isBeta: true, want: true},
+		{name: "autoSelect false is optional", autoSelectKnown: true, autoSelect: false, want: true},
+		{name: "autoSelect true not optional", autoSelectKnown: true, autoSelect: true, title: "Cumulative Update", want: false},
+		{name: "preview title pt-BR", title: "2026-11 .NET Framework Atualização Prévia (KB5137003)", want: true},
+		{name: "preview title en-US", title: "2026-11 Cumulative Update Preview", want: true},
+		{name: "regular security update", title: "2026-11 Security Update", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsOptionalUpdate(tc.browseOnly, tc.autoSelectKnown, tc.autoSelect, tc.isMandatory, tc.isBeta, tc.deploymentAction, tc.title)
+			if got != tc.want {
+				t.Fatalf("IsOptionalUpdate=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOptionalCriteria(t *testing.T) {
+	c := optionalCriteria(false, false)
+	if len(c) == 0 || !strings.Contains(c[0], "BrowseOnly=1") || !strings.Contains(c[0], "IsHidden=0") {
+		t.Fatalf("optionalCriteria inesperado: %v", c)
+	}
+	cHidden := optionalCriteria(true, false)
+	if len(cHidden) == 0 || strings.Contains(cHidden[0], "IsHidden=0") || !strings.Contains(cHidden[0], "BrowseOnly=1") {
+		t.Fatalf("optionalCriteria(includeHidden=true) inesperado: %v", cHidden)
+	}
+}
+
+func TestMergeUpdatesByKey(t *testing.T) {
+	base := []Update{{UpdateKey: "guid:a:1", Title: "A", IsOptional: false}}
+	extra := []Update{
+		{UpdateKey: "guid:a:1", Title: "A", IsOptional: true},
+		{UpdateKey: "guid:b:1", Title: "B", IsOptional: true},
+	}
+	merged := mergeUpdatesByKey(base, extra)
+	if len(merged) != 2 {
+		t.Fatalf("esperava 2 updates, veio %d", len(merged))
+	}
+	if !merged[0].IsOptional {
+		t.Fatal("merge deveria preservar IsOptional=true quando extra sinaliza opcional")
+	}
+	if merged[1].UpdateKey != "guid:b:1" {
+		t.Fatalf("segundo update inesperado: %+v", merged[1])
+	}
+}

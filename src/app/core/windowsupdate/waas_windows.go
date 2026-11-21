@@ -31,7 +31,7 @@ import (
 // (source "waas") sem depender do WUA.
 
 const (
-	waasOrchestratorKey = `SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Orchestrator`
+	waasOrchestratorKey = `SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator`
 	waasFeatureValue    = "WaaSFeatureAssessment"
 	// GUID estavel para o "upgrade de versao" sintetizado. Nao colide com
 	// UpdateID real (bloco 1111...); o servidor aceita guid:<uuid>:<rev>.
@@ -173,7 +173,7 @@ func readWaaSFeatureAssessment() (waasFeatureAssessment, bool) {
 
 // currentDisplayVersion devolve "25H2", "24H2", etc. (best-effort).
 func currentDisplayVersion() string {
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion`, registry.QUERY_VALUE)
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion`, registry.QUERY_VALUE)
 	if err != nil {
 		return ""
 	}
@@ -188,8 +188,12 @@ func currentDisplayVersion() string {
 // featureUpdateFromAssessment monta o item sintetico do inventario.
 func featureUpdateFromAssessment(assessment waasFeatureAssessment, currentVersion string) Update {
 	title := "Atualizacao de versao do Windows disponivel"
-	if currentVersion != "" {
+	if assessment.UpToDateOSBuild != "" && currentVersion != "" {
+		title = fmt.Sprintf("%s (versao atual %s -> build %s)", title, currentVersion, assessment.UpToDateOSBuild)
+	} else if currentVersion != "" {
 		title = fmt.Sprintf("%s (versao atual %s)", title, currentVersion)
+	} else if assessment.UpToDateOSBuild != "" {
+		title = fmt.Sprintf("%s (build %s)", title, assessment.UpToDateOSBuild)
 	}
 	description := fmt.Sprintf(
 		"WaaS feature assessment: status=%d impact=%d daysOutOfDate=%d endOfSupport=%t.",
@@ -221,6 +225,7 @@ func featureUpdateFromAssessment(assessment waasFeatureAssessment, currentVersio
 		UpdateType:     "feature",
 		Severity:       severity,
 		SeveritySource: "derived",
+		IsOptional:     !assessment.IsEndOfSupport,
 		IsPending:      true,
 		IsInstalled:    false,
 		Source:         "waas",

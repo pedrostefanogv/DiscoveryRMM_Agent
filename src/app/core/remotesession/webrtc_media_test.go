@@ -2,7 +2,9 @@ package remotesession
 
 import (
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 )
@@ -218,6 +220,292 @@ func TestBuildConfiguration_SemRelayMantemStunETurn(t *testing.T) {
 	}
 	if config.ICEServers[1].Username != "u" || config.ICEServers[1].Credential != "p" {
 		t.Fatal("credenciais do TURN não foram repassadas ao pion")
+	}
+}
+
+func TestMediaStack_RoteiaTodosOsQuatroCanaisSemSobrescrever(t *testing.T) {
+	// Regressão C1: antes, chamar peerConn.OnDataChannel 4 vezes sobrescrevia os
+	// primeiros callbacks e só o último canal ("files") recebia mensagens.
+	policy := WebRtcPolicy{
+		Enabled:        true,
+		FallbackToNats: true,
+	}
+
+	got := make(map[string]string)
+	var gotMu sync.Mutex
+	allReceived := make(chan struct{})
+	mark := func(label string, data []byte) {
+		gotMu.Lock()
+		got[label] = string(data)
+		done := len(got) == 4
+		gotMu.Unlock()
+		if done {
+			select {
+			case <-allReceived:
+			default:
+				close(allReceived)
+			}
+		}
+	}
+
+	stack := NewWebRtcMediaStack(
+		"sess-loopback-c1",
+		policy,
+		func(d []byte) { mark(WebRtcChannelMedia, d) },
+		func(d []byte) { mark(WebRtcChannelControl, d) },
+		func(d []byte) { mark(WebRtcChannelTunnel, d) },
+		func(d []byte) { mark(WebRtcChannelFiles, d) },
+		nil,
+	)
+	defer stack.Close()
+
+	viewerConn, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatalf("criar viewer PeerConnection: %v", err)
+	}
+	defer viewerConn.Close()
+
+	channels := make(map[string]*webrtc.DataChannel)
+	mediaReply := make(chan string, 1)
+	for _, label := range []string{WebRtcChannelMedia, WebRtcChannelControl, WebRtcChannelTunnel, WebRtcChannelFiles} {
+		lbl := label
+		dc, err := viewerConn.CreateDataChannel(lbl, nil)
+		if err != nil {
+			t.Fatalf("criar data channel %s: %v", lbl, err)
+		}
+		if lbl == WebRtcChannelMedia {
+			dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+				select {
+				case mediaReply <- string(msg.Data):
+				default:
+				}
+			})
+		}
+		dc.OnOpen(func() {
+			_ = dc.SendText("payload-" + lbl)
+		})
+		channels[lbl] = dc
+	}
+
+	offer, err := viewerConn.CreateOffer(nil)
+	if err != nil {
+		t.Fatalf("CreateOffer: %v", err)
+	}
+	gather := webrtc.GatheringCompletePromise(viewerConn)
+	if err := viewerConn.SetLocalDescription(offer); err != nil {
+		t.Fatalf("SetLocalDescription: %v", err)
+	}
+	<-gather
+
+	answerSDP, err := stack.Negociate(viewerConn.LocalDescription().SDP)
+	if err != nil {
+		t.Fatalf("Negociate: %v", err)
+	}
+
+	if err := viewerConn.SetRemoteDescription(webrtc.SessionDescription{
+		Type: webrtc.SDPTypeAnswer,
+		SDP:  answerSDP,
+	}); err != nil {
+		t.Fatalf("SetRemoteDescription: %v", err)
+	}
+
+	select {
+	case <-allReceived:
+	case <-time.After(8 * time.Second):
+		gotMu.Lock()
+		t.Fatalf("timeout aguardando os 4 data channels; recebidos=%v", got)
+	}
+
+	for _, label := range []string{WebRtcChannelMedia, WebRtcChannelControl, WebRtcChannelTunnel, WebRtcChannelFiles} {
+		if got[label] != "payload-"+label {
+			t.Fatalf("canal %s recebeu %q, esperava %q", label, got[label], "payload-"+label)
+		}
+	}
+
+	// Verifica também o envio agente -> viewer no canal media.
+	if !stack.Send(WebRtcChannelMedia, []byte("frame-from-agent")) {
+		t.Fatal("Send no canal media aberto deveria retornar true")
+	}
+	select {
+	case msg := <-mediaReply:
+		if msg != "frame-from-agent" {
+			t.Fatalf("viewer recebeu %q, esperava frame-from-agent", msg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout aguardando frame enviado pelo agente no canal media")
+	}
+}
+
+func TestMediaStack_CloseDuranteNegociateNaoRessuscita(t *testing.T) {
+	// Regressão C4: Close() concorrente durante Negociate() não pode ser
+	// revertido por s.closed = false ao final do gathering.
+	policy := WebRtcPolicy{
+		Enabled:    true,
+		IceServers: []IceServer{{Urls: []string{"stun:stun.l.google.com:19302"}}},
+	}
+	stack := NewWebRtcMediaStack("sess-c4", policy, nil, nil, nil, nil, nil)
+
+	viewerConn, offerSDP := buildTestOffer(t, WebRtcChannelMedia)
+	defer viewerConn.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := stack.Negociate(offerSDP)
+		done <- err
+	}()
+
+	time.Sleep(25 * time.Millisecond)
+	stack.Close()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Negociate não retornou após Close()")
+	}
+
+	stack.mu.Lock()
+	closed := stack.closed
+	pc := stack.peerConn
+	stack.mu.Unlock()
+
+	if !closed {
+		t.Fatal("stack.closed foi revertido após Close()")
+	}
+	if pc != nil {
+		t.Fatal("stack.peerConn não deveria permanecer preenchido após Close()")
+	}
+}
+
+func TestMediaStack_SendAcimaDoTetoSCTPRetornaFalse(t *testing.T) {
+	policy := WebRtcPolicy{Enabled: true}
+	stack := NewWebRtcMediaStack("sess-max-msg", policy, nil, nil, nil, nil, nil)
+	defer stack.Close()
+
+	oversized := make([]byte, maxWebRtcMessageBytes+1)
+	if stack.Send(WebRtcChannelMedia, oversized) {
+		t.Fatal("Send acima de maxWebRtcMessageBytes deveria retornar false para cair no NATS JUMBO")
+	}
+}
+
+func TestMediaStack_AddCandidateSemPeerConnNaoFalha(t *testing.T) {
+	policy := WebRtcPolicy{Enabled: true}
+	stack := NewWebRtcMediaStack("sess-cand", policy, nil, nil, nil, nil, nil)
+	defer stack.Close()
+
+	if err := stack.AddCandidate("candidate:1 1 UDP 2122252543 127.0.0.1 5000 typ host"); err != nil {
+		t.Fatalf("AddCandidate sem peerConn deveria ser no-op, retornou %v", err)
+	}
+}
+
+func TestNewSettingEngine_RespeitaTimeoutsDaPolitica(t *testing.T) {
+	policy := WebRtcPolicy{
+		DisconnectedTimeoutSeconds: 7,
+		FailedTimeoutSeconds:       20,
+		KeepAliveIntervalSeconds:   4,
+	}
+	disconnected, failed, keepAlive := resolveIceTimeouts(policy)
+	if disconnected != 7*time.Second {
+		t.Fatalf("ICEDisconnectedTimeout = %v, esperava 7s", disconnected)
+	}
+	if failed != 20*time.Second {
+		t.Fatalf("ICEFailedTimeout = %v, esperava 20s", failed)
+	}
+	if keepAlive != 4*time.Second {
+		t.Fatalf("ICEKeepaliveInterval = %v, esperava 4s", keepAlive)
+	}
+	_ = newSettingEngine(policy)
+}
+
+func TestManager_RegisterWebRtcDataSinkFazMergeNaoDestrutivo(t *testing.T) {
+	m := NewManager(nil)
+	var inputCalled, tunnelCalled bool
+
+	m.RegisterWebRtcDataSink("sess-merge", webrtcDataSink{
+		onInput: func([]byte) { inputCalled = true },
+	})
+	m.RegisterWebRtcDataSink("sess-merge", webrtcDataSink{
+		onTunnel: func([]byte) { tunnelCalled = true },
+	})
+
+	sink := m.dataSinkFor("sess-merge")
+	if sink.onInput == nil || sink.onTunnel == nil {
+		t.Fatal("RegisterWebRtcDataSink sobrescreveu callback existente em vez de fazer merge")
+	}
+	sink.onInput(nil)
+	sink.onTunnel(nil)
+	if !inputCalled || !tunnelCalled {
+		t.Fatal("callbacks preservados não foram acionados")
+	}
+}
+
+func TestMediaStack_RoteiaCanalRdpCleanPath(t *testing.T) {
+	policy := WebRtcPolicy{Enabled: true, FallbackToNats: true}
+	gotRdp := make(chan string, 1)
+
+	stack := NewWebRtcMediaStack("sess-rdp-ch", policy, nil, nil, nil, nil, nil)
+	stack.SetRdpHandler(func(d []byte) {
+		gotRdp <- string(d)
+	})
+	defer stack.Close()
+
+	viewerConn, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatalf("criar viewer PeerConnection: %v", err)
+	}
+	defer viewerConn.Close()
+
+	dc, err := viewerConn.CreateDataChannel(WebRtcChannelRdp, nil)
+	if err != nil {
+		t.Fatalf("criar data channel rdp: %v", err)
+	}
+	replyCh := make(chan string, 1)
+	dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		replyCh <- string(msg.Data)
+	})
+	dc.OnOpen(func() {
+		_ = dc.SendText("rdp-req-der")
+	})
+
+	offer, err := viewerConn.CreateOffer(nil)
+	if err != nil {
+		t.Fatalf("CreateOffer: %v", err)
+	}
+	gather := webrtc.GatheringCompletePromise(viewerConn)
+	if err := viewerConn.SetLocalDescription(offer); err != nil {
+		t.Fatalf("SetLocalDescription: %v", err)
+	}
+	<-gather
+
+	answerSDP, err := stack.Negociate(viewerConn.LocalDescription().SDP)
+	if err != nil {
+		t.Fatalf("Negociate: %v", err)
+	}
+	if err := viewerConn.SetRemoteDescription(webrtc.SessionDescription{
+		Type: webrtc.SDPTypeAnswer,
+		SDP:  answerSDP,
+	}); err != nil {
+		t.Fatalf("SetRemoteDescription: %v", err)
+	}
+
+	select {
+	case msg := <-gotRdp:
+		if msg != "rdp-req-der" {
+			t.Fatalf("recebeu %q, esperava rdp-req-der", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout aguardando mensagem no canal rdp-cleanpath")
+	}
+
+	if !stack.Send(WebRtcChannelRdp, []byte("rdp-resp-der")) {
+		t.Fatal("Send em WebRtcChannelRdp deveria retornar true")
+	}
+	select {
+	case msg := <-replyCh:
+		if msg != "rdp-resp-der" {
+			t.Fatalf("viewer recebeu %q, esperava rdp-resp-der", msg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout aguardando resposta no canal rdp-cleanpath")
 	}
 }
 

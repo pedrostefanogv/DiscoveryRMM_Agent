@@ -46,6 +46,9 @@ const (
 	WebRtcChannelTunnel = "tunnel"
 	// WebRtcChannelFiles carrega os chunks do servidor de arquivos.
 	WebRtcChannelFiles = "files"
+	// WebRtcChannelRdp carrega o protocolo RDCleanPath (DER + RDP cru),
+	// separado de "tunnel" para não misturar com o framing de 6 B do proxy LAN.
+	WebRtcChannelRdp = "rdp-cleanpath"
 )
 
 // WebRtcMediaStack é o peer connection vivo de uma sessão.
@@ -61,6 +64,7 @@ type WebRtcMediaStack struct {
 	peerConn   *webrtc.PeerConnection
 	channels   map[string]*webrtc.DataChannel
 	closed     bool
+	closeCh    chan struct{}
 	generation int
 
 	// onMedia entrega um frame recebido no data channel de mídia.
@@ -71,8 +75,20 @@ type WebRtcMediaStack struct {
 	onTunnel func([]byte)
 	// onFiles entrega um chunk de arquivo.
 	onFiles func([]byte)
+	// onRdp entrega bytes do canal dedicado RDCleanPath (WebRDP).
+	onRdp func([]byte)
 	// onStateChange reporta mudança de estado (para o indicador).
 	onStateChange func(state string)
+}
+
+// SetRdpHandler registra o callback para o canal dedicado de WebRDP.
+func (s *WebRtcMediaStack) SetRdpHandler(fn func([]byte)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onRdp = fn
 }
 
 // NewWebRtcMediaStack cria o stack de mídia de uma sessão.
@@ -86,6 +102,7 @@ func NewWebRtcMediaStack(
 		sessionID:     sessionID,
 		policy:        policy,
 		channels:      make(map[string]*webrtc.DataChannel),
+		closeCh:       make(chan struct{}),
 		onMedia:       onMedia,
 		onControl:     onControl,
 		onTunnel:      onTunnel,
@@ -142,17 +159,30 @@ func (s *WebRtcMediaStack) buildConfiguration() (webrtc.Configuration, error) {
 	return config, nil
 }
 
+func resolveIceTimeouts(policy WebRtcPolicy) (disconnected, failed, keepAlive time.Duration) {
+	disconnected = time.Duration(policy.DisconnectedTimeoutSeconds) * time.Second
+	if disconnected <= 0 {
+		disconnected = defaultWebRtcDisconnectedTimeoutSeconds * time.Second
+	}
+	failed = time.Duration(policy.FailedTimeoutSeconds) * time.Second
+	if failed <= 0 {
+		failed = defaultWebRtcFailedTimeoutSeconds * time.Second
+	}
+	keepAlive = time.Duration(policy.KeepAliveIntervalSeconds) * time.Second
+	if keepAlive <= 0 {
+		keepAlive = defaultWebRtcKeepAliveIntervalSeconds * time.Second
+	}
+	return disconnected, failed, keepAlive
+}
+
 // newSettingEngine aplica os timeouts afinados para suporte remoto.
 //
 // Sem isto, o pion usa 25 s de failedTimeout — o operador ficaria 25 segundos
 // olhando uma tela preta antes de o fallback para NATS entrar.
-func newSettingEngine() webrtc.SettingEngine {
+func newSettingEngine(policy WebRtcPolicy) webrtc.SettingEngine {
+	disconnected, failed, keepAlive := resolveIceTimeouts(policy)
 	se := webrtc.SettingEngine{}
-	se.SetICETimeouts(
-		5*time.Second,  // disconnectedTimeout — detecta "sem mídia" rápido
-		15*time.Second, // failedTimeout — reduzido do default de 25 s
-		2*time.Second,  // keepAliveInterval — renova binding STUN sem mídia
-	)
+	se.SetICETimeouts(disconnected, failed, keepAlive)
 	return se
 }
 
@@ -173,6 +203,7 @@ func (s *WebRtcMediaStack) Negociate(offerSDP string) (string, error) {
 	}
 	s.generation++
 	generation := s.generation
+	closeCh := s.closeCh
 	s.mu.Unlock()
 
 	config, err := s.buildConfiguration()
@@ -180,18 +211,15 @@ func (s *WebRtcMediaStack) Negociate(offerSDP string) (string, error) {
 		return "", err
 	}
 
-	api := webrtc.NewAPI(webrtc.WithSettingEngine(newSettingEngine()))
+	api := webrtc.NewAPI(webrtc.WithSettingEngine(newSettingEngine(s.policy)))
 	peerConn, err := api.NewPeerConnection(config)
 	if err != nil {
 		return "", fmt.Errorf("criar peer connection: %w", err)
 	}
 
-	// Registra os data channels ANTES de aplicar a oferta: o viewer abre os canais
-	// dele e o casamento por label precisa dos handlers já instalados.
-	s.registerChannel(peerConn, WebRtcChannelMedia, s.onMedia)
-	s.registerChannel(peerConn, WebRtcChannelControl, s.onControl)
-	s.registerChannel(peerConn, WebRtcChannelTunnel, s.onTunnel)
-	s.registerChannel(peerConn, WebRtcChannelFiles, s.onFiles)
+	// Registra o handler único de data channels ANTES de aplicar a oferta: o
+	// viewer abre os canais dele e o casamento por label precisa estar pronto.
+	s.registerDataChannels(peerConn)
 
 	peerConn.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		log.Printf("[remote-session-webrtc] estado do peer connection: session=%s state=%s\n",
@@ -229,6 +257,9 @@ func (s *WebRtcMediaStack) Negociate(offerSDP string) (string, error) {
 	// lado dele completa o resto.
 	select {
 	case <-gatherComplete:
+	case <-closeCh:
+		_ = peerConn.Close()
+		return "", fmt.Errorf("sessão WebRTC encerrada durante negociação")
 	case <-time.After(iceGatheringTimeout):
 		log.Printf("[remote-session-webrtc] gathering ICE incompleto após %s; devolvendo resposta parcial: session=%s\n",
 			iceGatheringTimeout, s.sessionID)
@@ -241,9 +272,18 @@ func (s *WebRtcMediaStack) Negociate(offerSDP string) (string, error) {
 	}
 
 	s.mu.Lock()
+	if s.closed || generation != s.generation {
+		s.mu.Unlock()
+		_ = peerConn.Close()
+		return "", fmt.Errorf("negociação obsoleta ou sessão encerrada")
+	}
+	prev := s.peerConn
 	s.peerConn = peerConn
-	s.closed = false
 	s.mu.Unlock()
+
+	if prev != nil {
+		_ = prev.Close()
+	}
 
 	log.Printf("[remote-session-webrtc] negociação concluída: session=%s generation=%d candidates=%d\n",
 		s.sessionID, generation, strings.Count(local.SDP, "a=candidate:"))
@@ -254,22 +294,52 @@ func (s *WebRtcMediaStack) Negociate(offerSDP string) (string, error) {
 // iceGatheringTimeout limita a espera pelos candidatos ICE.
 const iceGatheringTimeout = 8 * time.Second
 
-// registerChannel instala o handler de um data channel.
+// Limites de envio via data channel: mensagens acima do teto SCTP caem no NATS
+// JUMBO, e frames de mídia são descartados quando o buffer já está congestionado.
+const (
+	maxWebRtcMediaBufferedBytes = 2 * 1024 * 1024
+	maxWebRtcMessageBytes       = 240 * 1024
+)
+
+// registerDataChannels instala o handler único de data channels no peer connection,
+// roteando cada canal entrante pelo seu label.
 //
 // A tolerância a erro no OnMessage é deliberada: um payload corrompido não pode
 // derrubar a sessão inteira; o handler é chamado em panic-safe.
-func (s *WebRtcMediaStack) registerChannel(
-	peerConn *webrtc.PeerConnection,
-	label string,
-	handler func([]byte),
-) {
+func (s *WebRtcMediaStack) registerDataChannels(peerConn *webrtc.PeerConnection) {
 	peerConn.OnDataChannel(func(channel *webrtc.DataChannel) {
+		label := channel.Label()
+
+		var handler func([]byte)
+		switch label {
+		case WebRtcChannelMedia:
+			handler = s.onMedia
+		case WebRtcChannelControl:
+			handler = s.onControl
+		case WebRtcChannelTunnel:
+			handler = s.onTunnel
+		case WebRtcChannelFiles:
+			handler = s.onFiles
+		case WebRtcChannelRdp:
+			handler = s.onRdp
+		default:
+			log.Printf("[remote-session-webrtc] data channel com label desconhecido ignorado: session=%s label=%q\n",
+				s.sessionID, label)
+			return
+		}
+
 		s.mu.Lock()
 		s.channels[label] = channel
 		s.mu.Unlock()
 
 		if handler != nil {
 			channel.OnMessage(func(msg webrtc.DataChannelMessage) {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[remote-session-webrtc] panic recuperado no handler de %s: session=%s err=%v\n",
+							label, s.sessionID, r)
+					}
+				}()
 				handler(msg.Data)
 			})
 		}
@@ -281,7 +351,9 @@ func (s *WebRtcMediaStack) registerChannel(
 
 		channel.OnClose(func() {
 			s.mu.Lock()
-			delete(s.channels, label)
+			if s.channels[label] == channel {
+				delete(s.channels, label)
+			}
 			s.mu.Unlock()
 			log.Printf("[remote-session-webrtc] data channel fechado: session=%s label=%s\n",
 				s.sessionID, label)
@@ -289,17 +361,39 @@ func (s *WebRtcMediaStack) registerChannel(
 	})
 }
 
+// AddCandidate aplica um candidato ICE remoto ao peer connection ativo.
+func (s *WebRtcMediaStack) AddCandidate(candidate string) error {
+	s.mu.Lock()
+	if s.closed || s.peerConn == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	peerConn := s.peerConn
+	s.mu.Unlock()
+
+	return peerConn.AddICECandidate(webrtc.ICECandidateInit{Candidate: candidate})
+}
+
 // Send publica bytes num data channel. Devolve false quando o canal não está
-// aberto — o chamador decide se cai para NATS.
+// aberto, quando o payload excede o teto SCTP ou quando o buffer de mídia está
+// congestionado — o chamador decide se cai para NATS.
 //
 // NÃO é erro fatal: durante a negociação o canal ainda não abriu, e o caminho
 // NATS continua funcionando. Por isso devolve bool em vez de error.
 func (s *WebRtcMediaStack) Send(label string, data []byte) bool {
+	if len(data) > maxWebRtcMessageBytes {
+		return false
+	}
+
 	s.mu.Lock()
 	channel := s.channels[label]
 	s.mu.Unlock()
 
 	if channel == nil || channel.ReadyState() != webrtc.DataChannelStateOpen {
+		return false
+	}
+
+	if label == WebRtcChannelMedia && channel.BufferedAmount() > maxWebRtcMediaBufferedBytes {
 		return false
 	}
 
@@ -336,7 +430,11 @@ func (s *WebRtcMediaStack) Close() {
 		return
 	}
 	s.closed = true
+	if s.closeCh != nil {
+		close(s.closeCh)
+	}
 	peerConn := s.peerConn
+	s.peerConn = nil
 	s.channels = make(map[string]*webrtc.DataChannel)
 	s.mu.Unlock()
 

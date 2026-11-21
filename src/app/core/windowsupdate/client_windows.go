@@ -29,6 +29,14 @@ const (
 const (
 	wuaPendingSoftwareCriteria   = "IsInstalled=0 and Type='Software'"
 	wuaInstalledSoftwareCriteria = "IsInstalled=1 and Type='Software'"
+
+	wuaServerSelectionDefault   int32 = 0 // ssDefault
+	wuaServerSelectionOthers    int32 = 3 // ssOthers
+	wuaDeploymentActionOptional       = 4 // daOptionalInstallation
+
+	wuaServiceIDMicrosoftUpdate = "7971f918-a847-4430-9279-4a52d1efe18d"
+	wuaServiceIDDCatFlighting   = "8b24b027-1dee-babb-9a95-3517dfb9c552"
+	wuaServiceIDWindowsStore    = "855e8a7c-ecb4-4ca3-b045-1dfa50104289"
 )
 
 // Codigos de resultado de download/instalacao do WUA.
@@ -340,16 +348,24 @@ func pendingCriteria(includeHidden, includeDrivers bool) []string {
 	return []string{base + " and IsHidden=0", "IsInstalled=0 and IsHidden=0", "IsInstalled=0"}
 }
 
+// optionalCriteria devolve os criterios explicitos para buscar atualizacoes
+// opcionais (BrowseOnly=1), que em algumas builds do WUA nao retornam na busca
+// padrao sem BrowseOnly.
+func optionalCriteria(includeHidden, includeDrivers bool) []string {
+	base := wuaPendingSoftwareCriteria + " and BrowseOnly=1"
+	if includeDrivers {
+		base = "IsInstalled=0 and BrowseOnly=1"
+	}
+	if includeHidden {
+		return []string{base, "IsInstalled=0 and BrowseOnly=1"}
+	}
+	return []string{base + " and IsHidden=0", "IsInstalled=0 and BrowseOnly=1 and IsHidden=0"}
+}
+
 // searchPending executa a busca de pendentes tentando variantes de criterio,
-// caindo para a variante sem IsHidden quando o WUA rejeita o criterio.
-//
-// Importante (deteccao de pendentes): avalia TODAS as variantes e escolhe a
-// MELHOR — mais itens incluidos e menos itens "unreadable". Uma variante de
-// criterio pode listar o pendente de forma que Item(i)/leitura falhe no
-// contexto do servico (ex.: "Windows 11 Insider Preview Quality Update" ficava
-// unreadable na variante com IsHidden=0), enquanto outra variante le o mesmo
-// item sem erro. Antes a primeira variante que respondia vencia, mesmo com
-// descartes, e o pendente real nunca chegava ao inventario.
+// parando na primeira variante limpa (sem erro e sem unreadable) ou escolhendo a
+// melhor quando houver falhas parciais, e complementa com BrowseOnly=1 para
+// capturar atualizacoes opcionais/seeker.
 func searchPending(searcher *ole.IDispatch, includeHidden, includeDrivers bool) ([]Update, ScanCounters, error) {
 	var lastErr error
 	var bestUpdates []Update
@@ -362,9 +378,6 @@ func searchPending(searcher *ole.IDispatch, includeHidden, includeDrivers bool) 
 			if errors.As(err, &oleErr) && oleErr.Code() == hresultInvalidCriteria {
 				continue
 			}
-			// Erro não-critico da variante: tenta a proxima (o scan do WUA
-			// falha por criterio específico da maquina; outra variante pode
-			// responder).
 			continue
 		}
 		updates, counters, readErr := readUpdates(collection, includeDrivers)
@@ -373,14 +386,89 @@ func searchPending(searcher *ole.IDispatch, includeHidden, includeDrivers bool) 
 			lastErr = readErr
 			continue
 		}
+		if !includeHidden {
+			updates = filterOutHidden(updates)
+		}
 		if bestUpdates == nil || betterScanResult(counters, bestCounters) {
 			bestUpdates, bestCounters = updates, counters
 		}
+		if counters.Skipped[SkipReasonUnreadable] == 0 {
+			break
+		}
 	}
-	if bestUpdates != nil {
-		return bestUpdates, bestCounters, nil
+	if bestUpdates == nil {
+		return nil, ScanCounters{}, lastErr
 	}
-	return nil, ScanCounters{}, lastErr
+
+	for _, criteria := range optionalCriteria(includeHidden, includeDrivers) {
+		collection, err := searchUpdatesCollection(searcher, criteria)
+		if err != nil {
+			continue
+		}
+		optUpdates, _, readErr := readUpdates(collection, includeDrivers)
+		collection.Release()
+		if readErr != nil {
+			continue
+		}
+		if !includeHidden {
+			optUpdates = filterOutHidden(optUpdates)
+		}
+		for i := range optUpdates {
+			if !optUpdates[i].IsMandatory {
+				optUpdates[i].IsOptional = true
+			}
+		}
+		bestUpdates = mergeUpdatesByKey(bestUpdates, optUpdates)
+		break
+	}
+	return bestUpdates, bestCounters, nil
+}
+
+func filterOutHidden(updates []Update) []Update {
+	if len(updates) == 0 {
+		return updates
+	}
+	out := make([]Update, 0, len(updates))
+	for _, u := range updates {
+		if !u.IsHidden {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// mergeUpdatesByKey mescla dois slices de updates deduplicando por UpdateKey e
+// preservando IsOptional quando qualquer uma das fontes o sinalizou.
+func mergeUpdatesByKey(base, extra []Update) []Update {
+	if len(extra) == 0 {
+		return base
+	}
+	out := make([]Update, 0, len(base)+len(extra))
+	indexByKey := make(map[string]int, len(base)+len(extra))
+	for _, u := range base {
+		if u.UpdateKey == "" {
+			continue
+		}
+		if _, exists := indexByKey[u.UpdateKey]; exists {
+			continue
+		}
+		indexByKey[u.UpdateKey] = len(out)
+		out = append(out, u)
+	}
+	for _, u := range extra {
+		if u.UpdateKey == "" {
+			continue
+		}
+		if idx, exists := indexByKey[u.UpdateKey]; exists {
+			if u.IsOptional && !out[idx].IsMandatory {
+				out[idx].IsOptional = true
+			}
+			continue
+		}
+		indexByKey[u.UpdateKey] = len(out)
+		out = append(out, u)
+	}
+	return out
 }
 
 // betterScanResult compara dois resultados de busca por variante de criterio:
@@ -497,6 +585,8 @@ func readUpdate(update *ole.IDispatch) (Update, bool) {
 	u := Update{Source: SourceWUA}
 	title, description, severity, supportURL := "", "", "", ""
 	var isDownloaded, isMandatory, isHidden, rebootRequired bool
+	var browseOnly, autoSelectKnown, autoSelect, isBeta bool
+	var deploymentAction int
 	var maxDownloadSize int64
 	var lastDeployed *time.Time
 	var updateID string
@@ -534,6 +624,23 @@ func readUpdate(update *ole.IDispatch) (Update, bool) {
 	}
 	if raw, err := oleutil.GetProperty(update, "RebootRequired"); err == nil {
 		rebootRequired = variantBool(raw)
+		raw.Clear()
+	}
+	if raw, err := oleutil.GetProperty(update, "BrowseOnly"); err == nil {
+		browseOnly = variantBool(raw)
+		raw.Clear()
+	}
+	if raw, err := oleutil.GetProperty(update, "AutoSelectOnWebSites"); err == nil {
+		autoSelectKnown = true
+		autoSelect = variantBool(raw)
+		raw.Clear()
+	}
+	if raw, err := oleutil.GetProperty(update, "IsBeta"); err == nil {
+		isBeta = variantBool(raw)
+		raw.Clear()
+	}
+	if raw, err := oleutil.GetProperty(update, "DeploymentAction"); err == nil {
+		deploymentAction = variantInt(raw)
 		raw.Clear()
 	}
 	// MaxDownloadSize (IUpdate, bytes): VT_I4/VT_UI4/VT_I8 via late binding. E
@@ -604,13 +711,11 @@ func readUpdate(update *ole.IDispatch) (Update, bool) {
 	}
 	u.Title = truncate(title, 500)
 	u.Description = truncate(description, 2000)
-	// Severidade com proveniencia (WU-02/D10): MsrcSeverity vence; sem rating do
-	// fornecedor o agente deriva com teto "Important" (nunca "Critical").
-	u.Severity, u.SeveritySource = ResolveSeverity(severity, categories, title)
 	u.SupportURL = truncate(supportURL, 1000)
 	u.IsPending = true
 	u.IsDownloaded = isDownloaded
 	u.IsMandatory = isMandatory
+	u.IsOptional = IsOptionalUpdate(browseOnly, autoSelectKnown, autoSelect, isMandatory, isBeta, deploymentAction, title)
 	u.IsHidden = isHidden
 	u.RequiresReboot = rebootRequired
 	if maxDownloadSize > 0 {
@@ -626,8 +731,31 @@ func readUpdate(update *ole.IDispatch) (Update, bool) {
 	// WU-14: classifica por GUID (estavel por idioma) e cai para o nome quando
 	// o WUA nao expoe CategoryID (agente/WUA antigo).
 	u.Classification = ClassifyCategory(categoryIDs, categories)
-	u.UpdateType = DeriveUpdateType(categoryIDs, categories)
+	u.UpdateType = DeriveUpdateTypeWithTitle(categoryIDs, categories, title)
+	// Severidade com proveniencia (WU-02/D10): usa categorias canonicas por GUID
+	// para que maquinas pt-BR nao percam a classificacao na heuristica.
+	u.Severity, u.SeveritySource = ResolveSeverity(severity, CanonicalCategoryNames(categoryIDs, categories), title)
 	return u, false
+}
+
+// IsOptionalUpdate determina se um update deve ser marcado como opcional.
+func IsOptionalUpdate(browseOnly, autoSelectKnown, autoSelect, isMandatory, isBeta bool, deploymentAction int, title string) bool {
+	if isMandatory {
+		return false
+	}
+	if browseOnly || deploymentAction == wuaDeploymentActionOptional || isBeta {
+		return true
+	}
+	if autoSelectKnown && !autoSelect {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(title))
+	for _, marker := range []string{"preview", "prévia", "previa", "optional", "opcional"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // isDriverUpdate informa se o update e um driver (fora do escopo do modulo).
@@ -777,6 +905,81 @@ func tuneSearcherForScan(searcher *ole.IDispatch) {
 	_, _ = oleutil.PutProperty(searcher, "SearchScope", int32(4))
 }
 
+// discoverSecondaryServiceIDs lista servicos WUA secundarios (Microsoft Update,
+// DCat Flighting Prod, etc.) em maquinas NAO gerenciadas por WSUS.
+func discoverSecondaryServiceIDs(session *wuaSession) []string {
+	if session == nil || session.session == nil {
+		return nil
+	}
+	if wsusServerFromPolicy() != "" {
+		return nil
+	}
+	mgrRaw, err := oleutil.CallMethod(session.session, "CreateUpdateServiceManager")
+	if err != nil {
+		return nil
+	}
+	mgr := mgrRaw.ToIDispatch()
+	if mgr == nil {
+		mgrRaw.Clear()
+		return nil
+	}
+	defer mgr.Release()
+
+	servicesRaw, err := oleutil.GetProperty(mgr, "Services")
+	if err != nil {
+		return nil
+	}
+	services := servicesRaw.ToIDispatch()
+	if services == nil {
+		servicesRaw.Clear()
+		return nil
+	}
+	defer services.Release()
+
+	countRaw, err := oleutil.GetProperty(services, "Count")
+	if err != nil {
+		return nil
+	}
+	count := variantInt(countRaw)
+	countRaw.Clear()
+
+	var ids []string
+	seen := make(map[string]struct{}, 4)
+	for i := 0; i < count; i++ {
+		itemRaw, err := collectionItem(services, i)
+		if err != nil {
+			continue
+		}
+		svc := itemRaw.ToIDispatch()
+		if svc == nil {
+			itemRaw.Clear()
+			continue
+		}
+		var serviceID string
+		if idRaw, err := oleutil.GetProperty(svc, "ServiceID"); err == nil {
+			serviceID = NormalizeGUID(variantString(idRaw))
+			idRaw.Clear()
+		}
+		isDefault := variantBoolMust(svc, "IsDefaultAUService")
+		isManaged := variantBoolMust(svc, "IsManaged")
+		offersWU := variantBoolMust(svc, "OffersWindowsUpdates")
+		svc.Release()
+
+		if serviceID == "" || isDefault || isManaged || serviceID == wuaServiceIDWindowsStore {
+			continue
+		}
+		if serviceID != wuaServiceIDMicrosoftUpdate && serviceID != wuaServiceIDDCatFlighting && !offersWU {
+			continue
+		}
+		if _, ok := seen[serviceID]; ok {
+			continue
+		}
+		seen[serviceID] = struct{}{}
+		ids = append(ids, serviceID)
+	}
+	return ids
+}
+
 func scanWUA(ctx context.Context, opts ScanOptions) (*ScanResult, error) {
 	started := time.Now().UTC()
 	session, err := openSession()
@@ -795,6 +998,23 @@ func scanWUA(ctx context.Context, opts ScanOptions) (*ScanResult, error) {
 	pending, counters, err := searchPending(searcher, opts.IncludeHidden, opts.IncludeDrivers)
 	if err != nil {
 		return nil, err
+	}
+
+	// Best-effort em servicos secundarios (Microsoft Update / DCat Flighting):
+	// atualizacoes opcionais/seeker/preview podem ser oferecidas apenas la.
+	for _, serviceID := range discoverSecondaryServiceIDs(session) {
+		secSearcher, secErr := session.searcher()
+		if secErr != nil {
+			continue
+		}
+		tuneSearcherForScan(secSearcher)
+		_, _ = oleutil.PutProperty(secSearcher, "ServerSelection", wuaServerSelectionOthers)
+		_, _ = oleutil.PutProperty(secSearcher, "ServiceID", serviceID)
+		secUpdates, _, secSearchErr := searchPending(secSearcher, opts.IncludeHidden, opts.IncludeDrivers)
+		secSearcher.Release()
+		if secSearchErr == nil && len(secUpdates) > 0 {
+			pending = mergeUpdatesByKey(pending, secUpdates)
+		}
 	}
 	// O WUA nao lista feature update/upgrade de versao no Windows 11. Usa a
 	// avaliacao WaaS (registro do USO) para incluir o upgrade no inventario.
@@ -861,6 +1081,7 @@ func installWUA(targets []InstallTarget) (*InstallResult, error) {
 		return nil, ErrWuaUnavailable
 	}
 	defer searcher.Release()
+	tuneSearcherForScan(searcher)
 
 	// Busca SEM filtro de hidden/BrowseOnly: updates ocultos ou opcionais
 	// (inclusive upgrades de versao) podem ter sido aprovados explicitamente.
@@ -876,6 +1097,11 @@ func installWUA(targets []InstallTarget) (*InstallResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	neededKeys := make([]string, 0, len(targets))
+	for _, t := range targets {
+		neededKeys = append(neededKeys, t.UpdateKey)
+	}
+	supplementPendingByKey(session, searcher, byKey, neededKeys)
 	// Libera as referências IDispatch dos updates depois de montar/instalar a
 	// coleção (a coleção faz AddRef; sem isso vazaria uma referência por update).
 	defer func() {
@@ -1129,6 +1355,71 @@ func collectUpdatesByKey(collection *ole.IDispatch) (map[string]updateEntry, int
 	return out, unreadable, nil
 }
 
+// supplementPendingByKey complementa byKey com buscas BrowseOnly=1 e servicos
+// secundarios (Microsoft Update / DCat) apenas quando algum alvo em neededKeys
+// ainda nao foi encontrado.
+func supplementPendingByKey(session *wuaSession, defaultSearcher *ole.IDispatch, byKey map[string]updateEntry, neededKeys []string) {
+	if byKey == nil || len(neededKeys) == 0 {
+		return
+	}
+	hasMissing := func() bool {
+		for _, k := range neededKeys {
+			if _, ok := byKey[k]; !ok {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasMissing() {
+		return
+	}
+
+	mergeFromSearcher := func(s *ole.IDispatch, criteria string) {
+		if s == nil {
+			return
+		}
+		coll, err := searchUpdatesCollection(s, criteria)
+		if err != nil {
+			return
+		}
+		defer coll.Release()
+		extra, _, err := collectUpdatesByKey(coll)
+		if err != nil {
+			return
+		}
+		for k, entry := range extra {
+			if _, exists := byKey[k]; !exists {
+				byKey[k] = entry
+			} else if entry.update != nil {
+				entry.update.Release()
+			}
+		}
+	}
+
+	mergeFromSearcher(defaultSearcher, wuaPendingSoftwareCriteria+" and BrowseOnly=1")
+	if !hasMissing() {
+		return
+	}
+
+	for _, serviceID := range discoverSecondaryServiceIDs(session) {
+		secSearcher, err := session.searcher()
+		if err != nil {
+			continue
+		}
+		tuneSearcherForScan(secSearcher)
+		_, _ = oleutil.PutProperty(secSearcher, "ServerSelection", wuaServerSelectionOthers)
+		_, _ = oleutil.PutProperty(secSearcher, "ServiceID", serviceID)
+		mergeFromSearcher(secSearcher, wuaPendingSoftwareCriteria)
+		if hasMissing() {
+			mergeFromSearcher(secSearcher, wuaPendingSoftwareCriteria+" and BrowseOnly=1")
+		}
+		secSearcher.Release()
+		if !hasMissing() {
+			return
+		}
+	}
+}
+
 // updateKeysFromSearch executa uma busca WUA e devolve o conjunto de chaves
 // canonicas. Usado para saber se um alvo ausente da busca de pendentes ja esta
 // instalado (WU-07). Falha devolve mapa vazio: sem essa informacao o alvo vira
@@ -1179,6 +1470,7 @@ func hideWUA(updateKeys []string, hidden bool) (int, error) {
 		return 0, ErrWuaUnavailable
 	}
 	defer searcher.Release()
+	tuneSearcherForScan(searcher)
 
 	collection, err := searchUpdatesCollection(searcher, wuaPendingSoftwareCriteria)
 	if err != nil {
@@ -1190,6 +1482,7 @@ func hideWUA(updateKeys []string, hidden bool) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	supplementPendingByKey(session, searcher, byKey, updateKeys)
 	defer func() {
 		for _, entry := range byKey {
 			if entry.update != nil {
