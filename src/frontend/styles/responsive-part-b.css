@@ -1807,7 +1807,33 @@
 
 /* Estado ocupado: o agente está processando a ação disparada pelo clique. */
 .chat-msg.assistant.chat-a2ui.a2ui-busy {
+  opacity: 0.78;
+  cursor: progress;
+  transition: opacity 0.18s ease;
   animation: a2ui-busy-pulse 1.4s ease-in-out infinite;
+}
+
+/* Card substituído por um novo createSurface com o mesmo surfaceId: permanece
+   visível e clicável na sequência histórica, com destaque mais discreto. */
+.chat-msg.assistant.chat-a2ui.a2ui-superseded {
+  border-color: var(--border);
+  background: var(--card-bg, rgba(255, 255, 255, 0.03));
+  box-shadow: none;
+  opacity: 0.92;
+  transition: opacity 0.18s ease;
+}
+
+.chat-msg.assistant.chat-a2ui.a2ui-superseded:hover {
+  opacity: 1;
+}
+
+/* Rastro de clique em botão A2UI: pill compacta alinhada à direita. */
+.chat-msg.user.chat-a2ui-action {
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  border-radius: 16px;
+  opacity: 0.92;
 }
 
 @keyframes a2ui-busy-pulse {

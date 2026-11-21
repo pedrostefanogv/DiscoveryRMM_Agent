@@ -879,7 +879,7 @@ function pushChatActivityStep(root, text, state) {
   if (doneChips.length > CHAT_ACTIVITY_MAX_STEPS) {
     stepsEl.removeChild(doneChips[0]);
   }
-  scheduleChatScrollToBottom();
+  scheduleChatScrollToBottom(false);
 }
 
 function updateChatActivityRound(root, round, maxRounds) {
@@ -939,7 +939,7 @@ function onStreamThinking(status) {
   if (!label) {
     // Estrutura antiga (sem widget): fallback texto simples.
     thinkingEl.textContent = status || translate("chat.thinking");
-    scheduleChatScrollToBottom();
+    scheduleChatScrollToBottom(false);
     return;
   }
   if (!desc) {
@@ -948,7 +948,7 @@ function onStreamThinking(status) {
   }
   if (desc.raw) {
     setChatActivityText(thinkingEl, desc.raw);
-    scheduleChatScrollToBottom();
+    scheduleChatScrollToBottom(false);
     return;
   }
   if (desc.kind === "tools" && desc.tools && desc.tools.length) {
@@ -985,11 +985,11 @@ function onStreamThinking(status) {
   }
   if (desc.kind === "plan") {
     setChatActivityText(thinkingEl, translate(desc.key));
-    scheduleChatScrollToBottom();
+    scheduleChatScrollToBottom(false);
     return;
   }
   setChatActivityText(thinkingEl, translate(desc.key));
-  scheduleChatScrollToBottom();
+  scheduleChatScrollToBottom(false);
 }
 
 // onChatBudget mostra no chat o estado do ORÇAMENTO DE ROUNDS do agent loop.
@@ -1143,6 +1143,12 @@ function finaliseStreamingBubble() {
   // Add quick-action suggestion buttons (bloco final de "- " da resposta).
   if (actionSplit.options.length > 0) {
     appendChatQuickActions(streamingBubble, actionSplit.options);
+  }
+
+  // Se o turno retornou apenas uma interface A2UI (sem texto visível nem opções),
+  // remove a bolha assistente vazia para não deixar um balão em branco acima do card.
+  if (!streamingRawContent.trim() && a2uiRendered && actionSplit.options.length === 0) {
+    streamingBubble.remove();
   }
 
   streamingBubble = null;
@@ -1745,7 +1751,11 @@ function forwardFrontendLog(level, args) {
 // Mapa das surfaces A2UI ativas por surfaceId. Antes havia UMA surface ativa:
 // ao chegar um card novo a anterior era destruída e seus botões morriam. Agora
 // cada surfaceId conserva a sua bolha/handle (um card antigo continua clicável).
+// Quando um novo createSurface chega com um surfaceId já existente, a entrada
+// anterior é movida para a2uiArchivedSurfaces para manter a ordem cronológica
+// no chat sem sobrescrever o card antigo.
 var a2uiSurfaces = Object.create(null);
+var a2uiArchivedSurfaces = [];
 
 // ─── Tema visual das surfaces A2UI ───
 // Os componentes do catálogo A2UI (@a2ui/lit) renderizam em SHADOW DOM: os
@@ -2157,22 +2167,34 @@ var a2uiLastActionKey = "";
 var a2uiLastActionAt = 0;
 
 // formatA2uiActionLabel dá nome legível ao clique, para o turno disparado pela
-// interface não ficar sem rastro na conversa.
-function formatA2uiActionLabel(action) {
+// interface não ficar sem rastro na conversa. Prioriza o rótulo real do botão
+// (via sourceComponentId), depois CHAT_TOOL_LABELS e por fim o nome formatado.
+function formatA2uiActionLabel(action, entry) {
+  if (entry && entry.componentLabels && action && action.sourceComponentId) {
+    var compLabel = entry.componentLabels[action.sourceComponentId];
+    if (compLabel) return "▶ " + compLabel;
+  }
   var name = String((action && action.name) || "").trim();
   if (!name) return "▶ ação na interface";
+  if (typeof CHAT_TOOL_LABELS !== "undefined" && CHAT_TOOL_LABELS[name]) {
+    return "▶ " + CHAT_TOOL_LABELS[name];
+  }
   return "▶ " + name.replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function a2uiSetBusy(surfaceId, busy) {
-  var entry = a2uiSurfaces[surfaceId];
+function a2uiSetBusyEntry(entry, busy) {
   if (!entry || !entry.bubble) return;
   entry.bubble.classList.toggle("a2ui-busy", !!busy);
   entry.bubble.setAttribute("aria-busy", busy ? "true" : "false");
 }
 
+function a2uiSetBusy(surfaceId, busy) {
+  a2uiSetBusyEntry(a2uiSurfaces[surfaceId], busy);
+}
+
 function clearA2uiBusy() {
   Object.keys(a2uiSurfaces).forEach(function (surfaceId) { a2uiSetBusy(surfaceId, false); });
+  a2uiArchivedSurfaces.forEach(function (entry) { a2uiSetBusyEntry(entry, false); });
 }
 
 // a2uiSettleBusyIfIdle encerra o estado ocupado só quando NÃO há mais turno
@@ -2253,15 +2275,73 @@ function onChatA2uiIncomplete(data) {
   scheduleChatScrollToBottom();
 }
 
-// a2uiSurfaceDestroy remove a bolha e destrói o handle de UMA surface.
-function a2uiSurfaceDestroy(surfaceId) {
-  var entry = a2uiSurfaces[surfaceId];
+// a2uiDestroyEntry remove a bolha e destrói o handle de uma entrada (ativa ou arquivada).
+function a2uiDestroyEntry(entry) {
   if (!entry) return;
   a2uiClearSurfaceWatchdog(entry);
   a2uiThemeDispose(entry);
   try { entry.handle.destroy(); } catch (_) {}
   if (entry.bubble) { try { entry.bubble.remove(); } catch (_) {} }
+}
+
+// a2uiSurfaceDestroy remove a bolha e destrói o handle de UMA surface ativa.
+function a2uiSurfaceDestroy(surfaceId) {
+  var entry = a2uiSurfaces[surfaceId];
+  if (!entry) return;
   delete a2uiSurfaces[surfaceId];
+  a2uiDestroyEntry(entry);
+}
+
+// a2uiArchiveSurface move uma surface ativa para o arquivo histórico quando um
+// novo createSurface reutiliza o mesmo surfaceId, preservando o card anterior na
+// sequência cronológica do chat em vez de sobrescrevê-lo.
+function a2uiArchiveSurface(surfaceId) {
+  var existing = a2uiSurfaces[surfaceId];
+  if (!existing) return;
+  delete a2uiSurfaces[surfaceId];
+  a2uiClearSurfaceWatchdog(existing);
+  if (!existing.hasComponents) {
+    a2uiDestroyEntry(existing);
+    return;
+  }
+  a2uiSetBusyEntry(existing, false);
+  if (existing.bubble && existing.bubble.classList) {
+    existing.bubble.classList.add("a2ui-superseded");
+  }
+  a2uiArchivedSurfaces.push(existing);
+}
+
+// a2uiIndexComponentLabels indexa os textos legíveis de botões/campos por id
+// para que formatA2uiActionLabel exiba o rótulo real do botão clicado.
+function a2uiIndexComponentLabels(entry, components) {
+  if (!entry || !Array.isArray(components)) return;
+  if (!entry.componentLabels) entry.componentLabels = Object.create(null);
+  var byId = Object.create(null);
+  for (var i = 0; i < components.length; i++) {
+    var comp = components[i];
+    if (comp && comp.id) byId[comp.id] = comp;
+  }
+  for (var j = 0; j < components.length; j++) {
+    var c = components[j];
+    if (!c || !c.id) continue;
+    var resolved = "";
+    if (c.child && byId[c.child]) {
+      var child = byId[c.child];
+      if (typeof child.text === "string") {
+        resolved = child.text.trim();
+      } else if (child.text && typeof child.text.path === "string" && entry.handle && typeof entry.handle.getDataModel === "function") {
+        var dmVal = entry.handle.getDataModel(child.text.path);
+        if (typeof dmVal === "string") resolved = dmVal.trim();
+      }
+    } else if (typeof c.label === "string" && c.label.trim()) {
+      resolved = c.label.trim();
+    } else if (typeof c.text === "string" && c.text.trim()) {
+      resolved = c.text.trim();
+    }
+    if (resolved) {
+      entry.componentLabels[c.id] = resolved;
+    }
+  }
 }
 // a2uiWarnUnsupportedComponents detecta componentes que o catálogo EMBARCADO
 // nesta versão do app não conhece (ex.: API publicada antes do exe novo, com um
@@ -2380,12 +2460,14 @@ function onChatA2ui(data) {
       return;
     }
 
-    // createSurface → cria a bolha e a surface. O ensureA2uiSurface já envia
-    // a mensagem createSurface ao processor (via entry.js), então não reenviamos
-    // aqui para evitar duplicação.
+    // createSurface → cria SEMPRE uma nova bolha/surface no fim da conversa.
+    // Se já havia uma surface ativa com o mesmo surfaceId, ela é arquivada no
+    // histórico cronológico do chat (em vez de ser sobrescrita no topo).
+    // O ensureA2uiSurface já envia a mensagem createSurface ao processor (via
+    // entry.js), então não reenviamos aqui para evitar duplicação.
     var isCreateSurface = !!parsed.createSurface;
     if (isCreateSurface) {
-      ensureA2uiSurface(targetSurfaceId);
+      ensureA2uiSurface(targetSurfaceId, true);
     }
 
     var entry = a2uiSurfaces[targetSurfaceId];
@@ -2429,6 +2511,7 @@ function onChatA2ui(data) {
     }
     // Tipo desconhecido pelo bundle embarcado seria ignorado em silêncio.
     if (parsed.updateComponents && entry) {
+      a2uiIndexComponentLabels(entry, parsed.updateComponents.components);
       a2uiWarnUnsupportedComponents(parsed, entry);
     }
     // updateComponents/updateDataModel criam hosts novos (e novos shadow roots):
@@ -2471,11 +2554,17 @@ function fallbackA2uiToMarkdown(rawMsg, surfaceId) {
 }
 
 // ensureA2uiSurface cria a bolha de mensagem e a surface A2UI dentro dela para
-// o surfaceId informado (reutiliza a existente). Cada surface tem a sua bolha:
-// um card novo NÃO destrói os anteriores.
-function ensureA2uiSurface(surfaceId) {
+// o surfaceId informado. Quando forceNew é true (createSurface), arquiva a
+// surface anterior do mesmo surfaceId para que o novo card apareça na sequência
+// da conversa em vez de sobrescrever o card anterior. Quando forceNew é falsy
+// (updateComponents/updateDataModel sem createSurface), reutiliza a existente
+// para suportar atualizações in-place (ex.: steppers/tabs).
+function ensureA2uiSurface(surfaceId, forceNew) {
   var existing = a2uiSurfaces[surfaceId];
-  if (existing) return existing.handle;
+  if (existing && !forceNew) return existing.handle;
+  if (existing && forceNew) {
+    a2uiArchiveSurface(surfaceId);
+  }
   if (!chatMessagesEl) return null;
 
   var div = document.createElement("div");
@@ -2488,11 +2577,26 @@ function ensureA2uiSurface(surfaceId) {
 
   chatMessagesEl.appendChild(div);
 
+  // hasComponents fica true APENAS quando chega updateComponents (a mensagem
+  // que realmente define a árvore). updateDataModel não conta: sem isso, uma
+  // surface criada e nunca preenchida ficava presa em "Loading surface..."
+  // (resposta truncada no meio do bloco a2ui ou linha updateComponents
+  // descartada no servidor por JSON inválido).
+  var entry = {
+    surfaceId: surfaceId,
+    handle: null,
+    bubble: div,
+    theme: null,
+    hasComponents: false,
+    componentLabels: Object.create(null),
+  };
+
   var handle = null;
   try {
     handle = window.A2uiChat.createSurface(contentEl, surfaceId);
+    entry.handle = handle;
     handle.onUserAction(function (action) {
-      handleA2uiUserAction(surfaceId, action);
+      handleA2uiUserAction(entry, action);
     });
   } catch (e) {
     console.error("[a2ui] falha ao criar surface:", e);
@@ -2500,12 +2604,6 @@ function ensureA2uiSurface(surfaceId) {
     return null;
   }
 
-  // hasComponents fica true APENAS quando chega updateComponents (a mensagem
-  // que realmente define a árvore). updateDataModel não conta: sem isso, uma
-  // surface criada e nunca preenchida ficava presa em "Loading surface..."
-  // (resposta truncada no meio do bloco a2ui ou linha updateComponents
-  // descartada no servidor por JSON inválido).
-  var entry = { handle: handle, bubble: div, theme: null, hasComponents: false };
   a2uiSurfaces[surfaceId] = entry;
   // Tema visual: injetado nos shadow roots do catálogo Lit (o CSS do app não
   // atravessa a fronteira do shadow root — ver A2UI_THEME_CSS).
@@ -2534,8 +2632,8 @@ function isLocalA2uiAction(name) {
   return String(name || "").indexOf(A2UI_LOCAL_ACTION_PREFIX) === 0;
 }
 
-function applyLocalA2uiAction(surfaceId, action) {
-  var entry = a2uiSurfaces[surfaceId];
+function applyLocalA2uiAction(surfaceOrEntry, action) {
+  var entry = typeof surfaceOrEntry === "string" ? a2uiSurfaces[surfaceOrEntry] : surfaceOrEntry;
   var handle = entry && entry.handle;
   if (!handle || typeof handle.updateDataModel !== "function") {
     console.warn("[a2ui] ação local ignorada (surface/handle sem updateDataModel):", action.name);
@@ -2632,13 +2730,18 @@ function applyLocalA2uiAction(surfaceId, action) {
 // assim que o stream atual terminar (pendingA2uiAction). Antes, a ação ficava
 // solta e era consumida pela PRÓXIMA mensagem digitada — podendo "vazar" para
 // um turno sobre outro assunto.
-function handleA2uiUserAction(surfaceId, action) {
+function handleA2uiUserAction(surfaceOrEntry, action) {
   if (!action || !action.name) return;
+
+  var entry = typeof surfaceOrEntry === "string" ? a2uiSurfaces[surfaceOrEntry] : surfaceOrEntry;
+  var surfaceId = typeof surfaceOrEntry === "string"
+    ? surfaceOrEntry
+    : (entry && entry.surfaceId) || (action && action.surfaceId) || "discovery-chat-surface";
 
   // Ação LOCAL (ui.*): muda só o card. Não gera bolha, não fica busy e não
   // dispara turno — é o caminho para botões de navegação/estado da interface.
   if (isLocalA2uiAction(action.name)) {
-    applyLocalA2uiAction(surfaceId, action);
+    applyLocalA2uiAction(entry || surfaceId, action);
     return;
   }
 
@@ -2664,10 +2767,13 @@ function handleA2uiUserAction(surfaceId, action) {
     // Rastro SEMPRE: o clique vira bolha do usuário, inclusive quando entrou na
     // fila durante um turno ativo (antes o flag global escondia esse clique e a
     // ação era processada sem nenhum sinal na interface).
-    addChatMessage("user", formatA2uiActionLabel(action));
+    var actionBubble = addChatMessage("user", formatA2uiActionLabel(action, entry));
+    if (actionBubble && actionBubble.classList) {
+      actionBubble.classList.add("chat-a2ui-action");
+    }
     // Estado ocupado no card: o componente fica esmaecido enquanto o agente
     // processa a ação (antes o clique não dava nenhum retorno visual imediato).
-    a2uiSetBusy(surfaceId, true);
+    a2uiSetBusyEntry(entry || a2uiSurfaces[surfaceId], true);
     if (chatSending) {
       // Stream ativo: guarda a ação para disparar o processamento no chat:done.
       // Contador: um turno-sentinela por clique (o agent consome 1 por turno).
@@ -2677,7 +2783,7 @@ function handleA2uiUserAction(surfaceId, action) {
     sendChatMessageWithA2uiAction();
   } catch (e) {
     console.error("[a2ui] falha ao enviar userAction:", e);
-    a2uiSetBusy(surfaceId, false);
+    a2uiSetBusyEntry(entry || a2uiSurfaces[surfaceId], false);
   }
 }
 
@@ -2742,12 +2848,16 @@ function sendChatMessageWithA2uiAction() {
   }
 }
 
-// Limpa TODAS as surfaces A2UI quando o chat é limpo.
+// Limpa TODAS as surfaces A2UI (ativas e arquivadas) quando o chat é limpo.
 function clearA2uiSurface() {
   Object.keys(a2uiSurfaces).forEach(function (surfaceId) {
     a2uiSurfaceDestroy(surfaceId);
   });
   a2uiSurfaces = Object.create(null);
+  a2uiArchivedSurfaces.forEach(function (entry) {
+    a2uiDestroyEntry(entry);
+  });
+  a2uiArchivedSurfaces = [];
   pendingA2uiAction = 0;
 }
 
