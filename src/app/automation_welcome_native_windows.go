@@ -54,6 +54,14 @@ func (a *App) nativeAutomationWelcome(req automation.AutomationNotificationReque
 	// invisível para o usuário (mesma lacuna já corrigida nos psadt-alerts).
 	result, ok := runCardAsUser(cardCtx, cardReq, time.Duration(timeoutSeconds+30)*time.Second)
 	if !ok || result.Outcome == notifyui.OutcomeError || result.Outcome == notifyui.OutcomeCanceled {
+		if result.Outcome == notifyui.OutcomeCanceled && parentCtx.Err() != nil {
+			return automation.AutomationNotificationResponse{
+				Accepted:    true,
+				Result:      "deferred",
+				AgentAction: "native_welcome_canceled",
+				Message:     "prompt cancelado no encerramento do agente",
+			}, true
+		}
 		reason := result.Reason
 		if reason == "" {
 			reason = result.Outcome

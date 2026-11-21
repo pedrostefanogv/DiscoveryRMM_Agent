@@ -293,7 +293,7 @@ func (a *App) nativePowerCountdown(ctx context.Context, action string, delaySeco
 		title = "Desligamento Necessário"
 		okText = "Desligar agora"
 		countdownLabel = "O computador será desligado em:"
-		defaultMsg = fmt.Sprintf("O computador sera desligado automaticamente em %d segundos.", delaySeconds)
+		defaultMsg = fmt.Sprintf("O computador será desligado automaticamente em %d segundos.", delaySeconds)
 	}
 	body := strings.TrimSpace(message)
 	if body == "" {

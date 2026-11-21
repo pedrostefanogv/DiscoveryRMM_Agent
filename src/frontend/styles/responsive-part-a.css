@@ -312,7 +312,13 @@
 }
 
 @media (max-width: 720px) {
-  .toast-container,
+  .toast-container {
+    bottom: 12px;
+    top: auto;
+    right: 12px;
+    width: calc(100vw - 24px);
+  }
+
   .ntf-hub {
     top: calc(var(--window-chrome-height, 0px) + 12px);
     right: 12px;

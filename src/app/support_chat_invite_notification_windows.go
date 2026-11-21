@@ -413,6 +413,11 @@ func supportChatNotifyWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		hover := state.buttonAt(consentLParamX(lparam), consentLParamY(lparam))
 		if hover != state.hover {
 			state.hover = hover
+			if hover != supportChatNotifyNone {
+				winui.SetCursorHand()
+			} else {
+				winui.SetCursorArrow()
+			}
 			winui.Invalidate(hwnd)
 		}
 		winui.TrackMouseLeave(hwnd)
@@ -700,6 +705,7 @@ func runSupportChatInviteNotificationWindow(ctx context.Context, invite supportc
 	state.dwmCornerRadius = winui.ScalePx(supportChatNotifySystemCorner, scale)
 
 	x, y = winui.BottomRightStackedOnActiveWorkArea(hwnd, width, height, margin, winui.ScalePx(12, scale))
+	defer winui.ReleaseBottomRightSlot(hwnd)
 	winui.MoveResizeWindow(hwnd, x, y, width, height)
 
 	state.systemCorners = winui.SetSystemRoundedCorners(hwnd)

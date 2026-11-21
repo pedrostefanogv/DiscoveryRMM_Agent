@@ -236,9 +236,6 @@ function renderStatusOverview(data) {
   if (statusConnectionLabelEl) {
     statusSetText(statusConnectionLabelEl, connected ? translate('common.online') : translate('common.offline'));
   }
-  if (statusConnectionDetailEl) {
-    statusSetText(statusConnectionDetailEl, connected ? (transport || 'NATS') : translate('status.disconnected'));
-  }
 
   var line1 = translate('window.meta.server') + ': ' + statusSafe(data && data.server, '-');
   var line2 = translate('status.transportState') + ': ' + formatConnectionTypeLabel(data && data.connectionType);

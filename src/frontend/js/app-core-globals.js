@@ -526,7 +526,7 @@ function showConfirmModal(opts) {
 
     var prevFocus = document.activeElement;
     function cleanup(result) {
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', onKey, true);
       if (overlay.parentNode) overlay.remove();
       if (prevFocus && typeof prevFocus.focus === 'function') {
         try { prevFocus.focus(); } catch (_) {}
@@ -536,6 +536,7 @@ function showConfirmModal(opts) {
     function onKey(e) {
       if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopImmediatePropagation();
         cleanup(false);
       }
     }
@@ -545,7 +546,7 @@ function showConfirmModal(opts) {
     overlay.addEventListener('click', function (e) {
       if (e.target === overlay) cleanup(false);
     });
-    document.addEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey, true);
 
     actions.appendChild(cancelBtn);
     actions.appendChild(okBtn);

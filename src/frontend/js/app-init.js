@@ -78,11 +78,6 @@ function initAppBindings() {
       });
   })();
 
-  document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape" && typeof closeAppDetailModal === "function")
-      closeAppDetailModal();
-  });
-
   if (searchEl) {
     searchEl.addEventListener("input", debounce(applyFilter, 300));
   }

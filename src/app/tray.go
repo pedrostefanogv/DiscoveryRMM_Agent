@@ -281,7 +281,11 @@ func (a *App) syncRemoteSessionTray() {
 	a.safeTrayAction("tray-remote-session", func() {
 		count := a.activeRemoteSessions.Load()
 		if count <= 0 {
-			a.updateTrayTooltip()
+			if efficiencyModeEnabled {
+				a.systemTray.SetTooltip("Discovery")
+			} else {
+				a.updateTrayTooltip()
+			}
 			return
 		}
 		tooltip := "Discovery"

@@ -400,6 +400,11 @@ func consentWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		hover := state.buttonAt(consentLParamX(lparam), consentLParamY(lparam))
 		if hover != state.hover {
 			state.hover = hover
+			if hover != consentButtonNone {
+				winui.SetCursorHand()
+			} else {
+				winui.SetCursorArrow()
+			}
 			winui.Invalidate(hwnd)
 		}
 		winui.TrackMouseLeave(hwnd)
@@ -794,6 +799,7 @@ func runNativeConsentWindow(ctx context.Context, req remotesession.ConsentReques
 	// Ancora no canto inferior direito com o tamanho final (texto longo cresce
 	// para cima, sem sair da área útil).
 	x, y = winui.BottomRightStackedOnActiveWorkArea(hwnd, width, height, winui.ScalePx(consentScreenMargin, scale), winui.ScalePx(12, scale))
+	defer winui.ReleaseBottomRightSlot(hwnd)
 	winui.MoveResizeWindow(hwnd, x, y, width, height)
 
 	// Cantos: no Windows 11 o DWM arredonda com antialiasing (contorno suave);

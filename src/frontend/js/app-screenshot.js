@@ -166,6 +166,10 @@ function screenshotSaveAttachment(att) {
   });
 }
 
+function screenshotHasPendingImages() {
+  return Array.isArray(screenshotAttachments) && screenshotAttachments.length > 0;
+}
+
 // screenshotTakePendingImages devolve (e limpa) as imagens anexadas — chamada
 // pelo dispatch da mensagem do chat.
 function screenshotTakePendingImages() {

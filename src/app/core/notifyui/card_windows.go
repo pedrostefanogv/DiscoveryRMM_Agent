@@ -490,6 +490,11 @@ func cardWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		hover := state.buttonAt(cardLParamX(lparam), cardLParamY(lparam))
 		if hover != state.hover {
 			state.hover = hover
+			if hover >= 0 {
+				winui.SetCursorHand()
+			} else {
+				winui.SetCursorArrow()
+			}
 			winui.Invalidate(hwnd)
 		}
 		winui.TrackMouseLeave(hwnd)
@@ -922,6 +927,7 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 
 	scaledWidth := winui.ScalePx(cardWidth, scale)
 	x, y = winui.BottomRightStackedOnActiveWorkArea(hwnd, scaledWidth, height, winui.ScalePx(cardPad, scale), winui.ScalePx(12, scale))
+	defer winui.ReleaseBottomRightSlot(hwnd)
 	winui.MoveResizeWindow(hwnd, x, y, scaledWidth, height)
 
 	state.systemCorners = winui.SetSystemRoundedCorners(hwnd)

@@ -153,6 +153,14 @@ func DrawPNGMemory(hdc uintptr, png []byte, r Rect) bool {
 			return false
 		}
 		releaseCOM(stream)
+		if len(pngImageCache) >= 32 {
+			for k, oldImg := range pngImageCache {
+				if oldImg != 0 {
+					procGdipDisposeImage.Call(oldImg)
+				}
+				delete(pngImageCache, k)
+			}
+		}
 		pngImageCache[key] = image
 	}
 

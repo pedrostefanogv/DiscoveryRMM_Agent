@@ -4546,15 +4546,28 @@ function initChat() {
 
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape") return;
+    var privacyModalEl = document.getElementById("chatPrivacyModal");
     if (chatLogsModal && !chatLogsModal.classList.contains("hidden")) {
-      chatLogsModal.classList.add("hidden");
-      chatLogsModal.setAttribute("aria-hidden", "true");
+      if (typeof closeChatLogsModal === "function") {
+        closeChatLogsModal();
+      } else {
+        chatLogsModal.classList.add("hidden");
+        chatLogsModal.setAttribute("aria-hidden", "true");
+      }
     } else if (chatMemoriesModal && !chatMemoriesModal.classList.contains("hidden")) {
-      chatMemoriesModal.classList.add("hidden");
-      chatMemoriesModal.setAttribute("aria-hidden", "true");
-    } else if (chatPrivacyModal && !chatPrivacyModal.classList.contains("hidden")) {
-      chatPrivacyModal.classList.add("hidden");
-      chatPrivacyModal.setAttribute("aria-hidden", "true");
+      if (typeof closeChatMemoriesModal === "function") {
+        closeChatMemoriesModal();
+      } else {
+        chatMemoriesModal.classList.add("hidden");
+        chatMemoriesModal.setAttribute("aria-hidden", "true");
+      }
+    } else if (privacyModalEl && !privacyModalEl.classList.contains("hidden")) {
+      if (typeof closeScreenshotPrivacyModal === "function") {
+        closeScreenshotPrivacyModal();
+      } else {
+        privacyModalEl.classList.add("hidden");
+        privacyModalEl.setAttribute("aria-hidden", "true");
+      }
     }
   });
   if (chatTestConfigBtn) {

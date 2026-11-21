@@ -13,6 +13,7 @@ import "sync"
 
 type stackSlot struct {
 	id     uintptr
+	area   Rect
 	height int
 	gap    int
 }
@@ -24,8 +25,8 @@ var (
 
 // BottomRightStackedOnActiveWorkArea calcula a posição (x, y) no canto
 // inferior direito da área útil ativa, deslocando para cima conforme a soma das
-// alturas dos cartões já visíveis, e registra o slot para o id informado.
-// Se id já estiver registrado, atualiza a altura/gap sem duplicar.
+// alturas dos cartões já visíveis no mesmo monitor, e registra o slot para o id informado.
+// Se id já estiver registrado, atualiza a área/altura/gap sem duplicar.
 func BottomRightStackedOnActiveWorkArea(id uintptr, width, height, margin, gap int) (x, y int) {
 	if gap <= 0 {
 		gap = ScalePx(12, 1)
@@ -43,16 +44,20 @@ func BottomRightStackedOnActiveWorkArea(id uintptr, width, height, margin, gap i
 	found := false
 	for i := range bottomRightSlots {
 		if bottomRightSlots[i].id == id {
+			bottomRightSlots[i].area = area
 			bottomRightSlots[i].height = height
 			bottomRightSlots[i].gap = gap
 			found = true
-			break
+			continue
 		}
-		offset += bottomRightSlots[i].height + bottomRightSlots[i].gap
+		if bottomRightSlots[i].area == area {
+			offset += bottomRightSlots[i].height + bottomRightSlots[i].gap
+		}
 	}
 	if !found {
 		bottomRightSlots = append(bottomRightSlots, stackSlot{
 			id:     id,
+			area:   area,
 			height: height,
 			gap:    gap,
 		})

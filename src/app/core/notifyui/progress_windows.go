@@ -283,6 +283,7 @@ func runProgressWindow(ctx context.Context, req ProgressRequest) ProgressResult 
 	scaledWidth := winui.ScalePx(progressWidth, scale)
 	height := progressHeight(percentLabel, scale)
 	x, y = winui.BottomRightStackedOnActiveWorkArea(hwnd, scaledWidth, height, winui.ScalePx(progressPad, scale), winui.ScalePx(12, scale))
+	defer winui.ReleaseBottomRightSlot(hwnd)
 	winui.MoveResizeWindow(hwnd, x, y, scaledWidth, height)
 
 	state := &progressState{

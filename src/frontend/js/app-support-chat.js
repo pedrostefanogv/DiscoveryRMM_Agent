@@ -1462,7 +1462,7 @@
 
     var allowed = (state.policy && state.policy.allowedContentTypes) || [];
     var fileTypeLower = String(file.type || "").toLowerCase();
-    if (allowed.length && fileTypeLower && !allowed.some(function (ct) { return String(ct || "").toLowerCase() === fileTypeLower; })) {
+    if (allowed.length && (!fileTypeLower || !allowed.some(function (ct) { return String(ct || "").toLowerCase() === fileTypeLower; }))) {
       showBanner("Tipo de arquivo não permitido: " + (file.type || "desconhecido") + ".");
       return;
     }

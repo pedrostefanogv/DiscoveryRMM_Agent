@@ -127,10 +127,11 @@
 
   async function bootstrap() {
     if (PARTIALS.length > 0) {
-      await loadPartial(PARTIALS[0]);
+      var shellCount = Math.min(2, PARTIALS.length);
+      await Promise.all(PARTIALS.slice(0, shellCount).map(loadPartial));
     }
-    if (PARTIALS.length > 1) {
-      await Promise.all(PARTIALS.slice(1).map(loadPartial));
+    if (PARTIALS.length > 2) {
+      await Promise.all(PARTIALS.slice(2).map(loadPartial));
     }
 
     for (var j = 0; j < APP_SCRIPTS.length; j += 1) {
