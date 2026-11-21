@@ -2168,11 +2168,19 @@ var a2uiLastActionAt = 0;
 
 // formatA2uiActionLabel dá nome legível ao clique, para o turno disparado pela
 // interface não ficar sem rastro na conversa. Prioriza o rótulo real do botão
-// (via sourceComponentId), depois CHAT_TOOL_LABELS e por fim o nome formatado.
+// (via sourceComponentId, inclusive bindings { path } resolvidos no momento do
+// clique), depois CHAT_TOOL_LABELS e por fim o nome formatado.
 function formatA2uiActionLabel(action, entry) {
   if (entry && entry.componentLabels && action && action.sourceComponentId) {
-    var compLabel = entry.componentLabels[action.sourceComponentId];
-    if (compLabel) return "▶ " + compLabel;
+    var spec = entry.componentLabels[action.sourceComponentId];
+    if (spec && typeof spec === "object" && typeof spec.path === "string") {
+      if (entry.handle && typeof entry.handle.getDataModel === "function") {
+        var dmVal = entry.handle.getDataModel(spec.path);
+        if (typeof dmVal === "string" && dmVal.trim()) return "▶ " + dmVal.trim();
+      }
+    } else if (typeof spec === "string" && spec) {
+      return "▶ " + spec;
+    }
   }
   var name = String((action && action.name) || "").trim();
   if (!name) return "▶ ação na interface";
@@ -2313,31 +2321,37 @@ function a2uiArchiveSurface(surfaceId) {
 
 // a2uiIndexComponentLabels indexa os textos legíveis de botões/campos por id
 // para que formatA2uiActionLabel exiba o rótulo real do botão clicado.
-function a2uiIndexComponentLabels(entry, components) {
+// Resolve recursivamente child/children (ex.: Button -> Row -> [Icon, Text])
+// e preserva bindings { path } para leitura ao vivo no clique.
+function a2uiIndexComponentLabels(entry, components, reset) {
   if (!entry || !Array.isArray(components)) return;
-  if (!entry.componentLabels) entry.componentLabels = Object.create(null);
+  if (reset || !entry.componentLabels) entry.componentLabels = Object.create(null);
   var byId = Object.create(null);
   for (var i = 0; i < components.length; i++) {
     var comp = components[i];
     if (comp && comp.id) byId[comp.id] = comp;
   }
+  function resolveLabel(comp, depth) {
+    if (!comp || depth > 4) return null;
+    if (typeof comp.text === "string" && comp.text.trim()) return comp.text.trim();
+    if (comp.text && typeof comp.text.path === "string" && comp.text.path) return { path: comp.text.path };
+    if (typeof comp.label === "string" && comp.label.trim()) return comp.label.trim();
+    if (comp.child && byId[comp.child]) {
+      var fromChild = resolveLabel(byId[comp.child], depth + 1);
+      if (fromChild) return fromChild;
+    }
+    if (Array.isArray(comp.children)) {
+      for (var k = 0; k < comp.children.length; k++) {
+        var fromArr = resolveLabel(byId[comp.children[k]], depth + 1);
+        if (fromArr) return fromArr;
+      }
+    }
+    return null;
+  }
   for (var j = 0; j < components.length; j++) {
     var c = components[j];
     if (!c || !c.id) continue;
-    var resolved = "";
-    if (c.child && byId[c.child]) {
-      var child = byId[c.child];
-      if (typeof child.text === "string") {
-        resolved = child.text.trim();
-      } else if (child.text && typeof child.text.path === "string" && entry.handle && typeof entry.handle.getDataModel === "function") {
-        var dmVal = entry.handle.getDataModel(child.text.path);
-        if (typeof dmVal === "string") resolved = dmVal.trim();
-      }
-    } else if (typeof c.label === "string" && c.label.trim()) {
-      resolved = c.label.trim();
-    } else if (typeof c.text === "string" && c.text.trim()) {
-      resolved = c.text.trim();
-    }
+    var resolved = resolveLabel(c, 0);
     if (resolved) {
       entry.componentLabels[c.id] = resolved;
     }
@@ -2511,7 +2525,7 @@ function onChatA2ui(data) {
     }
     // Tipo desconhecido pelo bundle embarcado seria ignorado em silêncio.
     if (parsed.updateComponents && entry) {
-      a2uiIndexComponentLabels(entry, parsed.updateComponents.components);
+      a2uiIndexComponentLabels(entry, parsed.updateComponents.components, hasRoot);
       a2uiWarnUnsupportedComponents(parsed, entry);
     }
     // updateComponents/updateDataModel criam hosts novos (e novos shadow roots):
@@ -2742,6 +2756,12 @@ function handleA2uiUserAction(surfaceOrEntry, action) {
   // dispara turno — é o caminho para botões de navegação/estado da interface.
   if (isLocalA2uiAction(action.name)) {
     applyLocalA2uiAction(entry || surfaceId, action);
+    return;
+  }
+
+  // Sem conexão com o servidor, não envia ação nem deixa o card preso em busy.
+  if (typeof chatOfflineActive !== "undefined" && chatOfflineActive) {
+    if (typeof showChatOfflineBannerNow === "function") showChatOfflineBannerNow();
     return;
   }
 

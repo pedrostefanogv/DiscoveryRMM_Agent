@@ -66,6 +66,7 @@ function createHarness() {
   const handles = [];
   const userBubbles = [];
   const actionsSent = [];
+  let offlineBannerCalls = 0;
 
   const fns = [
     "formatA2uiActionLabel",
@@ -95,7 +96,7 @@ function createHarness() {
     },
     window: {
       A2uiChat: {
-        catalog: { components: new Set(["Column", "Row", "Text", "Button"]) },
+        catalog: { components: new Set(["Column", "Row", "Text", "Button", "Icon"]) },
         createSurface(contentEl, surfaceId) {
           let actionCb = null;
           const processed = [];
@@ -130,11 +131,14 @@ function createHarness() {
     a2uiArchivedSurfaces: [],
     pendingA2uiAction: 0,
     chatSending: false,
+    chatOfflineActive: false,
+    showChatOfflineBannerNow() { offlineBannerCalls++; },
     a2uiRendered: false,
     a2uiThemeAttach() {},
     a2uiThemeDispose() {},
     a2uiThemeRefresh() {},
     syncColorMode() {},
+    translate(k) { return k; },
     scheduleChatScrollToBottom() {},
     fallbackA2uiToMarkdown() {},
     isLocalA2uiAction(name) { return String(name || "").startsWith("ui."); },
@@ -155,7 +159,14 @@ function createHarness() {
   };
 
   vm.runInNewContext(fns, context);
-  return { ctx: context, chatMessagesEl, handles, userBubbles, actionsSent };
+  return {
+    ctx: context,
+    chatMessagesEl,
+    handles,
+    userBubbles,
+    actionsSent,
+    getOfflineBannerCalls: () => offlineBannerCalls,
+  };
 }
 
 test("duplicate createSurface with same surfaceId archives first card and appends new card at end", () => {
@@ -271,4 +282,55 @@ test("formatA2uiActionLabel resolves button text, CHAT_TOOL_LABELS, and prettifi
     ctx.formatA2uiActionLabel({ name: "custom_action_name" }, null),
     "▶ custom action name",
   );
+});
+
+test("handleA2uiUserAction blocks server action when offline but keeps local ui.* working", () => {
+  const { ctx, chatMessagesEl, handles, actionsSent, getOfflineBannerCalls } = createHarness();
+  let localApplied = 0;
+  ctx.applyLocalA2uiAction = () => { localApplied++; };
+
+  ctx.onChatA2ui(JSON.stringify({ version: "v0.9", createSurface: { surfaceId: "card_off" } }));
+  ctx.onChatA2ui(JSON.stringify({
+    version: "v0.9",
+    updateComponents: { surfaceId: "card_off", components: [{ id: "root", component: "Column" }] },
+  }));
+
+  ctx.chatOfflineActive = true;
+  handles[0].triggerAction({ name: "get_inventory", sourceComponentId: "b1", context: {} });
+
+  assert.equal(getOfflineBannerCalls(), 1);
+  assert.equal(actionsSent.length, 0);
+  assert.equal(chatMessagesEl.children.length, 1, "no user bubble appended while offline");
+  assert.equal(chatMessagesEl.children[0].classList.contains("a2ui-busy"), false);
+
+  handles[0].triggerAction({ name: "ui.next", context: { target: "/etapa" } });
+  assert.equal(localApplied, 1, "local ui.* action still executes offline");
+});
+
+test("a2uiIndexComponentLabels resolves nested Row/Text and live { path } bindings", () => {
+  const { ctx, handles, userBubbles } = createHarness();
+
+  ctx.onChatA2ui(JSON.stringify({ version: "v0.9", createSurface: { surfaceId: "nested_card" } }));
+  ctx.onChatA2ui(JSON.stringify({
+    version: "v0.9",
+    updateComponents: {
+      surfaceId: "nested_card",
+      components: [
+        { id: "root", component: "Column", children: ["btnNested", "btnDynamic"] },
+        { id: "btnNested", component: "Button", child: "btnRow", action: { event: { name: "printer", context: {} } } },
+        { id: "btnRow", component: "Row", children: ["ico", "lblNested"] },
+        { id: "ico", component: "Icon", name: "print" },
+        { id: "lblNested", component: "Text", text: "Listar impressoras" },
+        { id: "btnDynamic", component: "Button", child: "lblDynamic", action: { event: { name: "step_done", context: {} } } },
+        { id: "lblDynamic", component: "Text", text: { path: "/btnText" } },
+      ],
+    },
+  }));
+
+  handles[0].updateDataModel("/btnText", "Concluir etapa 2");
+  handles[0].triggerAction({ name: "printer", sourceComponentId: "btnNested", context: {} });
+  handles[0].triggerAction({ name: "step_done", sourceComponentId: "btnDynamic", context: {} });
+
+  assert.equal(userBubbles[0].textContent, "▶ Listar impressoras");
+  assert.equal(userBubbles[1].textContent, "▶ Concluir etapa 2");
 });
