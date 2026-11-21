@@ -77,6 +77,41 @@ type HardwareDirtyRectsReporter interface {
 	HasHardwareDirtyRects() bool
 }
 
+// DirtyRectsReporter é implementado por capturers que, ALÉM de saberem que a
+// tela mudou, sabem ONDE mudou — pela GPU, de graça.
+//
+// POR QUE ISTA INTERFACE EXISTE (Fase 6, 2026-11-20):
+// O DXGI Desktop Duplication entrega, em DXGI_OUTDUPL_FRAME_INFO, o
+// TotalMetadataBufferSize e — via GetFrameDirtyRects/GetFrameMoveRects — a
+// lista EXATA de retângulos alterados desde o último AcquireNextFrame. É a
+// informação que o RustDesk usa como caminho principal de delta.
+//
+// O DiscoveryRMM ANTES desta interface lia apenas "mudou/não mudou" do
+// hardware e DESCARTAVA as regiões. Com HardwareDirtyRectsReporter=true o
+// pipeline pulava o diff de software (correto: o hardware já respondeu), mas
+// ficava com rects=nil — e decideFrameKind só entra em tile-mode com
+// len(rects)>0. Resultado medido em produção (DESKTOP-4PIDHO0, 3440x1440):
+//
+//	tile-mode=true no log, 297 env/10s, comp 1299:1 ... mas todo frame saía
+//	COMPLETO (tela inteira ~5 MP recomprimida a cada quadro).
+//
+// Ou seja: a maior economia de banda do projeto estava DESLIGADA justamente no
+// caminho que roda em produção. Esta interface fecha esse buraco.
+type DirtyRectsReporter interface {
+	// HardwareDirtyRects devolve as regiões alteradas desde o último frame,
+	// em coordenadas do FRAME (mesmo espaço de Frame.OriginX/OriginY já
+	// subtraído), já recortadas em [0,width)x[0,height).
+	//
+	// Contrato:
+	//   - nil/len==0 significa "não sei as regiões" OU "mudou sem região útil".
+	//     O chamador trata len==0 como "frame completo" — NUNCA como idle
+	//     (idle chega como erro/timeout do capturer, não como lista vazia).
+	//   - A lista é válida até o próximo AcquireNextFrame.
+	//   - Os rects podem se sobrepor e virar muitos (centenas); o chamador
+	//     consolida/limita antes de codificar (ver CoalesceDirtyRects).
+	HardwareDirtyRects() []DirtyRect
+}
+
 // registraCapturer publica o capturer ativo para quem precisa consultá-lo fora do
 // pipeline (hoje o banner, que pergunta se a captura sabe contornar uma região).
 // Sem isso a emenda nunca liga em produção: o banner cairia sempre na escada do

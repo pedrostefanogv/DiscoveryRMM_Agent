@@ -20,7 +20,13 @@ import (
 //   IDXGIAdapter1:       7=EnumOutputs, 8=GetDesc, 10=GetDesc1
 //   IDXGIOutput:         7=GetDesc
 //   IDXGIOutput1:        22=DuplicateOutput
-//   IDXGIOutputDuplication: 8=AcquireNextFrame, 14=ReleaseFrame
+//   IDXGIOutputDuplication: 8=AcquireNextFrame, 9=GetFrameDirtyRects,
+//                          10=GetFrameMoveRects, 14=ReleaseFrame
+//     (base 3 = IUnknown QI/AddRef/Release; IDXGIObject ocupa 3..7 = SetPrivateData,
+//      SetPrivateDataInterface, GetPrivateData, GetParent, GetDesc — por isso
+//      AcquireNextFrame cai em 8. Conferido contra
+//      go-d3d/dxgi/dxgi_vtbl.go:134-146, onde GetDesc vem imediatamente antes de
+//      AcquireNextFrame, e GetFrameDirtyRects/GetFrameMoveRects logo depois.)
 //   ID3D11Device:        3=CreateTexture2D, 4=CreateTexture2D (alternate)
 //     — NOTA: slot 5 é CreateBuffer. CreateTexture2D = slot 5 na verdade.
 //     — Revisando: ID3D11Device: 0-2(IUnknown), 3-4(VK/private), 5=CreateTexture2D
@@ -83,7 +89,14 @@ const (
 	slotOutputGetDesc           = 7
 	slotOutput1DuplicateOutput  = 22
 	slotOutput1DuplicateOutput1 = 23
+	// Os índices abaixo contam a partir do INÍCIO da interface (incluindo os 3
+	// de IUnknown), que é como comCall navega a vtable. Confira a ordem real de
+	// IDXGIOutputDuplication: GetDesc, AcquireNextFrame, GetFrameDirtyRects,
+	// GetFrameMoveRects, GetFramePointerShape, MapDesktopSurface,
+	// UnMapDesktopSurface, ReleaseFrame.
 	slotDupAcquireNextFrame     = 8
+	slotDupGetFrameDirtyRects   = 9
+	slotDupGetFrameMoveRects    = 10
 	slotDupReleaseFrame         = 14
 	slotDevCreateTexture2D      = 5
 	slotCtxMap                  = 14
@@ -121,6 +134,11 @@ type dxgiOutputDesc struct {
 
 type rect struct{ Left, Top, Right, Bottom int32 }
 
+// dxgiRect é o RECT do Win32 (mesmo layout de rect). Existe como alias nomeado
+// porque GetFrameDirtyRects escreve um ARRAY deste tipo — usar rect direto
+// deixaria a intenção menos explícita no ponto de conversão para DirtyRect.
+type dxgiRect = rect
+
 type d3d11Texture2DDesc struct {
 	Width, Height, MipLevels, ArraySize         uint32
 	Format                                      uint32
@@ -139,6 +157,10 @@ type d3d11MappedSubresource struct {
 const (
 	DXGI_ERROR_WAIT_TIMEOUT = 0x887A0027
 	DXGI_ERROR_ACCESS_LOST  = 0x887A0020
+	// DXGI_ERROR_MORE_DATA: GetFrameDirtyRects/GetFrameMoveRects devolvem este
+	// HRESULT quando o buffer passado é menor que o necessário, e escrevem em
+	// *pRequiredBufferSize o tamanho REAL. É o protocolo de crescimento da API.
+	DXGI_ERROR_MORE_DATA = 0x887A000B
 
 	DXGI_FORMAT_B8G8R8A8_UNORM = 87
 	DXGI_FORMAT_R8G8B8A8_UNORM = 28
@@ -184,6 +206,27 @@ type dxgiCapturer struct {
 	lastResource  unsafe.Pointer
 	stagingTex    unsafe.Pointer
 	stagingMapped bool
+
+	// ── Dirty rects de HARDWARE (Fase 6, 2026-11-20) ──
+	//
+	// A duplicação já sabe ONDE a tela mudou (GetFrameDirtyRects). Esses rects
+	// eram descartados: o pipeline só aproveitava o "mudou/não mudou" implícito
+	// no timeout do AcquireNextFrame, e como decideFrameKind exige len(rects)>0
+	// para entrar em tile-mode, TODO frame saía como JPEG da tela inteira —
+	// medido em produção a 3440x1440 (~5 MP recomprimidos por quadro).
+	//
+	// dirtyBuf é o buffer de RECT nativo reutilizado entre frames (a API cresce
+	// a lista via DXGI_ERROR_MORE_DATA, então guardamos a capacidade).
+	// rectsFrame é a tradução para DirtyRect em coordenadas do frame, válida até
+	// o próximo AcquireNextFrame (mesmo contrato do Frame.Data).
+	dirtyBuf   []dxgiRect
+	rectsFrame []DirtyRect
+
+	// lastHadMetadata registra se o último frame trouxe metadados de dirty rect.
+	// TotalMetadataBufferSize==0 significa "sem informação de região" (o DXGI
+	// não rastreou) — nesse caso devolvemos nil e o pipeline manda frame
+	// completo, que é o comportamento seguro.
+	lastHadMetadata bool
 
 	// frameBuf é reutilizado entre frames (otimização de churn de GC: antes
 	// era um make([]byte, w*h*bpp) por frame — ~8 MB SDR / ~16 MB HDR @1080p
@@ -430,6 +473,20 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 
 	c.lastResource = res
 
+	// ── Dirty rects de HARDWARE (Fase 6, 2026-11-20) ──
+	//
+	// A duplicação já respondeu ONDE a tela mudou — de graça, junto do frame
+	// que ela acabou de entregar. Antes esta informação era descartada e o
+	// pipeline ficava com rects=nil, o que desliga o tile-mode (decideFrameKind
+	// exige len(rects)>0) e faz TODO frame sair como JPEG da tela inteira.
+	// Medido em produção a 3440x1440: ~5 MP recomprimidos por quadro mesmo
+	// quando só o cursor se moveu.
+	//
+	// TotalMetadataBufferSize==0 significa que o DXGI não rastreou regiões
+	// neste frame (acontece após mode change, por exemplo). Nesse caso deixamos
+	// rectsFrame nil — o chamador trata como "frame completo", que é seguro.
+	c.captureDirtyRectsLocked(&fi)
+
 	// CopyResource: GPU → staging
 	comCall(c.d3dContext, slotCtxCopyResource, uintptr(c.stagingTex), uintptr(res))
 
@@ -539,6 +596,111 @@ func (c *dxgiCapturer) Close() error {
 // O diff de software do pipeline é redundante aqui — ver
 // HardwareDirtyRectsReporter em capturer.go.
 func (c *dxgiCapturer) HasHardwareDirtyRects() bool { return true }
+
+// HardwareDirtyRects devolve as regiões alteradas reportadas pela GPU no último
+// frame, em coordenadas do FRAME e já recortadas/consolidadas para o protocolo
+// de tiles do viewer. Ver DirtyRectsReporter em capturer.go.
+//
+// Devolve nil quando o DXGI não trouxe metadados de região neste frame — o
+// chamador interpreta nil como "frame completo" (nunca como idle: idle chega
+// como erro de timeout no AcquireNextFrame).
+//
+// Contrato de validade: a slice é válida até o próximo AcquireNextFrame.
+func (c *dxgiCapturer) HardwareDirtyRects() []DirtyRect {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || !c.lastHadMetadata {
+		return nil
+	}
+	return c.rectsFrame
+}
+
+// captureDirtyRectsLocked consulta GetFrameDirtyRects e traduz o resultado para
+// coordenadas do frame. Chamado com c.mu JÁ travado, entre AcquireNextFrame e
+// ReleaseFrame (a API só é válida nessa janela e com um frame adquirido).
+//
+// IMPORTANTE — não é fatal: qualquer falha aqui é registrada e o capturer segue
+// com rectsFrame=nil (frame completo). Perder a otimização é aceitável; derrubar
+// a sessão de tela porque o DXGI não quis reportar regiões, não.
+func (c *dxgiCapturer) captureDirtyRectsLocked(fi *dxgiOutduplFrameInfo) {
+	c.lastHadMetadata = false
+	c.rectsFrame = nil
+
+	if fi.TotalMetadataBufferSize == 0 {
+		// Sem metadados: o DXGI não rastreou regiões neste frame.
+		return
+	}
+
+	// A API cresce o buffer via DXGI_ERROR_MORE_DATA: começa com a capacidade
+	// que já temos (reutilizada entre frames) e só realoca se ela não bastar.
+	// Isso evita alocar um []RECT por frame a 30 fps.
+	if len(c.dirtyBuf) == 0 {
+		c.dirtyBuf = make([]dxgiRect, 8)
+	}
+	required := uint32(len(c.dirtyBuf))
+
+	for attempt := 0; attempt < 4; attempt++ {
+		hr, _, _ := comCall(c.duplication, slotDupGetFrameDirtyRects,
+			uintptr(unsafe.Pointer(&c.dirtyBuf[0])),
+			uintptr(unsafe.Pointer(&required)),
+		)
+		if uint64(hr) == DXGI_ERROR_MORE_DATA {
+			// `required` traz o tamanho necessário; realoca e tenta de novo.
+			n := int(required)
+			if n <= len(c.dirtyBuf) {
+				n = len(c.dirtyBuf) * 2
+			}
+			if n > 4096 { // teto de segurança: 4096 RECTs = 64 KB
+				n = 4096
+			}
+			c.dirtyBuf = make([]dxgiRect, n)
+			required = uint32(n)
+			continue
+		}
+		if hr != 0 {
+			// Não fatal — segue com frame completo (ver comentário da função).
+			return
+		}
+		// Sucesso: `required` passou a ser o NÚMERO DE RECTS escritos.
+		count := int(required)
+		if count > len(c.dirtyBuf) {
+			count = len(c.dirtyBuf)
+		}
+		if count == 0 {
+			return
+		}
+
+		// Traduz RECT para DirtyRect. A origem do output JÁ foi subtraída: os
+		// RECTs do DXGI vêm em coordenadas do DESKTOP VIRTUAL, enquanto o frame
+		// começa em (originX, originY) — sem subtrair, um monitor não-primário
+		// desloca todos os tiles (mesmo bug já corrigido no cursor).
+		raw := make([]DirtyRect, 0, count)
+		for i := 0; i < count; i++ {
+			r := c.dirtyBuf[i]
+			w := int(r.Right - r.Left)
+			h := int(r.Bottom - r.Top)
+			if w <= 0 || h <= 0 {
+				continue
+			}
+			raw = append(raw, DirtyRect{
+				X:      int(r.Left) - c.originX,
+				Y:      int(r.Top) - c.originY,
+				Width:  w,
+				Height: h,
+			})
+		}
+		if len(raw) == 0 {
+			return
+		}
+
+		// Consolida para o que o protocolo do viewer aceita (numRects < 512).
+		// Sem isso um arrasto de janela pode gerar centenas de RECTs e o decoder
+		// do viewer deixa de reconhecer o payload como tiles.
+		c.rectsFrame = CoalesceDirtyRects(raw, c.width, c.height)
+		c.lastHadMetadata = len(c.rectsFrame) > 0
+		return
+	}
+}
 
 func (c *dxgiCapturer) Name() string { return "dxgi" }
 

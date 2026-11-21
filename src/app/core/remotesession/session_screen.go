@@ -331,6 +331,9 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		encodeMs         float64
 		capW, capH       int
 		originX, originY int
+		// inTiles: este frame foi enviado como DELTA (tiles) e não como imagem
+		// completa. Alimenta a telemetria de tiles= no log (Fase 6).
+		inTiles bool
 	}
 
 	encodeChan := make(chan encodeJob, 1) // buffer=1: captura nunca bloqueia se encoder ocupado
@@ -419,6 +422,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				capH:     job.capH,
 				originX:  job.originX,
 				originY:  job.originY,
+				inTiles:  job.rects != nil,
 			}:
 			case <-ctx.Done():
 				return
@@ -449,6 +453,15 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	// pelo teto de banda (observabilidade — distingue "rede freou" de
 	// "máquina lenta"/"tela ociosa" no log de métricas).
 	var gateWaits, totalGateWaits int64
+	// sentInTiles / hwRectFrames: observabilidade do caminho de dirty rects de
+	// hardware (Fase 6). sentInTiles conta frames enviados em TILES (delta);
+	// hwRectFrames conta frames em que o capturer REPORTOU regiões. Se
+	// hwRectFrames fica em 0 com um capturer DXGI, a otimização não está
+	// engatando e o motivo precisa ser investigado.
+	var sentInTiles, hwRectFrames int64
+	// totalHwRects acumula a sessão inteira (o log zera a cada 10 s; o evento de
+	// métricas precisa de um número que não reinicie para a UI mostrar tendência).
+	var totalHwRects int64
 	var sent, skipped int64
 	var rawBytes, encBytes int64
 	var encodeTimeTotal time.Duration
@@ -501,6 +514,9 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			s.inputCtrl.UpdateFrameOrigin(result.originX, result.originY)
 			s.recording.CaptureFrame(result.data)
 			s.frameSeq++
+			if result.inTiles {
+				sentInTiles++
+			}
 			s.quality.RecordFrame(len(result.data), time.Now())
 
 			rawBytes += result.rawBytes
@@ -511,7 +527,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 
 			// Metricas a cada 5s
 			if time.Since(s.lastMetricsTime) >= 5*time.Second {
-				s.publishMetrics(result.width, result.height, sent, skipped, rawBytes, encBytes, encodeTimeTotal)
+				s.publishMetrics(result.width, result.height, sent, skipped, rawBytes, encBytes, encodeTimeTotal, sentInTiles, hwRectFrames, totalHwRects)
 				s.lastMetricsTime = time.Now()
 			}
 
@@ -537,10 +553,17 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				// capturer contorna a região por conta própria ou não há cartão).
 				// dirty= passa a ser ~0 no caminho DXGI, que decide por hardware
 				// (ver hw-dirty-rects= no log de Start).
-				log.Printf("[remote-session-screen] %d env, %d idle, %d gate | comp %.1f:1 | cap=%.1fms dirty=%.1fms copy=%.1fms mask=%.1fms enc=%.1fms | fps=%d\n",
-					sent, totalIdle, gateWaits, compRatio, avgCapMs, avgDirtyMs, avgCopyMs, avgMaskMs, avgEncMs, curFps)
+				// hwrects=/tiles= (Fase 6, 2026-11-20): sem estes dois números não
+				// havia como saber, olhando o log, se o caminho de dirty rects de
+				// HARDWARE estava de fato alimentando o tile-mode. Era exatamente o
+				// ponto cego que deixou o tile-mode inerte em produção sem ninguém
+				// notar: o log dizia "tile-mode=true" e todo frame saía completo.
+				log.Printf("[remote-session-screen] %d env, %d idle, %d gate | comp %.1f:1 | cap=%.1fms dirty=%.1fms copy=%.1fms mask=%.1fms enc=%.1fms | tiles=%d hwrects=%d | fps=%d\n",
+					sent, totalIdle, gateWaits, compRatio, avgCapMs, avgDirtyMs, avgCopyMs, avgMaskMs, avgEncMs,
+					sentInTiles, hwRectFrames, curFps)
 				s.lastLogTime = time.Now()
 				sent, skipped = 0, 0
+				sentInTiles, hwRectFrames = 0, 0
 				gateWaits = 0
 				rawBytes, encBytes = 0, 0
 				encodeTimeTotal = 0
@@ -707,12 +730,28 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		//
 		// `rects` nil com hwDirtyRects=true significa "não sei as regiões, mas a
 		// tela mudou" — o frame vai COMPLETO (decideFrameKind devolve jobRects
-		// nil), que é o comportamento correto e seguro: o modo tile depende de
-		// rects e simplesmente não se aplica nesse caminho.
+		// nil), que é o comportamento correto e seguro.
+		//
+		// ATUALIZAÇÃO Fase 6 (2026-11-20): quando o capturer implementa
+		// DirtyRectsReporter (DXGI manual e go-d3d), rects JÁ VEM preenchido
+		// pelo hardware e o tile-mode passa a valer neste caminho. Antes desta
+		// mudança o comentário acima descrevia um tile-mode permanentemente
+		// inerte no caminho de produção.
 		dirtyStart := time.Now()
 		var rects []screen.DirtyRect
 		if !s.hwDirtyRects {
 			rects = s.dirtyDetector.Detect(frame)
+		} else if hw, ok := cap.(screen.DirtyRectsReporter); ok {
+			// Fase 6 (2026-11-20): o capturer sabe ONDE a tela mudou, de graça.
+			// Sem isto o tile-mode ficava inerte no caminho DXGI (rects=nil),
+			// e todo frame saía como JPEG da tela inteira — medido em produção
+			// a 3440x1440, ~5 MP recomprimidos por quadro mesmo com a tela
+			// quase parada. Ver DirtyRectsReporter em core/screen.
+			rects = hw.HardwareDirtyRects()
+			if len(rects) > 0 {
+				hwRectFrames++
+				totalHwRects++
+			}
 		}
 		dirtyMs := float64(time.Since(dirtyStart).Microseconds()) / 1000.0
 		dirtyMsTotal += dirtyMs
@@ -1149,10 +1188,17 @@ func (s *SessionScreen) SetQuality(profile string) {
 }
 
 // SetCodec configura o codec preferencial (auto/jpeg/webp/h264).
+//
+// Fase 6 (2026-11-20): quando o codec pedido não está disponível, o erro é
+// PUBLICADO no log e o encoder de fallback (JPEG) é aplicado. Antes a troca era
+// silenciosa: o log de start dizia "codec=webp" e o operador não tinha como
+// saber se o pedido foi honrado — exatamente o antipadrão do H.264.
 func (s *SessionScreen) SetCodec(codec string) {
 	s.codecSel.SetPreferred(codec)
-	// Seleciona o encoder otimo com base na GPU e codec
-	encoder := s.codecSel.Select(s.quality.Profile(), codec)
+	encoder, err := s.codecSel.SelectChecked(codec)
+	if err != nil {
+		log.Printf("[remote-session-screen] codec solicitado não aplicado: %v (sessionId=%s)\n", err, s.sessionID)
+	}
 	if encoder != nil {
 		s.encoderMu.Lock()
 		s.encoder = encoder
@@ -1270,7 +1316,7 @@ func (s *SessionScreen) consumeRecoveryFrame() bool {
 }
 
 // publishMetrics publica metricas de streaming no subject .event para o viewer.
-func (s *SessionScreen) publishMetrics(width, height int, framesSent, framesSkipped int64, rawBytes, encBytes int64, encodeTimeTotal time.Duration) {
+func (s *SessionScreen) publishMetrics(width, height int, framesSent, framesSkipped int64, rawBytes, encBytes int64, encodeTimeTotal time.Duration, tilesFrames, hwRects, totalHwRects int64) {
 	q := s.quality.Current()
 	compressionRatio := float64(0)
 	avgEncodeMs := float64(0)
@@ -1300,6 +1346,13 @@ func (s *SessionScreen) publishMetrics(width, height int, framesSent, framesSkip
 		"framesSent5s":     framesSent,
 		"framesSkipped5s":  framesSkipped,
 		"totalFrames":      s.frameSeq,
+		// tiles5s / hwDirtyRects5s (Fase 6, 2026-11-20): prova, no próprio
+		// evento de métricas, que o delta por hardware está engatando. Sem
+		// isso a única evidência seria o log do agente — e a ausência da
+		// otimização passou meses despercebida justamente por não haver número.
+		"tilesFrames5s":     tilesFrames,
+		"hwDirtyRects5s":    hwRects,
+		"hwDirtyRectsTotal": totalHwRects,
 	}
 	if framesSent > 0 {
 		metrics["frameBytesAvg"] = encBytes / framesSent

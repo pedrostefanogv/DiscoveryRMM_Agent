@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
-	"unsafe"
 )
 
 // Encoder comprime frames em um formato especifico para envio.
@@ -58,15 +57,7 @@ func (e *jpegEncoder) Encode(frame *Frame, quality int) ([]byte, error) {
 	// Swap B↔R usando uint32 cast (~4x mais rapido que byte-by-byte).
 	// Requer que stride seja multiplo de 4 (sempre verdade para BGRA).
 	if stride%4 == 0 {
-		pixels := unsafe.Slice((*uint32)(unsafe.Pointer(&rgba[0])), len(rgba)/4)
-		for i := range pixels {
-			// BGRA: 0xAARRGGBB → RGBA: 0xAABBGGRR
-			// Swap bytes 0 (B) e 2 (R) mantendo A e G
-			c := pixels[i]
-			pixels[i] = (c & 0xFF00FF00) | // A e G nos lugares certos
-				((c & 0x000000FF) << 16) | // B → R
-				((c & 0x00FF0000) >> 16) // R → B
-		}
+		SwapBGRAtoRGBAInPlace(rgba)
 	} else {
 		// Fallback: stride com padding — swap byte-by-byte
 		for y := 0; y < h; y++ {

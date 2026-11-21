@@ -146,3 +146,29 @@ func BenchmarkEncodeFullFrameJPEG(b *testing.B) {
 		}
 	}
 }
+// BenchmarkSwapBGRAtoRGBA mede a conversão de canais que roda por frame
+// (encoder de frame inteiro) e por tile (dirty_rects.go). Fase 6: era um laço
+// escalar; virou um caminho por palavra com faixas paralelas. Este benchmark é
+// o que prova o ganho em 1440p/ultrawide.
+func BenchmarkSwapBGRAtoRGBA(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		w, h int
+	}{
+		{"1080p", 1920, 1080},
+		{"ultrawide1440p", 3440, 1440},
+		{"4K", 3840, 2160},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			f := benchFrameBGRA(tc.w, tc.h, 5)
+			buf := make([]byte, len(f.Data))
+			copy(buf, f.Data)
+			b.SetBytes(int64(len(buf)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				SwapBGRAtoRGBAInPlace(buf)
+			}
+		})
+	}
+}

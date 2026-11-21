@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"image"
-	"image/jpeg"
 	"sort"
 	"unsafe"
 )
@@ -292,24 +291,30 @@ func EncodeDirtyRectsScratch(frame *Frame, rects []DirtyRect, quality int, s *Ti
 	// (truncamento), mas a dessincronia é evitável e o header passa a ser
 	// confiável como contrato.
 	s.out = append(s.out[:0], 0, 0, 0, 0)
+
+	// ── Codificação dos tiles, EM PARALELO quando compensa (Fase 6, 2026-11-20) ──
+	//
+	// POR QUE: cada tile é uma imagem INDEPENDENTE — nenhum tile lê o resultado
+	// de outro. Eram codificados em série, e a medição de base mostrou que 64
+	// tiles de 240x135 custam ~63 ms (BenchmarkEncodeDirtyRects) contra ~58 ms
+	// de um único JPEG do frame inteiro. Ou seja: o caminho que existe para
+	// ECONOMIZAR BANDA custava o MESMO TEMPO que mandar a tela toda — o pior
+	// dos dois mundos, porque a economia de bytes não pagava o custo de CPU.
+	//
+	// A paralelização muda essa conta: com N núcleos o trabalho de encode cai
+	// por um fator próximo de N, e o tile-mode passa a ser vantajoso nos DOIS
+	// eixos (banda E tempo de quadro).
+	//
+	// A ordem do payload é PRESERVADA: os resultados são escritos em posições
+	// fixas e montados na ordem original, não na ordem de conclusão — o viewer
+	// desenha tiles sobrepostos na ordem recebida.
+	encoded := encodeTilesParallel(frame, rects, quality)
+
 	escritos := 0
-
-	for _, rect := range rects {
-		// Extrai o tile para a imagem reutilizável.
-		img := s.extractTile(frame, rect)
-		if img == nil {
+	for _, te := range encoded {
+		if te == nil || len(te.data) == 0 {
 			continue
 		}
-
-		s.jpeg.Reset()
-		if err := jpeg.Encode(&s.jpeg, img, &jpeg.Options{Quality: quality}); err != nil {
-			continue
-		}
-		encoded := s.jpeg.Bytes()
-		if len(encoded) == 0 {
-			continue
-		}
-
 		// Tile header: x, y, w, h (uint16 cada = 8 bytes) + size (uint32 = 4 bytes)
 		//
 		// Largura/altura vêm da IMAGEM (já recortada nos limites do frame), não do
@@ -320,15 +325,15 @@ func EncodeDirtyRectsScratch(frame *Frame, rects []DirtyRect, quality int, s *Ti
 		// (o código anterior também escrevia rect.Width com a imagem recortada),
 		// corrigido junto com a revisão de 2026-11-19 — ver
 		// TestEncodeDirtyRectsHeaderBateComImagemRecortada.
-		bounds := img.Bounds()
-		binary.BigEndian.PutUint16(s.header[0:2], uint16(rect.X))
-		binary.BigEndian.PutUint16(s.header[2:4], uint16(rect.Y))
-		binary.BigEndian.PutUint16(s.header[4:6], uint16(bounds.Dx()))
-		binary.BigEndian.PutUint16(s.header[6:8], uint16(bounds.Dy()))
-		binary.BigEndian.PutUint32(s.header[8:12], uint32(len(encoded)))
+		var hdr [12]byte
+		binary.BigEndian.PutUint16(hdr[0:2], uint16(te.x))
+		binary.BigEndian.PutUint16(hdr[2:4], uint16(te.y))
+		binary.BigEndian.PutUint16(hdr[4:6], uint16(te.w))
+		binary.BigEndian.PutUint16(hdr[6:8], uint16(te.h))
+		binary.BigEndian.PutUint32(hdr[8:12], uint32(len(te.data)))
 
-		s.out = append(s.out, s.header[:]...)
-		s.out = append(s.out, encoded...)
+		s.out = append(s.out, hdr[:]...)
+		s.out = append(s.out, te.data...)
 		escritos++
 	}
 
@@ -381,20 +386,11 @@ func (s *TileScratch) extractTile(frame *Frame, rect DirtyRect) *image.RGBA {
 		if src+stride > len(frame.Data) {
 			break
 		}
-		// Swap BGRA→RGBA por PALAVRA (4 pixels de uma vez), como faz o encoder
-		// JPEG completo (encoder_jpeg.go). O laço anterior era byte a byte por
-		// canal, 4 escritas + 4 leituras por pixel.
-		n := stride / 4
-		sp := unsafe.Slice((*uint32)(unsafe.Pointer(&frame.Data[src])), n)
-		dp := unsafe.Slice((*uint32)(unsafe.Pointer(&pix[dst])), n)
-		for i := 0; i < n; i++ {
-			c := sp[i]
-			// BGRA 0xAARRGGBB → RGBA 0xAABBGGRR (força alfa opaco).
-			dp[i] = 0xFF000000 |
-				((c & 0x000000FF) << 16) | // B → R
-				(c & 0x0000FF00) | // G fica
-				((c & 0x00FF0000) >> 16) // R → B
-		}
+		// Swap BGRA→RGBA por PALAVRA, com o helper compartilhado
+		// (pixel_convert.go). O laço anterior era byte a byte por canal,
+		// 4 escritas + 4 leituras por pixel; agora é uma conversão por
+		// palavra com alfa forçado opaco, num único ponto do código.
+		CopyBGRAtoRGBA(pix[dst:dst+stride], frame.Data[src:src+stride])
 	}
 	return s.img
 }
