@@ -550,9 +550,15 @@ func TestTier4_Scenario6_SupplyChainSelfUpdateAndBuildGates(t *testing.T) {
 	if !strings.Contains(wf, "go vet") || !strings.Contains(wf, "go test") {
 		t.Fatalf("Scenario6/F14: release-agent-on-tag.yml sem go vet/go test")
 	}
+	// F18 (contrato atualizado 2026-11-21): o pion pode existir, mas so COM uso
+	// real. O guard de equivalencia vive no tier1; aqui a checagem e a mesma
+	// ideia em uma linha, para o cenario nao passar com dependencia morta.
 	gomod := readSrcFile(t, "go.mod")
 	if strings.Contains(gomod, "github.com/pion/webrtc") {
-		t.Fatalf("Scenario6/F18: go.mod ainda contem github.com/pion/webrtc")
+		code, out, err := runGoCmd(t, 30*time.Second, "list", "-f", "{{range .Imports}}{{.}},{{end}}", "./app/core/remotesession/")
+		if err != nil || code != 0 || !strings.Contains(out, "github.com/pion/webrtc") {
+			t.Fatalf("Scenario6/F18: go.mod declara pion/webrtc mas o pacote de acesso remoto nao o importa (dependencia morta)")
+		}
 	}
 
 	// 4. go vet em ./e2e/...

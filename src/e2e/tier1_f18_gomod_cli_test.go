@@ -8,15 +8,46 @@ import (
 	"time"
 )
 
+// TestF18_T1_GoModNoUnusedWebRTCBloat guarda contra DEPENDENCIA MORTA.
+//
+// O contrato MUDOU em 2026-11-21: antes o pion nao podia existir porque nao era
+// usado (a negociacao tinha um stub que recusava explicitamente). Agora o
+// transporte WebRTC e ADITIVO e OPCIONAL, com uso REAL em
+// app/core/remotesession/webrtc_media.go — entao o guard passa a exigir a
+// EQUIVALENCIA: pion presente <=> existe call site.
+//
+// O que o guard NAO perdeu: continua pegando o caso que o motivou — declarar a
+// dependencia sem usar (ou parar de usar e deixa-la no go.mod). So deixou de
+// proibir a dependencia em si, que agora tem proposito.
 func TestF18_T1_GoModNoUnusedWebRTCBloat(t *testing.T) {
 	gomod := readSrcFile(t, "go.mod")
-	if strings.Contains(gomod, "github.com/pion/webrtc") {
-		t.Fatalf("F18 violacao: go.mod ainda contem github.com/pion/webrtc (bloat nao utilizado)")
+	declared := strings.Contains(gomod, "github.com/pion/webrtc")
+
+	// Ha uso real? Inspeciona os imports do pacote de acesso remoto.
+	code, out, err := runGoCmd(t, 30*time.Second, "list", "-f", "{{.ImportPath}}|{{range .Imports}}{{.}},{{end}}", "./app/core/remotesession/")
+	if err != nil || code != 0 {
+		t.Fatalf("go list ./app/core/remotesession/ falhou (code=%d): %v\n%s", code, err, out)
 	}
 
-	code, out, err := runGoCmd(t, 20*time.Second, "mod", "why", "github.com/pion/webrtc/v4")
-	if err == nil && code == 0 && !strings.Contains(out, "does not need package") {
-		t.Fatalf("F18 violacao: `go mod why github.com/pion/webrtc/v4` indica dependencia ativa:\n%s", out)
+	usesPion := false
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		for _, imp := range strings.Split(parts[1], ",") {
+			if strings.Contains(strings.TrimSpace(imp), "github.com/pion/webrtc") {
+				usesPion = true
+			}
+		}
+	}
+
+	if declared && !usesPion {
+		t.Fatalf("F18 violacao: go.mod declara github.com/pion/webrtc mas NENHUM pacote o importa (dependencia morta). Remova a dependencia ou ligue o uso.")
+	}
+
+	if !declared && usesPion {
+		t.Fatalf("F18 violacao: o pacote de acesso remoto importa github.com/pion/webrtc mas ele nao esta declarado no go.mod (rode go mod tidy).")
 	}
 }
 

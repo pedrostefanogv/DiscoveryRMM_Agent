@@ -93,8 +93,12 @@ type Manager struct {
 	// webrtcSessions guarda o estado de negociação WebRTC por sessão. Só existe
 	// quando a política autorizou o WebRTC para aquela sessão.
 	webrtcSessions map[string]*WebRtcSession
-	nc             *nats.Conn
-	natsStream     *NatsStreamHandler
+	// webrtcDataSinks mapeia sessionId → pontos de entrega do caminho de dados
+	// (input/túnel/arquivos). As sessões vivem em goroutines com escopo local, então
+	// este registro é como o data channel alcança o pipeline delas.
+	webrtcDataSinks map[string]webrtcDataSink
+	nc              *nats.Conn
+	natsStream      *NatsStreamHandler
 
 	// callbacks para notificar a UI/tray
 	onSessionStarted func(sessionID, kind string)
@@ -126,10 +130,11 @@ type Manager struct {
 // NewManager cria um novo gerenciador de sessoes remotas.
 func NewManager(nc *nats.Conn) *Manager {
 	return &Manager{
-		sessions:       make(map[string]*Session),
-		screenSessions: make(map[string]*SessionScreen),
-		webrtcSessions: make(map[string]*WebRtcSession),
-		nc:             nc,
+		sessions:        make(map[string]*Session),
+		screenSessions:  make(map[string]*SessionScreen),
+		webrtcSessions:  make(map[string]*WebRtcSession),
+		webrtcDataSinks: make(map[string]webrtcDataSink),
+		nc:              nc,
 	}
 }
 
@@ -492,6 +497,22 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 					sessionID, reason)
 				m.closeSession(sessionID, "webrtc-failed: "+reason)
 			},
+		)
+
+		// Handlers do caminho de DADOS: ligam os data channels ao pipeline que já
+		// existe. O input do viewer, os bytes do túnel e os chunks de arquivo
+		// entram pelos MESMOS handlers que o caminho NATS usa — não há um segundo
+		// caminho de processamento para manter em sincronia.
+		//
+		// Registrado AGORA (antes de qualquer oferta) porque os handlers são
+		// instalados no data channel no instante em que o peer connection nasce:
+		// chegar depois significaria perder os primeiros frames.
+		m.webrtcSessions[sessionID].SetDataHandlers(
+			func(frame []byte) { m.handleWebRtcFrame(sessionID, frame) },
+			func(input []byte) { m.handleWebRtcInput(sessionID, input) },
+			func(data []byte) { m.handleWebRtcTunnel(sessionID, data) },
+			func(data []byte) { m.handleWebRtcFiles(sessionID, data) },
+			func(state string) { m.handleWebRtcPeerState(sessionID, state) },
 		)
 
 		go m.runWebRtcSignaling(ctx, sessionID)
@@ -872,6 +893,7 @@ func (m *Manager) closeSessionLocked(sessionID, reason string) bool {
 		ws.Close()
 		delete(m.webrtcSessions, sessionID)
 	}
+	delete(m.webrtcDataSinks, sessionID)
 
 	select {
 	case <-s.stopCh:
@@ -1307,6 +1329,19 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	} else {
 		defer inputSub.Unsubscribe()
 	}
+
+	// Sink do caminho WebRTC: o data channel de input entrega ao MESMO
+	// InputController. Assim o KVM lock, a validação de direitos e o rate limiting
+	// valem igual nos dois transportes — não há caminho privilegiado.
+	//
+	// Registrado SEMPRE (mesmo sem WebRTC autorizado): o custo é um struct, e
+	// condicionar ao uso criaria um ponto de divergência entre o que a sessão
+	// oferece e o que o indicador diz.
+	m.RegisterWebRtcDataSink(session.ID, webrtcDataSink{
+		onInput: func(data []byte) {
+			screenSession.inputCtrl.HandleInput(data)
+		},
+	})
 
 	// ── KVM input lock (bloqueio de teclado/mouse do host remoto) ──
 	// O estado autoritativo é publicado no .control; a liberação é garantida
@@ -2306,6 +2341,141 @@ func (m *Manager) runWebRtcSignaling(ctx context.Context, sessionID string) {
 	case <-ctx.Done():
 	case <-session.stopCh:
 	case <-session.doneCh:
+	}
+}
+
+// ── Handlers do caminho de dados WebRTC ────────────────────────────────
+//
+// Os data channels alimentam o MESMO pipeline que o NATS usa. Nenhum deles cria
+// lógica de domínio nova: só entrega os bytes ao ponto que o caminho NATS usaria,
+// para não existir uma segunda implementação de input/túnel/arquivos para manter
+// em sincronia (e auditar).
+//
+// NOTA DE ARQUITETURA: o SessionScreen, o SessionTunnel e o SessionFiles são
+// criados DENTRO das goroutines de sessão (runScreenSession, runProxySession,
+// runRdpSession, runFilesSession) e vivem no escopo local delas — não há mapa no
+// Manager para consultá-los. Por isso estes handlers usam um registro explícito
+// (webrtcDataSinks) preenchido por cada sessão quando ela sobe. Sem esse
+// registro, o handler de mídia não teria como alcançar o InputController da
+// sessão de tela, que é quem aplica o input.
+
+// webrtcDataSink é o ponto de entrega de um tipo de dado para a sessão.
+type webrtcDataSink struct {
+	// onInput aplica input do viewer (mouse/teclado).
+	onInput func([]byte)
+	// onTunnel entrega bytes do túnel TCP/RDP (framing de 6 B).
+	onTunnel func([]byte)
+	// onFiles entrega um chunk do servidor de arquivos (formato 'DF').
+	onFiles func([]byte)
+}
+
+// RegisterWebRtcDataSink registra os pontos de entrega do caminho de dados desta
+// sessão. Chamado pela goroutine da sessão quando ela sobe, e removido no
+// encerramento (closeSessionLocked). Idempotente.
+func (m *Manager) RegisterWebRtcDataSink(sessionID string, sink webrtcDataSink) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.webrtcDataSinks == nil {
+		m.webrtcDataSinks = make(map[string]webrtcDataSink)
+	}
+	m.webrtcDataSinks[sessionID] = sink
+}
+
+// dataSinkFor devolve o ponto de entrega da sessão (zero value quando não há).
+func (m *Manager) dataSinkFor(sessionID string) webrtcDataSink {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.webrtcDataSinks[sessionID]
+}
+
+// handleWebRtcFrame entrega um frame de tela recebido pelo data channel.
+//
+// No sentido agente→viewer os frames SAEM por SendToViewer; este handler cobre o
+// fluxo inverso, que não existe para tela hoje. É no-op registrado em vez de
+// erro: um frame inesperado não pode derrubar a sessão.
+func (m *Manager) handleWebRtcFrame(sessionID string, _ []byte) {
+	log.Printf("[remote-session-webrtc] frame recebido no data channel de mídia (ignorado): session=%s\n", sessionID)
+}
+
+// handleWebRtcInput aplica input do viewer vindo do data channel.
+//
+// Entrega ao MESMO InputController que o caminho NATS usa, então a validação de
+// direitos, o KVM lock e o rate limiting continuam valendo — um viewer que
+// publique pelo data channel NÃO ganha um atalho que contorne essas checagens.
+// (Defesa em profundidade: o data channel não é um canal privilegiado.)
+func (m *Manager) handleWebRtcInput(sessionID string, input []byte) {
+	sink := m.dataSinkFor(sessionID)
+	if sink.onInput == nil {
+		log.Printf("[remote-session-webrtc] input recebido sem sessão de tela ativa: session=%s bytes=%d\n",
+			sessionID, len(input))
+		return
+	}
+	sink.onInput(input)
+}
+
+// handleWebRtcTunnel entrega bytes do túnel TCP/RDP.
+//
+// O framing é o MESMO do caminho NATS (6 B de header), então os bytes entram
+// direto no SessionTunnel da sessão, sem adaptação.
+func (m *Manager) handleWebRtcTunnel(sessionID string, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	sink := m.dataSinkFor(sessionID)
+	if sink.onTunnel == nil {
+		log.Printf("[remote-session-webrtc] bytes de túnel sem sessão de túnel ativa: session=%s bytes=%d\n",
+			sessionID, len(data))
+		return
+	}
+	sink.onTunnel(data)
+}
+
+// handleWebRtcFiles entrega um chunk do servidor de arquivos.
+//
+// Formato binário 'DF' idêntico ao do caminho NATS (fileserver), então o
+// SessionFiles da sessão processa sem adaptação.
+func (m *Manager) handleWebRtcFiles(sessionID string, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	sink := m.dataSinkFor(sessionID)
+	if sink.onFiles == nil {
+		return
+	}
+	sink.onFiles(data)
+}
+
+// handleWebRtcPeerState traduz o estado do peer connection para o indicador.
+//
+// "connected" promove a sessão para WebRTC; "failed"/"disconnected" acionam o
+// fallback. É AQUI que o selo do console muda — sem isto o transporte seria
+// negociado mas o operador continuaria vendo "negociando" para sempre.
+func (m *Manager) handleWebRtcPeerState(sessionID, state string) {
+	session := m.sessionFor(sessionID)
+	if session == nil {
+		return
+	}
+
+	switch state {
+	case "connected":
+		session.SetTransportState(TransportStateWebRtc, "")
+		if m.natsStream != nil {
+			_ = m.natsStream.PublishTransportInfo(sessionID, session.TransportInfo())
+		}
+		m.publishTransportEvent(sessionID, session)
+
+	case "failed":
+		// O ICE desistiu: cai para NATS (se autorizado) e o indicador mostra o
+		// motivo em vez de um selo verde mentiroso.
+		m.markTransportFallback(sessionID, "conexão WebRTC falhou (ICE não estabeleceu)")
+
+	case "disconnected":
+		// Transitório: não cai para NATS ainda (o ICE pode se recuperar). O
+		// estado observável continua sendo o último bom, para o selo não piscar.
+		log.Printf("[remote-session-webrtc] peer connection desconectado (aguardando recuperação): session=%s\n", sessionID)
+
+	case "closed":
+		m.markTransportFallback(sessionID, "peer connection encerrado")
 	}
 }
 

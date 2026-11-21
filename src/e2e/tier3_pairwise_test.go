@@ -381,14 +381,19 @@ func TestTier3_F13_F17_RunAsUserFailClosedTerminalWithTabAndBurst(t *testing.T) 
 }
 
 func TestTier3_F14_F18_ModularCoreTestsAndWailsBinaryIntegrity(t *testing.T) {
-	// F14: release-agent-on-tag.yml executa go vet e go test; F18: go.mod sem pion/webrtc
+	// F14: release-agent-on-tag.yml executa go vet e go test.
+	// F18 (contrato atualizado 2026-11-21): pion/webrtc pode existir, mas so COM
+	// uso real — a proibicao absoluta virou guarda de dependencia morta.
 	wf := readRepoFile(t, filepath.Join(".github", "workflows", "release-agent-on-tag.yml"))
 	if !strings.Contains(wf, "go vet") || !strings.Contains(wf, "go test") {
 		t.Fatalf("F14xF18 violacao: release-agent-on-tag.yml nao executa go vet / go test")
 	}
 	gomod := readSrcFile(t, "go.mod")
 	if strings.Contains(gomod, "github.com/pion/webrtc") {
-		t.Fatalf("F14xF18 violacao: go.mod ainda contem github.com/pion/webrtc")
+		code, out, err := runGoCmd(t, 30*time.Second, "list", "-f", "{{range .Imports}}{{.}},{{end}}", "./app/core/remotesession/")
+		if err != nil || code != 0 || !strings.Contains(out, "github.com/pion/webrtc") {
+			t.Fatalf("F14xF18 violacao: go.mod declara pion/webrtc mas o pacote de acesso remoto nao o importa (dependencia morta)")
+		}
 	}
 }
 

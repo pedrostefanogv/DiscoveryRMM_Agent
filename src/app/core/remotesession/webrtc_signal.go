@@ -114,6 +114,18 @@ type WebRtcSession struct {
 	// closed evita entregar frames a uma sessão já encerrada.
 	closed bool
 
+	// stack é o peer connection vivo (nil até a primeira oferta). Protegido por
+	// mu: é criado sob demanda e lido pelo caminho de envio a cada frame.
+	stack *WebRtcMediaStack
+
+	// Callbacks do caminho de DADOS. O pacote de tela/túnel/arquivos injeta os
+	// seus para receber o que chega pelos data channels.
+	onMediaFrame      func([]byte)
+	onControlFrame    func([]byte)
+	onTunnelFrame     func([]byte)
+	onFilesFrame      func([]byte)
+	onPeerStateChange func(string)
+
 	// onAnswer é chamado quando a resposta SDP estiver pronta (injetado pelo
 	// pacote de tela, que faz a negociação de fato).
 	onAnswer func(answerSDP string) error
@@ -172,8 +184,37 @@ func (w *WebRtcSession) Close() {
 		return
 	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	stack := w.stack
+	w.stack = nil
 	w.closed = true
+	w.mu.Unlock()
+
+	// Fecha FORA do mutex: peerConn.Close() pode bloquear no teardown do ICE, e
+	// segurar o mutex aqui travaria qualquer envio em andamento.
+	if stack != nil {
+		stack.Close()
+	}
+}
+
+// SetDataHandlers registra os callbacks do caminho de dados.
+//
+// Chamado DEPOIS da construção e ANTES da primeira oferta: os handlers são
+// instalados no data channel no momento em que o peer connection é criado, então
+// chegar tarde significaria perder os primeiros frames.
+func (w *WebRtcSession) SetDataHandlers(
+	onMedia, onControl, onTunnel, onFiles func([]byte),
+	onPeerStateChange func(string),
+) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.onMediaFrame = onMedia
+	w.onControlFrame = onControl
+	w.onTunnelFrame = onTunnel
+	w.onFilesFrame = onFiles
+	w.onPeerStateChange = onPeerStateChange
 }
 
 // HandleFrame processa um frame de sinalização vindo do viewer.
@@ -274,17 +315,66 @@ func (w *WebRtcSession) handleOffer(frame SignalFrame) error {
 	return nil
 }
 
-// negotiate produz a resposta SDP. É o ponto de extensão para o stack de mídia
-// (pion/webrtc): enquanto ele não estiver ligado, a negociação é recusada de
-// forma EXPLÍCITA, e não silenciosa — o operador vê o motivo e a sessão segue
-// pelo NATS quando o fallback está ligado.
+// negotiate produz a resposta SDP delegando ao stack de mídia (pion).
 //
-// Isto é deliberado: um stub que devolvesse uma resposta vazia faria o viewer
-// acreditar que o peer connection subiu, e a sessão apareceria "conectada em
-// WebRTC" sem nenhum frame trafegando — o pior modo de falha possível para o
-// indicador.
-func (w *WebRtcSession) negotiate(_ string) (string, error) {
-	return "", fmt.Errorf("stack de mídia WebRTC não inicializado neste agente")
+// O stack é criado sob demanda na primeira oferta: uma sessão que nunca negocia
+// (porque o viewer ficou em NATS) não aloca peer connection nenhum.
+//
+// FAIL-CLOSED: qualquer erro aqui aciona a política de falha — fallback para NATS
+// quando autorizado, ou encerramento com motivo explícito. Nunca uma resposta
+// vazia, que faria o viewer acreditar que conectou e o INDICADOR MENTIR, que é o
+// pior modo de falha possível para um selo cuja única função é dizer a verdade.
+func (w *WebRtcSession) negotiate(offerSDP string) (string, error) {
+	stack := w.mediaStack()
+	if stack == nil {
+		return "", fmt.Errorf("stack de mídia indisponível para esta sessão")
+	}
+
+	answer, err := stack.Negociate(offerSDP)
+	if err != nil {
+		return "", err
+	}
+
+	return answer, nil
+}
+
+// mediaStack devolve o stack de mídia da sessão, criando-o na primeira chamada.
+//
+// A criação é serializada pelo mutex de negociação: duas ofertas concorrentes com
+// o mesmo sessionId criariam dois peer connections e o segundo orfanaria o
+// primeiro (bug real observado no Breeze).
+func (w *WebRtcSession) mediaStack() *WebRtcMediaStack {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.closed {
+		return nil
+	}
+
+	if w.stack == nil {
+		w.stack = NewWebRtcMediaStack(
+			w.sessionID,
+			w.policy,
+			w.onMediaFrame,
+			w.onControlFrame,
+			w.onTunnelFrame,
+			w.onFilesFrame,
+			w.onPeerStateChange,
+		)
+	}
+
+	return w.stack
+}
+
+// MediaStack devolve o stack para o caminho de dados (envio de frames/bytes).
+// Pode ser nil quando o WebRTC não foi autorizado ou ainda não negociou.
+func (w *WebRtcSession) MediaStack() *WebRtcMediaStack {
+	if w == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.stack
 }
 
 // fail aplica a política de falha: cai para NATS ou encerra, sempre com motivo.
