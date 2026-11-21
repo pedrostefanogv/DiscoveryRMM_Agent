@@ -443,12 +443,15 @@ func supportChatNotifyWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		}
 		return 0
 	case winui.MsgSetCursor:
-		if state.buttonAt(consentLParamX(lparam), consentLParamY(lparam)) != supportChatNotifyNone {
-			winui.SetCursorHand()
-		} else {
-			winui.SetCursorArrow()
+		if lparam&0xFFFF == 1 {
+			if state.hover != supportChatNotifyNone {
+				winui.SetCursorHand()
+			} else {
+				winui.SetCursorArrow()
+			}
+			return 1
 		}
-		return 1
+		return winui.DefWindowProc(hwnd, msg, wparam, lparam)
 	case winui.MsgNCHitTest:
 		if state.systemCorners {
 			x, y := winui.ScreenToClient(hwnd, consentLParamX(lparam), consentLParamY(lparam))
@@ -467,7 +470,12 @@ func supportChatNotifyWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		// de acesso remoto: fechar sem escolher não deixa o chat pendente).
 		state.activate(hwnd, supportChatNotifyDismiss)
 		return 0
+	case winui.MsgSettingChange:
+		state.theme = supportChatNotifyThemeLoader()
+		winui.Invalidate(hwnd)
+		return 0
 	case winui.MsgDestroy:
+		winui.ReleaseBottomRightSlot(hwnd)
 		state.fonts.release()
 		supportChatNotifyStates.Delete(hwnd)
 		// SEM publicação aqui. Com decisão, o publicador exclusivo é o goroutine
@@ -653,35 +661,14 @@ func runSupportChatInviteNotificationWindow(ctx context.Context, invite supportc
 		return
 	}
 
-	scale := winui.ScaleForDPI(winui.DpiForWindow(hwnd))
-
-	// Em telas pequenas com DPI alto (ex.: 1024x768 a 200%) o cartão escalado
-	// pode não caber na área útil: reduz a escala até caber, senão ele nasce
-	// parcialmente fora da tela (o bottom-right só clampa a posição).
 	area := winui.ActiveWorkArea()
-	for i := 0; i < 3; i++ {
-		width := winui.ScalePx(supportChatNotifyWidth, scale)
-		baseHeight := winui.ScalePx(supportChatNotifyHeight, scale)
-		margin := winui.ScalePx(supportChatNotifyScreenMargin, scale)
-		maxWidth := area.W - 2*margin
-		maxHeight := area.H - 2*margin
-		if maxWidth <= 0 || maxHeight <= 0 {
-			break
-		}
-		factor := 1.0
-		if width > maxWidth {
-			factor = float64(maxWidth) / float64(width)
-		}
-		if baseHeight > maxHeight {
-			if f := float64(maxHeight) / float64(baseHeight); f < factor {
-				factor = f
-			}
-		}
-		if factor >= 1 {
-			break
-		}
-		scale *= factor
-	}
+	scale := winui.ClampScaleToWorkArea(
+		area,
+		supportChatNotifyWidth,
+		supportChatNotifyHeight,
+		supportChatNotifyScreenMargin,
+		winui.ScaleForDPI(winui.DpiForWindow(hwnd)),
+	)
 
 	width := winui.ScalePx(supportChatNotifyWidth, scale)
 	baseHeight := winui.ScalePx(supportChatNotifyHeight, scale)
@@ -712,7 +699,7 @@ func runSupportChatInviteNotificationWindow(ctx context.Context, invite supportc
 	state.extraHeight = extraHeight
 	state.dwmCornerRadius = winui.ScalePx(supportChatNotifySystemCorner, scale)
 
-	x, y = winui.BottomRightOnActiveWorkArea(width, height, margin)
+	x, y = winui.BottomRightStackedOnActiveWorkArea(hwnd, width, height, margin, winui.ScalePx(12, scale))
 	winui.MoveResizeWindow(hwnd, x, y, width, height)
 
 	state.systemCorners = winui.SetSystemRoundedCorners(hwnd)
@@ -721,7 +708,7 @@ func runSupportChatInviteNotificationWindow(ctx context.Context, invite supportc
 	}
 	state.theme = supportChatNotifyThemeLoader()
 	state.fonts = supportChatNotifyFonts{
-		title:    winui.CreateFont(winui.ScalePx(21, scale), 600),
+		title:    winui.CreateFont(winui.ScalePx(22, scale), 600),
 		subtitle: winui.CreateFont(winui.ScalePx(14, scale), 400),
 		body:     bodyFont,
 		button:   winui.CreateFont(winui.ScalePx(14, scale), 600),

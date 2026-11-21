@@ -64,8 +64,9 @@ var (
 	balloonClassOnce sync.Once
 	balloonClassErr  error
 	// balloonAtual é o cartão vivo (um por sessão).
-	balloonMutex sync.Mutex
-	balloonAtual *sessionBalloon
+	balloonMutex  sync.Mutex
+	balloonAtual  *sessionBalloon
+	balloonStates sync.Map // hwnd -> *sessionBalloon
 )
 
 func ensureBalloonClass() error {
@@ -196,6 +197,7 @@ func showTrayBalloonWindow(message string, anchorX, anchorY int, anchorOk bool) 
 	// síncrona e o wndproc só pinta quando encontra o cartão em balloonAtual —
 	// publicando depois, o primeiro quadro saía vazio (cartão em branco por até
 	// 1s, até o timer repintar).
+	balloonStates.Store(hwnd, b)
 	balloonMutex.Lock()
 	anterior := balloonAtual
 	balloonAtual = b
@@ -341,10 +343,12 @@ func trayBalloonPosition(width, height, anchorX, anchorY int, anchorOk bool) (in
 
 // trayBalloonWndProc trata as mensagens do cartão.
 func sessionBalloonWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
-	balloonMutex.Lock()
-	b := balloonAtual
-	balloonMutex.Unlock()
-	if b == nil || b.hwnd != hwnd {
+	raw, ok := balloonStates.Load(hwnd)
+	if !ok {
+		return winui.DefWindowProc(hwnd, msg, wparam, lparam)
+	}
+	b, _ := raw.(*sessionBalloon)
+	if b == nil {
 		return winui.DefWindowProc(hwnd, msg, wparam, lparam)
 	}
 
@@ -377,8 +381,10 @@ func sessionBalloonWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		winui.DestroyWindow(hwnd)
 		return 0
 	case winui.MsgDestroy:
+		winui.KillTimer(hwnd, trayBalloonTextID)
 		unregisterBannerCapture(hwnd)
 		b.fonts.release()
+		balloonStates.Delete(hwnd)
 		b.mu.Lock()
 		b.closed = true
 		b.hwnd = 0
@@ -446,8 +452,8 @@ func (b *sessionBalloon) paint(screenDC uintptr) {
 	}
 	winui.DrawTextSingle(hdc, title,
 		winui.Rect{X: textLeft, Y: sw(10), W: textWidth, H: sw(18)}, b.fonts.primary, theme.Text, winui.AlignLeft)
-	winui.DrawTextSingle(hdc, message,
-		winui.Rect{X: textLeft, Y: sw(32), W: textWidth, H: sw(34)}, b.fonts.secondary, theme.TextMuted, winui.AlignLeft)
+	winui.DrawTextWrappedEllipsis(hdc, message,
+		winui.Rect{X: textLeft, Y: sw(30), W: textWidth, H: sw(44)}, b.fonts.secondary, theme.TextMuted, winui.AlignLeft)
 }
 
 // notifyShellBalloon é o caminho antigo (balloon do explorer). Fica como

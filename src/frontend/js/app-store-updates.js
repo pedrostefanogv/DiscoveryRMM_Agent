@@ -670,16 +670,26 @@ async function upgradeSelected() {
     };
   });
   upgradeSelectedBtn.disabled = true;
+  var succeeded = 0;
+  var failed = 0;
   for (var i = 0; i < items.length; i++) {
     try {
       showToast(translate('updates.upgradingItem', { id: items[i].label }), 'info');
       await appApi().Upgrade(items[i].target);
       showToast(translate('updates.upgradeSuccess', { id: items[i].label }), 'success');
+      succeeded++;
     } catch (error) {
       showToast(translate('updates.upgradeError', { id: items[i].label, error: String(error) }), 'error');
+      failed++;
     }
   }
-  showToast(translate('updates.batchComplete'), 'success');
+  if (failed === 0) {
+    showToast(translate('updates.batchComplete'), 'success');
+  } else if (succeeded === 0) {
+    showToast('Falha ao atualizar os pacotes selecionados (' + failed + ').', 'error');
+  } else {
+    showToast('Atualização concluída com avisos: ' + succeeded + ' sucesso(s), ' + failed + ' falha(s).', 'warning');
+  }
   checkPendingUpdates();
 }
 
@@ -737,3 +747,11 @@ function closeAppDetailModal() {
   modal.classList.add('hidden');
   modal.setAttribute('aria-hidden', 'true');
 }
+
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Escape') return;
+  var modal = getAppDetailModal();
+  if (modal && !modal.classList.contains('hidden')) {
+    closeAppDetailModal();
+  }
+});

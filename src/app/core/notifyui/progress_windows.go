@@ -43,9 +43,12 @@ func progressLayout(scale float64, extraHeight int) (badge, title, subtitle, div
 	title = winui.Rect{X: headerLeft, Y: sw(20), W: headerWidth, H: sw(28)}
 	subtitle = winui.Rect{X: headerLeft, Y: sw(52), W: headerWidth, H: sw(18)}
 	divider = winui.Rect{X: sw(progressPad), Y: sw(86), W: sw(progressWidth) - 2*sw(progressPad), H: 1}
-	messageBox = winui.Rect{X: sw(progressPad), Y: sw(98), W: sw(progressWidth) - 2*sw(progressPad), H: sw(64) + extraHeight}
-	statusText = messageBox.Inset(sw(14), sw(8))
-	statusDetail = winui.Rect{X: statusText.X, Y: statusText.Bottom() + sw(4), W: statusText.W, H: sw(16)}
+	messageBox = winui.Rect{X: sw(progressPad), Y: sw(98), W: sw(progressWidth) - 2*sw(progressPad), H: sw(76) + extraHeight}
+	inner := messageBox.Inset(sw(14), sw(8))
+	detailH := sw(16)
+	detailGap := sw(4)
+	statusText = winui.Rect{X: inner.X, Y: inner.Y, W: inner.W, H: inner.H - detailH - detailGap}
+	statusDetail = winui.Rect{X: inner.X, Y: statusText.Bottom() + detailGap, W: inner.W, H: detailH}
 	progressTrack = winui.Rect{X: sw(progressPad), Y: messageBox.Bottom() + sw(16), W: sw(progressWidth) - 2*sw(progressPad), H: sw(7)}
 	percentLabel = winui.Rect{X: sw(progressPad), Y: progressTrack.Bottom() + sw(6), W: sw(progressWidth) - 2*sw(progressPad), H: sw(16)}
 	return
@@ -69,13 +72,14 @@ func (f *progressFonts) release() {
 }
 
 type progressState struct {
-	req      ProgressRequest
-	start    time.Time
-	deadline time.Time
-	fonts    progressFonts
-	layout   progressLayoutFn
-	theme    winui.Theme
-	scale    float64
+	req           ProgressRequest
+	start         time.Time
+	deadline      time.Time
+	fonts         progressFonts
+	layout        progressLayoutFn
+	theme         winui.Theme
+	scale         float64
+	systemCorners bool
 }
 
 // progressLayoutFn evita um tipo nomeado redundante (assinatura do layout).
@@ -118,7 +122,6 @@ func progressWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		return 0
 	case winui.MsgTimer:
 		if state.req.DurationSeconds > 0 && time.Now().After(state.deadline) {
-			progressStates.Delete(hwnd)
 			winui.KillTimer(hwnd, progressTimerID)
 			winui.DestroyWindow(hwnd)
 			return 0
@@ -126,11 +129,16 @@ func progressWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		winui.Invalidate(hwnd)
 		return 0
 	case progressWMAppClose:
-		progressStates.Delete(hwnd)
 		winui.KillTimer(hwnd, progressTimerID)
 		winui.DestroyWindow(hwnd)
 		return 0
+	case winui.MsgSettingChange:
+		state.theme = winui.DetectTheme()
+		winui.Invalidate(hwnd)
+		return 0
 	case winui.MsgDestroy:
+		winui.ReleaseBottomRightSlot(hwnd)
+		winui.KillTimer(hwnd, progressTimerID)
 		state.fonts.release()
 		progressStates.Delete(hwnd)
 		winui.PostQuitMessage(0)
@@ -144,9 +152,12 @@ func (s *progressState) progressRatio() float64 {
 	if s.req.DurationSeconds <= 0 {
 		return 0
 	}
-	elapsed := time.Since(s.start)
-	ratio := elapsed / (time.Duration(s.req.DurationSeconds) * time.Second)
-	return math.Min(1, math.Max(0, float64(ratio)))
+	total := time.Duration(s.req.DurationSeconds) * time.Second
+	if total <= 0 {
+		return 1
+	}
+	ratio := float64(time.Since(s.start)) / float64(total)
+	return math.Min(1, math.Max(0, ratio))
 }
 
 // indeterminatePhase devolve 0..1 para a animação da barra indeterminada.
@@ -173,12 +184,15 @@ func (s *progressState) paint(screenDC uintptr) {
 	theme := s.theme
 	card := winui.Rect{W: width, H: height}
 	cardRadius := winui.ScalePx(progressRadius, scale)
+	if s.systemCorners {
+		cardRadius = 0
+	}
 	winui.FillRoundRectAA(hdc, card, cardRadius, theme.Card)
 	accentMargin := winui.ScalePx(10, scale)
 	winui.FillRoundRectAA(hdc,
 		winui.Rect{X: winui.ScalePx(3, scale), Y: accentMargin, W: winui.ScalePx(4, scale), H: height - 2*accentMargin},
 		winui.ScalePx(2, scale), theme.Accent)
-	winui.StrokeRoundRectAA(hdc, card, cardRadius, 1, theme.Border)
+	winui.StrokeRoundRectAA(hdc, card, cardRadius, winui.ScalePx(1, scale), theme.Border)
 
 	drawCardBadge(hdc, badge, theme, scale)
 	winui.DrawTextSingle(hdc, s.req.Title, title, s.fonts.title, theme.Text, winui.AlignLeft)
@@ -252,6 +266,7 @@ func runProgressWindow(ctx context.Context, req ProgressRequest) ProgressResult 
 	}
 
 	scale := winui.ScaleForDPI(winui.DpiForWindow(hwnd))
+	scale = winui.ClampScaleToWorkArea(winui.ActiveWorkArea(), progressWidth, height0, progressPad, scale)
 
 	// Crescimento dinâmico do texto de status.
 	bodyFont := winui.CreateFont(winui.ScalePx(15, scale), 400)
@@ -264,11 +279,21 @@ func runProgressWindow(ctx context.Context, req ProgressRequest) ProgressResult 
 		}
 	}
 
+	_, _, _, _, _, _, _, _, percentLabel := progressLayout(scale, extraHeight)
+	scaledWidth := winui.ScalePx(progressWidth, scale)
+	height := progressHeight(percentLabel, scale)
+	x, y = winui.BottomRightStackedOnActiveWorkArea(hwnd, scaledWidth, height, winui.ScalePx(progressPad, scale), winui.ScalePx(12, scale))
+	winui.MoveResizeWindow(hwnd, x, y, scaledWidth, height)
+
 	state := &progressState{
 		req:   req,
 		start: time.Now(),
 		theme: winui.DetectTheme(),
 		scale: scale,
+	}
+	state.systemCorners = winui.SetSystemRoundedCorners(hwnd)
+	if !state.systemCorners {
+		winui.SetRoundedRegion(hwnd, scaledWidth, height, winui.ScalePx(progressRadius, scale))
 	}
 	if req.DurationSeconds > 0 {
 		state.deadline = state.start.Add(time.Duration(req.DurationSeconds) * time.Second)

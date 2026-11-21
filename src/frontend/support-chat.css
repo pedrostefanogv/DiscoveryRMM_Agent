@@ -381,6 +381,7 @@
   cursor: pointer;
 }
 
+.sc-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
 .sc-btn:disabled { opacity: .55; cursor: default; }
 
 .sc-btn--primary {

@@ -23,7 +23,7 @@ func registerNotificationAppIcon(appID, iconURL string) error {
 	if appID == "" || iconURL == "" {
 		return nil
 	}
-	key, _, err := registry.CreateKey(registry.CURRENT_USER, `SOFTWAREClassesAppUserModelId`+appID, registry.SET_VALUE)
+	key, _, err := registry.CreateKey(registry.CURRENT_USER, `SOFTWARE\Classes\AppUserModelId\`+appID, registry.SET_VALUE)
 	if err != nil {
 		return err
 	}

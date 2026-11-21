@@ -703,23 +703,28 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			ownsFrame = true
 		}
 
-		// ── Máscara das janelas do agente (banner/aviso) ──
-		// Capturers que NÃO contornam a região por conta própria (DXGI go-d3d e
-		// DXGI manual) entregam o frame com o cartão já composto — e, com
-		// SetWindowDisplayAffinity, com um retângulo PRETO no lugar dele. Aqui a
-		// área é reescrita com os pixels lidos antes de o cartão aparecer, então
-		// o operador vê o conteúdo de baixo (nada de preto e nada do cartão).
-		// Roda DEPOIS do tone mapping (o frame HDR vira BGRA e pode ser
-		// mascarado) e ANTES da escala/dirty detection: a máscara está em pixels
-		// físicos, então passamos a origem guardada do frame original — o
-		// tone mapping zera OriginX/OriginY.
-		maskStart := time.Now()
-		screen.PatchFrameBannerIfNeededAt(cap, frame, inputOriginX, inputOriginY)
-		maskMsTotal += float64(time.Since(maskStart).Microseconds()) / 1000.0
-
 		// ── Aplica escala (se necessario) ──
 		scaleFactor := q.ScaleFactor
 		if scaleFactor > 0 && scaleFactor < 1.0 {
+			if !ownsFrame && screen.RegionMaskAvailable() {
+				// Copia para buffer do pool antes de aplicar a máscara para não
+				// mutar o buffer interno do capturer DXGI.
+				frameCopy := screen.GetPooledFrame(frame.Width, frame.Height, frame.Stride)
+				if len(frameCopy.Data) != len(frame.Data) {
+					frameCopy.Data = frameCopy.Data[:len(frame.Data)]
+				}
+				copy(frameCopy.Data, frame.Data)
+				frameCopy.Width = frame.Width
+				frameCopy.Height = frame.Height
+				frameCopy.Stride = frame.Stride
+				cap.ReleaseFrame()
+				frame = frameCopy
+				ownsFrame = true
+			}
+			maskStart := time.Now()
+			screen.PatchFrameBannerIfNeededAt(cap, frame, inputOriginX, inputOriginY)
+			maskMsTotal += float64(time.Since(maskStart).Microseconds()) / 1000.0
+
 			resized := screen.ResizeBGRA(frame, scaleFactor)
 			if !ownsFrame {
 				cap.ReleaseFrame()
@@ -764,6 +769,9 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			if len(rects) > 0 {
 				hwRectFrames++
 				totalHwRects++
+				if scaleFactor > 0 && scaleFactor < 1.0 {
+					rects = scaleDirtyRects(rects, scaleFactor, frame.Width, frame.Height)
+				}
 			}
 		}
 		dirtyMs := float64(time.Since(dirtyStart).Microseconds()) / 1000.0
@@ -822,9 +830,18 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			frameCopy.Stride = frame.Stride
 			cap.ReleaseFrame()
 			frame = frameCopy
+			ownsFrame = true
 		}
 		copyMs := float64(time.Since(copyStart).Microseconds()) / 1000.0
 		copyMsTotal += copyMs
+
+		// Aplica a máscara do banner APÓS copiar para o frame do pool (nunca
+		// mutando o buffer interno do capturer DXGI) quando não houve ResizeBGRA.
+		if !(scaleFactor > 0 && scaleFactor < 1.0) {
+			maskStart := time.Now()
+			screen.PatchFrameBannerIfNeededAt(cap, frame, inputOriginX, inputOriginY)
+			maskMsTotal += float64(time.Since(maskStart).Microseconds()) / 1000.0
+		}
 
 		// Envia para encode worker (nao bloqueante com buffer=1).
 		select {
@@ -872,6 +889,32 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 		loopStart = time.Now()
 	}
+}
+
+func scaleDirtyRects(rects []screen.DirtyRect, scale float64, maxW, maxH int) []screen.DirtyRect {
+	out := make([]screen.DirtyRect, 0, len(rects))
+	for _, r := range rects {
+		x := int(float64(r.X) * scale)
+		y := int(float64(r.Y) * scale)
+		w := int(float64(r.Width)*scale) + 2
+		h := int(float64(r.Height)*scale) + 2
+		if x < 0 {
+			x = 0
+		}
+		if y < 0 {
+			y = 0
+		}
+		if x+w > maxW {
+			w = maxW - x
+		}
+		if y+h > maxH {
+			h = maxH - y
+		}
+		if w > 0 && h > 0 {
+			out = append(out, screen.DirtyRect{X: x, Y: y, Width: w, Height: h})
+		}
+	}
+	return out
 }
 
 // frameIsIdle decide se o frame recém-capturado deve ser DESCARTADO por não

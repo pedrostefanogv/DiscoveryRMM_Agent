@@ -21,14 +21,14 @@
 
     <section class="grid">
       <article class="panel">
-        <h2>🔍 Preflight Nativo</h2>
+        <h2>Preflight Nativo</h2>
         <div class="meta" style="margin-bottom:10px;">Verificações do sistema sem PSADT: versão do Windows, elevação (admin), reinicialização pendente e conectividade.</div>
         <div class="actions" style="margin-top:8px;">
           <button id="runPreflightBtn" class="btn primary">Executar Preflight Checks</button>
         </div>
         <div id="preflightStatus" class="status"></div>
         <div class="output-wrap small" style="margin-top:10px;">
-          <pre id="preflightOutput" style="margin:0;white-space:pre-wrap;font-size:0.85rem;font-family:'IBM Plex Mono',monospace;"></pre>
+          <pre id="preflightOutput" style="margin:0;white-space:pre-wrap;font-size:0.85rem;font-family:var(--font-mono);"></pre>
         </div>
       </article>
 
@@ -83,7 +83,7 @@
     </section>
 
     <section class="panel">
-      <h2>🧪 Notificação Visual Nativa</h2>
+      <h2>Notificação Visual Nativa</h2>
       <div class="meta" style="margin-bottom:10px;">Renderiza os componentes nativos do agente (<code class="code-inline">core/notifyui</code>): cartão Win32 com tema do Windows + contador, toast do Windows Runtime, janela de progresso e MessageBox. Não usa o módulo PSAppDeployToolkit.</div>
       <div id="visualNotifForm">
         <div class="form-grid">
@@ -188,22 +188,22 @@
         <div id="visualNotifHelp" class="meta" style="margin-top:10px;font-size:.8rem;line-height:1.45;border-left:3px solid var(--accent, #4a9eff);padding-left:8px"></div>
         <div class="actions" style="margin-top:10px"><button id="visualNotifBtn" class="btn primary">Executar Notificação Nativa</button></div>
         <div id="visualNotifStatus" class="status"></div>
-        <div class="output-wrap small"><pre id="visualNotifOutput" style="margin:0;white-space:pre-wrap;font-size:0.85rem;font-family:'IBM Plex Mono',monospace;"></pre></div>
+        <div class="output-wrap small"><pre id="visualNotifOutput" style="margin:0;white-space:pre-wrap;font-size:0.85rem;font-family:var(--font-mono);"></pre></div>
       </div>
     </section>
 
     <section class="panel">
-      <h2>📝 Script PowerShell</h2>
+      <h2>Script PowerShell</h2>
       <div class="meta" style="margin-bottom:8px;">Runner genérico de PowerShell do agente (sem PSADT). Use o template como base.</div>
       <div class="actions" style="margin-bottom:10px;">
         <button id="getTemplateBtn" class="btn subtle">Carregar Template</button>
         <button id="executeCustomBtn" class="btn primary">Executar Script</button>
       </div>
       <label for="customScript">Conteudo do Script</label>
-      <textarea id="customScript" style="min-height:120px; width:100%; border:1px solid var(--psadt-border); border-radius:8px; padding:8px 10px; font-family:'IBM Plex Mono',monospace; font-size:0.9rem;"></textarea>
+      <textarea id="customScript" style="min-height:120px; width:100%; border:1px solid var(--psadt-border); border-radius:8px; padding:8px 10px; font-family:var(--font-mono); font-size:0.9rem;"></textarea>
       <div id="customStatus" class="status" style="margin-top:10px;"></div>
       <div class="output-wrap small">
-        <pre id="customOutput" style="margin:0; white-space:pre-wrap; font-size:0.85rem; font-family:'IBM Plex Mono',monospace;"></pre>
+        <pre id="customOutput" style="margin:0; white-space:pre-wrap; font-size:0.85rem; font-family:var(--font-mono);"></pre>
       </div>
     </section>
   </div>

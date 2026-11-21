@@ -638,6 +638,19 @@ export function ExecuteCustomPowerShellScript(scriptContent) {
 }
 
 /**
+ * ExecuteMCPToolInUserSession encaminha a execução de uma tool de sessão do
+ * usuário do serviço (Session 0 / SYSTEM) para a UI companion conectada via IPC.
+ * Em modo standalone (a.ipcServer == nil) devolve handled=false para execução
+ * local normal.
+ * @param {string} toolName
+ * @param {string} argsJSON
+ * @returns {$CancellablePromise<[string, boolean]>}
+ */
+export function ExecuteMCPToolInUserSession(toolName, argsJSON) {
+    return $Call.ByID(2072229351, toolName, argsJSON);
+}
+
+/**
  * ExecuteNativeVisualNotification executa a notificação visual pelo backend
  * NATIVO (cartão winui / toast do Windows Runtime / MessageBox).
  * @param {$models.NativeVisualNotificationRequest} req

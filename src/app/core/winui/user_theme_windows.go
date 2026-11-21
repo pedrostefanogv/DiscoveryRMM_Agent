@@ -72,6 +72,10 @@ func detectThemeInHKCU() Theme {
 			if candidate := colorFromABGR(uint32(value)); usableAccent(candidate) {
 				accent = candidate
 			}
+		} else if value, _, err := key.GetIntegerValue("ColorizationColor"); err == nil {
+			if candidate := colorFromARGB(uint32(value)); usableAccent(candidate) {
+				accent = candidate
+			}
 		}
 		key.Close()
 	}

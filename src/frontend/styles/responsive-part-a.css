@@ -1,9 +1,10 @@
-   TOAST NOTIFICATIONS
+/* TOAST NOTIFICATIONS
    ================================================================ */
 
 .toast-container {
   position: fixed;
-  top: calc(var(--window-chrome-height, 0px) + 16px);
+  bottom: 20px;
+  top: auto;
   right: 16px;
   left: auto;
   z-index: 9999;
@@ -25,7 +26,7 @@
   max-width: 420px;
   padding: 12px 16px;
   border-radius: 12px;
-  font-family: 'Space Grotesk', sans-serif;
+  font-family: var(--font-sans);
   font-size: 0.9rem;
   color: var(--toast-info-text);
   background: var(--toast-info-bg);
@@ -34,10 +35,10 @@
   animation: toastIn 0.3s ease forwards;
 }
 
-.toast.success { background: var(--toast-success-bg); }
-.toast.error   { background: var(--toast-error-bg); }
+.toast.success { background: var(--toast-success-bg); color: var(--on-accent); }
+.toast.error   { background: var(--toast-error-bg); color: var(--on-accent); }
 .toast.info    { background: var(--toast-info-bg); color: var(--toast-info-text); }
-.toast.warning { background: var(--toast-warning-bg); }
+.toast.warning { background: var(--toast-warning-bg); color: var(--on-accent); }
 
 .toast.removing {
   animation: toastOut 0.3s ease forwards;
@@ -266,7 +267,7 @@
 
 .ntf-modal-countdown {
   margin-top: 8px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.8rem;
   opacity: 0.9;
 }
@@ -504,7 +505,7 @@
 }
 
 .ticket-id-badge {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.78rem;
   color: var(--muted);
   font-weight: 600;
@@ -1080,7 +1081,7 @@
   padding: 3px 8px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: var(--surface-1);
+  background: var(--surface-2);
   color: var(--text);
   font-size: 0.72rem;
   cursor: pointer;
@@ -1113,7 +1114,7 @@
   padding: 0;
   border: 1px dashed var(--border);
   border-radius: 8px;
-  background: var(--surface-2, var(--surface-1));
+  background: var(--surface-2);
   cursor: zoom-in;
   overflow: hidden;
 }
@@ -1253,7 +1254,7 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--surface-1);
+  background: var(--surface-2);
 }
 
 .ticket-attachment-info {

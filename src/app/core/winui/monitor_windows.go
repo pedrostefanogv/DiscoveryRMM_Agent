@@ -45,12 +45,23 @@ type point struct {
 //
 // Existe porque WorkArea() só conhece o monitor primário: em multi-monitor um
 // cartão ancorado no cursor/bandeja nasceria no monitor errado.
+// packPointForMonitorFromPoint empacota POINT por valor para a ABI x64/x86
+// do Win32 (MonitorFromPoint recebe POINT por valor, não por ponteiro).
+func packPointForMonitorFromPoint(pt point) uintptr {
+	return uintptr(uint32(pt.X)) | (uintptr(uint32(pt.Y)) << 32)
+}
+
 func WorkAreaForPoint(x, y int) Rect {
 	if procMonitorFromPoint.Find() != nil {
 		return WorkArea()
 	}
 	pt := point{X: int32(x), Y: int32(y)}
-	monitor, _, _ := procMonitorFromPoint.Call(uintptr(unsafe.Pointer(&pt)), monitorDefaultToNearest)
+	var monitor uintptr
+	if unsafe.Sizeof(uintptr(0)) == 8 {
+		monitor, _, _ = procMonitorFromPoint.Call(packPointForMonitorFromPoint(pt), monitorDefaultToNearest)
+	} else {
+		monitor, _, _ = procMonitorFromPoint.Call(uintptr(uint32(pt.X)), uintptr(uint32(pt.Y)), monitorDefaultToNearest)
+	}
 	if monitor == 0 {
 		return WorkArea()
 	}

@@ -193,7 +193,7 @@ function renderAutomationExecutions(executions, pendingCallbacks) {
     if (execution.triggerLabel) chips.push('<span class="automation-chip">' + escapeHtml(execution.triggerLabel) + '</span>');
     if (execution.sourceLabel) chips.push('<span class="automation-chip">' + escapeHtml(execution.sourceLabel) + '</span>');
     if (execution.installationLabel) chips.push('<span class="automation-chip">' + escapeHtml(execution.installationLabel) + '</span>');
-    if (execution.hasPendingCallback || pendingCallbacks > 0 && execution.commandId) chips.push('<span class="automation-chip warn">' + escapeHtml(translate('automation.pendingCallbackChip')) + '</span>');
+    if (execution.hasPendingCallback) chips.push('<span class="automation-chip warn">' + escapeHtml(translate('automation.pendingCallbackChip')) + '</span>');
 
     return '' +
       '<article class="automation-task-card automation-execution-card">' +

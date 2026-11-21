@@ -124,6 +124,9 @@ function setActiveTab(tab) {
     supportChat: translate('tab.supportChat'),
     automation: translate('tab.automation'),
     p2p: translate('tab.p2p'),
+    sensors: translate('tab.sensors'),
+    psadt: translate('tab.psadt'),
+    zeroTouchConfig: translate('tab.zeroTouchConfig'),
     debug: translate('tab.debug'),
   };
 

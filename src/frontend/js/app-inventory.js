@@ -541,8 +541,12 @@ async function refreshSoftware() {
     showFeedback('Atualizando softwares instalados...');
 
     var software = await appApi().RefreshSoftware();
-    if (typeof renderSoftware === 'function') {
-      renderSoftware(software);
+    inventorySoftware = Array.isArray(software) ? software : [];
+    if (typeof applySoftwareFilter === 'function') {
+      applySoftwareFilter();
+    }
+    if (typeof updateSortIndicators === 'function') {
+      updateSortIndicators();
     }
 
     showFeedback('Softwares instalados atualizados.');
@@ -580,30 +584,36 @@ async function refreshStartupItems() {
 }
 
 async function refreshListeningPorts() {
-  if (!refreshListeningPortsBtn) return;
+  if (!refreshListeningPortsBtn || connectionsRefreshInFlight) return;
 
   try {
+    connectionsRefreshInFlight = true;
     refreshListeningPortsBtn.disabled = true;
     refreshListeningPortsBtn.setAttribute('aria-busy', 'true');
     refreshListeningPortsBtn.classList.add('is-loading');
+    setConnectionsLoading(true);
+    setConnectionsRefreshStatus('Atualizando...', false);
     showFeedback('Atualizando portas em escuta...');
 
     var ports = await appApi().RefreshListeningPorts();
-    setConnectionsLoading(true);
-    setConnectionsRefreshStatus('Atualizando...', false);
-    
-    if (connectionsData && typeof Array.isArray(connectionsData.listening)) {
-      connectionsData.listening = ports || [];
+    if (connectionsData && Array.isArray(connectionsData.listening)) {
+      var list = Array.isArray(ports) ? ports : [];
+      list.forEach(function (p) { if (p && !p.type) p.type = 'listening'; });
+      connectionsData.listening = list;
       if (connectionsType === 'listening') {
         applyConnectionsFilter();
       }
     }
 
+    var now = new Date();
+    var timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    setConnectionsRefreshStatus('Atualizado às ' + timeStr, false);
     showFeedback('Portas em escuta atualizadas.');
   } catch (error) {
     setConnectionsRefreshStatus('Falha ao atualizar portas', true);
     showFeedback('Falha ao atualizar portas: ' + String(error), true);
   } finally {
+    connectionsRefreshInFlight = false;
     refreshListeningPortsBtn.disabled = false;
     refreshListeningPortsBtn.setAttribute('aria-busy', 'false');
     refreshListeningPortsBtn.classList.remove('is-loading');

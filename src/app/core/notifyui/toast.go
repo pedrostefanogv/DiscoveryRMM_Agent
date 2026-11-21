@@ -17,4 +17,4 @@ type ToastRequest struct {
 
 // DefaultToastAppID é a identidade global das notificações do agente —
 // um único AppID vale para todos os clientes/agentes do servidor.
-const DefaultToastAppID = "Discovery Agent"
+const DefaultToastAppID = "Discovery"

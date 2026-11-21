@@ -81,6 +81,7 @@ type gdiCapturer struct {
 	// (limite ~2000 por processo) — chamar a cada frame esgotaria os slots
 	// em ~1 minuto e crashearia o processo. Re-detecta a cada 5s.
 	lastGeoCheck time.Time
+	closed       bool
 }
 
 // NewGDICapturer cria um capturador GDI do monitor primário.
@@ -91,8 +92,6 @@ func NewGDICapturer() (Capturer, error) {
 // NewGDICapturerMonitor cria um capturador GDI de um monitor específico.
 // monitorIndex 0 = primário. Usa EnumDisplayMonitors para localizar a região.
 func NewGDICapturerMonitor(monitorIndex int) (Capturer, error) {
-	runtime.LockOSThread()
-
 	// Localiza a região do monitor desejado (0 = primário).
 	mons, err := GetMonitors()
 	if err != nil || len(mons) == 0 {
@@ -125,6 +124,7 @@ func newGDICapturerRegion(offsetX, offsetY, width, height int) (Capturer, error)
 // newGDICapturerRegionIdx cria o capturer GDI com índice de monitor para
 // re-detectar a geometria a cada frame (resolução pode mudar).
 func newGDICapturerRegionIdx(offsetX, offsetY, width, height, monitorIndex int) (Capturer, error) {
+	runtime.LockOSThread()
 	if width <= 0 || height <= 0 {
 		w, _, _ := procGetSystemMetrics.Call(SM_CXSCREEN)
 		h, _, _ := procGetSystemMetrics.Call(SM_CYSCREEN)
@@ -330,6 +330,10 @@ func (c *gdiCapturer) releaseCached() {
 }
 
 func (c *gdiCapturer) Close() error {
+	if c.closed {
+		return nil
+	}
+	c.closed = true
 	c.releaseCached()
 	// Despublica este capturer se ele ainda for o ativo (pode ter sido trocado
 	// por outro no meio da sessão).

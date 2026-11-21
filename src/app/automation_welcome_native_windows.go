@@ -40,10 +40,14 @@ func (a *App) nativeAutomationWelcome(req automation.AutomationNotificationReque
 		TimeoutButtonID:  "install",
 		CloseButtonID:    allowDeferID(allowDefer),
 		CountdownSeconds: timeoutSeconds,
-		CountdownLabel:   "A instalacao continuara automaticamente em:",
+		CountdownLabel:   "A instalação continuará automaticamente em:",
 		Hint:             "Enter confirma · Esc adia",
 	}
-	cardCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds+30)*time.Second)
+	parentCtx := context.Background()
+	if a != nil && a.ctx != nil {
+		parentCtx = a.ctx
+	}
+	cardCtx, cancel := context.WithTimeout(parentCtx, time.Duration(timeoutSeconds+30)*time.Second)
 	defer cancel()
 
 	// O Welcome roda no SERVIÇO (sessão 0): sem o worker de UI o cartão seria
@@ -72,14 +76,14 @@ func (a *App) nativeAutomationWelcome(req automation.AutomationNotificationReque
 			Accepted:    true,
 			Result:      "approved",
 			AgentAction: "native_welcome_continue",
-			Message:     "usuario confirmou a execucao no prompt nativo",
+			Message:     "usuário confirmou a execução no prompt nativo",
 		}, true
 	default: // Adiar ou fechou
 		return automation.AutomationNotificationResponse{
 			Accepted:    true,
 			Result:      "deferred",
 			AgentAction: "native_welcome_defer",
-			Message:     "usuario adiou a execucao no prompt nativo",
+			Message:     "usuário adiou a execução no prompt nativo",
 		}, true
 	}
 }

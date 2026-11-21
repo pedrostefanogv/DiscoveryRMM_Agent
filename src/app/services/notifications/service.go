@@ -299,7 +299,7 @@ func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 		req.NotificationID = fmt.Sprintf("notification-%d", time.Now().UnixNano())
 	}
 	if strings.TrimSpace(req.Title) == "" {
-		req.Title = "Notificacao"
+		req.Title = "Notificação"
 	}
 	if strings.TrimSpace(req.Mode) == "" {
 		req.Mode = "notify_only"
@@ -431,7 +431,7 @@ func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 			NotificationID: req.NotificationID,
 			AgentAction:    "headless_logged",
 			Result:         "approved",
-			Message:        "contexto UI indisponivel",
+			Message:        "contexto UI indisponível",
 		}
 	}
 
@@ -485,6 +485,7 @@ func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 	select {
 	case result := <-resultCh:
 		result = normalizeResult(result)
+		s.recordDispatchResult(req.IdempotencyKey, req.NotificationID, result)
 		s.logf("[notification] confirmation id=" + req.NotificationID + " result=" + result)
 		s.persist(database.NotificationEventEntry{
 			NotificationID: req.NotificationID,
@@ -503,6 +504,7 @@ func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 			Result:         result,
 		}
 	case <-time.After(time.Duration(req.TimeoutSeconds) * time.Second):
+		s.recordDispatchResult(req.IdempotencyKey, req.NotificationID, "timeout_policy_applied")
 		s.logf("[notification] confirmation timeout id=" + req.NotificationID)
 		s.persist(database.NotificationEventEntry{
 			NotificationID: req.NotificationID,

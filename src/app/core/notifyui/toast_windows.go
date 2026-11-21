@@ -17,6 +17,13 @@ var (
 	appDataErr  error
 )
 
+func neutralizeToastInterpolation(value string) string {
+	if !strings.ContainsAny(value, "$`") {
+		return value
+	}
+	return strings.NewReplacer("$", "$\u200b", "`", "`\u200b").Replace(value)
+}
+
 // ShowToast envia um toast do Windows. Não é bloqueante além do envio: o
 // Windows gerencia exibição/encerramento.
 func ShowToast(req ToastRequest) error {
@@ -33,8 +40,8 @@ func ShowToast(req ToastRequest) error {
 	})
 	n := toast.Notification{
 		AppID: req.AppID,
-		Title: req.Title,
-		Body:  req.Message,
+		Title: neutralizeToastInterpolation(req.Title),
+		Body:  neutralizeToastInterpolation(req.Message),
 		Icon:  req.IconPath,
 		Audio: toast.Default,
 	}

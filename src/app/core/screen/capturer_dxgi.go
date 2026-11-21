@@ -538,7 +538,7 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 	frameData := c.frameBuf[:bufSize]
 
 	partialCopy := c.firstFrameDelivered &&
-		c.calib.Resolved() &&
+		c.calib.Verified() &&
 		!c.hdr &&
 		len(c.rectsFrame) > 0 &&
 		DirtyRectsCoverage(c.rectsFrame, c.width, c.height) < 0.85
@@ -729,18 +729,8 @@ func (c *dxgiCapturer) captureDirtyRectsLocked(fi *dxgiOutduplFrameInfo) {
 					continue
 				}
 				raw = append(raw,
-					DirtyRect{
-						X:      int(mv.SourcePoint.X) - c.originX,
-						Y:      int(mv.SourcePoint.Y) - c.originY,
-						Width:  w,
-						Height: h,
-					},
-					DirtyRect{
-						X:      int(mv.DestRect.Left) - c.originX,
-						Y:      int(mv.DestRect.Top) - c.originY,
-						Width:  w,
-						Height: h,
-					},
+					normalizeDXGIRect(int(mv.SourcePoint.X), int(mv.SourcePoint.Y), w, h, c.originX, c.originY, c.width, c.height),
+					normalizeDXGIRect(int(mv.DestRect.Left), int(mv.DestRect.Top), w, h, c.originX, c.originY, c.width, c.height),
 				)
 			}
 		}
@@ -785,12 +775,7 @@ func (c *dxgiCapturer) captureDirtyRectsLocked(fi *dxgiOutduplFrameInfo) {
 			if w <= 0 || h <= 0 {
 				continue
 			}
-			raw = append(raw, DirtyRect{
-				X:      int(r.Left) - c.originX,
-				Y:      int(r.Top) - c.originY,
-				Width:  w,
-				Height: h,
-			})
+			raw = append(raw, normalizeDXGIRect(int(r.Left), int(r.Top), w, h, c.originX, c.originY, c.width, c.height))
 		}
 		break
 	}
@@ -804,6 +789,26 @@ func (c *dxgiCapturer) captureDirtyRectsLocked(fi *dxgiOutduplFrameInfo) {
 	// do viewer deixa de reconhecer o payload como tiles.
 	c.rectsFrame = CoalesceDirtyRects(raw, c.width, c.height)
 	c.lastHadMetadata = len(c.rectsFrame) > 0
+}
+
+// normalizeDXGIRect converte um retângulo DXGI para coordenadas locais [0,width)x[0,height).
+// A API IDXGIOutputDuplication normalmente já entrega coordenadas locais ao
+// output (0..width, 0..height), mesmo em monitores secundários com originX != 0.
+// Subtrair originX/originY cegamente descartava todos os rects de monitores
+// secundários; só subtraímos quando o retângulo está fora de [0,width)x[0,height)
+// e dentro da região do output no desktop virtual.
+func normalizeDXGIRect(left, top, w, h, originX, originY, width, height int) DirtyRect {
+	if (originX != 0 || originY != 0) &&
+		(left < 0 || top < 0 || left+w > width || top+h > height) &&
+		left >= originX && top >= originY && left+w <= originX+width && top+h <= originY+height {
+		return DirtyRect{
+			X:      left - originX,
+			Y:      top - originY,
+			Width:  w,
+			Height: h,
+		}
+	}
+	return DirtyRect{X: left, Y: top, Width: w, Height: h}
 }
 
 func (c *dxgiCapturer) Name() string { return "dxgi" }

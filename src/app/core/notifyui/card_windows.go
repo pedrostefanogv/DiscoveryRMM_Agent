@@ -201,8 +201,41 @@ type cardState struct {
 	hover        int // -1 = nenhum
 	pressed      int
 	focus        int
+	showFocus    bool
 
 	systemCorners bool
+}
+
+// insideRoundedCard informa se (x, y) em coordenadas de cliente está dentro do
+// cartão visível quando o DWM arredonda a janela.
+func (s *cardState) insideRoundedCard(x, y int) bool {
+	width := winui.ScalePx(cardWidth, s.scale)
+	height := s.cardHeight()
+	if x < 0 || y < 0 || x >= width || y >= height {
+		return false
+	}
+	r := winui.ScalePx(8, s.scale)
+	if r <= 0 {
+		return true
+	}
+	left, top := x < r, y < r
+	right, bottom := x >= width-r, y >= height-r
+	if !left && !right && !top && !bottom {
+		return true
+	}
+	cx, cy := x, y
+	if left {
+		cx = r - 1
+	} else if right {
+		cx = width - r
+	}
+	if top {
+		cy = r - 1
+	} else if bottom {
+		cy = height - r
+	}
+	dx, dy := x-cx, y-cy
+	return dx*dx+dy*dy <= r*r
 }
 
 // cardHeight computa a altura efetiva (mensagem longa cresce o cartão).
@@ -343,11 +376,21 @@ func (s *cardState) closeResult() CardResult {
 func (s *cardState) handleKey(hwnd, key uintptr) uintptr {
 	n := len(s.req.Buttons)
 	switch key {
-	case winui.VkTab, winui.VkLeft, winui.VkRight:
+	case winui.VkTab, winui.VkRight:
+		s.showFocus = true
 		if s.focus < 0 {
 			s.focus = s.defaultIndex()
 		} else {
 			s.focus = (s.focus + 1) % n
+		}
+		winui.Invalidate(hwnd)
+		return 0
+	case winui.VkLeft:
+		s.showFocus = true
+		if s.focus < 0 {
+			s.focus = s.defaultIndex()
+		} else {
+			s.focus = (s.focus - 1 + n) % n
 		}
 		winui.Invalidate(hwnd)
 		return 0
@@ -476,16 +519,24 @@ func cardWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		}
 		return 0
 	case winui.MsgSetCursor:
-		// O lParam do WM_SETCURSOR vem em coordenadas de TELA: sem converter,
-		// a comparação com os retângulos de cliente nunca casa e o cursor
-		// nunca vira mão sobre os botões.
-		cx, cy := winui.ScreenToClient(hwnd, cardLParamX(lparam), cardLParamY(lparam))
-		if state.buttonAt(cx, cy) >= 0 {
+		// LOWORD(lParam) traz o hit-test code (1 = HTCLIENT), não coordenadas.
+		if lparam&0xFFFF == 1 && state.hover >= 0 {
 			winui.SetCursorHand()
-		} else {
-			winui.SetCursorArrow()
+			return 1
 		}
-		return 1
+		if lparam&0xFFFF == 1 {
+			winui.SetCursorArrow()
+			return 1
+		}
+		return winui.DefWindowProc(hwnd, msg, wparam, lparam)
+	case winui.MsgNCHitTest:
+		if state.systemCorners {
+			x, y := winui.ScreenToClient(hwnd, cardLParamX(lparam), cardLParamY(lparam))
+			if !state.insideRoundedCard(x, y) {
+				return winui.HtTransparent
+			}
+		}
+		return winui.DefWindowProc(hwnd, msg, wparam, lparam)
 	case winui.MsgKeyDown:
 		return state.handleKey(hwnd, wparam)
 	case cardWMAppCancel:
@@ -494,7 +545,13 @@ func cardWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	case winui.MsgClose:
 		state.finish(hwnd, state.closeResult())
 		return 0
+	case winui.MsgSettingChange:
+		state.theme = winui.DetectTheme()
+		state.bufferPrimed = false
+		winui.Invalidate(hwnd)
+		return 0
 	case winui.MsgDestroy:
+		winui.ReleaseBottomRightSlot(hwnd)
 		state.releaseProcessIcons()
 		state.fonts.release()
 		state.buffer.Release()
@@ -572,7 +629,7 @@ func (s *cardState) renderCard(hdc uintptr) {
 	winui.FillRoundRectAA(hdc,
 		winui.Rect{X: winui.ScalePx(3, s.scale), Y: accentMargin, W: winui.ScalePx(4, s.scale), H: height - 2*accentMargin},
 		winui.ScalePx(2, s.scale), theme.Accent)
-	winui.StrokeRoundRectAA(hdc, card, cardRadius, 1, theme.Border)
+	winui.StrokeRoundRectAA(hdc, card, cardRadius, winui.ScalePx(1, s.scale), theme.Border)
 
 	// Selo: logo do agente (o "D") onde antes ficava o sino genérico.
 	if !drawCardBadge(hdc, l.badge, theme, s.scale) {
@@ -628,14 +685,12 @@ func (s *cardState) renderCard(hdc uintptr) {
 		button := s.req.Buttons[i]
 		var style winui.ButtonStyle
 		if button.IsPrimary() {
-			style = winui.PillButton(theme.Accent, theme.Accent.Lighten(12), theme.Accent.Darken(12), theme.Card.ContrastText(), buttonRadius)
+			style = winui.PillButton(theme.Accent, theme.Accent.Lighten(12), theme.Accent.Darken(12), theme.AccentText, buttonRadius)
 		} else {
 			style = winui.OutlineButton(theme, buttonRadius)
 		}
-		// Sem anel de foco: o contorno em volta dos botões foi removido por
-		// design (o foco continua navegável e o Enter ainda confirma).
 		winui.PaintButton(hdc, rect, button.Label, s.fonts.button, style,
-			s.hover == i, s.pressed == i, false, theme.Accent)
+			s.hover == i, s.pressed == i, s.showFocus && s.focus == i, theme.Accent)
 	}
 }
 
@@ -740,7 +795,7 @@ func drawCardKindIcon(hdc uintptr, rect winui.Rect, kind string, theme winui.The
 	color := theme.Accent
 	switch normalizeIconKind(kind) {
 	case IconWarning:
-		color = theme.Accent
+		color = theme.Warning
 	case IconError:
 		color = theme.Danger
 	}
@@ -825,10 +880,11 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 	}
 
 	scale := winui.ScaleForDPI(winui.DpiForWindow(hwnd))
+	scale = winui.ClampScaleToWorkArea(winui.ActiveWorkArea(), cardWidth, height0, cardPad, scale)
 
 	// Crescimento dinâmico da caixa de mensagem (textos longos).
 	bodyFont := winui.CreateFont(winui.ScalePx(15, scale), 400)
-	messageTextRect := cardLayoutFor(scale, 0, hasCountdown, len(req.Buttons), len(req.ProcessList)).messageText.Inset(winui.ScalePx(14, scale), winui.ScalePx(10, scale))
+	messageTextRect := cardLayoutFor(scale, 0, hasCountdown, len(req.Buttons), len(req.ProcessList)).messageText
 	extraHeight := 0
 	if needed := winui.MeasureWrappedText(bodyFont, req.Message, messageTextRect.W); needed > messageTextRect.H {
 		extraHeight = needed - messageTextRect.H
@@ -864,12 +920,13 @@ func runCardWindow(ctx context.Context, req CardRequest) CardResult {
 	state.lastClock = state.clockText()
 	state.focus = state.defaultIndex()
 
-	x, y = winui.BottomRightOnActiveWorkArea(cardWidth, height, winui.ScalePx(cardPad, scale))
-	winui.MoveResizeWindow(hwnd, x, y, cardWidth, height)
+	scaledWidth := winui.ScalePx(cardWidth, scale)
+	x, y = winui.BottomRightStackedOnActiveWorkArea(hwnd, scaledWidth, height, winui.ScalePx(cardPad, scale), winui.ScalePx(12, scale))
+	winui.MoveResizeWindow(hwnd, x, y, scaledWidth, height)
 
 	state.systemCorners = winui.SetSystemRoundedCorners(hwnd)
 	if !state.systemCorners {
-		winui.SetRoundedRegion(hwnd, cardWidth, height, winui.ScalePx(cardRadius, scale))
+		winui.SetRoundedRegion(hwnd, scaledWidth, height, winui.ScalePx(cardRadius, scale))
 	}
 	state.theme = winui.DetectTheme()
 	state.fonts = cardFonts{

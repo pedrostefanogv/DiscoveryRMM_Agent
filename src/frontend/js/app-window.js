@@ -54,20 +54,7 @@
 
   function hideToTray() {
     var fn = windowMethod('Hide', 'hideWindow');
-    var dispatched = callWindow(fn, 'hideWindow');
-    flashDiagnostic('close', dispatched);
-  }
-
-  function flashDiagnostic(which, dispatched) {
-    try {
-      var el = document.getElementById(which === 'close' ? 'windowCloseBtn' : 'windowMaxBtn');
-      if (!el) return;
-      var base = el.title.split('|')[0].trim();
-      el.title = (base || 'agente') + ' | ' + (dispatched ? 'enviado' : 'sem-metodo');
-      var prev = el.style.backgroundColor;
-      el.style.backgroundColor = dispatched ? 'rgba(76,175,80,.5)' : 'rgba(193,18,31,.5)';
-      setTimeout(function () { el.style.backgroundColor = prev; }, 400);
-    } catch (e) { /* não crítico */ }
+    callWindow(fn, 'hideWindow');
   }
 
   function updateWindowMeta() {
@@ -127,10 +114,6 @@
 
   if (maxBtn) {
     maxBtn.addEventListener('click', function (e) {
-      e.preventDefault();
-      toggleMaximise();
-    });
-    maxBtn.addEventListener('dblclick', function (e) {
       e.preventDefault();
       toggleMaximise();
     });

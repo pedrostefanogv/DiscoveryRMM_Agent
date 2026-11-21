@@ -40,8 +40,8 @@ const (
 	consentRadius  = 16
 	consentPad     = 24
 	consentTimerID = 1
-	// consentTickMS: ~5 repinturas por segundo mantêm a barra suave sem custo.
-	consentTickMS = 200
+	// consentTickMS: ~30 repinturas por segundo mantêm a barra fluida.
+	consentTickMS = 33
 	// consentScreenMargin é o recuo do cartão em relação às bordas direita e
 	// inferior da área útil: o prompt nasce no canto inferior direito (como um
 	// toast do Windows/PSADT), sem cobrir o centro da tela do usuário.
@@ -430,12 +430,15 @@ func consentWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		}
 		return 0
 	case winui.MsgSetCursor:
-		if state.buttonAt(consentLParamX(lparam), consentLParamY(lparam)) != consentButtonNone {
-			winui.SetCursorHand()
-		} else {
-			winui.SetCursorArrow()
+		if lparam&0xFFFF == 1 {
+			if state.hover != consentButtonNone {
+				winui.SetCursorHand()
+			} else {
+				winui.SetCursorArrow()
+			}
+			return 1
 		}
-		return 1
+		return winui.DefWindowProc(hwnd, msg, wparam, lparam)
 	case winui.MsgNCHitTest:
 		// Com os cantos do DWM o recorte é só visual: a janela segue
 		// retangular para o mouse. Nos cantos transparentes devolve
@@ -457,7 +460,12 @@ func consentWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		// Fechar pelo X equivale a recusar (fail closed).
 		state.finish(hwnd, consentDeniedDecision("user_closed"))
 		return 0
+	case winui.MsgSettingChange:
+		state.theme = consentThemeLoader()
+		winui.Invalidate(hwnd)
+		return 0
 	case winui.MsgDestroy:
+		winui.ReleaseBottomRightSlot(hwnd)
 		state.fonts.release()
 		consentStates.Delete(hwnd)
 		winui.PostQuitMessage(0)
@@ -617,17 +625,26 @@ func (s *consentNativeState) paint(screenDC uintptr) {
 	winui.DrawTextWrapped(hdc, consentDefaultActionText(s.req.TimeoutAction), defaultAction,
 		s.fonts.defaultAction, actionColor, winui.AlignLeft)
 
-	// Barra de progresso do tempo restante.
-	winui.FillRoundRectAA(hdc, progressTrack, sw(4), theme.Border)
-	progress := progressTrack
-	progress.W = int(float64(progressTrack.W) * s.progressRatio())
-	if minWidth := sw(8); progress.W < minWidth {
-		progress.W = minWidth
+	// Barra de progresso do tempo restante (cápsula com coordenadas fracionárias).
+	winui.FillRoundRectAAf(hdc, winui.RectF{
+		X: float64(progressTrack.X), Y: float64(progressTrack.Y),
+		W: float64(progressTrack.W), H: float64(progressTrack.H),
+	}, float64(progressTrack.H)/2, theme.Card.Blend(theme.Border, 80))
+	fillW := float64(progressTrack.W) * s.progressRatio()
+	if minW := float64(sw(8)); fillW > 0 && fillW < minW {
+		fillW = minW
 	}
-	if progress.W > progressTrack.W {
-		progress.W = progressTrack.W
+	if fillW > float64(progressTrack.W) {
+		fillW = float64(progressTrack.W)
 	}
-	winui.FillRoundRectAA(hdc, progress, sw(4), actionColor)
+	if fillW > 0 {
+		winui.FillRoundRectGradientAAf(hdc, winui.RectF{
+			X: float64(progressTrack.X), Y: float64(progressTrack.Y),
+			W: fillW, H: float64(progressTrack.H),
+		}, float64(progressTrack.H)/2,
+			actionColor.Darken(6), actionColor.Lighten(10),
+			float64(progressTrack.X), float64(progressTrack.Right()))
+	}
 
 	// Dica de teclado (a ação padrão também é o Enter).
 	winui.DrawTextSingle(hdc, "Enter confirma a ação padrão · Esc recusa", hint, s.fonts.hint, theme.TextMuted, winui.AlignLeft)
@@ -749,6 +766,7 @@ func runNativeConsentWindow(ctx context.Context, req remotesession.ConsentReques
 	// DPI efetivo do monitor: com PerMonitorV2 o Windows não escala a janela
 	// sozinho. O prompt acompanha a escala, como o banner da sessão.
 	scale := winui.ScaleForDPI(winui.DpiForWindow(hwnd))
+	scale = winui.ClampScaleToWorkArea(winui.ActiveWorkArea(), consentWidth, consentHeight, consentScreenMargin, scale)
 	width := winui.ScalePx(consentWidth, scale)
 	baseHeight := winui.ScalePx(consentHeight, scale)
 	radius := winui.ScalePx(consentRadius, scale)
@@ -775,7 +793,7 @@ func runNativeConsentWindow(ctx context.Context, req remotesession.ConsentReques
 
 	// Ancora no canto inferior direito com o tamanho final (texto longo cresce
 	// para cima, sem sair da área útil).
-	x, y = winui.BottomRightOnActiveWorkArea(width, height, winui.ScalePx(consentScreenMargin, scale))
+	x, y = winui.BottomRightStackedOnActiveWorkArea(hwnd, width, height, winui.ScalePx(consentScreenMargin, scale), winui.ScalePx(12, scale))
 	winui.MoveResizeWindow(hwnd, x, y, width, height)
 
 	// Cantos: no Windows 11 o DWM arredonda com antialiasing (contorno suave);

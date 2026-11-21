@@ -3105,7 +3105,6 @@ function handleChatUIResume() {
 
 document.addEventListener("ui:suspend", handleChatUISuspend);
 document.addEventListener("ui:resume", handleChatUIResume);
-window.addEventListener("ui:resume", handleChatUIResume);
 document.addEventListener("visibilitychange", function () {
   if (!document.hidden) handleChatUIResume();
 });
@@ -3786,7 +3785,12 @@ function addChatMessage(role, content) {
 async function sendChatMessage() {
   if (!chatInputEl) return;
   var text = chatInputEl.value.trim();
-  if (!text) return;
+  if (!text) {
+    if (typeof screenshotHasPendingImages === "function" && screenshotHasPendingImages()) {
+      showToast("Digite uma mensagem para acompanhar a captura anexada.", "info");
+    }
+    return;
+  }
 
   // Sem comunicação com o servidor o chat está indisponível: não despacha.
   if (chatOfflineActive) {
@@ -3832,6 +3836,7 @@ async function sendChatMessage() {
   }
 
   chatInputEl.value = "";
+  autoGrowChatInput();
   dispatchChatMessage(text);
 }
 
@@ -4356,7 +4361,10 @@ function initChatConnectivityBanner() {
   // Fallback: reavalia periodicamente (o poll de status também roda ~5s),
   // mantendo o aviso em sincronia mesmo se um evento se perder.
   if (!chatOfflineBannerTimer) {
-    chatOfflineBannerTimer = setInterval(applyChatOfflineBanner, 5000);
+    chatOfflineBannerTimer = setInterval(function () {
+      if (document.hidden || window.__discoveryUISuspended) return;
+      applyChatOfflineBanner();
+    }, 5000);
   }
 }
 
@@ -4487,6 +4495,15 @@ function initChat() {
 
   if (chatClearBtn) {
     chatClearBtn.addEventListener("click", async function () {
+      var confirmed = typeof showConfirmModal === "function"
+        ? await showConfirmModal({
+            title: translate("action.clearChat"),
+            message: "Tem certeza que deseja limpar todo o histórico desta conversa?",
+            confirmLabel: translate("action.clearChat"),
+            danger: true,
+          })
+        : true;
+      if (!confirmed) return;
       try {
         if (chatSending && typeof appApi().StopChatStream === "function") {
           try { await appApi().StopChatStream(); } catch (_) {}
@@ -4495,6 +4512,8 @@ function initChat() {
         if (typeof stopPollingLoop === "function") stopPollingLoop();
         chatMessageQueue.length = 0;
         chatQuestionQueue.length = 0;
+        chatPendingQuestionCount = 0;
+        if (typeof clearChatBusyRequeue === "function") clearChatBusyRequeue();
         if (typeof renderChatQuestionDock === "function") renderChatQuestionDock();
         setChatBusy(false);
         stopThinkingStatusUpdates();
@@ -4524,6 +4543,20 @@ function initChat() {
   if (chatSaveConfigBtn) {
     chatSaveConfigBtn.addEventListener("click", saveChatConfig);
   }
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+    if (chatLogsModal && !chatLogsModal.classList.contains("hidden")) {
+      chatLogsModal.classList.add("hidden");
+      chatLogsModal.setAttribute("aria-hidden", "true");
+    } else if (chatMemoriesModal && !chatMemoriesModal.classList.contains("hidden")) {
+      chatMemoriesModal.classList.add("hidden");
+      chatMemoriesModal.setAttribute("aria-hidden", "true");
+    } else if (chatPrivacyModal && !chatPrivacyModal.classList.contains("hidden")) {
+      chatPrivacyModal.classList.add("hidden");
+      chatPrivacyModal.setAttribute("aria-hidden", "true");
+    }
+  });
   if (chatTestConfigBtn) {
     chatTestConfigBtn.addEventListener("click", testChatConfig);
   }

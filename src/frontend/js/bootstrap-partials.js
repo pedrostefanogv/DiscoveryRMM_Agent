@@ -126,8 +126,11 @@
   }
 
   async function bootstrap() {
-    for (var i = 0; i < PARTIALS.length; i += 1) {
-      await loadPartial(PARTIALS[i]);
+    if (PARTIALS.length > 0) {
+      await loadPartial(PARTIALS[0]);
+    }
+    if (PARTIALS.length > 1) {
+      await Promise.all(PARTIALS.slice(1).map(loadPartial));
     }
 
     for (var j = 0; j < APP_SCRIPTS.length; j += 1) {

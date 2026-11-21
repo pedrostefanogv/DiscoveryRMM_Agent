@@ -967,7 +967,9 @@ function selectKnowledgeArticle(id) {
         if (requestedId !== selectedKnowledgeArticleID) return;
         kbActivePages = Array.isArray(pages) ? pages : [];
         kbActivePageId = null;
-        renderKnowledgeArticleDetail(article);
+        if (kbActivePages.length > 0) {
+          renderKnowledgeArticleDetail(article);
+        }
       })
       .catch(function (err) {
         try {
@@ -980,10 +982,6 @@ function selectKnowledgeArticle(id) {
         } catch (_) {
           /* console indisponível */
         }
-        if (requestedId !== selectedKnowledgeArticleID) return;
-        kbActivePages = [];
-        kbActivePageId = null;
-        renderKnowledgeArticleDetail(article);
       });
   }
 }
@@ -1156,13 +1154,18 @@ function initKnowledge() {
   if (kbRefreshBtn) {
     kbRefreshBtn.addEventListener("click", async function () {
       kbRefreshBtn.disabled = true;
+      kbRefreshBtn.classList.add("is-loading");
       try {
-        await appApi().RefreshKnowledgeBase();
-      } catch (_) {
-        /* ignora erro do refresh e tenta recarregar mesmo assim */
+        try {
+          await appApi().RefreshKnowledgeBase();
+        } catch (_) {
+          /* ignora erro do refresh e tenta recarregar mesmo assim */
+        }
+        await loadKnowledgeBase();
+      } finally {
+        kbRefreshBtn.disabled = false;
+        kbRefreshBtn.classList.remove("is-loading");
       }
-      await loadKnowledgeBase();
-      kbRefreshBtn.disabled = false;
     });
   }
 

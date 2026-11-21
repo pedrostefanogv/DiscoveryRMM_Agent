@@ -109,3 +109,17 @@ func TestHardwareDirtyRectsDevolveRectsQuandoHaMetadados(t *testing.T) {
 		t.Fatalf("esperava o rect reportado, veio %v", got)
 	}
 }
+
+func TestNormalizeDXGIRectLocalAndVirtualCoordinates(t *testing.T) {
+	// Monitor secundário à direita (originX=1920, 1920x1080):
+	// 1) DXGI entrega coordenadas já locais ao output (100, 50, 200x100) — NÃO deve subtrair 1920.
+	gotLocal := normalizeDXGIRect(100, 50, 200, 100, 1920, 0, 1920, 1080)
+	if gotLocal.X != 100 || gotLocal.Y != 50 || gotLocal.Width != 200 || gotLocal.Height != 100 {
+		t.Fatalf("coordenada local no monitor secundário foi deslocada: %+v", gotLocal)
+	}
+	// 2) Se algum driver entregar em desktop virtual (2020, 50, 200x100) — DEVE subtrair 1920.
+	gotVirt := normalizeDXGIRect(2020, 50, 200, 100, 1920, 0, 1920, 1080)
+	if gotVirt.X != 100 || gotVirt.Y != 50 || gotVirt.Width != 200 || gotVirt.Height != 100 {
+		t.Fatalf("coordenada virtual no monitor secundário não foi normalizada: %+v", gotVirt)
+	}
+}

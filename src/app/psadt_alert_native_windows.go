@@ -147,10 +147,13 @@ func (a *App) nativeModalAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 			}
 			return 0
 		}(),
-		CountdownLabel: "Esta janela fechara automaticamente em:",
+		CountdownLabel: "Esta janela fechará automaticamente em:",
 	}
 	// Sem contador o cartão fica bloqueante: guarda de contexto de qualquer forma.
-	cardCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout+30)*time.Second)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cardCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout+30)*time.Second)
 	defer cancel()
 
 	if a != nil {
@@ -207,7 +210,10 @@ func (a *App) nativeProgressAlert(ctx context.Context, p PsadtAlertPayload) (int
 		Percent:             p.ProgressPercent,
 		DurationSeconds:     duration,
 	}
-	progressCtx, cancel := context.WithTimeout(context.Background(), time.Duration(duration+15)*time.Second)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	progressCtx, cancel := context.WithTimeout(ctx, time.Duration(duration+15)*time.Second)
 	defer cancel()
 
 	result, ok := runProgressAsUser(progressCtx, req)
@@ -279,14 +285,14 @@ func (a *App) nativePowerCountdown(ctx context.Context, action string, delaySeco
 	if delaySeconds <= 0 {
 		delaySeconds = 60
 	}
-	title := "Reinicializacao Necessaria"
+	title := "Reinicialização Necessária"
 	okText := "Reiniciar agora"
-	countdownLabel := "O computador sera reiniciado em:"
-	defaultMsg := fmt.Sprintf("O computador sera reiniciado automaticamente em %d segundos.", delaySeconds)
+	countdownLabel := "O computador será reiniciado em:"
+	defaultMsg := fmt.Sprintf("O computador será reiniciado automaticamente em %d segundos.", delaySeconds)
 	if action == "shutdown" {
-		title = "Desligamento Necessario"
+		title = "Desligamento Necessário"
 		okText = "Desligar agora"
-		countdownLabel = "O computador sera desligado em:"
+		countdownLabel = "O computador será desligado em:"
 		defaultMsg = fmt.Sprintf("O computador sera desligado automaticamente em %d segundos.", delaySeconds)
 	}
 	body := strings.TrimSpace(message)

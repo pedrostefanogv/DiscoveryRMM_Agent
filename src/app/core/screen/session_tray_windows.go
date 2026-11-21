@@ -83,6 +83,20 @@ var (
 	procPostQuitMessage       = user32DLL.NewProc("PostQuitMessage")
 )
 
+func loadBrandTrayIcon() uintptr {
+	hMod, _, _ := procGetModuleHandleW.Call(0)
+	if hMod == 0 {
+		return 0
+	}
+	// Resource ID 1 ou 32512 (IDI_APPLICATION) são usados pelos empacotadores Win32/Wails.
+	for _, resID := range []uintptr{1, 32512} {
+		if h, _, _ := procLoadIconW.Call(hMod, resID); h != 0 {
+			return h
+		}
+	}
+	return 0
+}
+
 type trayPoint struct {
 	X int32
 	Y int32
@@ -197,7 +211,10 @@ func NewSessionTray(opts SessionTrayOptions) (*SessionTray, error) {
 			tray.ready <- fmt.Errorf("CreateWindowExW(tray) falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
 			return
 		}
-		icon, _, _ := procLoadIconW.Call(0, idiInfoIcon)
+		icon := loadBrandTrayIcon()
+		if icon == 0 {
+			icon, _, _ = procLoadIconW.Call(0, idiInfoIcon)
+		}
 		taskbarCreated, _, _ := procRegisterWindowMessage.Call(uintptr(unsafe.Pointer(mustUTF16Pointer("TaskbarCreated"))))
 
 		tray.mu.Lock()

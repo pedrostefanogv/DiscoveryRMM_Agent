@@ -100,6 +100,9 @@ type Theme struct {
 	// Danger/rótulos da ação "negar"/encerrar.
 	Danger     Color
 	DangerText Color
+
+	// Warning é a cor semântica para ícones/indicadores de aviso.
+	Warning Color
 }
 
 // LightTheme devolve a paleta clara (Fluent light).
@@ -116,6 +119,7 @@ func LightTheme() Theme {
 		SuccessText: RGB(0xFF, 0xFF, 0xFF),
 		Danger:      RGB(0xC4, 0x2B, 0x1C),
 		DangerText:  RGB(0xFF, 0xFF, 0xFF),
+		Warning:     RGB(0xD9, 0x77, 0x06),
 	}
 }
 
@@ -134,6 +138,7 @@ func DarkTheme() Theme {
 		SuccessText: RGB(0x0B, 0x2A, 0x08),
 		Danger:      RGB(0xFF, 0x99, 0xA4),
 		DangerText:  RGB(0x2B, 0x05, 0x08),
+		Warning:     RGB(0xF5, 0x9E, 0x0B),
 	}
 }
 

@@ -100,10 +100,6 @@ func (a *App) startTray() {
 	tray := a.app.SystemTray().New()
 	a.systemTray = tray
 
-	// Ícone inicial (estado atual).
-	if icon := a.trayIconForState(a.currentTrayIconState()); len(icon) > 0 {
-		tray.SetIcon(icon)
-	}
 	tray.SetTooltip("Discovery")
 
 	// Clique simples/duplo: mostra a janela.
@@ -220,9 +216,9 @@ func (a *App) updateTrayTooltip() {
 		// Sessões remotas ativas têm prioridade na indicação.
 		if count := a.activeRemoteSessions.Load(); count > 0 {
 			if count == 1 {
-				a.systemTray.SetTooltip("Discovery - 1 sessao remota ativa")
+				a.systemTray.SetTooltip("Discovery - 1 sessão remota ativa")
 			} else {
-				a.systemTray.SetTooltip(fmt.Sprintf("Discovery - %d sessoes remotas ativas", count))
+				a.systemTray.SetTooltip(fmt.Sprintf("Discovery - %d sessões remotas ativas", count))
 			}
 			return
 		}
@@ -267,7 +263,7 @@ func (a *App) updateTrayIdleState(idle bool, supported bool) {
 		}
 
 		if idle {
-			a.systemTray.SetTooltip("Discovery - Modo de eficiencia ativo (aguardo)")
+			a.systemTray.SetTooltip("Discovery - Modo de eficiência ativo (aguardo)")
 			return
 		}
 
@@ -285,14 +281,14 @@ func (a *App) syncRemoteSessionTray() {
 	a.safeTrayAction("tray-remote-session", func() {
 		count := a.activeRemoteSessions.Load()
 		if count <= 0 {
-			// Sem sessoes ativas — volta ao estado normal (idle state loop cuida do resto)
+			a.updateTrayTooltip()
 			return
 		}
 		tooltip := "Discovery"
 		if count == 1 {
-			tooltip = "Discovery - 1 sessao remota ativa"
+			tooltip = "Discovery - 1 sessão remota ativa"
 		} else {
-			tooltip = fmt.Sprintf("Discovery - %d sessoes remotas ativas", count)
+			tooltip = fmt.Sprintf("Discovery - %d sessões remotas ativas", count)
 		}
 		a.systemTray.SetTooltip(tooltip)
 	})

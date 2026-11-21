@@ -3,6 +3,7 @@
 package winui
 
 import (
+	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -96,9 +97,6 @@ func releaseCOM(p uintptr) {
 	if p == 0 {
 		return
 	}
-	if p == 0 {
-		return
-	}
 	obj := (*iUnknownObject)(pointerFromUintptr(p))
 	if obj == nil || obj.vtbl == nil || obj.vtbl.Release == 0 {
 		return
@@ -106,19 +104,32 @@ func releaseCOM(p uintptr) {
 	syscall.SyscallN(obj.vtbl.Release, p)
 }
 
-// DrawPNGMemory decodifica um PNG em memória e desenha preenchendo o
-// retângulo, preservando transparência. Devolve false quando GDI+ ou a
-// decodificação falham (chamador decide o fallback).
+// DrawPNGMemory decodifica um PNG em memória (com cache por conteúdo) e
+// desenha preenchendo o retângulo, preservando transparência. Devolve false
+// quando GDI+ ou a decodificação falham (chamador decide o fallback).
+var (
+	pngImageCacheMu sync.Mutex
+	pngImageCache   = make(map[pngCacheKey]uintptr)
+)
+
+type pngCacheKey struct {
+	length int
+	hash   uint64
+}
+
+func fnv1a64(data []byte) uint64 {
+	var h uint64 = 14695981039346656037
+	for _, b := range data {
+		h ^= uint64(b)
+		h *= 1099511628211
+	}
+	return h
+}
+
 func DrawPNGMemory(hdc uintptr, png []byte, r Rect) bool {
 	if len(png) == 0 || r.Empty() || !ensureGdiplus() {
 		return false
 	}
-	stream, _, _ := procSHCreateMemStream.Call(
-		uintptr(unsafe.Pointer(&png[0])), uintptr(len(png)))
-	if stream == 0 {
-		return false
-	}
-	defer releaseCOM(stream)
 
 	graphics := gdiplusGraphics(hdc)
 	if graphics == 0 {
@@ -126,11 +137,24 @@ func DrawPNGMemory(hdc uintptr, png []byte, r Rect) bool {
 	}
 	defer procGdipDeleteGraphics.Call(graphics)
 
-	var image uintptr
-	if status, _, _ := procGdipLoadImageFromStream.Call(stream, uintptr(unsafe.Pointer(&image))); status != 0 || image == 0 {
-		return false
+	key := pngCacheKey{length: len(png), hash: fnv1a64(png)}
+	pngImageCacheMu.Lock()
+	defer pngImageCacheMu.Unlock()
+
+	image := pngImageCache[key]
+	if image == 0 {
+		stream, _, _ := procSHCreateMemStream.Call(
+			uintptr(unsafe.Pointer(&png[0])), uintptr(len(png)))
+		if stream == 0 {
+			return false
+		}
+		if status, _, _ := procGdipLoadImageFromStream.Call(stream, uintptr(unsafe.Pointer(&image))); status != 0 || image == 0 {
+			releaseCOM(stream)
+			return false
+		}
+		releaseCOM(stream)
+		pngImageCache[key] = image
 	}
-	defer procGdipDisposeImage.Call(image)
 
 	status, _, _ := procGdipDrawImageRectI.Call(graphics, image,
 		uintptr(r.X), uintptr(r.Y), uintptr(r.W), uintptr(r.H))

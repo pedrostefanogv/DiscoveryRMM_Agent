@@ -1461,7 +1461,8 @@
     }
 
     var allowed = (state.policy && state.policy.allowedContentTypes) || [];
-    if (allowed.length && allowed.indexOf(file.type) === -1) {
+    var fileTypeLower = String(file.type || "").toLowerCase();
+    if (allowed.length && fileTypeLower && !allowed.some(function (ct) { return String(ct || "").toLowerCase() === fileTypeLower; })) {
       showBanner("Tipo de arquivo não permitido: " + (file.type || "desconhecido") + ".");
       return;
     }
@@ -1572,7 +1573,13 @@
     var match = /data:([^;]+)/.exec(meta);
     if (match) contentType = match[1];
 
-    var bytes = atob(base64);
+    var bytes;
+    try {
+      bytes = atob(base64);
+    } catch (_e) {
+      showBanner("Não foi possível decodificar a imagem capturada.");
+      return;
+    }
     var buffer = new Uint8Array(bytes.length);
     for (var i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
 
@@ -1699,7 +1706,12 @@
     if (!base64) return null;
 
     var contentType = (payload && payload.contentType) || fallbackContentType || "application/octet-stream";
-    var bytes = atob(base64);
+    var bytes;
+    try {
+      bytes = atob(base64);
+    } catch (_e) {
+      return null;
+    }
     var buffer = new Uint8Array(bytes.length);
     for (var i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
     return new Blob([buffer], { type: contentType });
@@ -2017,7 +2029,12 @@
       }
     });
     document.addEventListener("keydown", function (event) {
-      if (event.key === "Escape") closeAttachmentViewer();
+      if (event.key !== "Escape") return;
+      if (els.viewer && !els.viewer.hidden) {
+        closeAttachmentViewer();
+      } else if (els.confirm && !els.confirm.hidden) {
+        els.confirm.hidden = true;
+      }
     });
 
     // O mesmo modal serve para "recusar convite" (confirmMode = invite) e para

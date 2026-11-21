@@ -236,6 +236,9 @@ function renderStatusOverview(data) {
   if (statusConnectionLabelEl) {
     statusSetText(statusConnectionLabelEl, connected ? translate('common.online') : translate('common.offline'));
   }
+  if (statusConnectionDetailEl) {
+    statusSetText(statusConnectionDetailEl, connected ? (transport || 'NATS') : translate('status.disconnected'));
+  }
 
   var line1 = translate('window.meta.server') + ': ' + statusSafe(data && data.server, '-');
   var line2 = translate('status.transportState') + ': ' + formatConnectionTypeLabel(data && data.connectionType);
@@ -429,9 +432,23 @@ function stopStatusPoll() {
   }
 }
 
+var statusRefreshInFlight = false;
+
 function initStatusPage() {
   if (statusRefreshBtnEl) {
-    statusRefreshBtnEl.addEventListener('click', loadStatusOverview);
+    statusRefreshBtnEl.addEventListener('click', async function () {
+      if (statusRefreshInFlight) return;
+      statusRefreshInFlight = true;
+      statusRefreshBtnEl.disabled = true;
+      statusRefreshBtnEl.classList.add('is-loading');
+      try {
+        await loadStatusOverview();
+      } finally {
+        statusRefreshInFlight = false;
+        statusRefreshBtnEl.disabled = false;
+        statusRefreshBtnEl.classList.remove('is-loading');
+      }
+    });
   }
   if (agentUpdateInstallBtnEl) {
     agentUpdateInstallBtnEl.addEventListener('click', async function () {
@@ -468,6 +485,9 @@ window.__connectivityEventPing = function (connected, transport, source) {
   }
   if (statusConnectionLabelEl) {
     statusSetText(statusConnectionLabelEl, connected ? translate('common.online') : translate('common.offline'));
+  }
+  if (statusConnectionDetailEl) {
+    statusSetText(statusConnectionDetailEl, connected ? (transport || 'NATS') : translate('status.disconnected'));
   }
 };
 

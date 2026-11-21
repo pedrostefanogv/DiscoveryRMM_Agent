@@ -20,18 +20,20 @@ package app
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
 	toast "git.sr.ht/~jackmordaunt/go-toast/v2"
 
 	"discovery/app/agentconfig"
+	"discovery/app/core/notifyui"
 	"discovery/app/services/notifications"
 )
 
 const (
-	// toastAppID é o AppID registrado no Action Center.
-	toastAppID = "Discovery.Agent"
+	// toastAppID é o AppID unificado registrado no Action Center.
+	toastAppID = notifyui.DefaultToastAppID
 
 	// toastArgsPrefix codifica arguments "notification:<id>:<result>".
 	toastArgsPrefix = "notification:"
@@ -83,8 +85,8 @@ func pushNativeToast(notificationID, title, message string, actions [][2]string)
 	initToastOnce()
 	n := toast.Notification{
 		AppID: toastAppID,
-		Title: strings.TrimSpace(title),
-		Body:  strings.TrimSpace(message),
+		Title: neutralizeToastInterpolation(strings.TrimSpace(title)),
+		Body:  neutralizeToastInterpolation(strings.TrimSpace(message)),
 		Audio: toast.Default,
 		Actions: func() []toast.Action {
 			out := make([]toast.Action, 0, len(actions))
@@ -130,5 +132,7 @@ func dispatchNativeToastWhenHeadless(req notifications.DispatchRequest) {
 			}
 		}
 	}
-	_ = pushNativeToast(req.NotificationID, req.Title, req.Message, actions)
+	if err := pushNativeToast(req.NotificationID, req.Title, req.Message, actions); err != nil {
+		log.Printf("[native-toast] falha ao enviar toast id=%s: %v", req.NotificationID, err)
+	}
 }

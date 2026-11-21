@@ -70,3 +70,18 @@ function applyThemePreference(pref) {
 
 // Aplicação imediata (antes do CSS/partials).
 applyThemePreference(getThemePreference());
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", function (e) {
+    if (!e || e.key === THEME_STORAGE_KEY) {
+      applyThemePreference(getThemePreference());
+    }
+  });
+  if (systemDarkQuery && typeof systemDarkQuery.addEventListener === "function") {
+    systemDarkQuery.addEventListener("change", function () {
+      if (getThemePreference() === "system") {
+        applyThemePreference("system");
+      }
+    });
+  }
+}

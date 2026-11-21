@@ -496,6 +496,10 @@ func newChannelCalibratorWithKey(cacheKey string, seed ChannelOrder) channelCali
 // publicação só espera a primeira decisão.
 func (cc *channelCalibrator) Resolved() bool { return cc.resolved }
 
+// Verified informa se a calibração/verificação já concluiu (não precisa mais de
+// frame completo para comparar com GDI).
+func (cc *channelCalibrator) Verified() bool { return cc.verified }
+
 // Order devolve a ordem efetiva atual (seed enquanto não verificada).
 func (cc *channelCalibrator) Order() ChannelOrder { return cc.order }
 

@@ -301,12 +301,12 @@ const hardwareRefreshBtn = document.getElementById('hardwareRefreshBtn');
 let agentStatusPollId = null;
 
 const DEFAULT_NOTIFICATION_THEME = {
-  surface: '#1f1a14',
-  text: '#f8f4ea',
-  accent: '#f4a259',
-  success: '#0b6e4f',
-  warning: '#8a4e12',
-  danger: '#9a031e',
+  surface: 'var(--surface)',
+  text: 'var(--text)',
+  accent: 'var(--accent)',
+  success: 'var(--success)',
+  warning: 'var(--warning-strong)',
+  danger: 'var(--danger)',
 };
 
 const notificationUXState = {
@@ -466,23 +466,96 @@ function showFeedback(message, isError) {
 
 var MAX_VISIBLE_TOASTS = 5;
 
+function removeToastNode(toast) {
+  if (!toast || !toast.parentNode) return;
+  toast.classList.add('removing');
+  toast.addEventListener('animationend', function () { toast.remove(); }, { once: true });
+  setTimeout(function () { if (toast.parentNode) toast.remove(); }, 400);
+}
+
 function showToast(message, type) {
   if (!toastContainerEl) return;
+  var kind = type || 'info';
   // Limitar toasts simultâneos: remover o mais antigo se exceder o limite
   var existingToasts = toastContainerEl.querySelectorAll('.toast:not(.removing)');
   if (existingToasts.length >= MAX_VISIBLE_TOASTS) {
-    var oldest = existingToasts[0];
-    oldest.classList.add('removing');
-    oldest.addEventListener('animationend', function () { oldest.remove(); });
+    removeToastNode(existingToasts[0]);
   }
   var toast = document.createElement('div');
-  toast.className = 'toast ' + (type || 'info');
+  toast.className = 'toast ' + kind;
+  toast.setAttribute('role', (kind === 'error' || kind === 'warning') ? 'alert' : 'status');
   toast.textContent = message;
   toastContainerEl.appendChild(toast);
-  setTimeout(function () {
-    toast.classList.add('removing');
-    toast.addEventListener('animationend', function () { toast.remove(); });
-  }, 3500);
+  setTimeout(function () { removeToastNode(toast); }, 3500);
+}
+
+function showConfirmModal(opts) {
+  var o = opts || {};
+  return new Promise(function (resolve) {
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9600;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;padding:16px;';
+
+    var card = document.createElement('div');
+    card.className = 'card';
+    card.style.cssText = 'max-width:420px;width:100%;padding:20px;display:flex;flex-direction:column;gap:12px;';
+
+    var titleEl = document.createElement('h3');
+    titleEl.style.margin = '0';
+    titleEl.textContent = o.title || 'Confirmação';
+
+    var msgEl = document.createElement('p');
+    msgEl.className = 'meta';
+    msgEl.style.margin = '0';
+    msgEl.textContent = o.message || '';
+
+    var actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:4px;';
+
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn subtle';
+    cancelBtn.textContent = o.cancelLabel || 'Cancelar';
+
+    var okBtn = document.createElement('button');
+    okBtn.type = 'button';
+    okBtn.className = o.danger ? 'btn danger' : 'btn primary';
+    okBtn.textContent = o.confirmLabel || 'Confirmar';
+
+    var prevFocus = document.activeElement;
+    function cleanup(result) {
+      document.removeEventListener('keydown', onKey);
+      if (overlay.parentNode) overlay.remove();
+      if (prevFocus && typeof prevFocus.focus === 'function') {
+        try { prevFocus.focus(); } catch (_) {}
+      }
+      resolve(result);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cleanup(false);
+      }
+    }
+
+    cancelBtn.addEventListener('click', function () { cleanup(false); });
+    okBtn.addEventListener('click', function () { cleanup(true); });
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) cleanup(false);
+    });
+    document.addEventListener('keydown', onKey);
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(okBtn);
+    card.appendChild(titleEl);
+    card.appendChild(msgEl);
+    card.appendChild(actions);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    cancelBtn.focus();
+  });
 }
 
 function computeProvisioningState(debugCfg) {
@@ -1105,10 +1178,22 @@ function applyProgressFromNotification(notification) {
     // Novo ciclo de instalação (novo correlationId): limpar dispensa anterior
     // para o painel reaparecer, e limpar grupos antigos para não vazar memória.
     delete notificationUXState.dismissedProgressGroups[groupId];
+    var groupKeys = Object.keys(notificationUXState.progressByGroup);
+    if (groupKeys.length >= 12) {
+      groupKeys.sort(function (a, b) {
+        return (notificationUXState.progressByGroup[a].updatedAt || 0) - (notificationUXState.progressByGroup[b].updatedAt || 0);
+      });
+      while (groupKeys.length >= 12) {
+        var oldestKey = groupKeys.shift();
+        if (oldestKey && oldestKey !== groupId) {
+          delete notificationUXState.progressByGroup[oldestKey];
+        }
+      }
+    }
     group = {
       totalTasks: Number(metadata.totalTasks || 0),
       tasks: {},
-      title: 'Progresso da instalacao',
+      title: 'Progresso da instalação',
       updatedAt: Date.now(),
       failed: false,
       phase: 'precheck',
@@ -1247,7 +1332,7 @@ function handleNotificationEvent(payload) {
   // Instalação pela loja: o cartão de progresso no topo já mostra início e
   // conclusão em tempo real. Toast de install_start era o 2º/3º aviso
   // redundante da mesma ação — só falha e conclusão ganham toast.
-  var suppressToast = !nativeSurface && (eventType === 'install_start');
+  var suppressToast = nativeSurface || (eventType === 'install_start');
   if (!suppressToast) {
     showToast(toastHeading + (message ? ': ' + message : ''), toastType);
   }

@@ -215,7 +215,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  font-family: 'Space Grotesk', sans-serif;
+  font-family: var(--font-sans);
   font-size: 0.95rem;
   line-height: 1.55;
   background: var(--bg);
@@ -251,7 +251,7 @@
 }
 
 .kb-detail-content code {
-  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-family: var(--font-mono);
   background: color-mix(in srgb, var(--surface-2) 84%, var(--surface) 16%);
   padding: 1px 5px;
   border-radius: 5px;
@@ -598,7 +598,7 @@
 }
 
 .chat-msg.assistant code {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.85em;
   background: rgba(11, 110, 79, 0.08);
   border-radius: 5px;
@@ -1328,7 +1328,7 @@
   overflow: auto;
   background: var(--terminal-bg-alt);
   color: var(--terminal-fg-alt);
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.82rem;
   line-height: 1.5;
 }
@@ -1593,7 +1593,7 @@
   padding: 12px 14px;
   background: var(--terminal-bg-alt);
   color: var(--terminal-fg-alt);
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
   font-size: .82rem;
   line-height: 1.5;
   border-radius: var(--radius);
@@ -1658,7 +1658,7 @@
    LOGS TERMINAL — aprimorado para copia/scroll/selecao
    ================================================================ */
 .logs-terminal {
-  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: .78rem;
   line-height: 1.55;
   background: var(--terminal-bg);

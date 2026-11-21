@@ -180,7 +180,7 @@ func RegisterWindowClass(className string, wndProc uintptr, style uint32) error 
 		if errno, ok := callErr.(windows.Errno); ok && errno == 1410 {
 			return nil
 		}
-		return fmt.Errorf("windui: RegisterClassExW(%s) falhou: %v", className, callErr)
+		return fmt.Errorf("winui: RegisterClassExW(%s) falhou: %v", className, callErr)
 	}
 	return nil
 }
@@ -204,7 +204,7 @@ func CreateWindow(className, title string, exStyle, style uint32, x, y, width, h
 		0, 0, 0, 0,
 	)
 	if hwnd == 0 {
-		return 0, fmt.Errorf("windui: CreateWindowExW(%s) falhou: %v", className, callErr)
+		return 0, fmt.Errorf("winui: CreateWindowExW(%s) falhou: %v", className, callErr)
 	}
 	return hwnd, nil
 }

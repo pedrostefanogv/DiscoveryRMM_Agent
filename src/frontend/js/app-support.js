@@ -2198,13 +2198,22 @@ async function openTicketFromCard(ticketId) {
 
 function showTicketDetail(t) {
   if (!t) return;
+  var switchingTicket = currentTicketId !== t.id;
   currentTicketId = t.id;
   currentTicket = t;
   showSupportDetail();
 
-  // Troca de chamado: limpa a avaliacao em rascunho do detalhe anterior.
-  if (ratingStarsWidget) ratingStarsWidget.reset();
-  if (ratingFeedbackEl) ratingFeedbackEl.value = '';
+  if (switchingTicket) {
+    // Troca de chamado: limpa a avaliacao e anexos em rascunho do detalhe anterior.
+    if (ratingStarsWidget) ratingStarsWidget.reset();
+    if (ratingFeedbackEl) ratingFeedbackEl.value = '';
+    commentAttachments = [];
+    renderCommentAttachments();
+    commentThumbCache = {};
+    commentThumbOrder = [];
+    setTicketAttachments([]);
+    hideTicketAttachmentsModal();
+  }
 
   renderTicketDetail(t);
   loadWorkflowStatesForClose(t);
@@ -2268,17 +2277,6 @@ function renderTicketDetail(t) {
   // reabertura e a avaliacao (CSAT) quando ainda nao avaliado.
   if (openCloseTicketBtnEl) openCloseTicketBtnEl.classList.toggle('hidden', closed);
   if (commentComposeEl) commentComposeEl.classList.toggle('hidden', closed);
-  // Troca de chamado: anexos pendentes nao valem para outro ticket (e o
-  // upload usa currentTicketId).
-  commentAttachments = [];
-  renderCommentAttachments();
-  // Cache de miniaturas tambem e por chamado.
-  commentThumbCache = {};
-  commentThumbOrder = [];
-  // Anexos do chamado no modal tambem sao por chamado: limpa e fecha o modal
-  // (o loadTicketComments do chamado novo repovoa em seguida).
-  setTicketAttachments([]);
-  hideTicketAttachmentsModal();
   if (ticketClosedNoticeEl) ticketClosedNoticeEl.classList.toggle('hidden', !closed);
   if (closed && ticketClosedNoticeTextEl) {
     ticketClosedNoticeTextEl.textContent = t.closedAt
@@ -2464,10 +2462,12 @@ async function uploadCommentAttachment(ticketId, commentId, entry) {
 }
 
 async function handleCommentFiles(files) {
+  var fileList = Array.prototype.slice.call(files || []);
+  if (!fileList.length) return;
   // Aguarda a policy antes de validar: sem isso o PRIMEIRO arquivo era checado
   // com o padrão local (10 MB) mesmo se o servidor tivesse um limite menor.
   await ensureCommentAttachmentSettings();
-  Array.prototype.slice.call(files || []).forEach(function (file) {
+  fileList.forEach(function (file) {
     if (!file) return;
     var reader = new FileReader();
     reader.onload = function () {
@@ -2642,7 +2642,7 @@ function renderCommentAttachments() {
         // arquivo para o caso de o titulo virar HTML).
         error.textContent = translate('support.attachmentError', {
           name: item.fileName || 'anexo',
-          error: escapeHtml(item.error || ''),
+          error: String(item.error || ''),
         });
       }
       tile.title = String(item.error || '');
@@ -2902,7 +2902,14 @@ async function submitTicketComment() {
 
 async function reopenTicket() {
   if (!currentTicketId || !reopenTicketBtnEl) return;
-  if (!window.confirm(translate('support.reopenConfirm'))) return;
+  var confirmed = typeof showConfirmModal === 'function'
+    ? await showConfirmModal({
+        title: translate('support.reopenTicket'),
+        message: translate('support.reopenConfirm'),
+        confirmLabel: translate('support.reopenTicket'),
+      })
+    : window.confirm(translate('support.reopenConfirm'));
+  if (!confirmed) return;
 
   var previousText = reopenTicketBtnEl.textContent;
   reopenTicketBtnEl.disabled = true;
@@ -3271,6 +3278,15 @@ function showTicketAttachmentsModal() {
 function hideTicketAttachmentsModal() {
   if (ticketAttachmentsModalEl) ticketAttachmentsModalEl.classList.add('hidden');
 }
+
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Escape') return;
+  if (ticketAttachmentsModalEl && !ticketAttachmentsModalEl.classList.contains('hidden')) {
+    hideTicketAttachmentsModal();
+  } else if (closeTicketModalEl && !closeTicketModalEl.classList.contains('hidden')) {
+    hideCloseTicketModal();
+  }
+});
 
 function ticketAttachmentItemFromRow(row) {
   return {

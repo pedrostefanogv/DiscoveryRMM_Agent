@@ -214,7 +214,7 @@
 }
 
 .sensor-engine-item.wide .sensor-engine-value {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
   font-size: .8rem;
 }
 
@@ -343,7 +343,7 @@
 /* Celulas tecnicas em monoespacada, quebrando a palavra se preciso. */
 .debug-sensors-table td.mono,
 .debug-sensors-table td .mono {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
   font-size: .76rem;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -489,7 +489,7 @@
 }
 
 .sensor-detail-channels li {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
   font-size: .74rem;
   color: var(--fg);
   background: var(--bg2);
@@ -539,7 +539,7 @@
 }
 
 .sensor-result-channels {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
   font-size: .74rem;
   color: var(--fg);
   opacity: .85;
@@ -553,7 +553,7 @@
   padding: 10px 12px;
   background: var(--terminal-bg-alt);
   color: var(--terminal-fg-alt);
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
   font-size: .74rem;
   line-height: 1.5;
   border-radius: var(--radius-sm);
@@ -564,14 +564,14 @@
   tab-size: 2;
 }
 
-.muted,
+.debug-sensors-wrap .muted,
 .sensor-detail .muted {
   color: var(--fg);
   opacity: .55;
   font-style: italic;
 }
 
-.err,
+.debug-sensors-wrap .err,
 .sensor-detail .err {
   color: var(--debug-error-text);
   font-weight: 600;
@@ -677,7 +677,7 @@
    perigo. As regras da tabela (.debug-sensors-table td.mono) nao alcancam
    este grid, entao repetimos aqui de forma escopada. */
 .sensor-history-item .mono {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
   font-size: .72rem;
 }
 

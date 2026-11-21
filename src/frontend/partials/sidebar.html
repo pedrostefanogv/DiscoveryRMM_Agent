@@ -10,7 +10,7 @@
   </div>
 
   <ul class="sidebar-nav" role="tablist">
-    <li>
+    <li role="presentation">
       <button id="tabStore" class="sidebar-link" role="tab" aria-selected="false" aria-controls="storeView" title="Loja"
         aria-label="Loja" data-i18n-title="tab.store" data-i18n-aria-label="tab.store">
         <svg viewBox="0 -960 960 960" width="20" height="20" aria-hidden="true" focusable="false">
@@ -19,25 +19,25 @@
         <span data-i18n="tab.store">Loja</span>
       </button>
     </li>
-    <li>
+    <li role="presentation">
       <button id="tabUpdates" class="sidebar-link" role="tab" aria-selected="false" aria-controls="updatesView"
-        title="Atualizacoes" aria-label="Atualizacoes" data-i18n-title="tab.updates" data-i18n-aria-label="tab.updates">
+        title="Atualizações" aria-label="Atualizações" data-i18n-title="tab.updates" data-i18n-aria-label="tab.updates">
         <svg viewBox="0 -960 960 960" width="20" height="20" aria-hidden="true" focusable="false">
           <path d="M480-160q-134 0-227-93t-93-227q0-134 93-227t227-93q69 0 132 28.5T720-690v-70q0-17 11.5-28.5T760-800q17 0 28.5 11.5T800-760v200q0 17-11.5 28.5T760-520H560q-17 0-28.5-11.5T520-560q0-17 11.5-28.5T560-600h128q-32-56-87.5-88T480-720q-100 0-170 70t-70 170q0 100 70 170t170 70q68 0 124.5-34.5T692-367q8-14 22.5-19.5t29.5-.5q16 5 23 21t-1 30q-41 80-117 128t-169 48Z" fill="currentColor" />
         </svg>
-        <span data-i18n="tab.updates">Atualizacoes</span>
+        <span data-i18n="tab.updates">Atualizações</span>
       </button>
     </li>
-    <li>
+    <li role="presentation">
       <button id="tabInventory" class="sidebar-link" role="tab" aria-selected="false" aria-controls="inventoryView"
-        title="Inventario" aria-label="Inventario" data-i18n-title="tab.inventory" data-i18n-aria-label="tab.inventory">
+        title="Inventário" aria-label="Inventário" data-i18n-title="tab.inventory" data-i18n-aria-label="tab.inventory">
         <svg viewBox="0 -960 960 960" width="20" height="20" aria-hidden="true" focusable="false">
           <path d="M400-200v-80H160q-33 0-56.5-23.5T80-360v-400q0-33 23.5-56.5T160-840h640q33 0 56.5 23.5T880-760v400q0 33-23.5 56.5T800-280H560v80h40q17 0 28.5 11.5T640-160q0 17-11.5 28.5T600-120H360q-17 0-28.5-11.5T320-160q0-17 11.5-28.5T360-200h40ZM160-360h640v-400H160v400Zm0 0v-400 400Z" fill="currentColor" />
         </svg>
-        <span data-i18n="tab.inventory">Inventario</span>
+        <span data-i18n="tab.inventory">Inventário</span>
       </button>
     </li>
-    <li>
+    <li role="presentation">
       <button id="tabLogs" class="sidebar-link" role="tab" aria-selected="false" aria-controls="logsView" title="Logs"
         aria-label="Logs" data-i18n-title="tab.logs" data-i18n-aria-label="tab.logs">
         <svg viewBox="0 -960 960 960" width="20" height="20" aria-hidden="true" focusable="false">
@@ -46,7 +46,7 @@
         <span data-i18n="tab.logs">Logs</span>
       </button>
     </li>
-    <li>
+    <li role="presentation">
       <button id="tabChat" class="sidebar-link" role="tab" aria-selected="false" aria-controls="chatView"
         title="Chat IA" aria-label="Chat IA" data-i18n-title="tab.chat" data-i18n-aria-label="tab.chat">
         <svg viewBox="0 -960 960 960" width="20" height="20" aria-hidden="true" focusable="false">
@@ -55,7 +55,7 @@
         <span data-i18n="tab.chat">Chat IA</span>
       </button>
     </li>
-    <li>
+    <li role="presentation">
       <button id="tabSupport" class="sidebar-link" role="tab" aria-selected="false" aria-controls="supportView"
         title="Suporte" aria-label="Suporte" data-i18n-title="tab.support" data-i18n-aria-label="tab.support">
         <svg viewBox="0 -960 960 960" width="20" height="20" aria-hidden="true" focusable="false">
@@ -64,7 +64,7 @@
         <span data-i18n="tab.support">Suporte</span>
       </button>
     </li>
-    <li>
+    <li role="presentation">
       <button id="tabKnowledge" class="sidebar-link" role="tab" aria-selected="false" aria-controls="knowledgeView"
         title="Base de Conhecimento" aria-label="Base de Conhecimento" data-i18n-title="tab.knowledge"
         data-i18n-aria-label="tab.knowledge">
@@ -75,10 +75,10 @@
       </button>
     </li>
 
-    <li>
+    <li role="presentation">
       <!-- Item do chat AO VIVO: aparece só com sessão waiting/active e some no
-           encerramento. Ícone de headset + tom próprio para NÃO se confundir
-           com o Chat IA (ícone de balão). -->
+           encerramento. Ícone Material Symbols (support_agent) para manter o
+           mesmo padrão visual dos demais itens da sidebar. -->
       <button id="tabSupportChat" class="sidebar-link sidebar-link--support" role="tab" aria-selected="false"
         aria-controls="supportChatView" title="Atendimento ao vivo" aria-label="Atendimento ao vivo" hidden
         data-i18n-title="tab.supportChat" data-i18n-aria-label="tab.supportChat">
@@ -93,16 +93,16 @@
         <span id="tabSupportChatBadge" class="sidebar-badge" hidden></span>
       </button>
     </li>
-    <li>
+    <li role="presentation">
       <button id="tabAutomation" class="sidebar-link" role="tab" aria-selected="false" aria-controls="automationView"
-        title="Automacao" aria-label="Automacao" data-i18n-title="tab.automation" data-i18n-aria-label="tab.automation">
+        title="Automação" aria-label="Automação" data-i18n-title="tab.automation" data-i18n-aria-label="tab.automation">
         <svg viewBox="0 -960 960 960" width="20" height="20" aria-hidden="true" focusable="false">
           <path d="M433-80q-27 0-46.5-18T363-142l-9-66q-13-5-24.5-12T307-235l-62 26q-25 11-50 2t-39-32l-47-82q-14-23-8-49t27-43l53-40q-1-7-1-13.5v-27q0-6.5 1-13.5l-53-40q-21-17-27-43t8-49l47-82q14-23 39-32t50 2l62 26q11-8 23-15t24-12l9-66q4-26 23.5-44t46.5-18h94q27 0 46.5 18t23.5 44l9 66q13 5 24.5 12t22.5 15l62-26q25-11 50-2t39 32l47 82q14 23 8 49t-27 43l-53 40q1 7 1 13.5v27q0 6.5-2 13.5l53 40q21 17 27 43t-8 49l-48 82q-14 23-39 32t-50-2l-60-26q-11 8-23 15t-24 12l-9 66q-4 26-23.5 44T527-80h-94Zm7-80h79l14-106q31-8 57.5-23.5T639-327l99 41 39-68-86-65q5-14 7-29.5t2-31.5q0-16-2-31.5t-7-29.5l86-65-39-68-99 42q-22-23-48.5-38.5T533-694l-13-106h-79l-14 106q-31 8-57.5 23.5T321-633l-99-41-39 68 86 64q-5 15-7 30t-2 32q0 16 2 31t7 30l-86 65 39 68 99-42q22 23 48.5 38.5T427-266l13 106Zm42-180q58 0 99-41t41-99q0-58-41-99t-99-41q-59 0-99.5 41T342-480q0 58 40.5 99t99.5 41Zm-2-140Z" fill="currentColor" />
         </svg>
-        <span data-i18n="tab.automation">Automacao</span>
+        <span data-i18n="tab.automation">Automação</span>
       </button>
     </li>
-    <li>
+    <li role="presentation">
       <button id="tabDebug" class="sidebar-link" role="tab" aria-selected="false" aria-controls="debugView"
         title="Debug" aria-label="Debug" data-i18n-title="tab.debug" data-i18n-aria-label="tab.debug">
         <svg viewBox="0 -960 960 960" width="20" height="20" aria-hidden="true" focusable="false">
@@ -111,7 +111,7 @@
         <span data-i18n="tab.debug">Debug</span>
       </button>
     </li>
-    <li>
+    <li role="presentation">
       <button id="tabSensors" class="sidebar-link" role="tab" aria-selected="false" aria-controls="sensorView"
         title="Sensores" aria-label="Sensores" data-i18n-title="tab.sensors" data-i18n-aria-label="tab.sensors">
         <svg viewBox="0 -960 960 960" width="20" height="20" aria-hidden="true" focusable="false">
@@ -120,7 +120,7 @@
         <span data-i18n="tab.sensors">Sensores</span>
       </button>
     </li>
-    <li>
+    <li role="presentation">
       <button id="tabPSADT" class="sidebar-link" role="tab" aria-selected="false" aria-controls="psadtView"
         title="Notificações" aria-label="Notificações" data-i18n-title="tab.psadt" data-i18n-aria-label="tab.psadt">
         <svg viewBox="0 -960 960 960" width="20" height="20" aria-hidden="true" focusable="false">
@@ -129,7 +129,7 @@
         <span data-i18n="tab.psadt">Notificações</span>
       </button>
     </li>
-    <li>
+    <li role="presentation">
       <button id="tabP2P" class="sidebar-link hidden" role="tab" aria-selected="false" aria-controls="p2pView"
         title="P2P" aria-label="P2P" data-i18n-title="tab.p2p" data-i18n-aria-label="tab.p2p">
         <svg viewBox="0 -960 960 960" width="20" height="20" aria-hidden="true" focusable="false">
@@ -138,7 +138,7 @@
         <span data-i18n="tab.p2p">P2P</span>
       </button>
     </li>
-    <li>
+    <li role="presentation">
       <button id="tabZeroTouchConfig" class="sidebar-link hidden" role="tab" aria-selected="false"
         aria-controls="zeroTouchConfigView" title="Configuração Zero-Touch" aria-label="Configuração Zero-Touch"
         data-i18n-title="tab.zeroTouchConfig" data-i18n-aria-label="tab.zeroTouchConfig">
