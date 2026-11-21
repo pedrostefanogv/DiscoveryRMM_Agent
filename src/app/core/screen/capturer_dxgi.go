@@ -139,6 +139,12 @@ type rect struct{ Left, Top, Right, Bottom int32 }
 // deixaria a intenção menos explícita no ponto de conversão para DirtyRect.
 type dxgiRect = rect
 
+// dxgiOutduplMoveRect espelha DXGI_OUTDUPL_MOVE_RECT (SourcePoint + DestinationRect).
+type dxgiOutduplMoveRect struct {
+	SourcePoint point
+	DestRect    rect
+}
+
 type d3d11Texture2DDesc struct {
 	Width, Height, MipLevels, ArraySize         uint32
 	Format                                      uint32
@@ -220,6 +226,7 @@ type dxgiCapturer struct {
 	// rectsFrame é a tradução para DirtyRect em coordenadas do frame, válida até
 	// o próximo AcquireNextFrame (mesmo contrato do Frame.Data).
 	dirtyBuf   []dxgiRect
+	moveBuf    []dxgiOutduplMoveRect
 	rectsFrame []DirtyRect
 
 	// lastHadMetadata registra se o último frame trouxe metadados de dirty rect.
@@ -227,6 +234,12 @@ type dxgiCapturer struct {
 	// não rastreou) — nesse caso devolvemos nil e o pipeline manda frame
 	// completo, que é o comportamento seguro.
 	lastHadMetadata bool
+
+	// firstFrameDelivered indica que pelo menos um frame integral já foi
+	// copiado para frameBuf e calibrado; a partir daqui atualizações só de
+	// cursor (LastPresentTime==0) podem ser descartadas e cópias GPU→CPU podem
+	// ser parciais nos dirty rects.
+	firstFrameDelivered bool
 
 	// frameBuf é reutilizado entre frames (otimização de churn de GC: antes
 	// era um make([]byte, w*h*bpp) por frame — ~8 MB SDR / ~16 MB HDR @1080p
@@ -473,6 +486,15 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 
 	c.lastResource = res
 
+	// Quando apenas o cursor de hardware atualizou (LastPresentTime == 0 e sem
+	// metadados de pixels sujos), não há mudança de imagem na tela: com cursor
+	// separado (.cursor em 60Hz), descartar evita copiar e comprimir a tela
+	// inteira a cada movimento do mouse.
+	if c.firstFrameDelivered && fi.LastPresentTime == 0 && fi.TotalMetadataBufferSize == 0 {
+		c.releaseLocked()
+		return nil, fmt.Errorf("timeout")
+	}
+
 	// ── Dirty rects de HARDWARE (Fase 6, 2026-11-20) ──
 	//
 	// A duplicação já respondeu ONDE a tela mudou — de graça, junto do frame
@@ -511,16 +533,47 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 	// de churn de GC). O consumidor copia antes do próximo acquire.
 	if cap(c.frameBuf) < bufSize {
 		c.frameBuf = make([]byte, bufSize)
+		c.firstFrameDelivered = false
 	}
 	frameData := c.frameBuf[:bufSize]
+
+	partialCopy := c.firstFrameDelivered &&
+		c.calib.Resolved() &&
+		!c.hdr &&
+		len(c.rectsFrame) > 0 &&
+		DirtyRectsCoverage(c.rectsFrame, c.width, c.height) < 0.85
+
 	if mapped.Data != nil && mapped.RowPitch > 0 {
 		// mapped.Data aponta para memória GPU staging (não-GC) — o campo já é
 		// unsafe.Pointer, então unsafe.Slice/unsafe.Add operam sem conversão uintptr.
-		if int(mapped.RowPitch) == c.width*bpp {
+		rowPitch := int(mapped.RowPitch)
+		if partialCopy {
+			needSwap := c.calib.Order() == ChannelOrderRGBA
+			for _, r := range c.rectsFrame {
+				x0 := max(0, r.X)
+				y0 := max(0, r.Y)
+				x1 := min(c.width, r.X+r.Width)
+				y1 := min(c.height, r.Y+r.Height)
+				if x1 <= x0 || y1 <= y0 {
+					continue
+				}
+				spanBytes := (x1 - x0) * bpp
+				for y := y0; y < y1; y++ {
+					srcOff := y*rowPitch + x0*bpp
+					dstOff := y*c.width*bpp + x0*bpp
+					row := unsafe.Add(mapped.Data, uintptr(srcOff))
+					dstSlice := frameData[dstOff : dstOff+spanBytes]
+					copy(dstSlice, unsafe.Slice((*byte)(row), spanBytes))
+					if needSwap {
+						swapRB_BGRA(dstSlice)
+					}
+				}
+			}
+		} else if rowPitch == c.width*bpp {
 			copy(frameData, unsafe.Slice((*byte)(mapped.Data), bufSize))
 		} else {
 			for y := 0; y < c.height; y++ {
-				srcOff := y * int(mapped.RowPitch)
+				srcOff := y * rowPitch
 				dstOff := y * c.width * bpp
 				row := unsafe.Add(mapped.Data, uintptr(srcOff))
 				copy(frameData[dstOff:], unsafe.Slice((*byte)(row), c.width*bpp))
@@ -541,10 +594,13 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 		OriginY:    c.originY,
 		ColorSpace: c.colorSpace,
 	}
-	// Normaliza a ordem de canais para BGRA (contrato dos encoders). Quando o
-	// DuplicateOutput1 falha e caímos no DuplicateOutput nativo, o formato pode
-	// ser R8G8B8A8 — a calibração detecta e corrige em vez de inverter R↔B.
-	c.calib.apply(frame)
+	if !partialCopy {
+		// Normaliza a ordem de canais para BGRA (contrato dos encoders). Quando o
+		// DuplicateOutput1 falha e caímos no DuplicateOutput nativo, o formato pode
+		// ser R8G8B8A8 — a calibração detecta e corrige em vez de inverter R↔B.
+		c.calib.apply(frame)
+	}
+	c.firstFrameDelivered = true
 	return frame, nil
 }
 
@@ -631,22 +687,80 @@ func (c *dxgiCapturer) captureDirtyRectsLocked(fi *dxgiOutduplFrameInfo) {
 		return
 	}
 
-	// A API cresce o buffer via DXGI_ERROR_MORE_DATA: começa com a capacidade
-	// que já temos (reutilizada entre frames) e só realoca se ela não bastar.
-	// Isso evita alocar um []RECT por frame a 30 fps.
-	if len(c.dirtyBuf) == 0 {
-		c.dirtyBuf = make([]dxgiRect, 8)
-	}
-	required := uint32(len(c.dirtyBuf))
+	const rectBytes = int(unsafe.Sizeof(dxgiRect{}))
+	const moveBytes = int(unsafe.Sizeof(dxgiOutduplMoveRect{}))
 
+	var raw []DirtyRect
+
+	// 1. Move rects (arrasto de janela / scroll): inclui origem e destino como
+	// regiões sujas para o tile-mode atualizar ambas as áreas.
+	if len(c.moveBuf) == 0 {
+		c.moveBuf = make([]dxgiOutduplMoveRect, 8)
+	}
 	for attempt := 0; attempt < 4; attempt++ {
-		hr, _, _ := comCall(c.duplication, slotDupGetFrameDirtyRects,
-			uintptr(unsafe.Pointer(&c.dirtyBuf[0])),
-			uintptr(unsafe.Pointer(&required)),
+		bufBytes := uint32(len(c.moveBuf) * moveBytes)
+		var reqBytes uint32
+		hr, _, _ := comCall(c.duplication, slotDupGetFrameMoveRects,
+			uintptr(bufBytes),
+			uintptr(unsafe.Pointer(&c.moveBuf[0])),
+			uintptr(unsafe.Pointer(&reqBytes)),
 		)
 		if uint64(hr) == DXGI_ERROR_MORE_DATA {
-			// `required` traz o tamanho necessário; realoca e tenta de novo.
-			n := int(required)
+			n := (int(reqBytes) + moveBytes - 1) / moveBytes
+			if n <= len(c.moveBuf) {
+				n = len(c.moveBuf) * 2
+			}
+			if n > 2048 {
+				n = 2048
+			}
+			c.moveBuf = make([]dxgiOutduplMoveRect, n)
+			continue
+		}
+		if hr == 0 && reqBytes > 0 {
+			mCount := int(reqBytes) / moveBytes
+			if mCount > len(c.moveBuf) {
+				mCount = len(c.moveBuf)
+			}
+			for i := 0; i < mCount; i++ {
+				mv := c.moveBuf[i]
+				w := int(mv.DestRect.Right - mv.DestRect.Left)
+				h := int(mv.DestRect.Bottom - mv.DestRect.Top)
+				if w <= 0 || h <= 0 {
+					continue
+				}
+				raw = append(raw,
+					DirtyRect{
+						X:      int(mv.SourcePoint.X) - c.originX,
+						Y:      int(mv.SourcePoint.Y) - c.originY,
+						Width:  w,
+						Height: h,
+					},
+					DirtyRect{
+						X:      int(mv.DestRect.Left) - c.originX,
+						Y:      int(mv.DestRect.Top) - c.originY,
+						Width:  w,
+						Height: h,
+					},
+				)
+			}
+		}
+		break
+	}
+
+	// 2. Dirty rects: API Win32 espera BufferSizeInBytes como 1º parâmetro.
+	if len(c.dirtyBuf) == 0 {
+		c.dirtyBuf = make([]dxgiRect, 16)
+	}
+	for attempt := 0; attempt < 4; attempt++ {
+		bufBytes := uint32(len(c.dirtyBuf) * rectBytes)
+		var requiredBytes uint32
+		hr, _, _ := comCall(c.duplication, slotDupGetFrameDirtyRects,
+			uintptr(bufBytes),
+			uintptr(unsafe.Pointer(&c.dirtyBuf[0])),
+			uintptr(unsafe.Pointer(&requiredBytes)),
+		)
+		if uint64(hr) == DXGI_ERROR_MORE_DATA {
+			n := (int(requiredBytes) + rectBytes - 1) / rectBytes
 			if n <= len(c.dirtyBuf) {
 				n = len(c.dirtyBuf) * 2
 			}
@@ -654,27 +768,16 @@ func (c *dxgiCapturer) captureDirtyRectsLocked(fi *dxgiOutduplFrameInfo) {
 				n = 4096
 			}
 			c.dirtyBuf = make([]dxgiRect, n)
-			required = uint32(n)
 			continue
 		}
 		if hr != 0 {
 			// Não fatal — segue com frame completo (ver comentário da função).
 			return
 		}
-		// Sucesso: `required` passou a ser o NÚMERO DE RECTS escritos.
-		count := int(required)
+		count := int(requiredBytes) / rectBytes
 		if count > len(c.dirtyBuf) {
 			count = len(c.dirtyBuf)
 		}
-		if count == 0 {
-			return
-		}
-
-		// Traduz RECT para DirtyRect. A origem do output JÁ foi subtraída: os
-		// RECTs do DXGI vêm em coordenadas do DESKTOP VIRTUAL, enquanto o frame
-		// começa em (originX, originY) — sem subtrair, um monitor não-primário
-		// desloca todos os tiles (mesmo bug já corrigido no cursor).
-		raw := make([]DirtyRect, 0, count)
 		for i := 0; i < count; i++ {
 			r := c.dirtyBuf[i]
 			w := int(r.Right - r.Left)
@@ -689,17 +792,18 @@ func (c *dxgiCapturer) captureDirtyRectsLocked(fi *dxgiOutduplFrameInfo) {
 				Height: h,
 			})
 		}
-		if len(raw) == 0 {
-			return
-		}
+		break
+	}
 
-		// Consolida para o que o protocolo do viewer aceita (numRects < 512).
-		// Sem isso um arrasto de janela pode gerar centenas de RECTs e o decoder
-		// do viewer deixa de reconhecer o payload como tiles.
-		c.rectsFrame = CoalesceDirtyRects(raw, c.width, c.height)
-		c.lastHadMetadata = len(c.rectsFrame) > 0
+	if len(raw) == 0 {
 		return
 	}
+
+	// Consolida para o que o protocolo do viewer aceita (numRects < 512).
+	// Sem isso um arrasto de janela pode gerar centenas de RECTs e o decoder
+	// do viewer deixa de reconhecer o payload como tiles.
+	c.rectsFrame = CoalesceDirtyRects(raw, c.width, c.height)
+	c.lastHadMetadata = len(c.rectsFrame) > 0
 }
 
 func (c *dxgiCapturer) Name() string { return "dxgi" }

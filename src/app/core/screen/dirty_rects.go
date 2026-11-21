@@ -278,6 +278,12 @@ func EncodeDirtyRects(frame *Frame, rects []DirtyRect, quality int) ([]byte, err
 // alocações por frame; nil cria um scratch descartável (mesmo resultado, sem a
 // economia — mantém a API antiga funcionando).
 func EncodeDirtyRectsScratch(frame *Frame, rects []DirtyRect, quality int, s *TileScratch) ([]byte, error) {
+	return EncodeDirtyRectsCodecScratch(frame, rects, quality, "jpeg", s)
+}
+
+// EncodeDirtyRectsCodecScratch codifica apenas as regiões alteradas usando o
+// codec especificado ("webp" ou "jpeg"), reutilizando o *TileScratch da sessão.
+func EncodeDirtyRectsCodecScratch(frame *Frame, rects []DirtyRect, quality int, codec string, s *TileScratch) ([]byte, error) {
 	if s == nil {
 		s = &TileScratch{}
 	}
@@ -296,7 +302,7 @@ func EncodeDirtyRectsScratch(frame *Frame, rects []DirtyRect, quality int, s *Ti
 	//
 	// POR QUE: cada tile é uma imagem INDEPENDENTE — nenhum tile lê o resultado
 	// de outro. Eram codificados em série, e a medição de base mostrou que 64
-	// tiles de 240x135 custam ~63 ms (BenchmarkEncodeDirtyRects) contra ~58 ms
+	// tiles de 240x135 custavam ~63 ms (BenchmarkEncodeDirtyRects) contra ~58 ms
 	// de um único JPEG do frame inteiro. Ou seja: o caminho que existe para
 	// ECONOMIZAR BANDA custava o MESMO TEMPO que mandar a tela toda — o pior
 	// dos dois mundos, porque a economia de bytes não pagava o custo de CPU.
@@ -308,7 +314,7 @@ func EncodeDirtyRectsScratch(frame *Frame, rects []DirtyRect, quality int, s *Ti
 	// A ordem do payload é PRESERVADA: os resultados são escritos em posições
 	// fixas e montados na ordem original, não na ordem de conclusão — o viewer
 	// desenha tiles sobrepostos na ordem recebida.
-	encoded := encodeTilesParallel(frame, rects, quality)
+	encoded := encodeTilesParallelWithCodec(frame, rects, quality, codec)
 
 	escritos := 0
 	for _, te := range encoded {
@@ -393,6 +399,42 @@ func (s *TileScratch) extractTile(frame *Frame, rect DirtyRect) *image.RGBA {
 		CopyBGRAtoRGBA(pix[dst:dst+stride], frame.Data[src:src+stride])
 	}
 	return s.img
+}
+
+// CopyFrameRects copia de src para dst apenas as regiões especificadas em rects
+// (para que o encode worker extraia os tiles sem pagar memcpy de 20 MB pela
+// tela inteira). Quando rects está vazio ou a geometria difere, copia tudo.
+func CopyFrameRects(dst, src *Frame, rects []DirtyRect) {
+	if dst == nil || src == nil {
+		return
+	}
+	if len(rects) == 0 || dst.Width != src.Width || dst.Height != src.Height ||
+		dst.Stride != src.Stride || len(dst.Data) != len(src.Data) {
+		if len(dst.Data) != len(src.Data) {
+			dst.Data = dst.Data[:len(src.Data)]
+		}
+		copy(dst.Data, src.Data)
+		return
+	}
+	const bpp = 4
+	stride := src.Stride
+	for _, r := range rects {
+		x0 := max(0, r.X)
+		y0 := max(0, r.Y)
+		x1 := min(src.Width, r.X+r.Width)
+		y1 := min(src.Height, r.Y+r.Height)
+		if x1 <= x0 || y1 <= y0 {
+			continue
+		}
+		spanBytes := (x1 - x0) * bpp
+		for y := y0; y < y1; y++ {
+			off := y*stride + x0*bpp
+			if off+spanBytes > len(src.Data) {
+				break
+			}
+			copy(dst.Data[off:off+spanBytes], src.Data[off:off+spanBytes])
+		}
+	}
 }
 
 // Ensure imports

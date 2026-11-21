@@ -31,9 +31,15 @@ type tileEncoded struct {
 // paralelizar. Com 1-2 tiles o custo de sincronização supera o ganho.
 const encodeTilesParallelMinTiles = 2
 
-// encodeTilesParallel extrai e codifica cada rect, devolvendo os resultados na
-// MESMA ORDEM de `rects`. Posições cujo recorte/encode falhou ficam nil.
+// encodeTilesParallel extrai e codifica cada rect em JPEG, devolvendo os
+// resultados na MESMA ORDEM de `rects`. Posições cujo recorte/encode falhou ficam nil.
 func encodeTilesParallel(frame *Frame, rects []DirtyRect, quality int) []*tileEncoded {
+	return encodeTilesParallelWithCodec(frame, rects, quality, "jpeg")
+}
+
+// encodeTilesParallelWithCodec extrai e codifica cada rect usando o codec
+// informado ("webp" ou "jpeg", com fallback para JPEG se WebP falhar).
+func encodeTilesParallelWithCodec(frame *Frame, rects []DirtyRect, quality int, codec string) []*tileEncoded {
 	out := make([]*tileEncoded, len(rects))
 	if len(rects) == 0 {
 		return out
@@ -41,7 +47,7 @@ func encodeTilesParallel(frame *Frame, rects []DirtyRect, quality int) []*tileEn
 
 	// Um único tile (ou poucos): o caminho serial evita acordar goroutines.
 	if len(rects) < encodeTilesParallelMinTiles {
-		out[0] = encodeOneTile(frame, rects[0], quality, &TileScratch{})
+		out[0] = encodeOneTileWithCodec(frame, rects[0], quality, codec, &TileScratch{})
 		return out
 	}
 
@@ -53,7 +59,7 @@ func encodeTilesParallel(frame *Frame, rects []DirtyRect, quality int) []*tileEn
 		// Máquina de 1 núcleo: serial, sem custo de sincronização.
 		sc := &TileScratch{}
 		for i := range rects {
-			out[i] = encodeOneTile(frame, rects[i], quality, sc)
+			out[i] = encodeOneTileWithCodec(frame, rects[i], quality, codec, sc)
 		}
 		return out
 	}
@@ -73,7 +79,7 @@ func encodeTilesParallel(frame *Frame, rects []DirtyRect, quality int) []*tileEn
 			// entre goroutines seria uma corrida de dados.
 			sc := &TileScratch{}
 			for i := range idx {
-				out[i] = encodeOneTile(frame, rects[i], quality, sc)
+				out[i] = encodeOneTileWithCodec(frame, rects[i], quality, codec, sc)
 			}
 		}()
 	}
@@ -85,17 +91,25 @@ func encodeTilesParallel(frame *Frame, rects []DirtyRect, quality int) []*tileEn
 	return out
 }
 
-// encodeOneTile extrai UM tile do frame e o codifica como JPEG. Devolve nil
-// quando o recorte é inválido ou o encode falha (o chamador simplesmente pula
-// esse tile, como fazia antes).
-func encodeOneTile(frame *Frame, rect DirtyRect, quality int, sc *TileScratch) *tileEncoded {
+// encodeOneTileWithCodec extrai UM tile do frame e o codifica no codec pedido
+// ("webp" ou "jpeg"). Devolve nil quando o recorte é inválido ou o encode falha.
+func encodeOneTileWithCodec(frame *Frame, rect DirtyRect, quality int, codec string, sc *TileScratch) *tileEncoded {
 	img := extractTileWith(frame, rect, sc)
 	if img == nil {
 		return nil
 	}
 	sc.jpeg.Reset()
-	if err := jpeg.Encode(&sc.jpeg, img, &jpeg.Options{Quality: quality}); err != nil {
-		return nil
+	if codec == "webp" {
+		if err := encodeRGBAWebP(&sc.jpeg, img, quality); err != nil {
+			sc.jpeg.Reset()
+			if jerr := jpeg.Encode(&sc.jpeg, img, &jpeg.Options{Quality: quality}); jerr != nil {
+				return nil
+			}
+		}
+	} else {
+		if err := jpeg.Encode(&sc.jpeg, img, &jpeg.Options{Quality: quality}); err != nil {
+			return nil
+		}
 	}
 	encoded := sc.jpeg.Bytes()
 	if len(encoded) == 0 {

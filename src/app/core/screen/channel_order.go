@@ -583,6 +583,11 @@ func (cc *channelCalibrator) tryResolve(candidate *Frame) {
 	var err error
 	if cc.refFn != nil {
 		reference, err = cc.refFn(candidate)
+		// Mantém a invariante "o calibrador é dono da memória que recebe" também
+		// para referências injetadas por testes.
+		if err == nil && reference != nil {
+			reference = copyFrameData(reference)
+		}
 	} else {
 		gdi, gerr := NewGDICapturerRegion(candidate.OriginX, candidate.OriginY, candidate.Width, candidate.Height)
 		if gerr != nil {
@@ -595,31 +600,17 @@ func (cc *channelCalibrator) tryResolve(candidate *Frame) {
 			return
 		}
 		reference, err = gdi.AcquireNextFrame()
+		// ── CÓPIA OBRIGATÓRIA ANTES DE Close() (use-after-free corrigido) ──
+		//
+		// O gdiCapturer entrega Data como unsafe.Slice sobre c.dibBits
+		// (capturer_gdi.go:221) e Close() destrói a DIB (DeleteObject),
+		// desmapeando imediatamente a página virtual. Copiar DEPOIS do Close()
+		// causava fatal error: fault [signal 0xc0000005] dentro de copyFrameData.
+		if err == nil && reference != nil {
+			reference = copyFrameData(reference)
+		}
 		gdi.ReleaseFrame()
 		_ = gdi.Close()
-	}
-	// ── CÓPIA OBRIGATÓRIA da referência (use-after-free corrigido 2026-11-20) ──
-	//
-	// O gdiCapturer entrega Data como uma slice SOBRE a memória da DIB section
-	// (unsafe.Slice(c.dibBits, ...), ver capturer_gdi.go:221) e o Close() logo
-	// acima destrói essa DIB (releaseCached → DeleteObject). Sem esta cópia,
-	// reference.Data é uma slice PENDENTE: a sonda a lê nas linhas seguintes,
-	// depois do free.
-	//
-	// É o MESMO use-after-free já documentado em capturer_dxgi_god3d.go:314-320
-	// ("um use-after-free que já se manifestou como segfault") — lá o
-	// captureFirstFrameGDI copia os pixels exatamente por isso; na calibração a
-	// cópia faltava. Sintoma no incidente: leituras caindo em página não
-	// commitada (fatal error: fault com endereço sempre 0x...000) enquanto o
-	// probe varria a referência.
-	//
-	// Fica no caminho COMUM (fora do else) de propósito: o contrato "o
-	// calibrador é dono da memória que recebe" vale para QUALQUER origem de
-	// referência — GDI real ou a injetada por refFn nos testes. Deixar a cópia
-	// dentro do else fazia o caminho de teste exercitar um contrato diferente
-	// do de produção, que é justamente como um use-after-free passa batido.
-	if err == nil && reference != nil {
-		reference = copyFrameData(reference)
 	}
 	if err != nil {
 		// Falha transitória (ex.: troca de desktop): tenta de novo no próximo

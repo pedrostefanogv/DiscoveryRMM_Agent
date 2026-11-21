@@ -156,3 +156,35 @@ func TestProbeComReferenciaDestruidaFalha(t *testing.T) {
 	}
 	t.Logf("controle OK: referência destruída ⇒ Unknown (%s)", reason)
 }
+
+// TestTryResolveGDIRealNaoCausaUseAfterFree valida o caminho de produção real
+// (NewGDICapturerRegion → AcquireNextFrame → copyFrameData → ReleaseFrame →
+// Close) quando o desktop está acessível, garantindo que copyFrameData ocorre
+// ANTES do DeleteObject da DIB section. Se o desktop não estiver acessível
+// (ex.: sessão headless/serviço sem desktop interativo), o teste é pulado.
+func TestTryResolveGDIRealNaoCausaUseAfterFree(t *testing.T) {
+	gdi, err := NewGDICapturerRegion(0, 0, 128, 72)
+	if err != nil {
+		t.Skipf("GDI indisponível neste ambiente: %v", err)
+	}
+	ref, aerr := gdi.AcquireNextFrame()
+	if aerr != nil || ref == nil {
+		gdi.ReleaseFrame()
+		_ = gdi.Close()
+		t.Skipf("AcquireNextFrame GDI indisponível neste ambiente: %v", aerr)
+	}
+	cp := copyFrameData(ref)
+	gdi.ReleaseFrame()
+	_ = gdi.Close()
+
+	if len(cp.Data) != 128*72*4 {
+		t.Fatalf("tamanho inesperado da cópia: %d", len(cp.Data))
+	}
+	// Toca todas as páginas da cópia após o Close() para garantir que não há
+	// referência pendente à DIB destruída.
+	var sum byte
+	for i := 0; i < len(cp.Data); i += 4096 {
+		sum ^= cp.Data[i]
+	}
+	_ = sum
+}

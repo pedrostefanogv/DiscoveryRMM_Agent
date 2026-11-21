@@ -259,8 +259,6 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 	}()
 
-	_ = screen.DetectGPU()
-
 	// fps: >0 = máximo; 0 = sem limite. Se ausente, usa o perfil.
 	if fps <= 0 {
 		fps = s.quality.Current().EffectiveFps()
@@ -387,7 +385,8 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				// Modo tile: codifica apenas os rects alterados (economia de banda).
 				// O scratch é DA SESSÃO (s.tileScratch) e sobrevive entre frames —
 				// sem ele cada frame alocava ~900 objetos/16 MB em tile mode.
-				tiles, err := screen.EncodeDirtyRectsScratch(job.frame, job.rects, quality, &s.tileScratch)
+				// Usa o codec ativo (webp/jpeg) para economizar mais ~30-45% nos tiles.
+				tiles, err := screen.EncodeDirtyRectsCodecScratch(job.frame, job.rects, quality, enc.Name(), &s.tileScratch)
 				if err != nil {
 					log.Printf("[remote-session-screen] ERRO encode tiles: %v\n", err)
 					if job.pooled {
@@ -794,23 +793,30 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 		consecutiveIdle = 0
 
+		// Decide se o frame vai COMPLETO ou em TILES ANTES de copiar do capturer:
+		// em tile-mode copiamos apenas os dirty rects (~KB em vez de ~20 MB).
+		fullFrame, jobRects := s.decideFrameKind(frame, rects)
+
 		// ── Copia frame do GPU (timing) ──
-		// NOTA: go-d3d retorna c.img.Pix (buffer Go reutilizado).
+		// NOTA: go-d3d/dxgi reutilizam o buffer interno entre chamadas.
 		// Precisamos copiar ANTES de enviar ao encode worker, pois o próximo
-		// AcquireNextFrame() sobrescreve c.img.Pix.
+		// AcquireNextFrame() sobrescreve o buffer.
 		copyStart := time.Now()
 		// Both paths yield a pooled frame: ToneMapHDRToSDR/ResizeBGRA allocate
 		// from framePool (ownsFrame=true) and !ownsFrame copies into framePool.
 		jobPooled := true
 		if !ownsFrame {
-			// Pool de frames (otimização de churn de GC): o copy era um
-			// make([]byte, len) por frame (~8 MB @1080p a 30fps ≈ 250 MB/s).
-			// O encode worker devolve o frame ao pool após o encode.
+			// Pool de frames (otimização de churn de GC): o encode worker devolve
+			// o frame ao pool após o encode.
 			frameCopy := screen.GetPooledFrame(frame.Width, frame.Height, frame.Stride)
 			if len(frameCopy.Data) != len(frame.Data) {
 				frameCopy.Data = frameCopy.Data[:len(frame.Data)]
 			}
-			copy(frameCopy.Data, frame.Data)
+			if !fullFrame && len(jobRects) > 0 {
+				screen.CopyFrameRects(frameCopy, frame, jobRects)
+			} else {
+				copy(frameCopy.Data, frame.Data)
+			}
 			frameCopy.Width = frame.Width
 			frameCopy.Height = frame.Height
 			frameCopy.Stride = frame.Stride
@@ -821,10 +827,6 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		copyMsTotal += copyMs
 
 		// Envia para encode worker (nao bloqueante com buffer=1).
-		// decideFrameKind classifica este frame como COMPLETO (key frame) ou
-		// em TILES — ver o comentário da função para as regras e para o bug de
-		// ordem corrigido em 2026-11-07 (primeiro frame saía como delta).
-		_, jobRects := s.decideFrameKind(frame, rects)
 		select {
 		case encodeChan <- encodeJob{
 			frame:   frame,

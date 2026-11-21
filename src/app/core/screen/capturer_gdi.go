@@ -148,9 +148,14 @@ func newGDICapturerRegionIdx(offsetX, offsetY, width, height, monitorIndex int) 
 		offsetY:      offsetY,
 		monitorIndex: monitorIndex,
 	}
-	// Registra este capturer como o ativo: o banner consulta o registry para
-	// saber se a captura sabe contornar a área dele (emenda de região).
-	SetCapturerAtual(c)
+	// Registra este capturer como o ativo apenas quando representa um monitor
+	// da sessão (monitorIndex >= 0). Capturas efêmeras de região (calibração
+	// de canais, primeiro frame GDI do go-d3d, screenshot avulso) têm
+	// monitorIndex == -1 e não devem sobrescrever/limpar o capturer da sessão
+	// no registry global do banner.
+	if monitorIndex >= 0 {
+		SetCapturerAtual(c)
+	}
 	return c, nil
 }
 

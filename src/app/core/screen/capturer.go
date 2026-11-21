@@ -132,27 +132,34 @@ func NewCapturer(monitorIndex int) (Capturer, error) {
 // drawCursor=true: cursor desenhado no frame (compat).
 // drawCursor=false: cursor separado (enviado via subject .cursor pelo viewer).
 func NewCapturerMode(monitorIndex int, drawCursor bool) (Capturer, error) {
-	// Em monitor HDR/Advanced Color, o go-d3d força R8G8B8A8_UNORM (SDR 8-bit)
-	// e o driver converte sem tone mapping → conteúdo HDR lavado. Nesse caso,
-	// usamos o capturador DXGI manual, que captura em scRGB float e permite
-	// tone mapping HDR→SDR no pipeline.
-	if ac, err := DetectAdvancedColor(monitorIndex); err == nil && ac != nil && ac.IsHDR {
-		c, err := NewDXGICapturer(monitorIndex)
-		if err == nil {
+	// Em monitor HDR/Advanced Color ou quando o cursor é separado (!drawCursor,
+	// padrão da sessão remota), priorizamos o capturador DXGI manual:
+	//   - suporta scRGB/HDR com tone mapping;
+	//   - implementa DirtyRectsReporter (GetFrameDirtyRects direto da GPU),
+	//     ativando o tile-mode de hardware em produção;
+	//   - força B8G8R8A8_UNORM (BGRA nativo) no DuplicateOutput1 sem swizzle.
+	if !drawCursor {
+		if c, err := NewDXGICapturer(monitorIndex); err == nil {
+			return registraCapturer(c), nil
+		}
+	} else if ac, err := DetectAdvancedColor(monitorIndex); err == nil && ac != nil && ac.IsHDR {
+		if c, err := NewDXGICapturer(monitorIndex); err == nil {
 			return registraCapturer(c), nil
 		}
 		// Se o DXGI manual falhar, cai para o fluxo normal (go-d3d → GDI).
 	}
 
-	// Tenta go-d3d primeiro (HW dirty rects, release otimizado)
+	// Fallback / modo drawCursor=true: go-d3d
 	c, err := NewDXGIGoD3dCapturerMode(monitorIndex, drawCursor)
 	if err == nil {
 		return registraCapturer(c), nil
 	}
-	// Fallback: DXGI manual (VTable syscall)
-	c, err = NewDXGICapturer(monitorIndex)
-	if err == nil {
-		return registraCapturer(c), nil
+	// Fallback: DXGI manual (caso drawCursor=true tenha falhado no go-d3d)
+	if drawCursor {
+		c, err = NewDXGICapturer(monitorIndex)
+		if err == nil {
+			return registraCapturer(c), nil
+		}
 	}
 	// Fallback final: GDI BitBlt (VM sem GPU, RDP)
 	c, err = NewGDICapturerMonitor(monitorIndex)
