@@ -129,7 +129,18 @@ func PingHost(ctx context.Context, host string, count int, timeoutSeconds int) (
 		return PingResult{}, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds+2)*time.Second)
+	if count <= 0 {
+		count = 1
+	}
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 5
+	}
+	totalTimeout := time.Duration(count*timeoutSeconds+3) * time.Second
+	if totalTimeout > 60*time.Second {
+		totalTimeout = 60 * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
 	defer cancel()
 
 	cmd, err := buildPingCommand(host, count, timeoutSeconds)

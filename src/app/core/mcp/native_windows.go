@@ -10,6 +10,7 @@ import (
 
 	"discovery/app/core/nettable"
 	"discovery/app/core/sysctrl"
+	"discovery/app/core/windowsupdate"
 )
 
 // listServicesNative lista os servicos Windows via sysctrl.
@@ -39,9 +40,17 @@ func getServiceNative(name string) (json.RawMessage, error) {
 	return nil, fmt.Errorf("servico nao encontrado: %s", name)
 }
 
-func startServiceNative(name string) error   { return sysctrl.StartService(name) }
-func stopServiceNative(name string) error    { return sysctrl.StopService(name) }
-func restartServiceNative(name string) error { return sysctrl.RestartService(name) }
+func applyServiceActionNative(name string, action sysctrl.ServiceAction) error {
+	res := sysctrl.ApplyServiceAction(name, action, sysctrl.DetectProductType())
+	if !res.Decision.Allowed {
+		return fmt.Errorf("ação recusada pelo guard de segurança: %s", res.Decision.Reason)
+	}
+	return res.Err
+}
+
+func startServiceNative(name string) error   { return applyServiceActionNative(name, sysctrl.ActionStart) }
+func stopServiceNative(name string) error    { return applyServiceActionNative(name, sysctrl.ActionStop) }
+func restartServiceNative(name string) error { return applyServiceActionNative(name, sysctrl.ActionRestart) }
 
 // listProcessesNative lista os processos em execucao via sysctrl.
 func listProcessesNative() (json.RawMessage, error) {
@@ -63,6 +72,18 @@ func systemInfoNative() map[string]any {
 		"memoryPercent":    si.MemoryPercent,
 		"cpuPercent":       si.CpuPercent,
 	}
+}
+
+func windowsUpdateStatusNative() (any, error) {
+	return windowsupdate.ProbeLocalState(), nil
+}
+
+func windowsUpdatePendingRebootNative() (any, error) {
+	st := windowsupdate.ProbeLocalState()
+	return map[string]any{
+		"pendingReboot": st.RebootPending,
+		"reasons":       st.RebootReasons,
+	}, nil
 }
 
 // connectionsNative lista conexoes TCP/UDP (IPv4) com PID e estado.

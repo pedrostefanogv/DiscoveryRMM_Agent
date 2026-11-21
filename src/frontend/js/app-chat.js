@@ -17,6 +17,8 @@ var CHAT_STREAM_PROBE_MS = 30000;    // sonda de reconciliação subsequente
 var streamingBubble = null;
 var streamingRawContent = "";
 var streamingRafPending = false;
+var lastStreamFlushAt = 0;
+var streamingThrottleTimer = null;
 // Último round do agent loop visto no turno (usado para inserir a quebra entre
 // as mensagens de rounds diferentes). Reson no dispatch de cada mensagem.
 var streamingLastRound = 0;
@@ -258,12 +260,26 @@ function onStreamToken(token) {
   }
   if (!streamingRafPending) {
     streamingRafPending = true;
-    requestAnimationFrame(flushStreamingContent);
+    var elapsed = Date.now() - lastStreamFlushAt;
+    var wait = 60 - elapsed;
+    if (wait > 0) {
+      streamingThrottleTimer = setTimeout(function () {
+        streamingThrottleTimer = null;
+        requestAnimationFrame(flushStreamingContent);
+      }, wait);
+    } else {
+      requestAnimationFrame(flushStreamingContent);
+    }
   }
 }
 
 function flushStreamingContent() {
   streamingRafPending = false;
+  lastStreamFlushAt = Date.now();
+  if (streamingThrottleTimer) {
+    clearTimeout(streamingThrottleTimer);
+    streamingThrottleTimer = null;
+  }
   if (!streamingBubble) return;
   var thinkingEl = streamingBubble.querySelector(".stream-thinking");
   var contentEl = streamingBubble.querySelector(".stream-content");
@@ -283,11 +299,8 @@ function flushStreamingContent() {
     thinkingEl.style.display = "none";
   }
   contentEl.innerHTML = renderAssistantMarkdown(streamingRawContent);
-  syncColorMode();
   bindInternalChatLinks(contentEl);
-  // Force reflow to ensure the bubble background expands with the content.
-  void streamingBubble.offsetHeight;
-  scheduleChatScrollToBottom();
+  scheduleChatScrollToBottom(false);
 }
 
 function setChatBusy(isBusy) {
@@ -640,6 +653,13 @@ var CHAT_TOOL_LABELS = {
   "get_performance_snapshot": "Capturando desempenho",
   "get_top_processes": "Analisando processos",
   "get_disk_health": "Verificando saúde dos discos",
+  "registry_read": "Consultando Registro do Windows",
+  "ad_gpo_certs": "Verificando AD, certificados e BitLocker",
+  "software": "Gerenciando aplicativos",
+  "event_log": "Consultando Event Log",
+  "local_memory": "Consultando memórias locais",
+  "screen": "Verificando tela e janelas",
+  "request_human_support": "Encaminhando ao suporte humano",
   "get_recent_errors": "Buscando erros recentes",
 };
 
@@ -1458,13 +1478,27 @@ function renderChatQuestionDock() {
     });
   }
 
-  // O campo de texto livre fica SEMPRE visível: o usuário escolhe entre as
-  // opções sugeridas ou digita a própria resposta.
+  var allowText = !(question.allowText === false || question.allowText === "false");
+  var inputRow = chatQuestionDock.querySelector(".chat-question-dock-input-row");
+  if (inputRow) inputRow.classList.toggle("hidden", !allowText);
+  if (chatQuestionDockInput) {
+    chatQuestionDockInput.disabled = !allowText || chatOfflineActive;
+    if (!allowText) chatQuestionDockInput.value = "";
+  }
+  if (chatQuestionDockSendBtn) {
+    chatQuestionDockSendBtn.disabled = !allowText || chatOfflineActive;
+  }
+
   chatQuestionDock.classList.remove("hidden");
   chatInputWrapEl.classList.add("hidden");
   syncColorMode();
-  scheduleChatScrollToBottom();
-  if (chatQuestionDockInput) chatQuestionDockInput.focus();
+  scheduleChatScrollToBottom(true);
+  if (allowText && chatQuestionDockInput) {
+    chatQuestionDockInput.focus();
+  } else if (chatQuestionDockOptions) {
+    var firstOptBtn = chatQuestionDockOptions.querySelector("button");
+    if (firstOptBtn) firstOptBtn.focus();
+  }
 }
 
 function showChatQuestion(question) {
@@ -2749,6 +2783,7 @@ function clearA2uiSurface() {
     "chat:question_cancelled": onChatQuestionCancelled,
     "chat:a2ui": onChatA2ui,
     "chat:a2ui_incomplete": onChatA2uiIncomplete,
+    "chat:info": handleChatInfoEvent,
     // Captura de tela assistida (app-screenshot.js).
     "screenshot:request": onScreenshotRequest,
     "screenshot:overlay_close": onScreenshotOverlayClose,
@@ -2943,18 +2978,24 @@ window.__discoveryFocusChatView = function () {
   }
 };
 
-function scrollChatToBottom() {
+function isChatNearBottom() {
+  if (!chatMessagesEl) return true;
+  return (chatMessagesEl.scrollHeight - chatMessagesEl.scrollTop - chatMessagesEl.clientHeight) <= 80;
+}
+
+function scrollChatToBottom(force) {
+  if (force !== true && !isChatNearBottom()) return;
   if (chatMessagesEl) chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
   if (chatViewEl) chatViewEl.scrollTop = chatViewEl.scrollHeight;
 }
 
-function scheduleChatScrollToBottom() {
+function scheduleChatScrollToBottom(force) {
   if (document.hidden || window.__discoveryUISuspended) return;
-  // Run after current and next paint to keep bottom lock even after dynamic layout updates.
-  scrollChatToBottom();
+  var shouldScroll = force !== false;
+  if (!shouldScroll && !isChatNearBottom()) return;
+  scrollChatToBottom(true);
   requestAnimationFrame(function () {
-    scrollChatToBottom();
-    requestAnimationFrame(scrollChatToBottom);
+    scrollChatToBottom(true);
   });
 }
 
@@ -3049,7 +3090,25 @@ function handleChatUISuspend() {
   stopThinkingStatusUpdates();
 }
 
+function handleChatUIResume() {
+  if (document.hidden || window.__discoveryUISuspended) return;
+  if (streamingBubble) {
+    if (streamingRawContent) {
+      flushStreamingContent();
+    }
+    var thinkingEl = streamingBubble.querySelector(".stream-thinking");
+    if (thinkingEl && thinkingEl.style.display !== "none" && typeof startChatActivityTimer === "function") {
+      startChatActivityTimer();
+    }
+  }
+}
+
 document.addEventListener("ui:suspend", handleChatUISuspend);
+document.addEventListener("ui:resume", handleChatUIResume);
+window.addEventListener("ui:resume", handleChatUIResume);
+document.addEventListener("visibilitychange", function () {
+  if (!document.hidden) handleChatUIResume();
+});
 
 function formatInlineChatMarkdown(text) {
   // Espaço após rótulo em negrito colado ao valor ("**ID:**01a0557e") —
@@ -3126,7 +3185,7 @@ function formatInlineChatMarkdown(text) {
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/__([^_]+)__/g, "<strong>$1</strong>")
     .replace(/\*([^*\n]+)\*/g, "<em>$1</em>")
-    .replace(/_([^_\n]+)_/g, "<em>$1</em>");
+    .replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?:;]|$)/g, "$1<em>$2</em>");
 
   for (var i = 0; i < codeTokens.length; i += 1) {
     // Replacer por FUNÇÃO: o HTML do código é inserido literalmente (conteúdo
@@ -3277,6 +3336,39 @@ function bindInternalChatLinks(containerEl) {
       var internalURL = link.getAttribute("data-internal-url") || "";
       navigateInternalAppRoute(internalURL);
     });
+  });
+
+  if (window.wails && typeof window.wails.openURL === "function") {
+    var externalLinks = containerEl.querySelectorAll('a[target="_blank"][href^="http"]');
+    externalLinks.forEach(function (link) {
+      if (link.dataset.boundExternalClick === "1") return;
+      link.dataset.boundExternalClick = "1";
+      link.addEventListener("click", function (e) {
+        e.preventDefault();
+        window.wails.openURL(link.href);
+      });
+    });
+  }
+
+  var codeBlocks = containerEl.querySelectorAll("pre.chat-code");
+  codeBlocks.forEach(function (pre) {
+    if (pre.dataset.boundCopy === "1") return;
+    pre.dataset.boundCopy = "1";
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chat-code-copy-btn";
+    btn.textContent = "Copiar";
+    btn.addEventListener("click", function () {
+      var codeEl = pre.querySelector("code");
+      var text = codeEl ? codeEl.textContent : pre.textContent;
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        navigator.clipboard.writeText(text || "").then(function () {
+          btn.textContent = "Copiado!";
+          setTimeout(function () { btn.textContent = "Copiar"; }, 1500);
+        }).catch(function () {});
+      }
+    });
+    pre.appendChild(btn);
   });
 }
 
@@ -4120,7 +4212,7 @@ function applyChatOfflineMode(offline) {
   chatOfflineActive = !!offline;
   if (chatInputEl) chatInputEl.disabled = chatOfflineActive;
   if (chatSendBtn) chatSendBtn.disabled = chatOfflineActive;
-  ["chatScreenshotBtn", "chatQuestionDockSendBtn", "chatQuestionDockInput"].forEach(function (id) {
+  ["chatScreenshotBtn", "chatScreenshotMenuBtn", "chatQuestionDockSendBtn", "chatQuestionDockInput"].forEach(function (id) {
     var el = document.getElementById(id);
     if (el) el.disabled = chatOfflineActive;
   });
@@ -4272,25 +4364,50 @@ function initChatConnectivityBanner() {
 // energia foi CANCELADA pelo usuario depois que o turno terminal ja tinha
 // encerrado a conversa). Sem isso o usuario nao recebia nenhum retorno.
 var chatInfoBound = false;
+var lastChatInfoKey = "";
+var lastChatInfoAt = 0;
+
+function handleChatInfoEvent(data) {
+  var text = "";
+  if (data && typeof data === "object") {
+    text = String(data.text || "");
+  } else if (typeof data === "string") {
+    text = data;
+  }
+  if (!text.trim()) return;
+  var now = Date.now();
+  if (text === lastChatInfoKey && (now - lastChatInfoAt) < 1000) return;
+  lastChatInfoKey = text;
+  lastChatInfoAt = now;
+  try {
+    addChatMessage("assistant", text);
+  } catch (e) {
+    console.error("[chat] falha ao exibir chat:info:", e);
+  }
+}
 
 function initChatInfoListener() {
   if (chatInfoBound) return;
   if (!(window.wails && typeof window.wails.on === "function")) return;
   chatInfoBound = true;
-  window.wails.on("chat:info", function (data) {
-    var text = "";
-    if (data && typeof data === "object") {
-      text = String(data.text || "");
-    } else if (typeof data === "string") {
-      text = data;
-    }
-    if (!text.trim()) return;
-    try {
-      addChatMessage("assistant", text);
-    } catch (e) {
-      console.error("[chat] falha ao exibir chat:info:", e);
-    }
-  });
+  window.wails.on("chat:info", handleChatInfoEvent);
+}
+
+async function restoreChatHistory() {
+  if (!chatMessagesEl || chatMessagesEl.children.length > 0) return;
+  if (typeof appApi !== "function" || typeof appApi().GetChatHistory !== "function") return;
+  try {
+    var hist = await appApi().GetChatHistory();
+    if (!Array.isArray(hist) || hist.length === 0) return;
+    hist.forEach(function (m) {
+      if (!m || !m.content) return;
+      var role = String(m.role || "").toLowerCase();
+      if (role !== "user" && role !== "assistant") return;
+      addChatMessage(role, m.content);
+    });
+  } catch (e) {
+    console.warn("[chat] falha ao restaurar histórico:", e);
+  }
 }
 
 function initChat() {
@@ -4371,12 +4488,21 @@ function initChat() {
   if (chatClearBtn) {
     chatClearBtn.addEventListener("click", async function () {
       try {
+        if (chatSending && typeof appApi().StopChatStream === "function") {
+          try { await appApi().StopChatStream(); } catch (_) {}
+        }
         await appApi().ClearChatHistory();
-        // Turno em curso: sem isto o cronômetro do widget continuaria rodando a
-        // cada segundo sobre uma bolha já destacada (e streamingBubble seguiria
-        // apontando para um nó fora do documento) até o evento terminal.
+        if (typeof stopPollingLoop === "function") stopPollingLoop();
+        chatMessageQueue.length = 0;
+        chatQuestionQueue.length = 0;
+        if (typeof renderChatQuestionDock === "function") renderChatQuestionDock();
+        setChatBusy(false);
         stopThinkingStatusUpdates();
         clearChatStreamTimeout();
+        if (streamingThrottleTimer) {
+          clearTimeout(streamingThrottleTimer);
+          streamingThrottleTimer = null;
+        }
         streamingBubble = null;
         streamingRawContent = "";
         streamingRafPending = false;
@@ -4401,4 +4527,5 @@ function initChat() {
   if (chatTestConfigBtn) {
     chatTestConfigBtn.addEventListener("click", testChatConfig);
   }
+  restoreChatHistory();
 }

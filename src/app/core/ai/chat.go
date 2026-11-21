@@ -52,10 +52,11 @@ type ToolCall struct {
 
 // Service manages conversations with an LLM that can call tools.
 type Service struct {
-	mu        sync.RWMutex
-	cfg       Config
-	registry  *mcp.Registry
-	history   []Message
+	mu              sync.RWMutex
+	cfg             Config
+	registry        *mcp.Registry
+	toolAllowFilter func(string) bool
+	history         []Message
 	sessionID string
 	logger    func(string)
 
@@ -111,6 +112,24 @@ type Service struct {
 	// executou. Registrado pelo serviço de chat (SetBudgetObserver); fica nulo
 	// quando não há UI (ex.: testes e uso headless).
 	budgetObserver func(state, message string, round, maxRounds int)
+}
+
+// SetToolFilter define um filtro opcional de allowlist para as tools enviadas
+// ao servidor no payload de chat (nil = envia todas as tools do registry).
+func (s *Service) SetToolFilter(fn func(string) bool) {
+	s.mu.Lock()
+	s.toolAllowFilter = fn
+	s.mu.Unlock()
+}
+
+func (s *Service) openAIFunctionsLocked() []map[string]any {
+	if s.registry == nil {
+		return nil
+	}
+	if s.toolAllowFilter != nil {
+		return s.registry.OpenAIFunctionsFiltered(s.toolAllowFilter)
+	}
+	return s.registry.OpenAIFunctions()
 }
 
 // SetBudgetObserver registra o observador de orçamento de rounds. Idempotente:

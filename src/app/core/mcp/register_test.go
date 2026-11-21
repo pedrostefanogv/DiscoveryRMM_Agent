@@ -66,8 +66,8 @@ func TestRegisteredToolNamesMatchProviderPattern(t *testing.T) {
 			t.Errorf("nome nao normalizado: %q -> %q", tool.Name, SanitizeToolName(tool.Name))
 		}
 	}
-	// As memorias locais continuam registradas (com o nome ja normalizado).
-	for _, name := range []string{"memory_list", "memory_create", "memory_delete"} {
+	// A familia consolidada de memorias locais continua registrada (nome normalizado).
+	for _, name := range []string{"local_memory"} {
 		if reg.Find(name) == nil {
 			t.Errorf("tool %q nao registrada", name)
 		}

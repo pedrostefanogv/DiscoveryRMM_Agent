@@ -149,156 +149,9 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		},
 	})
 
-	// ========== BUSCA E INSTALACAO ==========
-	reg.Register(Tool{
-		Name:        "search_packages",
-		Description: "Pesquisa pacotes no catalogo winget por nome, ID ou publisher. Retorna ate 20 resultados.",
-		Params: []ToolParam{
-			{Name: "query", Type: "string", Description: "Termo de busca (nome, ID ou publisher do pacote)", Required: true},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			q, _ := args["query"].(string)
-			if strings.TrimSpace(q) == "" {
-				return nil, fmt.Errorf("query nao pode ser vazia")
-			}
-			return app.SearchCatalog(q)
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "install_package",
-		Description: "Instala um pacote via winget pelo seu ID (ex: 'Google.Chrome', 'Mozilla.Firefox').",
-		Params: []ToolParam{
-			{Name: "id", Type: "string", Description: "ID do pacote winget (ex: Google.Chrome)", Required: true},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			id, _ := args["id"].(string)
-			if strings.TrimSpace(id) == "" {
-				return nil, fmt.Errorf("id do pacote nao pode ser vazio")
-			}
-			out, err := app.InstallPackage(id)
-			return map[string]string{"output": out}, err
-		},
-	})
-
-	// ========== GERENCIAMENTO DE PACOTES INSTALADOS ==========
-	reg.Register(Tool{
-		Name:        "list_installed_packages",
-		Description: "Lista todos os pacotes (programas) atualmente instalados na maquina, detectados pelo winget.",
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			out, err := app.ListInstalled()
-			return map[string]string{"output": out}, err
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "uninstall_package",
-		Description: "Desinstala um pacote via winget pelo seu ID. DESTRUTIVA: exige autorizacao do usuario no chat.",
-		Params: []ToolParam{
-			{Name: "id", Type: "string", Description: "ID do pacote winget", Required: true},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			if err := requireConfirm(args); err != nil {
-				return nil, err
-			}
-			id, _ := args["id"].(string)
-			if strings.TrimSpace(id) == "" {
-				return nil, fmt.Errorf("id do pacote nao pode ser vazio")
-			}
-			out, err := app.UninstallPackage(id)
-			return map[string]string{"output": out}, err
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "upgrade_package",
-		Description: "Atualiza um pacote especifico via winget.",
-		Params: []ToolParam{
-			{Name: "id", Type: "string", Description: "ID do pacote winget", Required: true},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			id, _ := args["id"].(string)
-			if strings.TrimSpace(id) == "" {
-				return nil, fmt.Errorf("id do pacote nao pode ser vazio")
-			}
-			out, err := app.UpgradePackage(id)
-			return map[string]string{"output": out}, err
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "get_pending_updates",
-		Description: "Lista todos os pacotes que possuem atualizacoes disponiveis, com versao atual e versao disponivel.",
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return app.GetPendingUpdatesJSON()
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "get_package_actions",
-		Description: "Retorna o mapa de acao contextual por pacote (install, uninstall, upgrade).",
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return app.GetPackageActionsJSON()
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "upgrade_all_packages",
-		Description: "Atualiza todos os pacotes que possuem atualizacao disponivel via winget. DESTRUTIVA em massa: exige autorizacao do usuario no chat.",
-		Params:      []ToolParam{},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			if err := requireConfirm(args); err != nil {
-				return nil, err
-			}
-			out, err := app.UpgradeAllPackages()
-			return map[string]string{"output": out}, err
-		},
-	})
-
-	// ========== SISTEMA E DIAGNOSTICOS ==========
-	// ========== MEMORIAS LOCAIS ==========
-	reg.Register(Tool{
-		Name: "memory_list",
-		Description: "Lista as ANOTACOES LOCAIS gravadas por voce neste computador (memoria do agente, guardada localmente no cliente). " +
-			"Use para reler preferencias, observacoes e lembretes que voce mesmo salvou nesta maquina. " +
-			"Diferente de memory.search (servidor), que le o historico de conversas anteriores — estas anotacoes sao duráveis e ficam no computador do usuario.",
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return app.GetLocalMemories()
-		},
-	})
-
-	reg.Register(Tool{
-		Name: "memory_create",
-		Description: "Grava uma ANOTACAO LOCAL permanente neste computador (memoria do agente). " +
-			"Use quando o usuario pedir para lembrar de algo ou quando identificar uma preferencia/contexto durável que deva sobreviver a novas conversas. " +
-			"NUNCA grave senhas, tokens ou dados sensiveis. Conteudo curto e objetivo.",
-		Params: []ToolParam{
-			{Name: "content", Type: "string", Description: "Conteudo da anotacao", Required: true},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			content, err := requiredStringArg(args, "content")
-			if err != nil {
-				return nil, err
-			}
-			return app.AddLocalMemory(content)
-		},
-	})
-
-	reg.Register(Tool{
-		Name: "memory_delete",
-		Description: "Remove uma ANOTACAO LOCAL da memoria do agente pelo ID (obtido em memory_list). " +
-			"Use quando o usuario pedir para esquecer/apagar uma anotacao.",
-		Params: []ToolParam{
-			{Name: "id", Type: "integer", Description: "ID da anotacao", Required: true},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			id, err := requiredIntArg(args, "id")
-			if err != nil {
-				return nil, err
-			}
-			return map[string]bool{"ok": true}, app.DeleteLocalMemory(int64(id))
-		},
-	})
+	// ========== SOFTWARE & MEMORIA LOCAL (CONSOLIDADOS) ==========
+	registerSoftwareTool(reg, app)
+	registerLocalMemoryTool(reg, app)
 
 	reg.Register(Tool{
 		Name:        "get_logs",
@@ -338,138 +191,12 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		},
 	})
 
-	// ========== NAVEGACAO INTERNA ==========
-	reg.Register(Tool{
-		Name:        "get_internal_navigation_routes",
-		Description: "Lista as rotas internas disponiveis no app para construir links discovery:// clicaveis no chat.",
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return []map[string]string{
-				{"target": "support_tickets", "url": "discovery://support/tickets", "description": "Abre a tela de chamados"},
-				{"target": "support_ticket", "url": "discovery://support/ticket/{ticketId}", "description": "Abre chamado especifico"},
-				{"target": "store", "url": "discovery://store", "description": "Abre a aba Loja"},
-				{"target": "updates", "url": "discovery://updates", "description": "Abre a aba Atualizacoes"},
-				{"target": "inventory", "url": "discovery://inventory", "description": "Abre a aba Inventario"},
-				{"target": "logs", "url": "discovery://logs", "description": "Abre a aba Logs"},
-				{"target": "chat", "url": "discovery://chat", "description": "Abre a aba Chat IA"},
-				{"target": "knowledge", "url": "discovery://knowledge", "description": "Abre a Base de Conhecimento"},
-				{"target": "knowledge_article", "url": "discovery://knowledge/article/{articleId}", "description": "Abre um artigo especifico da Base de Conhecimento"},
-				{"target": "debug", "url": "discovery://debug", "description": "Abre a aba Debug"},
-			}, nil
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "build_internal_navigation_link",
-		Description: "Monta um link interno discovery:// e um markdown de card clicavel para navegação interna no app.",
-		Params: []ToolParam{
-			{Name: "target", Type: "string", Description: "Destino: support_tickets, support_ticket, store, updates, inventory, logs, chat, knowledge, knowledge_article, debug", Required: true},
-			{Name: "ticketId", Type: "string", Description: "GUID do chamado (obrigatorio apenas para target=support_ticket)", Required: false},
-			{Name: "articleId", Type: "string", Description: "GUID do artigo da Base de Conhecimento (obrigatorio apenas para target=knowledge_article)", Required: false},
-			{Name: "title", Type: "string", Description: "Titulo do card/botao", Required: false},
-			{Name: "subtitle", Type: "string", Description: "Subtitulo do card", Required: false},
-			{Name: "meta", Type: "string", Description: "Meta adicional do card", Required: false},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			target, _ := args["target"].(string)
-			target = strings.TrimSpace(strings.ToLower(target))
-			if target == "" {
-				return nil, fmt.Errorf("target nao pode ser vazio")
-			}
-
-			ticketID, _ := args["ticketId"].(string)
-			ticketID = strings.TrimSpace(ticketID)
-
-			articleID, _ := args["articleId"].(string)
-			articleID = strings.TrimSpace(articleID)
-
-			urlByTarget := map[string]string{
-				"support_tickets": "discovery://support/tickets",
-				"store":           "discovery://store",
-				"updates":         "discovery://updates",
-				"inventory":       "discovery://inventory",
-				"logs":            "discovery://logs",
-				"chat":            "discovery://chat",
-				"knowledge":       "discovery://knowledge",
-				"debug":           "discovery://debug",
-			}
-
-			var url string
-			if target == "support_ticket" {
-				if ticketID == "" {
-					return nil, fmt.Errorf("ticketId e obrigatorio para target=support_ticket")
-				}
-				url = "discovery://support/ticket/" + ticketID
-			} else if target == "knowledge_article" {
-				if articleID == "" {
-					return nil, fmt.Errorf("articleId e obrigatorio para target=knowledge_article")
-				}
-				url = "discovery://knowledge/article/" + articleID
-			} else {
-				u, ok := urlByTarget[target]
-				if !ok {
-					return nil, fmt.Errorf("target invalido: %s", target)
-				}
-				url = u
-			}
-
-			title, _ := args["title"].(string)
-			title = strings.TrimSpace(title)
-			if title == "" {
-				title = "Abrir"
-			}
-
-			subtitle, _ := args["subtitle"].(string)
-			subtitle = strings.TrimSpace(subtitle)
-			if subtitle == "" {
-				subtitle = strings.ReplaceAll(target, "_", " ")
-			}
-
-			meta, _ := args["meta"].(string)
-			meta = strings.TrimSpace(meta)
-
-			labelParts := []string{title, subtitle}
-			if meta != "" {
-				labelParts = append(labelParts, meta)
-			}
-			markdown := "[" + strings.Join(labelParts, " | ") + "](" + url + ")"
-
-			return map[string]string{
-				"target":   target,
-				"url":      url,
-				"markdown": markdown,
-			}, nil
-		},
-	})
-
-	// ========== CHAMADOS DE SUPORTE ==========
+	// ========== CHAMADOS DE SUPORTE (leitura movida ao servidor; rotas discovery:// no prompt) ==========
 	reg.Register(Tool{
 		Name:        "get_agent_info",
 		Description: "Retorna dados de identificacao do agente: agentId, clientId, siteId, hostname, IP, SO e versao. Use ANTES de criar qualquer chamado (create_ticket) para enriquecer a descricao com informacoes da maquina.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.GetAgentInfoJSON()
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "list_tickets",
-		Description: "Lista os chamados de suporte vinculados a este agente/maquina em formato resumido (id, titulo, descricao curta, categoria, prioridade, workflowStateId, isOpen, createdAt, closedAt), com os ABERTOS primeiro e os contadores total/openCount/returned/truncated. isOpen=true significa chamado ABERTO (ClosedAt nulo); se truncated=true existem chamados fora do recorte. Chame SEMPRE ANTES de create_ticket para verificar se ja existe chamado aberto sobre o MESMO assunto e evitar chamado duplicado; se existir, NAO abra duplicata — informe o usuario e ofereca add_ticket_comment no chamado existente. Use get_ticket_details(ticketId) para o texto completo de um chamado. Use tambem quando o usuario perguntar quais chamados ele tem.",
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return app.ListAgentTickets()
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "get_ticket_details",
-		Description: "Retorna os detalhes de um chamado específico do agente autenticado.",
-		Params: []ToolParam{
-			{Name: "ticketId", Type: "string", Description: "GUID do chamado", Required: true},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			ticketID, _ := args["ticketId"].(string)
-			if strings.TrimSpace(ticketID) == "" {
-				return nil, fmt.Errorf("ticketId nao pode ser vazio")
-			}
-			return app.GetAgentTicketDetails(ticketID)
 		},
 	})
 
@@ -922,82 +649,8 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		},
 	})
 
-	// ========== EVENT LOG ==========
-	reg.Register(Tool{
-		Name:        "query_event_log",
-		Description: "Consulta o Windows Event Log com filtros. logName: System, Application ou Setup. level: Critical, Error, Warning ou Information (vazio = todos). source: nome do provider/fonte (opcional). maxEvents: maximo de eventos retornados (padrao 50, max 100). lastHours: janela de tempo em horas (padrao 24, max 168).",
-		Params: []ToolParam{
-			{Name: "logName", Type: "string", Description: "Nome do log: System, Application ou Setup", Required: true},
-			{Name: "level", Type: "string", Description: "Nivel: Critical, Error, Warning, Information (vazio = todos)", Required: false},
-			{Name: "source", Type: "string", Description: "Fonte/Provider do evento (ex: Service Control Manager)", Required: false},
-			{Name: "maxEvents", Type: "integer", Description: "Maximo de eventos retornados (padrao 50, max 100)", Required: false},
-			{Name: "lastHours", Type: "integer", Description: "Janela de tempo em horas (padrao 24, max 168)", Required: false},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			logName, _ := args["logName"].(string)
-			level, _ := args["level"].(string)
-			source, _ := args["source"].(string)
-			maxEvents := 0
-			if v, ok := args["maxEvents"]; ok {
-				switch n := v.(type) {
-				case float64:
-					maxEvents = int(n)
-				case int:
-					maxEvents = n
-				}
-			}
-			lastHours := 0
-			if v, ok := args["lastHours"]; ok {
-				switch n := v.(type) {
-				case float64:
-					lastHours = int(n)
-				case int:
-					lastHours = n
-				}
-			}
-			return QueryEventLog(ctx, logName, level, source, maxEvents, lastHours)
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "get_recent_errors",
-		Description: "Retorna eventos Critical e Error dos logs System e Application nas ultimas N horas (padrao 24h, max 168h). Util para diagnostico rapido de problemas sem abrir o Visualizador de Eventos.",
-		Params: []ToolParam{
-			{Name: "lastHours", Type: "integer", Description: "Janela de tempo em horas (padrao 24, max 168)", Required: false},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			lastHours := 0
-			if v, ok := args["lastHours"]; ok {
-				switch n := v.(type) {
-				case float64:
-					lastHours = int(n)
-				case int:
-					lastHours = n
-				}
-			}
-			return GetRecentErrors(ctx, lastHours)
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "get_recent_crashes",
-		Description: "Retorna BSODs, falhas de kernel (ID 41), desligamentos inesperados (ID 6008) e crashes de aplicativo (IDs 1000/1001) nas ultimas N horas (padrao 168h = 7 dias).",
-		Params: []ToolParam{
-			{Name: "lastHours", Type: "integer", Description: "Janela de tempo em horas (padrao 168 = 7 dias, max 168)", Required: false},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			lastHours := 0
-			if v, ok := args["lastHours"]; ok {
-				switch n := v.(type) {
-				case float64:
-					lastHours = int(n)
-				case int:
-					lastHours = n
-				}
-			}
-			return GetRecentCrashes(ctx, lastHours)
-		},
-	})
+	// ========== EVENT LOG (CONSOLIDADO) ==========
+	registerEventLogTool(reg)
 
 	// ========== DESEMPENHO ==========
 	reg.Register(Tool{
@@ -1061,87 +714,8 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		},
 	})
 
-	// ========== CAPTURA DE TELA (visao do LLM) ==========
-	reg.Register(Tool{
-		Name: "list_open_windows",
-		Description: "Lista as janelas visiveis abertas no desktop (handle, titulo, processo, PID, posicao/tamanho, foco). " +
-			"Use ANTES de capture_screenshot(mode=window) para escolher o alvo do diagnostico. " +
-			"Janelas com blocked=true estao na blocklist de privacidade e NAO podem ser capturadas. " +
-			"Nao captura nada e nao exige autorizacao.",
-		Params: []ToolParam{
-			{Name: "includeUntitled", Type: "boolean", Description: "Inclui janelas sem titulo (games/UWP); padrao false", Required: false},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			includeUntitled := false
-			switch v := args["includeUntitled"].(type) {
-			case bool:
-				includeUntitled = v
-			case string:
-				switch strings.ToLower(strings.TrimSpace(v)) {
-				case "true", "1", "yes", "sim", "on":
-					includeUntitled = true
-				}
-			case float64:
-				includeUntitled = v != 0
-			}
-			return app.ListOpenWindowsJSON(includeUntitled)
-		},
-	})
-
-	reg.Register(Tool{
-		Name: "capture_screenshot",
-		Description: "Captura a tela deste computador para diagnostico visual e devolve a imagem ao modelo (visao). " +
-			"Modos: full (todos os monitores), window (exige windowHandle de list_open_windows), focused (janela em foco), " +
-			"monitor (exige monitor), region (exige x, y, width, height) e interactive (o usuario seleciona a area/janela na tela congelada). " +
-			"Por padrao TODA captura pedida pela IA exige autorizacao explicita do usuario NESTA captura (o agente abre um " +
-			"pedido de permissao no chat a cada pedido). O usuario pode ligar 'permitir sempre' (permissao permanente) — opt-in, " +
-			"desligada por padrao, persistida e revogavel no painel de privacidade; nesse caso o agente deixa de perguntar, mas a " +
-			"captura segue registrada na auditoria e sujeita a blocklist/cota. " +
-			"Nunca use para espionar: informe sempre o motivo em reason e prefira a janela especifica em vez da tela inteira.",
-		Params: []ToolParam{
-			{Name: "mode", Type: "string", Description: "full | window | focused | monitor | region | interactive", Required: true},
-			{Name: "windowHandle", Type: "integer", Description: "Handle da janela (list_open_windows) — modo window", Required: false},
-			{Name: "monitor", Type: "integer", Description: "Indice do monitor (0 = primario) — modo monitor", Required: false},
-			{Name: "x", Type: "integer", Description: "Coordenada X fisica da regiao — modo region", Required: false},
-			{Name: "y", Type: "integer", Description: "Coordenada Y fisica da regiao — modo region", Required: false},
-			{Name: "width", Type: "integer", Description: "Largura da regiao — modo region", Required: false},
-			{Name: "height", Type: "integer", Description: "Altura da regiao — modo region", Required: false},
-			{Name: "reason", Type: "string", Description: "Motivo da captura exibido ao usuario no pedido de autorizacao", Required: false},
-			{Name: "quality", Type: "integer", Description: "Qualidade do fallback lossy (JPEG/WebP) 1-100, padrao 95. O caminho normal e lossless (PNG/WebP sem perdas), entao este valor so importa em telas muito grandes/ruidosas", Required: false},
-			{Name: "maxDimension", Type: "integer", Description: "Reduz o lado maior da imagem (200-3840). OMITA para manter a resolucao ORIGINAL da captura (padrao); use 1280-1920 para economizar tokens quando o alvo for so confirmar um estado de tela", Required: false},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			raw, err := app.CaptureScreenshotForTool(ctx, args)
-			if err != nil {
-				return nil, err
-			}
-			// Cacheia a captura consentida e devolve uma ref curta (shot:<sha256>)
-			// para a IA reutilizar a MESMA imagem em attach_images_to_ticket /
-			// attach_images_to_ticket_comment sem recapturar a tela. O
-			// image_base64 continua no payload (contrato de visão da API).
-			var payload map[string]any
-			if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil {
-				return raw, nil
-			}
-			b64, _ := payload["image_base64"].(string)
-			mime, _ := payload["mime"].(string)
-			if strings.TrimSpace(b64) != "" && strings.TrimSpace(mime) != "" {
-				if ref := cacheScreenshotImage("data:" + mime + ";base64," + b64); ref != "" {
-					payload["image_ref"] = ref
-				}
-			}
-			return payload, nil
-		},
-	})
-
-	reg.Register(Tool{
-		Name: "screenshot_permission",
-		Description: "Consulta o modelo de autorizacao de captura de tela: por padrao o consentimento e POR CAPTURA (a IA pergunta a cada pedido), se os pedidos da IA estao habilitados, se o usuario ligou 'permitir sempre' (permissao permanente: sessionAllow/perCaptureConsent) e as ultimas decisoes (autorizadas/negadas). " +
-			"Use quando capture_screenshot falhar por falta de autorizacao para orientar o usuario.",
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return app.ScreenshotConsentStatusJSON()
-		},
-	})
+	// ========== CAPTURA DE TELA (CONSOLIDADO) ==========
+	registerScreenTool(reg, app)
 	// ========== FAMILIAS CONSOLIDADAS E NOVAS TOOLS ==========
 	// Tools action-based que substituem registrations antigas + tools novas de
 	// administracao do Windows. Acoes destrutivas exigem confirm=true.
@@ -1160,6 +734,10 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	registerSendNotificationTool(reg, app)
 	// Consulta de SENSORES do agente (somente leitura; nenhum consentimento).
 	registerSensorTools(reg, app)
+	// Leitura segura do Registro do Windows via guard fail-closed.
+	registerRegistryReadTool(reg)
+	// Diagnostico corporativo: AD, certificados locais, BitLocker e sessoes.
+	registerAdGpoCertsTool(reg)
 }
 
 // attachmentMetadata monta a lista de metadados dos anexos devolvida à IA,

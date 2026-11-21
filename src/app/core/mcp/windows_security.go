@@ -55,21 +55,24 @@ func registerWindowsUpdateTool(reg *Registry) {
 	reg.Register(Tool{
 		Name: "windows_update",
 		Description: "Atualizacoes do Windows (familia action-based). action: " +
-			"installed (hotfixes instalados) | pending_reboot (reinicio pendente no registro) | " +
+			"status (sonda nativa completa: servico wuauserv, reboot pendente, politicas e atividade) | " +
+			"installed (hotfixes instalados) | pending_reboot (verificacao nativa de reinicio pendente) | " +
 			"history (ultimos 50 eventos do log Setup; fallback para os hotfixes).",
 		Params: []ToolParam{
-			{Name: "action", Type: "string", Description: "Acao: installed, pending_reboot, history", Required: true},
+			{Name: "action", Type: "string", Description: "Acao: status, installed, pending_reboot, history", Required: true},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			action, err := requireAction(args, "installed", "pending_reboot", "history")
+			action, err := requireAction(args, "status", "installed", "pending_reboot", "history")
 			if err != nil {
 				return nil, err
 			}
 			switch action {
+			case "status":
+				return windowsUpdateStatusNative()
 			case "installed":
 				return runPowerShell(ctx, windowsUpdateInstalledScript, 60*time.Second), nil
 			case "pending_reboot":
-				return runPowerShell(ctx, pendingRebootScript, 30*time.Second), nil
+				return windowsUpdatePendingRebootNative()
 			case "history":
 				return runPowerShell(ctx, windowsUpdateHistoryScript, 90*time.Second), nil
 			}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -90,5 +91,79 @@ func TestWithFlushDNSHint_OnlyForElevationFailures(t *testing.T) {
 	plain := withFlushDNSHint("Successfully flushed the DNS Resolver Cache.")
 	if strings.Contains(plain, "administrador") {
 		t.Fatalf("nao deveria acrescentar dica: %q", plain)
+	}
+}
+
+func TestRegistryOpenAIFunctions_ConcurrentSafe(t *testing.T) {
+	reg := NewRegistry()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			reg.Register(Tool{
+				Name:        "tool_" + string(rune('a'+idx)),
+				Description: "test",
+				Handler: func(ctx context.Context, args map[string]any) (any, error) {
+					return nil, nil
+				},
+			})
+			_ = reg.OpenAIFunctions()
+		}(i)
+	}
+	wg.Wait()
+	if got := len(reg.OpenAIFunctions()); got != 8 {
+		t.Fatalf("expected 8 tools, got %d", got)
+	}
+}
+
+func TestPingHost_ZeroTimeoutDoesNotExpireEarly(t *testing.T) {
+	res, err := PingHost(context.Background(), "127.0.0.1", 1, 0)
+	if err != nil {
+		t.Fatalf("PingHost(127.0.0.1, 1, 0) failed: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected localhost ping to succeed, output=%q", res.Output)
+	}
+}
+
+func TestOpenAIFunctionsFiltered_RespectsPredicate(t *testing.T) {
+	reg := NewRegistry()
+	for _, name := range []string{"get_inventory", "service_control", "ping"} {
+		reg.Register(Tool{
+			Name:        name,
+			Description: "test",
+			Handler:     func(ctx context.Context, args map[string]any) (any, error) { return nil, nil },
+		})
+	}
+	filtered := reg.OpenAIFunctionsFiltered(func(name string) bool {
+		return name != "service_control"
+	})
+	if len(filtered) != 2 {
+		t.Fatalf("expected 2 filtered tools, got %d", len(filtered))
+	}
+}
+
+func TestClearScreenshotCache_ClearsEntries(t *testing.T) {
+	ref := cacheScreenshotImage("data:image/png;base64,AAAA")
+	if ref == "" {
+		t.Fatal("expected non-empty ref")
+	}
+	ClearScreenshotCache()
+	if _, ok := screenshotByRef(ref); ok {
+		t.Fatal("expected screenshot cache to be cleared")
+	}
+}
+
+func TestGetTopProcesses_NativeReturnsValidJSON(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows only")
+	}
+	raw, err := GetTopProcesses(context.Background(), 5, "memory")
+	if err != nil {
+		t.Fatalf("GetTopProcesses failed: %v", err)
+	}
+	if len(raw) == 0 || raw[0] != '[' {
+		t.Fatalf("expected JSON array, got %s", string(raw))
 	}
 }

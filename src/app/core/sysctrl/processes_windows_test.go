@@ -58,3 +58,18 @@ func TestListProcessesIncludesCurrentProcess(t *testing.T) {
 		t.Fatalf("current process PID %d not found in ListProcesses (%d entries)", self, len(procs))
 	}
 }
+
+func TestIsProtectedProcessName(t *testing.T) {
+	protected := []string{"lsass.exe", "LSASS.EXE", "csrss.exe", "wininit.exe", "winlogon.exe", "services.exe", "smss.exe", "discovery-service.exe", "discovery.exe"}
+	for _, name := range protected {
+		if !isProtectedProcessName(name) {
+			t.Errorf("expected %q to be protected", name)
+		}
+	}
+	allowed := []string{"notepad.exe", "chrome.exe", "svchost.exe", "explorer.exe"}
+	for _, name := range allowed {
+		if isProtectedProcessName(name) {
+			t.Errorf("expected %q NOT to be in protected denylist", name)
+		}
+	}
+}

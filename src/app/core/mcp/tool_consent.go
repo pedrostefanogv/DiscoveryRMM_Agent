@@ -87,6 +87,17 @@ func ToolConsentFor(toolName string, args map[string]any) *consent.Request {
 		return destructive("upgrade_package", optionalStringArg(args, "id"))
 	case "upgrade_all_packages":
 		return destructive("upgrade_all_packages", "")
+	case "software":
+		switch actionArg(args) {
+		case "install":
+			return destructive("install_package", optionalStringArg(args, "id"))
+		case "uninstall":
+			return destructive("uninstall_package", optionalStringArg(args, "id"))
+		case "upgrade":
+			return destructive("upgrade_package", optionalStringArg(args, "id"))
+		case "upgrade_all":
+			return destructive("upgrade_all_packages", "")
+		}
 	case "service_control":
 		switch actionArg(args) {
 		case "start":
@@ -146,6 +157,10 @@ func ToolConsentFor(toolName string, args map[string]any) *consent.Request {
 	case "open_app":
 		// Abrir um aplicativo instalado também altera o estado visível da máquina.
 		return destructive("open_app", optionalStringArg(args, "app"), reasonExtra(args)...)
+	case "disk":
+		if actionArg(args) == "cleanup_temp" {
+			return destructive("disk_cleanup_temp", "%TEMP% e C:\\Windows\\Temp")
+		}
 	case "power_action":
 		switch actionArg(args) {
 		case "restart":

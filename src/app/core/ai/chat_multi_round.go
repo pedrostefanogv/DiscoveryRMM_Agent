@@ -235,7 +235,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	s.mu.RLock()
 	toolCount := 0
 	if s.registry != nil {
-		tools := s.registry.OpenAIFunctions()
+		tools := s.openAIFunctionsLocked()
 		toolCount = len(tools)
 		if toolCount > 0 {
 			req.Tools = tools
@@ -448,10 +448,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 					onStatus("Reconectando — reenviando resultados das ferramentas...")
 				}
 				s.mu.RLock()
-				tools := make([]map[string]any, 0)
-				if s.registry != nil {
-					tools = s.registry.OpenAIFunctions()
-				}
+				tools := s.openAIFunctionsLocked()
 				s.mu.RUnlock()
 				req = agentStreamRequest{
 					SessionID:   currentSessionID,
@@ -547,11 +544,8 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				}
 				if retry != "" {
 					forcedRetries++
-					var tools []map[string]any
 					s.mu.RLock()
-					if s.registry != nil {
-						tools = s.registry.OpenAIFunctions()
-					}
+					tools := s.openAIFunctionsLocked()
 					s.mu.RUnlock()
 					// M3: o retry NÃO reenvia a userMessage como Message — isso
 					// duplicava a mensagem do usuário no histórico do servidor.
@@ -877,7 +871,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 		// das ferramentas disponíveis. Modelos menores (ex: gpt-oss-20b)
 		// podem "esquecer" as tools entre rounds se não reenviadas.
 		s.mu.RLock()
-		tools := s.registry.OpenAIFunctions()
+		tools := s.openAIFunctionsLocked()
 		s.mu.RUnlock()
 		req = agentStreamRequest{
 			SessionID:   currentSessionID,

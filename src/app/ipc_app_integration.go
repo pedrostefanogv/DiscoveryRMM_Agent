@@ -166,7 +166,7 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 		}
 		a.Logs.Append("[ipc] resposta de notificação sem payload válido")
 	case IPCMsgCommandResult:
-		a.Logs.Append("[ipc] resultado de comando interativo recebido da UI (encaminhamento é extensão futura)")
+		a.handleIPCSessionToolResult(msg.Payload)
 	case IPCMsgRequest:
 		// Request/response RPC (PLANO_SEPARACAO_SERVICO_UI.md, Fase C): a UI
 		// companion consulta o core do serviço (status, config, inventário,
@@ -509,6 +509,10 @@ func (a *App) startIPCClient() {
 				// IPC vem como {name, <campos do evento>}.
 				name, eventData := ipcEventToFrontend(msg.Payload)
 				if name == "" {
+					return
+				}
+				if name == "mcp:exec_user_session" {
+					go a.handleCompanionExecUserSessionTool(msg.Payload)
 					return
 				}
 				// Toast nativo do app: no modo companion quem tem o servico nativo

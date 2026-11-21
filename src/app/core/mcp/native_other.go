@@ -19,3 +19,5 @@ func listProcessesNative() (json.RawMessage, error)    { return nil, errWindowsO
 func killProcessNative(uint32) error                   { return errWindowsOnly }
 func systemInfoNative() map[string]any                 { return nil }
 func connectionsNative(int) []map[string]any           { return nil }
+func windowsUpdateStatusNative() (any, error)          { return nil, errWindowsOnly }
+func windowsUpdatePendingRebootNative() (any, error)   { return nil, errWindowsOnly }

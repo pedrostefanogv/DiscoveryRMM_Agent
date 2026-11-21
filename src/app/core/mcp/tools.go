@@ -222,9 +222,20 @@ func (r *Registry) Call(ctx context.Context, name string, argsJSON json.RawMessa
 
 // OpenAIFunctions returns all tools in OpenAI function-calling format.
 func (r *Registry) OpenAIFunctions() []map[string]any {
-	funcs := make([]map[string]any, len(r.tools))
-	for i, t := range r.tools {
-		funcs[i] = t.OpenAIFunction()
+	return r.OpenAIFunctionsFiltered(nil)
+}
+
+// OpenAIFunctionsFiltered returns tools in OpenAI function-calling format,
+// optionally filtered by an allow predicate (nil = all tools).
+func (r *Registry) OpenAIFunctionsFiltered(allow func(name string) bool) []map[string]any {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	funcs := make([]map[string]any, 0, len(r.tools))
+	for _, t := range r.tools {
+		if allow != nil && !allow(t.Name) {
+			continue
+		}
+		funcs = append(funcs, t.OpenAIFunction())
 	}
 	return funcs
 }

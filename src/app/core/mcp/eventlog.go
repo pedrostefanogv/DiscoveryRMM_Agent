@@ -4,12 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"runtime"
 	"strings"
 	"time"
-
-	"discovery/app/core/processutil"
 )
 
 // allowedEventLogNames is the hard-coded set of Windows Event Log names that
@@ -250,35 +247,24 @@ $results | ConvertTo-Json -Depth 4 -Compress`, startTimeMS)
 	return runEventLogScript(ctx, script, eventLogTimeout)
 }
 
-// runEventLogScript executes a PowerShell script with the standard agent flags
-// and returns its stdout as a JSON raw message.
+// runEventLogScript delega ao executor unificado runPowerShell (UTF-8 +
+// stdout/stderr separados), preservando o contrato (json.RawMessage, error).
 func runEventLogScript(ctx context.Context, script string, timeout time.Duration) (json.RawMessage, error) {
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(runCtx, "powershell",
-		"-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-		"-Command", script)
-	processutil.HideWindow(cmd)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("erro ao consultar Event Log: %w | saida: %s",
-			err, strings.TrimSpace(string(output)))
+	if runtime.GOOS != "windows" {
+		return nil, fmt.Errorf("Event Log suportado apenas no Windows")
 	}
-
-	trimmed := strings.TrimSpace(string(output))
-	if trimmed == "" || trimmed == "null" {
+	raw := runPowerShell(ctx, script, timeout)
+	var errObj struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(raw, &errObj) == nil && errObj.Error != "" {
+		return nil, fmt.Errorf("erro ao consultar Event Log: %s", errObj.Error)
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "{}" || trimmed == "null" {
 		return json.RawMessage("[]"), nil
 	}
-
-	// Ensure the output is valid JSON before returning.
-	if !json.Valid([]byte(trimmed)) {
-		return nil, fmt.Errorf("saida inesperada do Event Log (nao-JSON): %s",
-			truncate(trimmed, 200))
-	}
-
-	return json.RawMessage(trimmed), nil
+	return raw, nil
 }
 
 // truncate returns s truncated to maxLen bytes with "..." appended if needed.

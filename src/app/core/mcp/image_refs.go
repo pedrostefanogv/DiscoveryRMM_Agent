@@ -95,6 +95,16 @@ func screenshotByRef(ref string) (string, bool) {
 	return dataURL, ok
 }
 
+// ClearScreenshotCache limpa todas as capturas cacheadas em memória (chamado ao
+// limpar o histórico do chat para liberar memória e isolar conversas).
+func ClearScreenshotCache() {
+	screenshotMu.Lock()
+	screenshotCache = map[string]string{}
+	screenshotOrder = nil
+	screenshotLast = ""
+	screenshotMu.Unlock()
+}
+
 // lastScreenshotDataURL devolve a captura mais recente cacheada.
 func lastScreenshotDataURL() (string, bool) {
 	screenshotMu.RLock()

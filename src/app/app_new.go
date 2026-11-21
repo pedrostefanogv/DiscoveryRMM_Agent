@@ -914,6 +914,7 @@ func (a *App) initSelfUpdater() {
 
 func (a *App) initSupportAndDebug(reg *mcp.Registry, opts AppStartupOptions) {
 	a.chatSvc = chat.New(reg, chat.Deps{
+		ExecuteInUserSession: a.ExecuteMCPToolInUserSession,
 		Ctx: func() context.Context { return a.ctx },
 		Logf: func(line string) {
 			a.Logs.Append(line)

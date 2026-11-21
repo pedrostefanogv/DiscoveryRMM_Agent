@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"time"
+
+	"discovery/app/core/winregistry"
 )
 
 // adaptersConfigScript le a configuracao de IP, mascara, gateway e DNS dos
@@ -23,9 +25,15 @@ $configs = @(Get-NetIPConfiguration | ForEach-Object {
 })
 $configs | ConvertTo-Json -Compress -Depth 4`
 
+const routesScript = `$ErrorActionPreference = 'Stop'
+@(Get-NetRoute -AddressFamily IPv4 |
+  Sort-Object RouteMetric |
+  Select-Object -First 50 DestinationPrefix, NextHop, InterfaceAlias, RouteMetric) |
+  ConvertTo-Json -Compress -Depth 3`
+
 // registerNetworkDiagnosticsTool registra a tool "network_diagnostics", que
 // consolida ping_host e flush_dns e adiciona test_connection, resolve,
-// connections e config.
+// connections, config, routes e proxy.
 func registerNetworkDiagnosticsTool(reg *Registry) {
 	reg.Register(Tool{
 		Name: "network_diagnostics",
@@ -35,9 +43,11 @@ func registerNetworkDiagnosticsTool(reg *Registry) {
 			"test_connection (host e port; teste TCP, apenas rede privada/local) | " +
 			"resolve (host; DNS) | " +
 			"connections (conexoes TCP/UDP ativas com PID e estado) | " +
-			"config (adaptadores: IP, mascara, gateway e DNS).",
+			"config (adaptadores: IP, mascara, gateway e DNS) | " +
+			"routes (tabela de rotas IPv4) | " +
+			"proxy (configuracao de proxy/PAC do usuario no registro).",
 		Params: []ToolParam{
-			{Name: "action", Type: "string", Description: "Acao: ping, flush_dns, test_connection, resolve, connections, config", Required: true},
+			{Name: "action", Type: "string", Description: "Acao: ping, flush_dns, test_connection, resolve, connections, config, routes, proxy", Required: true},
 			{Name: "host", Type: "string", Description: "Host ou IP (ping, test_connection, resolve)", Required: false},
 			{Name: "count", Type: "integer", Description: "Numero de pacotes ping (padrao 1)", Required: false},
 			{Name: "timeoutSeconds", Type: "integer", Description: "Timeout em segundos (ping: padrao 5; test_connection: padrao 3)", Required: false},
@@ -45,7 +55,7 @@ func registerNetworkDiagnosticsTool(reg *Registry) {
 			{Name: "limit", Type: "integer", Description: "Limite de conexoes retornadas (padrao 200)", Required: false},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			action, err := requireAction(args, "ping", "flush_dns", "test_connection", "resolve", "connections", "config")
+			action, err := requireAction(args, "ping", "flush_dns", "test_connection", "resolve", "connections", "config", "routes", "proxy")
 			if err != nil {
 				return nil, err
 			}
@@ -87,6 +97,21 @@ func registerNetworkDiagnosticsTool(reg *Registry) {
 				return connectionsResult(optionalIntArg(args, "limit")), nil
 			case "config":
 				return runPowerShell(ctx, adaptersConfigScript, 90*time.Second), nil
+			case "routes":
+				return runPowerShell(ctx, routesScript, 45*time.Second), nil
+			case "proxy":
+				page, err := winregistry.ListKey(winregistry.HiveCurrentUser, `Software\Microsoft\Windows\CurrentVersion\Internet Settings`, "")
+				if err != nil {
+					return nil, err
+				}
+				proxyInfo := map[string]any{}
+				for _, v := range page.Values {
+					switch v.Name {
+					case "ProxyEnable", "ProxyServer", "ProxyOverride", "AutoConfigURL", "AutoDetect":
+						proxyInfo[v.Name] = v.Data
+					}
+				}
+				return proxyInfo, nil
 			}
 			return nil, fmt.Errorf("action nao suportada: %s", action)
 		},

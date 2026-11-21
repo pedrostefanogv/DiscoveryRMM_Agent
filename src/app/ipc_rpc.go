@@ -79,6 +79,10 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCChatTools()
 	case "chat:register_tools":
 		return a.ipcRPCChatRegisterTools()
+	case "chat:answer_question":
+		return a.ipcRPCChatAnswerQuestion(payload)
+	case "chat:answer_a2ui_action":
+		return a.ipcRPCChatAnswerA2uiAction(payload)
 	case "supportchat:refresh":
 		return a.ipcRPCSupportChatRefresh(false)
 	case "supportchat:refresh_keeping_invite":

@@ -150,6 +150,13 @@ func (a *App) AskUserContext(ctx context.Context, question, optionsJSON, allowTe
 
 // AnswerChatQuestion is the Wails binding called by the frontend when the user clicks an option.
 func (a *App) AnswerChatQuestion(questionID, answer string) {
+	if a.ipcClient != nil {
+		_, _ = a.ipcRequest("chat:answer_question", map[string]any{
+			"questionID": questionID,
+			"answer":     answer,
+		})
+		return
+	}
 	ch := takeQuestionChannel(questionID)
 	if ch == nil {
 		// Pergunta desconhecida, cancelada ou já respondida — ignora sem
@@ -177,6 +184,12 @@ type A2uiActionPayload struct {
 // no próximo round do loop multi-round (o LLM recebe o resultado e continua).
 // Se não houver stream ativo, a ação é descartada silenciosamente.
 func (a *App) AnswerA2uiAction(payloadJSON string) {
+	if a.ipcClient != nil {
+		_, _ = a.ipcRequest("chat:answer_a2ui_action", map[string]any{
+			"payloadJSON": payloadJSON,
+		})
+		return
+	}
 	if a.chatSvc == nil {
 		return
 	}

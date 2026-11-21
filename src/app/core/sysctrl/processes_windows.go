@@ -7,6 +7,8 @@ package sysctrl
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -88,12 +90,30 @@ func ListProcesses() ([]ProcessInfo, error) {
 	return enrichProcessMetrics(procs), nil
 }
 
+// isProtectedProcessName verifica se o executável pertence à denylist de
+// processos críticos do sistema ou do próprio agente.
+func isProtectedProcessName(exeName string) bool {
+	switch strings.ToLower(strings.TrimSpace(exeName)) {
+	case "lsass.exe", "csrss.exe", "wininit.exe", "winlogon.exe",
+		"services.exe", "smss.exe", "discovery-service.exe", "discovery.exe":
+		return true
+	default:
+		return false
+	}
+}
+
 // KillProcess encerra um processo pelo PID via TerminateProcess.
 func KillProcess(pid uint32) error {
 	// Segurança: impede encerrar o processo do próprio agente (evita
 	// "tiro no pé" — encerrar o agent cortaria o acesso remoto).
 	if pid == uint32(os.Getpid()) {
 		return fmt.Errorf("recusa: não é possível encerrar o processo do agente (PID %d)", pid)
+	}
+	if imgPath, err := ProcessImagePath(pid); err == nil {
+		base := filepath.Base(imgPath)
+		if isProtectedProcessName(base) {
+			return fmt.Errorf("recusa: processo protegido '%s' (PID %d) não pode ser encerrado", base, pid)
+		}
 	}
 
 	h, _, e := procOpenProcess.Call(

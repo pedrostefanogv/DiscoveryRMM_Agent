@@ -60,7 +60,7 @@
       <div id="chatToolsList" class="chat-tools-list"></div>
     </div>
 
-    <div id="chatMessages" class="chat-messages"></div>
+    <div id="chatMessages" class="chat-messages" role="log" aria-live="polite" aria-relevant="additions text"></div>
 
     <!-- Dock de pergunta interativa (ask_user): enquanto houver pergunta
          pendente, substitui a área de digitação. Sempre oferece campo de
@@ -95,7 +95,7 @@
     <div id="chatAttachments" class="chat-attachments hidden" aria-live="polite"></div>
 
     <div id="chatInputWrap" class="chat-input-wrap">
-      <textarea id="chatInput" class="chat-input" placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)" rows="3" spellcheck="true" data-app-lang="true"
+      <textarea id="chatInput" class="chat-input" aria-label="Mensagem para o assistente" placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)" rows="3" spellcheck="true" data-app-lang="true"
         autocapitalize="sentences" autocomplete="on" data-i18n-placeholder="chat.inputPlaceholder"></textarea>
       <div class="chat-input-actions">
         <button id="chatScreenshotBtn" class="chat-icon-btn chat-screenshot-btn" type="button"
@@ -133,7 +133,7 @@
       </div>
     </div>
 
-    <div id="chatMemoriesModal" class="chat-logs-modal hidden" aria-hidden="true">
+    <div id="chatMemoriesModal" class="chat-logs-modal hidden" role="dialog" aria-modal="true" aria-label="Memórias locais" aria-hidden="true">
       <div class="chat-logs-card">
         <div class="chat-logs-head section-bar">
           <strong data-i18n="chat.localMemories">Memórias Locais</strong>
@@ -150,7 +150,7 @@
 
     <!-- Painel de privacidade da captura: autorização da IA, política local
          (blocklist/limites) e auditoria com miniaturas do que foi capturado. -->
-    <div id="chatPrivacyModal" class="chat-logs-modal hidden" aria-hidden="true">
+    <div id="chatPrivacyModal" class="chat-logs-modal hidden" role="dialog" aria-modal="true" aria-label="Privacidade da captura de tela" aria-hidden="true">
       <div class="chat-logs-card">
         <div class="chat-logs-head section-bar">
           <strong data-i18n="screenshot.privacyTitle">Privacidade da captura de tela</strong>

@@ -223,8 +223,13 @@ func TestRegisteredToolCount(t *testing.T) {
 	// attach_images_to_ticket_comment e list_ticket_attachments),
 	// view_ticket_attachment e get_sensors (consulta de sensores do agente,
 	// somente leitura — sensor_tool.go).
-	if len(names) != 58 {
-		t.Fatalf("total de tools = %d, esperado 58", len(names))
+	if len(names) != 43 {
+		t.Fatalf("total de tools = %d, esperado 43", len(names))
+	}
+	for _, required := range []string{"software", "event_log", "local_memory", "screen", "registry_read", "ad_gpo_certs"} {
+		if reg.Find(required) == nil {
+			t.Fatalf("tool %s nao registrada", required)
+		}
 	}
 	// A tool de sensores faz parte do catalogo exposto ao LLM.
 	if reg.Find("get_sensors") == nil {

@@ -589,7 +589,7 @@ func TestCaptureScreenshotAddsImageRef(t *testing.T) {
 	fake := &imageTestBridge{}
 	reg := newImageTestRegistry(fake)
 
-	result, err := callImageTool(t, reg, "capture_screenshot", map[string]any{"mode": "full"})
+	result, err := callImageTool(t, reg, "screen", map[string]any{"action": "capture", "mode": "full"})
 	if err != nil {
 		t.Fatalf("capture_screenshot: %v", err)
 	}

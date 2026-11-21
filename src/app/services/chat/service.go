@@ -19,6 +19,7 @@ import (
 	"discovery/app/core/consent"
 	"discovery/app/core/mcp"
 	"discovery/app/core/platform"
+	"discovery/app/core/tlsutil"
 	"discovery/app/netutil"
 )
 
@@ -96,6 +97,8 @@ type Deps struct {
 	// MIME/tamanho) consultada no servidor e cacheada pelo App. nil = usa o
 	// default local (10 MB, imagens).
 	GetAttachmentPolicy func() AttachmentPolicy
+	// ExecuteInUserSession despacha tools de sessão interativa (Session 0 -> UI companion).
+	ExecuteInUserSession func(ctx context.Context, toolName, argsJSON string) (string, bool, error)
 }
 
 // DebugConfig is a minimal view of the debug config used by chat.
@@ -136,6 +139,7 @@ type Service struct {
 	chatConfigFile              string
 	requestToolConsent          func(ctx context.Context, req consent.Request) (bool, error)
 	getAttachmentPolicy         func() AttachmentPolicy
+	executeInUserSession        func(ctx context.Context, toolName, argsJSON string) (string, bool, error)
 
 	// notifyPreview é a preferência de privacidade do toast (padrão true).
 	notifyPreviewMu sync.RWMutex
@@ -163,6 +167,7 @@ func New(reg *mcp.Registry, deps Deps) *Service {
 		chatConfigFile:              deps.ChatConfigFile,
 		requestToolConsent:          deps.RequestToolConsent,
 		getAttachmentPolicy:         deps.GetAttachmentPolicy,
+		executeInUserSession:        deps.ExecuteInUserSession,
 		// Padrão de privacidade: mostrar prévia (comportamento anterior). O
 		// installer/config do chat pode desligar.
 		notifyPreview: true,
@@ -186,6 +191,10 @@ func New(reg *mcp.Registry, deps Deps) *Service {
 				s.publishChatEvent("chat:budget", string(raw))
 			}
 		}
+	})
+	s.chatSvc.SetToolFilter(func(toolName string) bool {
+		mode, allow := s.mcpToolPolicy()
+		return mcp.ToolAllowedByPolicy(mode, allow, toolName) == nil
 	})
 	return s
 }
@@ -560,6 +569,7 @@ func (s *Service) SubmitA2uiAction(surfaceID, name string, context map[string]an
 // ClearHistory resets the conversation.
 func (s *Service) ClearHistory() {
 	s.chatSvc.ClearHistory()
+	mcp.ClearScreenshotCache()
 }
 
 // GetHistory returns the conversation for display.
@@ -673,6 +683,12 @@ func (s *Service) mcpExecuteForChat(ctx context.Context, toolName, argsJSON stri
 		}
 	}
 
+	if s.executeInUserSession != nil && argsErr == nil && mcp.IsUserSessionTool(toolName, args) {
+		if routedRes, handled, routedErr := s.executeInUserSession(ctx, toolName, argsJSON); handled {
+			return routedRes, routedErr
+		}
+	}
+
 	result, err := s.mcpRegistry.Call(ctx, toolName, json.RawMessage(argsJSON))
 	if err != nil {
 		return "", err
@@ -720,9 +736,8 @@ func (s *Service) RegisterToolsOnServer() error {
 		s.logf("[chat] registro tools headers: " + err.Error())
 		return err
 	}
-	// B2: cliente com timeout — http.DefaultClient (sem timeout) podia
-	// pendurar o chamador indefinidamente.
-	client := &http.Client{Timeout: 60 * time.Second}
+	// B2: cliente com timeout e TLS customizado (CA corporativa / proxy).
+	client := tlsutil.NewHTTPClient(60 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		s.logf("[chat] registro tools falhou: " + err.Error())

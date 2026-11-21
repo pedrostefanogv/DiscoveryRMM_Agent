@@ -151,6 +151,19 @@ func (a *App) ipcRPCChatRegisterTools() map[string]any {
 	return map[string]any{"ok": true}
 }
 
+func (a *App) ipcRPCChatAnswerQuestion(payload map[string]any) map[string]any {
+	questionID, _ := payload["questionID"].(string)
+	answer, _ := payload["answer"].(string)
+	a.AnswerChatQuestion(questionID, answer)
+	return map[string]any{"ok": true}
+}
+
+func (a *App) ipcRPCChatAnswerA2uiAction(payload map[string]any) map[string]any {
+	payloadJSON, _ := payload["payloadJSON"].(string)
+	a.AnswerA2uiAction(payloadJSON)
+	return map[string]any{"ok": true}
+}
+
 // ── Chat de Suporte (companion → serviço via IPC) ───────────────────────────
 
 func (a *App) ipcRPCSupportChatRefresh(keepInvite bool) map[string]any {

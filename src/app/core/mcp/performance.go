@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
+	"math"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
-	"discovery/app/core/processutil"
+	"discovery/app/core/sysctrl"
 )
 
 const (
@@ -79,14 +80,15 @@ $memUsePct   = if ($os.TotalVisibleMemorySize -gt 0) {
 	return runPerfScript(ctx, script, perfSnapshotTimeout)
 }
 
-// GetTopProcesses returns the top N processes ordered by CPU seconds or
-// WorkingSet memory. The orderBy parameter is validated against an allowlist —
-// the corresponding PowerShell property name is chosen in Go, not interpolated
-// from user input. CommandLine is intentionally excluded to avoid leaking
-// credentials or tokens that processes may receive as arguments.
+// GetTopProcesses returns the top N processes ordered by CPU percent or
+// WorkingSet memory usando coleta nativa Go (sysctrl.ListProcesses), sem
+// spawnar powershell.exe. CommandLine é omitido para evitar vazamento de secrets.
 func GetTopProcesses(ctx context.Context, top int, orderBy string) (json.RawMessage, error) {
 	if runtime.GOOS != "windows" {
 		return nil, fmt.Errorf("listagem de processos suportada apenas no Windows")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	// Validate and clamp top.
@@ -95,36 +97,52 @@ func GetTopProcesses(ctx context.Context, top int, orderBy string) (json.RawMess
 	}
 	top = clampInt(top, 1, perfTopProcessesMax)
 
-	// Validate orderBy against the allowlist; the PS property is chosen in Go.
 	orderBy = strings.ToLower(strings.TrimSpace(orderBy))
 	if orderBy == "" {
 		orderBy = "cpu"
 	}
-	psProperty, ok := allowedOrderBy[orderBy]
-	if !ok {
+	if _, ok := allowedOrderBy[orderBy]; !ok {
 		return nil, fmt.Errorf("orderBy invalido: %q — valores aceitos: cpu, memory", orderBy)
 	}
 
-	// The script uses the safe psProperty string (one of two hard-coded values)
-	// and the integer top — no free-form user input is interpolated.
-	script := fmt.Sprintf(`$ErrorActionPreference = 'Stop'
-$procs = @(Get-Process -ErrorAction SilentlyContinue |
-  Sort-Object %s -Descending |
-  Select-Object -First %d |
-  ForEach-Object {
-    $memMB = [math]::Round($_.WorkingSet64 / 1MB, 2)
-    [PSCustomObject]@{
-      name         = $_.ProcessName
-      pid          = $_.Id
-      cpuSeconds   = [math]::Round($_.CPU, 2)
-      memoryMB     = $memMB
-      description  = $_.Description
-      startTime    = if ($_.StartTime) { $_.StartTime.ToString('o') } else { $null }
-    }
-  })
-$procs | ConvertTo-Json -Depth 4 -Compress`, psProperty, top)
+	procs, err := sysctrl.ListProcesses()
+	if err != nil {
+		return nil, fmt.Errorf("erro ao listar processos: %w", err)
+	}
 
-	return runPerfScript(ctx, script, perfProcessTimeout)
+	sort.Slice(procs, func(i, j int) bool {
+		if orderBy == "memory" {
+			return procs[i].MemoryBytes > procs[j].MemoryBytes
+		}
+		if procs[i].CpuPercent == procs[j].CpuPercent {
+			return procs[i].MemoryBytes > procs[j].MemoryBytes
+		}
+		return procs[i].CpuPercent > procs[j].CpuPercent
+	})
+
+	if len(procs) > top {
+		procs = procs[:top]
+	}
+
+	type topProcItem struct {
+		Name       string  `json:"name"`
+		PID        uint32  `json:"pid"`
+		CpuPercent float64 `json:"cpuPercent"`
+		MemoryMB   float64 `json:"memoryMB"`
+	}
+
+	out := make([]topProcItem, 0, len(procs))
+	for _, p := range procs {
+		memMB := math.Round((float64(p.MemoryBytes)/(1024*1024))*100) / 100
+		cpuPct := math.Round(p.CpuPercent*100) / 100
+		out = append(out, topProcItem{
+			Name:       p.Name,
+			PID:        p.PID,
+			CpuPercent: cpuPct,
+			MemoryMB:   memMB,
+		})
+	}
+	return json.Marshal(out)
 }
 
 // GetDiskHealth returns the WMI-reported health status for all physical disks.
@@ -161,32 +179,18 @@ $disks | ConvertTo-Json -Depth 4 -Compress`
 	return runPerfScript(ctx, script, perfDiskTimeout)
 }
 
-// runPerfScript executes a performance-monitoring PowerShell script using the
-// standard agent flags and returns its stdout as a validated JSON raw message.
+// runPerfScript delega ao executor unificado runPowerShell (UTF-8 +
+// stdout/stderr separados), preservando o contrato (json.RawMessage, error).
 func runPerfScript(ctx context.Context, script string, timeout time.Duration) (json.RawMessage, error) {
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(runCtx, "powershell",
-		"-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-		"-Command", script)
-	processutil.HideWindow(cmd)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("erro ao coletar dados de desempenho: %w | saida: %s",
-			err, strings.TrimSpace(string(output)))
+	if runtime.GOOS != "windows" {
+		return nil, fmt.Errorf("coleta de desempenho suportada apenas no Windows")
 	}
-
-	trimmed := strings.TrimSpace(string(output))
-	if trimmed == "" || trimmed == "null" {
-		return json.RawMessage("{}"), nil
+	raw := runPowerShell(ctx, script, timeout)
+	var errObj struct {
+		Error string `json:"error"`
 	}
-
-	if !json.Valid([]byte(trimmed)) {
-		return nil, fmt.Errorf("saida inesperada do PowerShell (nao-JSON): %s",
-			truncate(trimmed, 200))
+	if json.Unmarshal(raw, &errObj) == nil && errObj.Error != "" {
+		return nil, fmt.Errorf("erro ao coletar dados de desempenho: %s", errObj.Error)
 	}
-
-	return json.RawMessage(trimmed), nil
+	return raw, nil
 }

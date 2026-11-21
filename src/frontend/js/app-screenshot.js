@@ -346,7 +346,7 @@ function screenshotClearAttachments() {
 // enviada (o servidor recebe as imagens junto do texto).
 function screenshotRenderSentImages(images) {
   if (!images || !images.length) return;
-  var bubbles = document.querySelectorAll(".chat-msg.user");
+  var bubbles = document.querySelectorAll(".chat-msg.user:not(.chat-queued)");
   var last = bubbles[bubbles.length - 1];
   if (!last) return;
   images.forEach(function (src) {

@@ -662,6 +662,29 @@
   background: color-mix(in srgb, var(--surface) 82%, var(--darken) 18%);
 }
 
+.chat-msg.assistant .chat-code {
+  position: relative;
+}
+
+.chat-code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  border-radius: 4px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
+  background: var(--surface, rgba(255, 255, 255, 0.85));
+  color: var(--text, inherit);
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 0.15s ease;
+}
+
+.chat-code-copy-btn:hover {
+  opacity: 1;
+}
+
 [data-theme="dark"] .chat-msg.assistant .chat-code {
   background: color-mix(in srgb, var(--surface-2) 78%, var(--darken) 22%);
 }
@@ -1144,9 +1167,8 @@
   display: block;
   width: 100%;
   resize: none;
-  /* Reserva à direita a largura dos botões flutuantes (enviar/stop), para o
-     texto não passar por baixo deles em nenhuma linha (inclusive rolada). */
-  padding: 0 56px 0 0;
+  /* Reserva à direita a largura dos botões flutuantes (câmera + menu + stop + enviar). */
+  padding: 0 116px 0 0;
   border: none;
   background: transparent;
   color: var(--text);
