@@ -13,6 +13,10 @@ func TestInteractiveToolRequiresUser(t *testing.T) {
 		{"ask_user", `{"question":"x"}`, true},
 		{"read_file", `{"path":"C:/a.txt"}`, true},
 		{"capture_screenshot", "", true},
+		{"screen", `{"action":"capture","mode":"full"}`, true},
+		{"screen", `{"action":"list_windows"}`, false},
+		{"software", `{"action":"install","id":"Google.Chrome"}`, true},
+		{"software", `{"action":"search","query":"firefox"}`, false},
 
 		// Consentimento (mcp.ToolConsentFor) — por AÇÃO.
 		{"export_inventory_pdf", "", true},

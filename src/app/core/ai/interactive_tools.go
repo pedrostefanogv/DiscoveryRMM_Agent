@@ -33,5 +33,10 @@ func interactiveToolRequiresUser(name, argsJSON string) bool {
 	if strings.TrimSpace(argsJSON) != "" {
 		_ = json.Unmarshal([]byte(argsJSON), &args)
 	}
+	if strings.EqualFold(strings.TrimSpace(name), "screen") {
+		if act, _ := args["action"].(string); strings.EqualFold(strings.TrimSpace(act), "capture") {
+			return true
+		}
+	}
 	return mcp.ToolConsentFor(name, args) != nil
 }

@@ -1653,7 +1653,8 @@ func hasScreenshotImagePayload(toolName, result string) bool {
 	if !strings.Contains(result, "\"image_base64\"") {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(toolName), "capture_screenshot") {
+	trimmedName := strings.TrimSpace(toolName)
+	if strings.EqualFold(trimmedName, "capture_screenshot") || strings.EqualFold(trimmedName, "screen") {
 		return true
 	}
 	return strings.Contains(result, "\"type\":\"screenshot\"")
@@ -1775,16 +1776,16 @@ func diagnoseMissingToolCall(s *Service, userMessage string) string {
 		return "O usuario perguntou sobre os chamados da maquina. Emita AGORA a function call nativa `list_tickets` e responda com base no resultado. NAO responda com texto, NAO prometa verificar. Envie apenas a function call list_tickets."
 	}
 	hints := map[string]string{
-		"instalado":      "list_installed_packages",
-		"instalada":      "list_installed_packages",
-		"instalar":       "search_packages / install_package",
-		"instale":        "search_packages / install_package",
-		"instala":        "search_packages / install_package",
-		"desinstalar":    "uninstall_package",
-		"desinstale":     "uninstall_package",
-		"atualizar":      "get_pending_updates / upgrade_package",
-		"atualizacao":    "get_pending_updates",
-		"update":         "get_pending_updates",
+		"instalado":      "software(action=list_installed)",
+		"instalada":      "software(action=list_installed)",
+		"instalar":       "software(action=search) / software(action=install)",
+		"instale":        "software(action=search) / software(action=install)",
+		"instala":        "software(action=search) / software(action=install)",
+		"desinstalar":    "software(action=uninstall)",
+		"desinstale":     "software(action=uninstall)",
+		"atualizar":      "software(action=pending_updates) / software(action=upgrade)",
+		"atualizacao":    "software(action=pending_updates)",
+		"update":         "software(action=pending_updates)",
 		"memoria":        "get_inventory",
 		"ram":            "get_inventory",
 		"cpu":            "get_inventory",
