@@ -19,7 +19,7 @@ func TestFuzzSafeFrameWindowInvariante(t *testing.T) {
 	rng := rand.New(rand.NewSource(20261120)) // determinístico: falha é reproduzível
 
 	for i := 0; i < 200000; i++ {
-		w := rng.Intn(200) - 2   // inclui 0 e negativos
+		w := rng.Intn(200) - 2 // inclui 0 e negativos
 		h := rng.Intn(200) - 2
 		stride := rng.Intn(4000) - 5 // inclui 0 e negativos
 		dataLen := rng.Intn(20000) - 3

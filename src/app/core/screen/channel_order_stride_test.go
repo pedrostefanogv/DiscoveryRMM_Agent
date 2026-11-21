@@ -53,8 +53,8 @@ func TestProbeChannelOrderStrideMaiorQueBufferNaoCrasha(t *testing.T) {
 	// Conteúdo informativo: sem isso a sonda sai cedo por "poucas amostras" e
 	// o teste não exercitaria o caminho de indexação.
 	for i := 0; i+3 < len(ref.Data); i += 4 {
-		ref.Data[i] = byte(i % 251)       // B
-		ref.Data[i+1] = byte((i * 7) % 251) // G
+		ref.Data[i] = byte(i % 251)          // B
+		ref.Data[i+1] = byte((i * 7) % 251)  // G
 		ref.Data[i+2] = byte((i * 13) % 251) // R
 		ref.Data[i+3] = 255
 	}
@@ -102,9 +102,9 @@ func TestProbeChannelOrderStrideZeroOuNegativo(t *testing.T) {
 // incidente, mas qualquer combinação de geometria/stride/buffer.
 func TestSafeFrameStrideNuncaExcedeBuffer(t *testing.T) {
 	casos := []struct {
-		nome          string
-		w, h, stride  int
-		dataLen       int
+		nome         string
+		w, h, stride int
+		dataLen      int
 	}{
 		{"buffer exato, stride correto", 64, 64, 64 * 4, 64 * 4 * 64},
 		{"stride maior que buffer", 64, 64, 64 * 4 * 10, 64 * 4 * 64},
@@ -208,6 +208,7 @@ func TestTryResolveRecoverNaoDerruba(t *testing.T) {
 		t.Fatal("o motivo do panic deveria ser registrado para diagnóstico")
 	}
 }
+
 // TestProbeChannelOrderNuncaIndexaForaDoBuffer varre combinações degeneradas de
 // geometria/stride/buffer e garante que a sonda completa (não só o helper)
 // nunca indexa fora de Data. É o teste de fechamento da classe do defeito.

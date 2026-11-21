@@ -146,6 +146,7 @@ func BenchmarkEncodeFullFrameJPEG(b *testing.B) {
 		}
 	}
 }
+
 // BenchmarkSwapBGRAtoRGBA mede a conversão de canais que roda por frame
 // (encoder de frame inteiro) e por tile (dirty_rects.go). Fase 6: era um laço
 // escalar; virou um caminho por palavra com faixas paralelas. Este benchmark é

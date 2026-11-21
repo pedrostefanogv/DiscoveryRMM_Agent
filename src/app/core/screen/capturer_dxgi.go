@@ -94,14 +94,14 @@ const (
 	// IDXGIOutputDuplication: GetDesc, AcquireNextFrame, GetFrameDirtyRects,
 	// GetFrameMoveRects, GetFramePointerShape, MapDesktopSurface,
 	// UnMapDesktopSurface, ReleaseFrame.
-	slotDupAcquireNextFrame     = 8
-	slotDupGetFrameDirtyRects   = 9
-	slotDupGetFrameMoveRects    = 10
-	slotDupReleaseFrame         = 14
-	slotDevCreateTexture2D      = 5
-	slotCtxMap                  = 14
-	slotCtxUnmap                = 15
-	slotCtxCopyResource         = 47
+	slotDupAcquireNextFrame   = 8
+	slotDupGetFrameDirtyRects = 9
+	slotDupGetFrameMoveRects  = 10
+	slotDupReleaseFrame       = 14
+	slotDevCreateTexture2D    = 5
+	slotCtxMap                = 14
+	slotCtxUnmap              = 15
+	slotCtxCopyResource       = 47
 )
 
 // ── Structs ──

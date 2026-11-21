@@ -40,6 +40,31 @@ type Session struct {
 	Recording    bool                `json:"recording"`
 	ProxyPolicy  *ProxyPolicy        `json:"-"`
 	banner       SessionBanner
+
+	// ── Estado do transporte WebRTC (indicador de conexão) ──────────────
+	//
+	// Existe para responder à pergunta do operador: "esta sessão está em WebRTC
+	// ou em NATS?". Sem isto ele só descobriria olhando o tráfego de rede.
+	//
+	// O valor é PUBLICADO no canal .control e no evento "started", então o
+	// console exibe um selo em tempo real — inclusive quando houve FALLBACK,
+	// que é o caso em que o operador mais precisa saber (a sessão funciona, mas
+	// não pelo caminho que ele configurou).
+	WebRtcPolicy *WebRtcPolicy `json:"-"`
+
+	// transportState é o estado corrente: nats | webrtc | webrtc-fallback.
+	//
+	// transportMu é PONTEIRO pelo mesmo motivo de controlSeqMu: Session é
+	// copiada por valor em GetActiveSessions (snapshot para a UI/tray), e um
+	// sync.RWMutex embutido faria `go vet` acusar "copies lock value" —
+	// além de a cópia carregar um mutex já travado, que é um deadlock esperando
+	// acontecer. Um ponteiro compartilha a proteção sem ser copiado.
+	transportState string
+	transportMu    *sync.RWMutex
+
+	// transportReason explica POR QUE não está em WebRTC (ex.: "relayOnly sem
+	// TURN", "ICE falhou: timeout"). Texto curto exibido no tooltip do selo.
+	transportReason string
 	// tray é o ícone da bandeja da sessão (aviso local + Desconectar). Também
 	// serve de indicador do input lock — evita um segundo ícone.
 	tray SessionTray
@@ -65,6 +90,9 @@ type Manager struct {
 	mu             sync.RWMutex
 	sessions       map[string]*Session       // key: sessionId
 	screenSessions map[string]*SessionScreen // key: sessionId — referência às goroutines ativas
+	// webrtcSessions guarda o estado de negociação WebRTC por sessão. Só existe
+	// quando a política autorizou o WebRTC para aquela sessão.
+	webrtcSessions map[string]*WebRtcSession
 	nc             *nats.Conn
 	natsStream     *NatsStreamHandler
 
@@ -100,6 +128,7 @@ func NewManager(nc *nats.Conn) *Manager {
 	return &Manager{
 		sessions:       make(map[string]*Session),
 		screenSessions: make(map[string]*SessionScreen),
+		webrtcSessions: make(map[string]*WebRtcSession),
 		nc:             nc,
 	}
 }
@@ -214,6 +243,13 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	kind := ParseRemoteSessionKind(payload["kind"])
 	rights := ParseRemoteSessionRights(payload["rights"])
 	transport := normalizeTransport(toString(payload["transport"]))
+
+	// Política de WebRTC (bloco "webrtc" do payload). Fail-closed: um bloco
+	// ausente ou malformado resulta em WebRTC desligado, e a sessão segue pelo
+	// NATS — rejeitar o start inteiro por causa de uma otimização de transporte
+	// deixaria o operador sem acesso.
+	webRtcPolicy := ParseWebRtcPolicy(payload["webrtc"])
+
 	quality := toString(payload["quality"])
 	codec := toString(payload["codec"])
 	natsSubject := toString(payload["natsSubject"])
@@ -241,6 +277,18 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	default:
 		log.Printf("[remote-session] handleStart: kind não suportado %q sessionId=%s — rejeitando\n", kind, sessionID)
 		return false, "kind não suportado: " + kind
+	}
+
+	// Decisão do transporte, DEPOIS da validação de kind (a política depende
+	// dele) e ANTES de criar a sessão. O motivo da recusa fica registrado em vez
+	// de o operador ver "conectando..." sem causa.
+	useWebRtc, webRtcSkipReason := resolveWebRtcTransport(transport, kind, webRtcPolicy)
+	if useWebRtc {
+		log.Printf("[remote-session] handleStart: WebRTC AUTORIZADO sessionId=%s kind=%s stun=%v turn=%v relayOnly=%v fallback=%v\n",
+			sessionID, kind, webRtcPolicy.HasStun(), webRtcPolicy.HasTurn(), webRtcPolicy.RelayOnly, webRtcPolicy.FallbackToNats)
+	} else if transport == "webrtc" {
+		log.Printf("[remote-session] handleStart: WebRTC recusado sessionId=%s kind=%s motivo=%q — seguindo em NATS\n",
+			sessionID, kind, webRtcSkipReason)
 	}
 
 	if kind == KindProxy && rights.Has(RightsNoProxy) {
@@ -359,6 +407,7 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		StartedAt:       now,
 		ExpiresAt:       expiresAt,
 		ProxyPolicy:     proxyPolicy,
+		WebRtcPolicy:    &webRtcPolicy,
 		stopCh:          make(chan struct{}),
 		doneCh:          make(chan struct{}),
 		Meta:            payload, // payload original (shell, termCols, termRows, etc.)
@@ -367,6 +416,7 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		initialDeadline: expiresAt,
 		maxDeadline:     maxExpiresAt,
 		controlSeqMu:    &sync.Mutex{},
+		transportMu:     &sync.RWMutex{},
 	}
 
 	// Canal .control assinado para TODO kind: carrega a liveness do viewer
@@ -391,7 +441,61 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	}
 	session.controlSub = controlSub
 
+	// Estado inicial do transporte. Quando o WebRTC é autorizado mas ainda não
+	// conectou, publicamos "webrtc" com o motivo vazio: o console mostra
+	// "negociando" e o fallback (se ocorrer) atualiza via .control.
+	if useWebRtc {
+		session.SetTransportState(TransportStateWebRtc, "")
+	} else {
+		reason := webRtcSkipReason
+		if reason == "" && transport == "webrtc" {
+			reason = "transporte efetivo é NATS"
+		}
+		session.SetTransportState(TransportStateNats, reason)
+	}
+
 	m.sessions[sessionID] = session
+
+	// Estado de negociação WebRTC: criado APENAS quando a política autorizou.
+	// Só a partir daqui o agente aceita .webrtc.in para esta sessão — um viewer
+	// adulterado que publique no canal antes da autorização não encontra
+	// ninguém ouvindo.
+	if useWebRtc {
+		m.webrtcSessions[sessionID] = NewWebRtcSession(
+			sessionID,
+			webRtcPolicy,
+			func(answerSDP string) error {
+				frame, err := EncodeSignalFrame(SignalFrame{Kind: SignalKindAnswer, SDP: answerSDP})
+				if err != nil {
+					return err
+				}
+				return m.natsStream.PublishWebRtcOut(sessionID, frame)
+			},
+			func(candidate string) error {
+				// O candidato é repassado ao stack de mídia da sessão. Sem stack
+				// ligado, isto é um no-op registrado — não um erro fatal, porque
+				// um candidato que chega antes do stack subir é normal no trickle.
+				log.Printf("[remote-session-webrtc] candidato ICE recebido: session=%s bytes=%d\n",
+					sessionID, len(candidate))
+				return nil
+			},
+			func(reason string) {
+				// Fallback: a sessão CONTINUA, agora pelo NATS. O estado vai para
+				// o indicador — é assim que o operador descobre que não está em
+				// WebRTC apesar de ter configurado.
+				m.markTransportFallback(sessionID, reason)
+			},
+			func(reason string) {
+				// Sem fallback autorizado: encerra com motivo EXPLÍCITO. Nunca
+				// deixar uma sessão pendurada numa tela preta silenciosa.
+				log.Printf("[remote-session-webrtc] encerrando sessão por falha sem fallback: session=%s motivo=%q\n",
+					sessionID, reason)
+				m.closeSession(sessionID, "webrtc-failed: "+reason)
+			},
+		)
+
+		go m.runWebRtcSignaling(ctx, sessionID)
+	}
 
 	// Banner local (click-through) + ícone da bandeja: exibidos na sessão
 	// interativa e excluídos da captura. A desconexão mora no ícone — o banner
@@ -444,7 +548,10 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		}
 	}
 
+	// Evento "started" já carrega o estado do transporte: o console exibe o selo
+	// (WebRTC / NATS / fallback) sem precisar de uma segunda consulta.
 	m.natsStream.PublishEvent(sessionID, "started", session)
+	m.natsStream.PublishTransportInfo(sessionID, session.TransportInfo())
 
 	// Inicia o stream conforme o tipo (goroutine com safego)
 	switch kind {
@@ -757,6 +864,14 @@ func (m *Manager) closeSessionLocked(sessionID, reason string) bool {
 	}
 	delete(m.sessions, sessionID)
 	delete(m.screenSessions, sessionID) // limpa referencia da SessionScreen
+
+	// Encerra o estado de negociação WebRTC: marca como fechado para que frames
+	// tardios no .webrtc.in sejam descartados em vez de reabrir uma negociação
+	// de uma sessão que já morreu.
+	if ws := m.webrtcSessions[sessionID]; ws != nil {
+		ws.Close()
+		delete(m.webrtcSessions, sessionID)
+	}
 
 	select {
 	case <-s.stopCh:
@@ -2102,13 +2217,244 @@ func (m *Manager) Shutdown() error {
 }
 
 // normalizeTransport mapeia o transporte pedido pelo servidor para o que o
-// binario realmente suporta. WebRTC foi removido: qualquer pedido de "webrtc"
-// (ou vazio) cai para NATS.
+// binario realmente suporta.
+//
+// "webrtc" é PRESERVADO aqui (não é mais rebaixado para NATS como antes): quem
+// decide se o WebRTC é usado de fato é a política do bloco "webrtc" do payload
+// (ver resolveWebRtcTransport). O rebaixamento acontece lá, com o motivo
+// registrado — rebaixar silenciosamente aqui apagaria a informação de que o
+// operador PEDIU WebRTC, que é justamente o que o indicador precisa mostrar.
 func normalizeTransport(requested string) string {
-	if requested == "" || requested == "webrtc" {
+	if requested == "" {
 		return "nats"
 	}
-	return requested
+	return strings.ToLower(requested)
+}
+
+// Estados possíveis do transporte de uma sessão. São o que o indicador do
+// console exibe; "webrtc-fallback" é o mais importante deles, porque a sessão
+// está funcionando por um caminho DIFERENTE do que o operador configurou.
+const (
+	TransportStateNats     = "nats"
+	TransportStateWebRtc   = "webrtc"
+	TransportStateFallback = "webrtc-fallback"
+)
+
+// resolveWebRtcTransport decide se ESTA sessão usará WebRTC e registra o motivo
+// quando não usar.
+//
+// A decisão é fail-closed e revalidada aqui (o agente é o ponto de coerção): o
+// servidor pode ter autorizado, mas se a política não valida — relayOnly sem
+// TURN, nenhum servidor ICE — o caminho é o NATS, e o motivo fica registrado
+// para o operador em vez de virar um "conectando..." sem causa.
+//
+// Retorna (usar WebRTC?, motivo quando não usar).
+func resolveWebRtcTransport(requestedTransport, kind string, policy WebRtcPolicy) (bool, string) {
+	if requestedTransport != "webrtc" {
+		return false, ""
+	}
+
+	if !policy.Enabled {
+		// O servidor pediu o transporte mas não mandou o bloco: é exatamente o
+		// caso de um agente antigo ou de política desligada. Segue NATS.
+		return false, "bloco webrtc ausente ou desabilitado pelo servidor"
+	}
+
+	if reason := policy.Validate(); reason != "" {
+		return false, reason
+	}
+
+	if !policy.AllowsKind(kind) {
+		return false, "kind " + kind + " não está na lista de kinds autorizados pelo servidor"
+	}
+
+	return true, ""
+}
+
+// runWebRtcSignaling assina o canal de sinalização da sessão e processa os
+// frames até a sessão encerrar.
+//
+// O loop termina junto com a sessão (stopCh/doneCh): sem isso a assinatura
+// sobreviveria ao encerramento e um frame tardio reabriria estado morto.
+func (m *Manager) runWebRtcSignaling(ctx context.Context, sessionID string) {
+	session := m.sessionFor(sessionID)
+	if session == nil {
+		return
+	}
+
+	sub, err := m.natsStream.SubscribeToWebRtcIn(sessionID, func(data []byte) {
+		ws := m.webRtcSessionFor(sessionID)
+		if ws == nil {
+			return
+		}
+		if err := ws.HandleFrame(data); err != nil {
+			// HandleFrame já aplicou a política de falha (fallback ou
+			// encerramento). Aqui só registramos para diagnóstico.
+			log.Printf("[remote-session-webrtc] frame rejeitado: session=%s err=%v\n", sessionID, err)
+		}
+	})
+	if err != nil {
+		log.Printf("[remote-session-webrtc] falha ao assinar .webrtc.in: session=%s err=%v\n", sessionID, err)
+		// Sem canal de sinalização o WebRTC não tem como negociar: cai para NATS
+		// em vez de deixar a sessão esperando um offer que nunca será lido.
+		m.markTransportFallback(sessionID, "falha ao assinar o canal de sinalização")
+		return
+	}
+	defer sub.Unsubscribe()
+
+	select {
+	case <-ctx.Done():
+	case <-session.stopCh:
+	case <-session.doneCh:
+	}
+}
+
+// markTransportFallback muda o estado do transporte para "webrtc-fallback" e
+// PUBLICA a mudança no .control.
+//
+// A publicação é o ponto inteiro: sem ela o console continuaria exibindo o selo
+// "WebRTC" enquanto a sessão já trafega por NATS. O operador precisa saber que a
+// sessão funciona por um caminho diferente do que ele configurou.
+func (m *Manager) markTransportFallback(sessionID, reason string) {
+	session := m.sessionFor(sessionID)
+	if session == nil {
+		return
+	}
+
+	session.SetTransportState(TransportStateFallback, reason)
+	log.Printf("[remote-session-webrtc] FALLBACK para NATS: session=%s motivo=%q\n", sessionID, reason)
+
+	if m.natsStream != nil {
+		_ = m.natsStream.PublishTransportInfo(sessionID, session.TransportInfo())
+	}
+
+	m.publishTransportEvent(sessionID, session)
+}
+
+// publishTransportEvent publica o estado do transporte como evento da sessão,
+// para viewers que escutam .event em vez de .control.
+func (m *Manager) publishTransportEvent(sessionID string, session *Session) {
+	if m.natsStream == nil || session == nil {
+		return
+	}
+	_ = m.natsStream.PublishEvent(sessionID, "transport", session.TransportInfo())
+}
+
+// sessionFor devolve a sessão ativa pelo id (nil quando não existe).
+func (m *Manager) sessionFor(sessionID string) *Session {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sessions[sessionID]
+}
+
+// webRtcSessionFor devolve o estado de negociação WebRTC da sessão.
+func (m *Manager) webRtcSessionFor(sessionID string) *WebRtcSession {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.webrtcSessions[sessionID]
+}
+
+// ── Estado do transporte (indicador de conexão) ─────────────────────────
+
+// SetTransportState registra o estado corrente do transporte. Thread-safe: o
+// fallback é decidido numa goroutine de sessão enquanto o console consulta.
+func (s *Session) SetTransportState(state, reason string) {
+	if s == nil {
+		return
+	}
+	if s.transportMu == nil {
+		// Sessão construída fora de handleStart (testes, caminhos legados): a
+		// proteção não existe, mas gravar o estado ainda é seguro o bastante
+		// porque não há concorrência nesses caminhos.
+		s.transportState = state
+		s.transportReason = reason
+		return
+	}
+
+	s.transportMu.Lock()
+	defer s.transportMu.Unlock()
+	s.transportState = state
+	s.transportReason = reason
+}
+
+// TransportState devolve o estado corrente e o motivo. Quando nada foi definido
+// ainda, deriva do transporte pedido — nunca devolve vazio, para o console não
+// exibir um selo em branco.
+func (s *Session) TransportState() (string, string) {
+	if s == nil {
+		return TransportStateNats, ""
+	}
+	if s.transportMu == nil {
+		if s.transportState != "" {
+			return s.transportState, s.transportReason
+		}
+		if s.Transport == "webrtc" {
+			return TransportStateWebRtc, ""
+		}
+		return TransportStateNats, ""
+	}
+
+	s.transportMu.RLock()
+	defer s.transportMu.RUnlock()
+
+	if s.transportState != "" {
+		return s.transportState, s.transportReason
+	}
+
+	if s.Transport == "webrtc" {
+		return TransportStateWebRtc, ""
+	}
+	return TransportStateNats, ""
+}
+
+// TransportInfo é o bloco de diagnóstico do transporte publicado ao console.
+//
+// É ADITIVO: vai no evento "started" e no canal .control. O console que não o
+// conhece simplesmente o ignora, então nenhum cliente precisa ser atualizado em
+// sincronia com o agente.
+type TransportInfo struct {
+	// State: nats | webrtc | webrtc-fallback.
+	State string `json:"state"`
+	// Requested é o transporte que o SERVIDOR pediu (pode diferir do efetivo).
+	Requested string `json:"requested"`
+	// Active é o transporte realmente em uso.
+	Active string `json:"active"`
+	// Reason explica por que não está em WebRTC (vazio quando está).
+	Reason string `json:"reason,omitempty"`
+	// HasStun/HasTurn descrevem a configuração ICE aplicada, para o operador
+	// distinguir "sem TURN configurado" de "TURN configurado mas inalcançável".
+	HasStun bool `json:"hasStun"`
+	HasTurn bool `json:"hasTurn"`
+	// RelayOnly indica que todo o tráfego está forçado pelo TURN.
+	RelayOnly bool `json:"relayOnly"`
+}
+
+// TransportInfo monta o bloco de diagnóstico a partir do estado corrente.
+func (s *Session) TransportInfo() TransportInfo {
+	if s == nil {
+		return TransportInfo{State: TransportStateNats, Active: TransportStateNats}
+	}
+
+	state, reason := s.TransportState()
+
+	info := TransportInfo{
+		State:     state,
+		Requested: s.Transport,
+		Active:    TransportStateNats,
+		Reason:    reason,
+	}
+
+	if state == TransportStateWebRtc {
+		info.Active = "webrtc"
+	}
+
+	if s.WebRtcPolicy != nil {
+		info.HasStun = s.WebRtcPolicy.HasStun()
+		info.HasTurn = s.WebRtcPolicy.HasTurn()
+		info.RelayOnly = s.WebRtcPolicy.RelayOnly
+	}
+
+	return info
 }
 
 // helper

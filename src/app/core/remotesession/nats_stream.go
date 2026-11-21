@@ -336,6 +336,70 @@ func (h *NatsStreamHandler) PublishEvent(sessionID string, eventType string, dat
 	return h.nc.Publish(subject, payload)
 }
 
+// PublishTransportInfo publica o estado do transporte da sessão (WebRTC vs
+// NATS vs fallback) no canal .control.
+//
+// Por que num canal próprio em vez de só no evento "started": o console precisa
+// saber de uma MUDANÇA de transporte em tempo real — principalmente quando o ICE
+// falha e o agente cai para NATS no meio da sessão. Sem este aviso, o operador
+// continuaria vendo "WebRTC" no selo enquanto a sessão já trafega por NATS.
+//
+// ADITIVO: viewers antigos ignoram a mensagem (o switch de actions tem default),
+// então nenhum cliente precisa subir em sincronia com o agente.
+func (h *NatsStreamHandler) PublishTransportInfo(sessionID string, info TransportInfo) error {
+	payload, err := json.Marshal(map[string]any{
+		"action":    "transport_info",
+		"sessionId": sessionID,
+		"transport": info,
+	})
+	if err != nil {
+		return err
+	}
+
+	subject := h.publishSubject(sessionID, "control")
+	log.Printf("[remote-session-nats] PublishTransportInfo: subject=%s state=%s active=%s reason=%q\n",
+		subject, info.State, info.Active, info.Reason)
+	return h.nc.Publish(subject, payload)
+}
+
+// ── Sinalização WebRTC (oferta/resposta/candidatos) ─────────────────────
+//
+// Subjects DEDICADOS (.webrtc.in / .webrtc.out), separados de .control.
+//
+// Por que não usar o .control: o envelope de controle tem teto de 512 bytes
+// (sessioncontrol.MaxEnvelopeBytes) e uma oferta SDP típica tem 1-4 KB. Enfiar
+// o SDP ali exigiria fragmentar um documento JSON no meio, o que multiplicaria
+// os modos de falha (fragmento perdido, fora de ordem, renegociação no meio).
+// O .control continua carregando só o que é pequeno: ping/pong, keyframe,
+// inputLock e o estado do transporte.
+//
+// O canal é bidirecional pelo mesmo par de subjects: o viewer publica em
+// .webrtc.in e o agente responde em .webrtc.out, como já se faz em .tunnel.*.
+// O frame carrega JSON puro ({kind:"offer"|"answer"|"candidate"}) — o mesmo
+// contrato do wire que o navegador usa, sem envelope extra.
+
+// SubscribeToWebRtcIn subscreve o canal de entrada da sinalização WebRTC
+// (viewer → agente). O handler recebe o frame JSON cru.
+func (h *NatsStreamHandler) SubscribeToWebRtcIn(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
+	pattern := h.subscribePattern(sessionID, "webrtc.in")
+	sub, err := h.nc.Subscribe(pattern, func(msg *nats.Msg) {
+		handler(msg.Data)
+	})
+	if err != nil {
+		log.Printf("[remote-session-nats] SubscribeToWebRtcIn erro: pattern=%s err=%v\n", pattern, err)
+	} else {
+		log.Printf("[remote-session-nats] SubscribeToWebRtcIn ok: pattern=%s\n", pattern)
+	}
+	return sub, err
+}
+
+// PublishWebRtcOut publica um frame de sinalização do agente para o viewer
+// (resposta SDP, candidatos ICE do agente, erro de negociação).
+func (h *NatsStreamHandler) PublishWebRtcOut(sessionID string, data []byte) error {
+	subject := h.publishSubject(sessionID, "webrtc.out")
+	return h.nc.Publish(subject, data)
+}
+
 // SubscribeToInput subscreve a eventos de input (mouse/teclado) do viewer.
 func (h *NatsStreamHandler) SubscribeToInput(sessionID string, handler func(inputData []byte)) (*nats.Subscription, error) {
 	pattern := h.subscribePattern(sessionID, "input")

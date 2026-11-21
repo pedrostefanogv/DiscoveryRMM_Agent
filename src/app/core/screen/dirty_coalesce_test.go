@@ -158,7 +158,7 @@ func TestCoalesceDirtyRectsNaoPerdeCobertura(t *testing.T) {
 
 func TestCoalesceDirtyRectsOrdenaPorArea(t *testing.T) {
 	// Maiores primeiro: o viewer desenha na ordem, e mandar a base maior
-		// antes reduz trabalho de sobreposição no canvas.
+	// antes reduz trabalho de sobreposição no canvas.
 	got := CoalesceDirtyRects([]DirtyRect{
 		{X: 900, Y: 900, Width: 10, Height: 10},
 		{X: 0, Y: 0, Width: 200, Height: 200},

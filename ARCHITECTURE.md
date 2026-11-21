@@ -34,6 +34,7 @@ O **Discovery Agent** é um agente de inventário, automação, acesso remoto e 
 | Core Hub (`package app`) | `src/app/app*.go` + `src/app/coreagent/` | `App` struct decomposto (`app.go`, `app_new.go`, `app_lifecycle.go`, `app_window_ui.go`, `app_connectivity.go`, `app_inventory_sync.go`, `app_power_idle.go`) + `CoreAgent` embed |
 | Proxy LAN | `src/app/core/netproxy` | Proxy HTTP/WS para destinos da rede interna do endpoint, com allowlist fail-closed, proteção SSRF e resolução DNS anti-TOCTOU |
 | Sessão Remota | `src/app/core/remotesession` | Orquestração de tela, terminal, arquivos, processos/serviços, túnel TCP/RDP multiplexado sobre NATS (`session_tunnel*`) e preflight RDP (`rdp_preflight*`) |
+| Transporte WebRTC (opcional) | `src/app/core/remotesession/webrtc_*.go` | WebRTC ADITIVO para tela, túnel RDP/TCP e arquivos: política herdável (`ParseWebRtcPolicy`), decisão de transporte fail-closed (`resolveWebRtcTransport`), sinalização por subjects dedicados (`.webrtc.in`/`.webrtc.out`) e indicador de conexão publicado no `.control`. Desligado por padrão; a mídia pode ser P2P, mas o CONTROLE permanece no NATS |
 | Captura / Terminal / Arquivos | `src/app/core/screen`, `core/terminal`, `core/fileserver`, `core/sysctrl`, `core/winregistry` | Captura DXGI/GDI, ConPTY (`RUN_AS`), servidor de arquivos com protocolo binário `'DF'`, gerenciamento de processos/serviços Windows com guard fail-closed, navegação/edição do Registro com guard fail-closed e codec de valor byte-exato |
 | Identidade e Segurança | `src/app/core/platform` | DPAPI para `authToken`, ACLs endurecidas (`SYSTEM`/`Administrators`), elevação e verificação Authenticode |
 | Testes E2E e Contrato | `src/e2e/` | Suíte Tiers 1–2 validando limites de arquitetura, desacoplamento `discovery-service`, `gofmt`/`go vet`, CLI flags e contratos de documentação |
@@ -265,7 +266,11 @@ Console Web (DiscoveryRMM_Site) ──► API WS/NATS ──► discovery-servic
   │           └─► winregistry.ops (ListKey paginado, Get/Set/Delete, Create/Delete/Rename, Export)
   └─► Proxy LAN & Túnel RDP:
         ├─► netproxy: HTTP/WS local allowlist SSRF-safe + anti-TOCTOU DNS
-        └─► session_tunnel (.tunnel.in / .tunnel.out): multiplexação TCP sobre NATS + --rdp-tunnel
+        ├─► session_tunnel (.tunnel.in / .tunnel.out): multiplexação TCP sobre NATS + --rdp-tunnel
+        └─► WebRTC opcional (webrtc.in / webrtc.out): sinalização SDP/ICE fora do
+            .control (cujo teto de 512 B não comporta um SDP). Só é negociado
+            quando a política herdável está efetiva; a falha de ICE cai para NATS
+            e o estado vai ao indicador (nats | webrtc | webrtc-fallback).
 ```
 
 ### P2P Artifact Distribution & Onboarding

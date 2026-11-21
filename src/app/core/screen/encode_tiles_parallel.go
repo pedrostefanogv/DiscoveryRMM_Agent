@@ -102,8 +102,8 @@ func encodeOneTile(frame *Frame, rect DirtyRect, quality int, sc *TileScratch) *
 		return nil
 	}
 	// CÓPIA OBRIGATÓRIA: encoded aponta para o buffer do scratch, que será
-		// reutilizado no próximo tile DESTE worker. Sem a cópia, dois tiles
-		// compartilhariam o mesmo armazenamento e o payload sairia corrompido.
+	// reutilizado no próximo tile DESTE worker. Sem a cópia, dois tiles
+	// compartilhariam o mesmo armazenamento e o payload sairia corrompido.
 	data := make([]byte, len(encoded))
 	copy(data, encoded)
 
@@ -120,4 +120,3 @@ func encodeOneTile(frame *Frame, rect DirtyRect, quality int, sc *TileScratch) *
 func extractTileWith(frame *Frame, rect DirtyRect, sc *TileScratch) *image.RGBA {
 	return sc.extractTile(frame, rect)
 }
-
