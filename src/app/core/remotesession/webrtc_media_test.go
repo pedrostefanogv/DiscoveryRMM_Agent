@@ -515,3 +515,22 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// TestLimitesDeEnvio_GuardNaoExcedeOTetoSctpAnunciado fixa o alinhamento que
+// faltava entre o guard de aplicação e o teto SCTP realmente negociado.
+//
+// Quando o guard valia 240 KB contra um anúncio de 64 KB (o default do pion),
+// todo frame entre os dois valores era recusado pelo Send e caía para o NATS: o
+// data channel ficava aberto e OCIOSO exatamente nos keyframes, que são os
+// maiores. O sintoma era silencioso — nada no log dizia "a tela não está em P2P".
+func TestLimitesDeEnvio_GuardNaoExcedeOTetoSctpAnunciado(t *testing.T) {
+	if maxWebRtcMessageBytes > sctpMaxMessageBytes {
+		t.Fatalf("guard de aplicação (%d) excede o teto SCTP anunciado (%d): o Send recusaria e cairia para o NATS",
+			maxWebRtcMessageBytes, sctpMaxMessageBytes)
+	}
+	// O default do pion (64 KB) é o que motivou anunciar um teto maior: um
+	// keyframe de 3440x1440 WebP não cabe em 64 KB.
+	if sctpMaxMessageBytes <= 64*1024 {
+		t.Fatalf("teto SCTP efetivo (%d) é o default do pion: keyframes não passariam pelo data channel", sctpMaxMessageBytes)
+	}
+}

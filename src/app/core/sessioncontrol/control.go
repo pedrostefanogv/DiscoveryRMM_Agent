@@ -70,7 +70,21 @@ var RemoteDebugTypes = NewTypeSet("ping", "pong", "setLevel", "levelChanged", "c
 //
 // inputLock/inputLockChanged = bloqueio (KVM lock) da entrada da máquina
 // remota: comando do viewer e estado autoritativo devolvido pelo agent.
-var RemoteSessionTypes = NewTypeSet("ping", "pong", "keyframe", "closed", "inputLock", "inputLockChanged")
+//
+// transport_info = estado do transporte (nats/webrtc/webrtc-fallback) publicado
+// pelo agent. PRECISA estar na allow-list: o codec valida o tipo na CODIFICAÇÃO,
+// então sem isto o agent não consegue emitir o selo pelo envelope tipado — foi o
+// que motivou a publicação no formato legado {"action":...}, que o decoder do
+// console REJEITA (ele exige "type"). O resultado era o selo preso em NATS.
+//
+// webrtcReady = handshake de prontidão do viewer: ele avisa que assinou
+// .webrtc.out e criou o peer, e o agent responde reenviando o transport_info
+// corrente. Elimina a corrida de "o agent publica antes de o viewer assinar".
+var RemoteSessionTypes = NewTypeSet(
+	"ping", "pong", "keyframe", "closed",
+	"inputLock", "inputLockChanged",
+	"transport_info", "webrtcReady",
+)
 
 // IsRole valida o campo from contra os papeis conhecidos.
 func IsRole(role string) bool {

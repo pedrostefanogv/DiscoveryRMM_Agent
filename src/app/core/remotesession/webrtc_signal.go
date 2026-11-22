@@ -40,6 +40,25 @@ const (
 	SignalKindError     = "error"
 )
 
+// maxSignalReasonChars limita o motivo de um frame de erro. Ele vem do VIEWER,
+// segue para o log e termina no transport_info (que tem teto de 512 B no
+// .control): sem limite, um frame de erro gigante inunda o log e estoura o
+// envelope do indicador.
+const maxSignalReasonChars = 200
+
+// clampText limita um texto por RUNES (nao por bytes) para nao cortar um
+// caractere UTF-8 ao meio e produzir JSON invalido.
+func clampText(s string, maxRunes int) string {
+	if s == "" || maxRunes <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "..."
+}
+
 // SignalFrame é um frame do canal de sinalização.
 //
 // SDP e Candidate convivem no mesmo tipo porque o canal é o mesmo e o
@@ -85,6 +104,11 @@ func DecodeSignalFrame(data []byte) (SignalFrame, error) {
 	default:
 		return SignalFrame{}, fmt.Errorf("kind de sinalização desconhecido: %q", frame.Kind)
 	}
+
+	// O motivo vem de fora e nao tem tamanho garantido: limitar aqui e defesa em
+	// profundidade — o envelope do .control ja limita na publicacao, mas o LOG
+	// receberia o texto integral.
+	frame.Reason = clampText(frame.Reason, maxSignalReasonChars)
 
 	return frame, nil
 }

@@ -586,6 +586,17 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	m.natsStream.PublishEvent(sessionID, "started", session)
 	m.natsStream.PublishTransportInfo(sessionID, session.TransportInfo())
 
+	// Republicação periódica do estado do transporte.
+	//
+	// O envio pontual acima NÃO basta: ele acontece alguns milissegundos depois
+	// do start, enquanto o viewer ainda está assinando o .control. A mensagem
+	// caía no vazio e o selo ficava preso no default ("NATS") mesmo com o peer
+	// connection conectado. Um tick é o que torna o indicador auto-corretivo em
+	// vez de dependente de uma janela de tempo.
+	safego.Go(func() { m.runTransportInfoRepublisher(ctx, sessionID) }, func(line string) {
+		fmt.Printf("[remote-session-transport] %s\n", line)
+	})
+
 	// Inicia o stream conforme o tipo (goroutine com safego)
 	switch kind {
 	case "screen", "all":
@@ -1112,6 +1123,27 @@ func (m *Manager) handleControlFrame(session *Session, data []byte) {
 			break
 		}
 		lk.HandleCommand(env.Payload)
+	case ControlTypeWebRtcReady:
+		// Handshake de prontidão: o viewer avisa que JÁ assinou .webrtc.out e criou
+		// o peer. Só então o estado do transporte é reenviado — antes disso a
+		// mensagem não teria destinatário e cairia no vazio (a corrida que prendia
+		// o selo em "NATS"). Idempotente: reenviar o mesmo estado é inofensivo.
+		if env.From != sessioncontrol.RoleViewer {
+			log.Printf("[remote-session-webrtc] webrtcReady ignorado: papel %q nao e viewer\n", env.From)
+			break
+		}
+		if m.webRtcSessionFor(session.ID) == nil {
+			// Sessão sem WebRTC autorizado: nada a negociar, nada a anunciar.
+			break
+		}
+		log.Printf("[remote-session-webrtc] viewer pronto: reenviando estado do transporte session=%s\n", session.ID)
+		// Pelo publicador dedicado, e NÃO por sendControl: sendControl usa o codec
+		// cru, que recusa o frame inteiro acima de 512 B sem degradar. Reenviar o
+		// estado é o ponto do handshake — falhar aqui por causa de um motivo longo
+		// anularia a correção da corrida exatamente no caminho de fallback.
+		if m.natsStream != nil {
+			_ = m.natsStream.PublishTransportInfo(session.ID, session.TransportInfo())
+		}
 	case ControlTypePong, ControlTypeClosed:
 		// presenca ja registrada acima
 	}
@@ -2619,6 +2651,49 @@ func (m *Manager) publishTransportEvent(sessionID string, session *Session) {
 	_ = m.natsStream.PublishEvent(sessionID, "transport", session.TransportInfo())
 }
 
+// transportInfoRepublishInterval é o período do reenvio do estado do
+// transporte enquanto a sessão estiver viva.
+//
+// Por que republicar em vez de só enviar na transição: o canal .control é
+// pub/sub SEM retenção. Um viewer que assina 200 ms depois do evento perde a
+// transição para sempre — e era exatamente essa a falha observada (peer
+// "connected", canais abertos, selo em "NATS"). O custo é um frame de ~250 B
+// a cada 5 s por sessão.
+const transportInfoRepublishInterval = 5 * time.Second
+
+// runTransportInfoRepublisher mantém o selo do console correto por
+// convergência: cada tick reafirma o estado corrente. Encerra junto com a
+// sessão (ctx/stopCh) para não vazar goroutine.
+func (m *Manager) runTransportInfoRepublisher(ctx context.Context, sessionID string) {
+	ticker := time.NewTicker(transportInfoRepublishInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		session := m.sessionFor(sessionID)
+		if session == nil {
+			return
+		}
+		// Sessão encerrada: o mapa pode ainda conter a entrada por um instante.
+		select {
+		case <-session.stopCh:
+			return
+		case <-session.doneCh:
+			return
+		default:
+		}
+
+		if m.natsStream != nil {
+			_ = m.natsStream.PublishTransportInfo(sessionID, session.TransportInfo())
+		}
+	}
+}
+
 // sessionFor devolve a sessão ativa pelo id (nil quando não existe).
 func (m *Manager) sessionFor(sessionID string) *Session {
 	m.mu.RLock()
@@ -2641,6 +2716,17 @@ func (s *Session) SetTransportState(state, reason string) {
 	if s == nil {
 		return
 	}
+	// O motivo é limitado AQUI, na entrada, porque este é o único ponto por onde
+	// TODAS as transições passam.
+	//
+	// Ele pode vir do VIEWER (frame de sinalização de erro) ou de um erro do
+	// pion, sem tamanho garantido. O envelope do .control tem teto de 512 B e o
+	// codec RECUSA o frame inteiro acima disso — o selo congelaria no último
+	// estado, justamente no caminho de fallback. Limitar na origem mantém o
+	// estado publicável em todos os caminhos (.control, evento e handshake) e
+	// evita repetir a tentativa falha a cada republicação.
+	reason = clampText(reason, transportInfoMaxReasonChars)
+
 	if s.transportMu == nil {
 		// Sessão construída fora de handleStart (testes, caminhos legados): a
 		// proteção não existe, mas gravar o estado ainda é seguro o bastante

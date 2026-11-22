@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
 
 	"discovery/app/core/remotesession/rdcleanpath"
+	"discovery/app/core/sessioncontrol"
 	"discovery/app/core/screen"
 )
 
@@ -53,6 +55,10 @@ type NatsStreamHandler struct {
 	// maxPayloadBytes é o limite de payload do servidor NATS. Frames maiores
 	// são fragmentados (JUMBO) para não exceder o limite.
 	maxPayloadBytes int
+
+	// transportSeq numera os frames de transport_info publicados. É apenas
+	// informativo, mas mantém a leitura do canal de controle ordenada.
+	transportSeq atomic.Uint64
 }
 
 // DefaultMaxPayloadBytes é o padrão (2MB), alinhado ao servidor NATS.
@@ -346,14 +352,77 @@ func (h *NatsStreamHandler) PublishEvent(sessionID string, eventType string, dat
 //
 // ADITIVO: viewers antigos ignoram a mensagem (o switch de actions tem default),
 // então nenhum cliente precisa subir em sincronia com o agente.
+// Tetos dos campos textuais do transport_info.
+//
+// O envelope de controle tem teto de 512 bytes (sessioncontrol.MaxEnvelopeBytes)
+// e o codec RECUSA o frame INTEIRO quando estoura. Sem estes limites, o selo
+// ficava CONGELADO no ultimo estado conhecido — e justamente no caminho de
+// fallback, que e quando o operador mais precisa saber que nao esta em WebRTC.
+//
+// Dois destes campos NAO sao confiaveis: reason vem do frame de sinalizacao de
+// erro do VIEWER e requested vem do payload de start. Nenhum dos dois tem
+// tamanho garantido.
+const (
+	transportInfoMaxReasonChars    = 120
+	transportInfoMaxTransportChars = 24
+)
+
+// boundTransportInfo limita os campos textuais ao que cabe no envelope.
+func boundTransportInfo(info TransportInfo) TransportInfo {
+	info.State = clampText(info.State, transportInfoMaxTransportChars)
+	info.Requested = clampText(info.Requested, transportInfoMaxTransportChars)
+	info.Active = clampText(info.Active, transportInfoMaxTransportChars)
+	info.Reason = clampText(info.Reason, transportInfoMaxReasonChars)
+	return info
+}
+
+// encodeTransportInfoFrame monta o frame tipado de transport_info. O envelope e
+// o MESMO contrato validado de ping/pong/keyframe/inputLock — e por isso que o
+// teto de 512 B se aplica a ele.
+func encodeTransportInfoFrame(sessionID string, info TransportInfo, seq uint64) ([]byte, error) {
+	return encodeRemoteSessionControl(sessioncontrol.NewEnvelope(
+		sessioncontrol.RoleAgent,
+		ControlTypeTransportInfo,
+		sessionID,
+		seq,
+		map[string]any{"transport": info},
+	))
+}
+
 func (h *NatsStreamHandler) PublishTransportInfo(sessionID string, info TransportInfo) error {
-	payload, err := json.Marshal(map[string]any{
-		"action":    "transport_info",
-		"sessionId": sessionID,
-		"transport": info,
-	})
+	// Envelope TIPADO, montado pelo MESMO codec do resto do canal de controle.
+	//
+	// Antes isto saia como {"action":"transport_info",...}, sem o campo "type". O
+	// decoder do console (decodeRemoteControlEnvelope) exige "type" e devolve null
+	// para qualquer outra forma, entao a mensagem era DESCARTADA antes de chegar
+	// ao selo: o peer connection ficava "connected", os data channels abriam, e o
+	// operador continuava vendo "NATS".
+	seq := h.transportSeq.Add(1)
+
+	payload, err := encodeTransportInfoFrame(sessionID, info, seq)
 	if err != nil {
-		return err
+		// DEGRADACAO PROGRESSIVA: o ESTADO e o que o selo precisa; o texto do motivo
+		// e diagnostico. Preferimos perder o texto a deixar o indicador congelado —
+		// ainda mais porque um motivo enorme e, tipicamente, um caso de falha.
+		bounded := boundTransportInfo(info)
+		log.Printf("[remote-session-nats] PublishTransportInfo: frame excedeu o teto (%d chars de motivo); publicando com campos limitados\n",
+			len([]rune(info.Reason)))
+
+		payload, err = encodeTransportInfoFrame(sessionID, bounded, seq)
+		if err != nil {
+			// Ultimo recurso: SO o estado. Um selo sem motivo e ruim; um selo
+			// congelado e pior, porque mente sobre o transporte em uso.
+			state := bounded.State
+			if state == "" {
+				state = TransportStateNats
+			}
+			payload, err = encodeTransportInfoFrame(sessionID, TransportInfo{State: state}, seq)
+			if err != nil {
+				log.Printf("[remote-session-nats] PublishTransportInfo: nao foi possivel montar nem o frame reduzido: %v\n", err)
+				return err
+			}
+		}
+		info = bounded
 	}
 
 	subject := h.publishSubject(sessionID, "control")

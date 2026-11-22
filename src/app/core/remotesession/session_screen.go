@@ -446,16 +446,46 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	type frameJob struct{ data []byte }
 	frameChan := make(chan frameJob, 2)
 
+	// Contadores do caminho de envio, por janela de métricas.
+	//
+	// Sem eles não havia como distinguir, lendo o log, "o data channel está
+	// aberto mas a tela continua no NATS" de "a tela está mesmo em P2P": era o
+	// ponto cego que manteve o WebRTC inerte em produção — peer "connected",
+	// canais abertos, zero frames por eles. Atômicos porque o consumer escreve e
+	// o loop de métricas (outra goroutine) lê.
+	var webrtcFrames, natsFrames, webrtcTooLarge, webrtcNotReady atomic.Int64
+	var webrtcFirstFrame atomic.Bool
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for job := range frameChan {
-			if s.webrtcSendFrame != nil && s.webrtcSendFrame(job.data) {
-				continue
+			// Escolha EXPLÍCITA do canal: o data channel de mídia é o caminho
+			// preferido quando está aberto; o NATS é fallback, não o padrão.
+			//
+			// Distinguir "sem canal" de "acima do teto SCTP" é deliberado: o
+			// primeiro é transitório (negociação em curso) e o segundo é
+			// estrutural (aquele frame NUNCA passará pelo data channel). Os dois
+			// caem para o NATS, mas pedem ações diferentes de quem lê o log.
+			if s.webrtcSendFrame != nil {
+				if s.webrtcSendFrame(job.data) {
+					webrtcFrames.Add(1)
+					if webrtcFirstFrame.CompareAndSwap(false, true) {
+						log.Printf("[remote-session-screen] primeiro frame enviado por WebRTC (data channel media) session=%s\n", s.sessionID)
+					}
+					continue
+				}
+				if len(job.data) > maxWebRtcMessageBytes {
+					webrtcTooLarge.Add(1)
+				} else {
+					webrtcNotReady.Add(1)
+				}
 			}
 			if err := s.natsStream.PublishFrame(s.sessionID, job.data); err != nil {
 				log.Printf("[remote-session-screen] ERRO ao publicar frame: %v\n", err)
+			} else {
+				natsFrames.Add(1)
 			}
 		}
 	}()
@@ -571,9 +601,18 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				// HARDWARE estava de fato alimentando o tile-mode. Era exatamente o
 				// ponto cego que deixou o tile-mode inerte em produção sem ninguém
 				// notar: o log dizia "tile-mode=true" e todo frame saía completo.
-				log.Printf("[remote-session-screen] %d env, %d idle, %d gate | comp %.1f:1 | cap=%.1fms dirty=%.1fms copy=%.1fms mask=%.1fms enc=%.1fms | tiles=%d hwrects=%d | fps=%d\n",
+				// tx= é o indicador decisivo do transporte da TELA: sem estes números, um
+				// data channel aberto e ocioso era indistinguível de P2P funcionando.
+				// grande= e semcanal= explicam um nats= alto sem esconder a causa.
+				// Swap(0) em vez de Load+Store: o consumer incrementa em paralelo, e um
+				// frame contado entre a leitura e o reset se perderia na janela seguinte
+				// (subcontagem silenciosa justamente no numero que prova o P2P).
+				wf, nf := webrtcFrames.Swap(0), natsFrames.Swap(0)
+				wLarge, wNotReady := webrtcTooLarge.Swap(0), webrtcNotReady.Swap(0)
+				log.Printf("[remote-session-screen] %d env, %d idle, %d gate | comp %.1f:1 | cap=%.1fms dirty=%.1fms copy=%.1fms mask=%.1fms enc=%.1fms | tiles=%d hwrects=%d | tx webrtc=%d nats=%d grande=%d semcanal=%d | fps=%d\n",
 					sent, totalIdle, gateWaits, compRatio, avgCapMs, avgDirtyMs, avgCopyMs, avgMaskMs, avgEncMs,
-					sentInTiles, hwRectFrames, curFps)
+					sentInTiles, hwRectFrames, wf, nf, wLarge, wNotReady, curFps)
+				// (reset ja feito pelo Swap acima)
 				s.lastLogTime = time.Now()
 				sent, skipped = 0, 0
 				sentInTiles, hwRectFrames = 0, 0

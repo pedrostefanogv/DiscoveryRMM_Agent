@@ -183,6 +183,15 @@ func newSettingEngine(policy WebRtcPolicy) webrtc.SettingEngine {
 	disconnected, failed, keepAlive := resolveIceTimeouts(policy)
 	se := webrtc.SettingEngine{}
 	se.SetICETimeouts(disconnected, failed, keepAlive)
+	// Teto de mensagem SCTP ANUNCIADO ao viewer.
+	//
+	// O default do pion e 64 KB (sctpMaxMessageSizeUnsetValue = MaxUint16), e o
+	// negociado e o MENOR entre o nosso anuncio e o do navegador. Com o default,
+	// um keyframe de tela (3440x1440 WebP) ficava acima do teto e NUNCA passava
+	// pelo data channel: caia para o NATS sem que nada no log explicasse por que.
+	// 256 KB e o limite tipico de recepcao dos navegadores, entao anunciar isso
+	// nao arrisca mensagem que o viewer nao saiba receber — o min() negocia.
+	se.SetSCTPMaxMessageSize(sctpMaxMessageBytes)
 	return se
 }
 
@@ -294,11 +303,21 @@ func (s *WebRtcMediaStack) Negociate(offerSDP string) (string, error) {
 // iceGatheringTimeout limita a espera pelos candidatos ICE.
 const iceGatheringTimeout = 8 * time.Second
 
-// Limites de envio via data channel: mensagens acima do teto SCTP caem no NATS
-// JUMBO, e frames de mídia são descartados quando o buffer já está congestionado.
+// Limites de envio via data channel.
+//
+// sctpMaxMessageBytes é o teto de mensagem SCTP que ANUNCIAMOS (ver
+// newSettingEngine). 256 KB é o limite típico de RECEPÇÃO dos navegadores.
+//
+// maxWebRtcMessageBytes é o guard de aplicação e precisa espelhar o negociado:
+// enquanto ele valia 240 KB e o pion negociava 64 KB, qualquer frame entre os
+// dois valores era REJEITADO pelo Send e caía para o NATS — o data channel
+// ficava aberto e ocioso nos frames grandes, que são justamente os keyframes.
+// O negociado real é min(anúncio local, anúncio do viewer); se o viewer anunciar
+// menos, o pion devolve erro no Send e o fallback para NATS continua valendo.
 const (
 	maxWebRtcMediaBufferedBytes = 2 * 1024 * 1024
-	maxWebRtcMessageBytes       = 240 * 1024
+	sctpMaxMessageBytes         = 256 * 1024
+	maxWebRtcMessageBytes       = sctpMaxMessageBytes
 )
 
 // registerDataChannels instala o handler único de data channels no peer connection,

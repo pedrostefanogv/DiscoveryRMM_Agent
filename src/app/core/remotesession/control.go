@@ -23,6 +23,21 @@ const (
 	// ControlTypeInputLockChanged é o estado autoritativo publicado pelo agent
 	// (também em resposta a query e em toda liberação automática).
 	ControlTypeInputLockChanged = "inputLockChanged"
+	// ControlTypeTransportInfo é o estado do transporte (nats | webrtc |
+	// webrtc-fallback) publicado pelo agent no .control. Payload:
+	// {"transport":{state,requested,active,reason,hasStun,hasTurn,relayOnly}}.
+	//
+	// O tipo PRECISA estar na allow-list do codec (sessioncontrol.
+	// RemoteSessionTypes): sem isso o agente publicava no formato legado
+	// {"action":"transport_info"}, que o decoder do console rejeita — ele exige o
+	// campo "type". Era essa incompatibilidade que prendia o selo em "NATS"
+	// mesmo com o peer connection conectado.
+	ControlTypeTransportInfo = "transport_info"
+	// ControlTypeWebRtcReady é o handshake de prontidão do viewer: ele avisa que
+	// já assinou .webrtc.out e criou o peer, e o agent responde reenviando o
+	// transport_info corrente. É idempotente e existe para fechar a corrida de
+	// "o agent publica o estado antes de o viewer estar escutando".
+	ControlTypeWebRtcReady = "webrtcReady"
 )
 
 // DecodeRemoteSessionControl decodifica um frame recebido no .control.
