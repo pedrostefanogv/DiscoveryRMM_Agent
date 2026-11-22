@@ -149,6 +149,10 @@ type WebRtcSession struct {
 	onTunnelFrame     func([]byte)
 	onFilesFrame      func([]byte)
 	onRdpFrame        func([]byte)
+	// onTerminalFrame entrega stdin/resize/hello do viewer.
+	onTerminalFrame func([]byte)
+	// onProcessesFrame entrega uma requisição de processos/serviços.
+	onProcessesFrame  func([]byte)
 	onPeerStateChange func(string)
 
 	// onAnswer é chamado quando a resposta SDP estiver pronta (injetado pelo
@@ -263,6 +267,39 @@ func (w *WebRtcSession) SetRdpHandler(onRdp func([]byte)) {
 	w.mu.Unlock()
 	if stack != nil {
 		stack.SetRdpHandler(onRdp)
+	}
+}
+
+// SetTerminalHandler registra o callback do canal do terminal.
+//
+// A dupla "guarda o callback E repassa ao stack, se existir" é o que torna a
+// chamada idempotente em qualquer ordem: se o stack ainda não nasceu (o peer
+// connection só é criado na primeira oferta), mediaStack() aplica o callback na
+// criação; se já nasceu, aplica aqui.
+func (w *WebRtcSession) SetTerminalHandler(onTerminal func([]byte)) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.onTerminalFrame = onTerminal
+	stack := w.stack
+	w.mu.Unlock()
+	if stack != nil {
+		stack.SetTerminalHandler(onTerminal)
+	}
+}
+
+// SetProcessesHandler registra o callback do canal de processos/serviços.
+func (w *WebRtcSession) SetProcessesHandler(onProcesses func([]byte)) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.onProcessesFrame = onProcesses
+	stack := w.stack
+	w.mu.Unlock()
+	if stack != nil {
+		stack.SetProcessesHandler(onProcesses)
 	}
 }
 
@@ -411,6 +448,8 @@ func (w *WebRtcSession) mediaStack() *WebRtcMediaStack {
 			w.onPeerStateChange,
 		)
 		w.stack.SetRdpHandler(w.onRdpFrame)
+		w.stack.SetTerminalHandler(w.onTerminalFrame)
+		w.stack.SetProcessesHandler(w.onProcessesFrame)
 	}
 
 	return w.stack

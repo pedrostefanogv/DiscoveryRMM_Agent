@@ -644,6 +644,17 @@ func (h *NatsStreamHandler) SubscribeToProcReq(sessionID string, handler func(re
 	return sub, err
 }
 
+// PublishProcResp publica uma resposta de processos/serviços no .proc.resp.
+//
+// Existe para o caminho do data channel: quando a requisição chega por WebRTC e
+// a resposta NÃO pode voltar por ele (canal fechou no meio, payload acima do teto
+// SCTP), o viewer continua escutando .proc.resp — responder por lá evita deixá-lo
+// pendurado até o timeout do pedido.
+func (h *NatsStreamHandler) PublishProcResp(sessionID string, data []byte) error {
+	subject := h.publishSubject(sessionID, "proc.resp")
+	return h.nc.Publish(subject, data)
+}
+
 // PublishProcReady notifica o viewer que a sessão de processos/serviços está
 // pronta (subscribe em proc.req ativo). Mesmo padrão anti-race de files.ready.
 func (h *NatsStreamHandler) PublishProcReady(sessionID string, data any) error {

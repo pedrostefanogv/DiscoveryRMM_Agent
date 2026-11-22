@@ -49,6 +49,20 @@ const (
 	// WebRtcChannelRdp carrega o protocolo RDCleanPath (DER + RDP cru),
 	// separado de "tunnel" para não misturar com o framing de 6 B do proxy LAN.
 	WebRtcChannelRdp = "rdp-cleanpath"
+	// WebRtcChannelTerminal carrega o protocolo do terminal: saída do shell
+	// (agente→viewer) e stdin/resize/hello (viewer→agente), no MESMO formato
+	// JSON do .term.out/.term.in.
+	//
+	// O replay por seq NÃO depende do transporte: o seq vai no payload, então o
+	// handshake hello/lastSeq continua funcionando igual quando a saída chega
+	// pelo data channel. É por isso que o canal é seguro aqui.
+	WebRtcChannelTerminal = "terminal"
+	// WebRtcChannelProcesses carrega o request/response de processos/serviços.
+	//
+	// O data channel SCTP é orientado a MENSAGEM, então cada Send preserva uma
+	// requisição ou resposta inteira — o mesmo contrato do .proc.req/.proc.resp,
+	// sem precisar do framing de 6 B do túnel. O pareamento é por requestId.
+	WebRtcChannelProcesses = "processes"
 )
 
 // WebRtcMediaStack é o peer connection vivo de uma sessão.
@@ -77,6 +91,11 @@ type WebRtcMediaStack struct {
 	onFiles func([]byte)
 	// onRdp entrega bytes do canal dedicado RDCleanPath (WebRDP).
 	onRdp func([]byte)
+	// onTerminal entrega uma mensagem do canal do terminal (stdin/resize/hello
+	// do viewer).
+	onTerminal func([]byte)
+	// onProcesses entrega uma requisição de processos/serviços do viewer.
+	onProcesses func([]byte)
 	// onStateChange reporta mudança de estado (para o indicador).
 	onStateChange func(state string)
 }
@@ -89,6 +108,30 @@ func (s *WebRtcMediaStack) SetRdpHandler(fn func([]byte)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onRdp = fn
+}
+
+// SetTerminalHandler registra o callback do canal do terminal.
+//
+// Segue o precedente de SetRdpHandler: um canal adicionado DEPOIS da criação do
+// stack não pode depender do construtor, senão toda nova rota obrigaria a mudar
+// a assinatura de NewWebRtcMediaStack (e todos os seus chamadores e testes).
+func (s *WebRtcMediaStack) SetTerminalHandler(fn func([]byte)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onTerminal = fn
+}
+
+// SetProcessesHandler registra o callback do canal de processos/serviços.
+func (s *WebRtcMediaStack) SetProcessesHandler(fn func([]byte)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onProcesses = fn
 }
 
 // NewWebRtcMediaStack cria o stack de mídia de uma sessão.
@@ -341,6 +384,10 @@ func (s *WebRtcMediaStack) registerDataChannels(peerConn *webrtc.PeerConnection)
 			handler = s.onFiles
 		case WebRtcChannelRdp:
 			handler = s.onRdp
+		case WebRtcChannelTerminal:
+			handler = s.onTerminal
+		case WebRtcChannelProcesses:
+			handler = s.onProcesses
 		default:
 			log.Printf("[remote-session-webrtc] data channel com label desconhecido ignorado: session=%s label=%q\n",
 				s.sessionID, label)

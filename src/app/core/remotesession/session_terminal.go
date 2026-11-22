@@ -917,6 +917,16 @@ type SessionTerminal struct {
 	stopCh chan struct{}
 	doneCh chan struct{}
 	mu     sync.RWMutex
+
+	// webrtcSend envia uma mensagem de SAÍDA pelo data channel WebRTC. Devolve
+	// false quando o canal não está utilizável (o chamador cai para o NATS).
+	webrtcSend func(string) bool
+
+	// inputHandler processa uma mensagem de ENTRADA do viewer. É o MESMO closure
+	// assinado no .term.in: NATS e data channel entregam aqui, então o rate limit,
+	// a recusa por versão de protocolo e o replay por seq valem igual nos dois
+	// caminhos.
+	inputHandler func([]byte)
 }
 
 // SetOnExit define o callback de encerramento do console.
@@ -924,6 +934,70 @@ func (st *SessionTerminal) SetOnExit(cb func(reason string)) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.onExit = cb
+}
+
+// SetWebRtcSend registra o envio de SAÍDA pelo data channel WebRTC.
+//
+// Fail-soft por desenho: quando o enviador devolve false, publishOut cai para o
+// NATS. O NATS NUNCA é desligado, então um peer que cai não derruba o terminal —
+// só o torna mais lento. É a mesma propriedade que protege a tela.
+func (st *SessionTerminal) SetWebRtcSend(fn func(string) bool) {
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	st.webrtcSend = fn
+	st.mu.Unlock()
+}
+
+// SetInputHandler guarda o handler de entrada para o caminho do data channel.
+func (st *SessionTerminal) SetInputHandler(fn func([]byte)) {
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	st.inputHandler = fn
+	st.mu.Unlock()
+}
+
+// DeliverInput entrega uma mensagem de entrada vinda do data channel WebRTC.
+//
+// Devolve false quando o handler ainda não existe (janela entre a criação do
+// SessionTerminal e a assinatura do .term.in): o chamador registra o descarte em
+// vez de fingir sucesso. O callback é lido sob lock e CHAMADO fora dele — o
+// handler pega st.mu, e chamá-lo com o lock preso seria deadlock.
+func (st *SessionTerminal) DeliverInput(data []byte) bool {
+	if st == nil {
+		return false
+	}
+	st.mu.RLock()
+	handler := st.inputHandler
+	st.mu.RUnlock()
+	if handler == nil {
+		return false
+	}
+	handler(data)
+	return true
+}
+
+// publishOut entrega uma mensagem de SAÍDA ao viewer preferindo o data channel
+// e caindo para o NATS.
+//
+// É o ÚNICO ponto de decisão de transporte da saída: todos os pontos que
+// publicam em term.out (ready, coalescer, erro, protocolo, replay, reset, exit)
+// passam por aqui, para não existir um caminho que "esqueça" de tentar o P2P —
+// que foi exatamente o modo de falha que manteve o selo da tela mentindo.
+func (st *SessionTerminal) publishOut(payload string) error {
+	if st == nil {
+		return nil
+	}
+	st.mu.RLock()
+	send := st.webrtcSend
+	st.mu.RUnlock()
+	if send != nil && send(payload) {
+		return nil
+	}
+	return st.publishOut(payload)
 }
 
 // SetReadyPayload guarda o payload do term.ready para republicar no primeiro
@@ -936,7 +1010,7 @@ func (st *SessionTerminal) SetReadyPayload(payload []byte) {
 	st.readyRequested = false
 	st.mu.Unlock()
 	if send {
-		if pubErr := st.natsStream.PublishTermOut(st.sessionID, string(payload)); pubErr != nil {
+		if pubErr := st.publishOut(string(payload)); pubErr != nil {
 			log.Printf("[remote-terminal] falha ao publicar saída do terminal da sessão %s: %v\n", st.sessionID, pubErr)
 		}
 	}
@@ -1265,7 +1339,7 @@ func (st *SessionTerminal) PublishError(code, reason string) {
 		"reason": reason,
 		"seq":    int64(0),
 	})
-	if err := st.natsStream.PublishTermOut(st.sessionID, string(payload)); err != nil {
+	if err := st.publishOut(string(payload)); err != nil {
 		st.notePublishError()
 		log.Printf("[session-terminal] erro ao publicar frame de erro: %v", err)
 	}
@@ -1337,7 +1411,7 @@ func (st *SessionTerminal) publishProtocolMismatch(viewerPv int) {
 	if err != nil {
 		return
 	}
-	if pubErr := st.natsStream.PublishTermOut(st.sessionID, string(payload)); pubErr != nil {
+	if pubErr := st.publishOut(string(payload)); pubErr != nil {
 		log.Printf("[session-terminal] falha ao publicar erro de versao de protocolo: %v", pubErr)
 	}
 }
@@ -1415,7 +1489,7 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 	publishFrame := func(frameSeq int64, payload string) {
 		st.outMu.Lock()
 		replay.add(frameSeq, payload)
-		err := st.natsStream.PublishTermOut(st.sessionID, payload)
+		err := st.publishOut(payload)
 		st.outMu.Unlock()
 		if err != nil {
 			stats.publishErrors.Add(1)
@@ -1654,7 +1728,7 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 		// Serializa com o coalescer/emitError para o exit ser o ÚLTIMO frame
 		// da sessão (o ForceFlush logo acima já esvaziou o buffer).
 		st.outMu.Lock()
-		if perr := st.natsStream.PublishTermOut(st.sessionID, string(exitPayload)); perr != nil {
+		if perr := st.publishOut(string(exitPayload)); perr != nil {
 			stats.publishErrors.Add(1)
 		}
 		st.outMu.Unlock()
@@ -1676,7 +1750,12 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 	resizeRate := &rateWindow{}
 
 	// Subscrever input do viewer no subject fixo term.in
-	sub, err := st.natsStream.SubscribeToTermIn(st.sessionID, func(data []byte) {
+	// Handler ÚNICO da entrada do viewer.
+	//
+	// NATS e data channel WebRTC entregam AQUI, então o rate limit (inputRate/
+	// resizeRate), a recusa por versão de protocolo e o replay por seq valem igual
+	// nos dois caminhos — o data channel não é um caminho privilegiado.
+	handleTermIn := func(data []byte) {
 		var req struct {
 			Data    string `json:"data"`
 			Cols    int    `json:"cols"`
@@ -1732,7 +1811,7 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 		}
 		st.mu.Unlock()
 		if len(rp) > 0 {
-			if pubErr := st.natsStream.PublishTermOut(st.sessionID, string(rp)); pubErr != nil {
+			if pubErr := st.publishOut(string(rp)); pubErr != nil {
 				log.Printf("[remote-terminal] falha ao publicar replay da sessão %s: %v\n", st.sessionID, pubErr)
 			}
 		}
@@ -1745,7 +1824,7 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 			frames, ok := replay.since(*req.LastSeq)
 			if ok {
 				for _, f := range frames {
-					if err := st.natsStream.PublishTermOut(st.sessionID, f.payload); err != nil {
+					if err := st.publishOut(f.payload); err != nil {
 						stats.publishErrors.Add(1)
 						log.Printf("[session-terminal] erro ao reenviar term.out: %v", err)
 					}
@@ -1763,7 +1842,7 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 					"reset":         true,
 					"requestedFrom": *req.LastSeq,
 				})
-				if rerr := st.natsStream.PublishTermOut(st.sessionID, string(reset)); rerr != nil {
+				if rerr := st.publishOut(string(reset)); rerr != nil {
 					stats.publishErrors.Add(1)
 				}
 				log.Printf("[session-terminal] replay indisponivel (lastSeq=%d): enviando reset", *req.LastSeq)
@@ -1840,12 +1919,24 @@ func (st *SessionTerminal) StartRunAs(ctx context.Context, shellKind terminal.Sh
 			log.Printf("[session-terminal] WriteStdin falhou: %v", err)
 			emitError("stdin_rejected", err.Error())
 		}
-	})
+	}
+
+	sub, err := st.natsStream.SubscribeToTermIn(st.sessionID, handleTermIn)
 	if err != nil {
 		_ = shell.Close()
 		st.terminal = nil
 		return nil, fmt.Errorf("subscribe term.in: %w", err)
 	}
+
+	// Entrada pelo data channel WebRTC → MESMO handler do .term.in. Registrado
+	// só DEPOIS do subscribe ter dado certo: antes disso a sessão não está de pé.
+	//
+	// ATENÇÃO — NÃO troque por st.SetInputHandler(handleTermIn): StartRunAs segura
+	// st.mu até RETORNAR (o `defer st.mu.Unlock()` no início da função), e o setter
+	// faz st.mu.Lock(). sync.RWMutex NÃO é reentrante, então a chamada travaria o
+	// próprio mutex e a sessão de terminal ficaria pendurada para sempre no start.
+	// Aqui já estamos DENTRO da região crítica: a atribuição direta é o correto.
+	st.inputHandler = handleTermIn
 
 	// Assina a completacao (TAB) quando o shell/backend suportam. A consulta
 	// roda num processo auxiliar (pwsh/powershell -NoProfile -NonInteractive),

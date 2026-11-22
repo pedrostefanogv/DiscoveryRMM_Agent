@@ -526,6 +526,15 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		m.webrtcSessions[sessionID].SetRdpHandler(func(data []byte) {
 			m.handleWebRtcRdp(sessionID, data)
 		})
+		// Canais adicionados depois (terminal e processos): registrados AQUI, antes de
+		// qualquer oferta, pelo mesmo motivo do RDP — o handler é instalado no data
+		// channel no instante em que o peer connection nasce.
+		m.webrtcSessions[sessionID].SetTerminalHandler(func(data []byte) {
+			m.handleWebRtcTerminal(sessionID, data)
+		})
+		m.webrtcSessions[sessionID].SetProcessesHandler(func(data []byte) {
+			m.handleWebRtcProcesses(sessionID, data)
+		})
 
 		go m.runWebRtcSignaling(ctx, sessionID)
 	}
@@ -1559,6 +1568,24 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 
 	sessTerm := NewSessionTerminal(session.ID, m.natsStream, session.Recording)
 
+	// ── Caminho de dados WebRTC do terminal ──
+	//
+	// SAÍDA: o data channel é o caminho preferido; o NATS continua sendo o
+	// fallback por mensagem (o próprio publishOut decide). O NATS NUNCA é
+	// desligado — é o que garante que o terminal não quebra se o peer cair.
+	sendTerminal := m.webRtcSendOn(session.ID, WebRtcChannelTerminal)
+	sessTerm.SetWebRtcSend(func(payload string) bool { return sendTerminal([]byte(payload)) })
+
+	// ENTRADA: entrega ao MESMO handler do .term.in (rate limit, versão de
+	// protocolo e replay valem igual). Um data channel não é caminho privilegiado.
+	m.RegisterWebRtcDataSink(session.ID, webrtcDataSink{
+		onTerminal: func(data []byte) {
+			if !sessTerm.DeliverInput(data) {
+				log.Printf("[remote-session-term] entrada WebRTC descartada (handler ainda nao pronto): session=%s", session.ID)
+			}
+		},
+	})
+
 	// Quando o console (shell) encerra, fecha a sessão para liberar recursos
 	// e notificar o viewer (não deixa sessão "morta" ativa).
 	sessTerm.SetOnExit(func(reason string) {
@@ -2185,6 +2212,31 @@ func (m *Manager) runProcessesSession(ctx context.Context, session *Session) {
 	sp := NewSessionProcesses(session.ID, m.natsStream)
 	log.Printf("[remote-session-processes] sessão de processos/serviços iniciada para %s", session.ID)
 
+	// Caminho de dados WebRTC: requisição e resposta pelo MESMO canal, com o
+	// mesmo handleRequest do NATS. O par requestId continua sendo o que pareia as
+	// duas pontas, então não há estado novo de correlação para manter.
+	//
+	// Registrado ANTES do Start (que assina o .proc.req): o NATS permanece ativo
+	// como fallback e é o que responde quando o canal não está utilizável.
+	sendProcesses := m.webRtcSendOn(session.ID, WebRtcChannelProcesses)
+	m.RegisterWebRtcDataSink(session.ID, webrtcDataSink{
+		onProcesses: func(req []byte) {
+			resp := sp.HandleRequest(req)
+			if len(resp) == 0 {
+				return
+			}
+			if sendProcesses(resp) {
+				return
+			}
+			// Canal indisponível (fechou no meio, payload acima do teto SCTP): a
+			// resposta vai pelo NATS, que o viewer também escuta. Sem isto o pedido
+			// ficaria pendurado até o timeout.
+			if err := m.natsStream.PublishProcResp(session.ID, resp); err != nil {
+				log.Printf("[remote-session-processes] falha ao responder pelo NATS: %v", err)
+			}
+		},
+	})
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -2472,6 +2524,10 @@ type webrtcDataSink struct {
 	onFiles func([]byte)
 	// onRdp entrega bytes do canal dedicado RDCleanPath (WebRDP).
 	onRdp func([]byte)
+	// onTerminal entrega stdin/resize/hello do viewer.
+	onTerminal func([]byte)
+	// onProcesses entrega uma requisição de processos/serviços.
+	onProcesses func([]byte)
 }
 
 // RegisterWebRtcDataSink registra os pontos de entrega do caminho de dados desta
@@ -2496,6 +2552,12 @@ func (m *Manager) RegisterWebRtcDataSink(sessionID string, sink webrtcDataSink) 
 	}
 	if sink.onRdp != nil {
 		cur.onRdp = sink.onRdp
+	}
+	if sink.onTerminal != nil {
+		cur.onTerminal = sink.onTerminal
+	}
+	if sink.onProcesses != nil {
+		cur.onProcesses = sink.onProcesses
 	}
 	m.webrtcDataSinks[sessionID] = cur
 }
@@ -2574,6 +2636,59 @@ func (m *Manager) handleWebRtcRdp(sessionID string, data []byte) {
 		return
 	}
 	sink.onRdp(data)
+}
+
+// handleWebRtcTerminal entrega uma mensagem de entrada do terminal.
+//
+// Entrega ao MESMO handler que o .term.in usa, então o rate limit de input, a
+// validação de versão de protocolo e o replay por seq valem igual nos dois
+// caminhos — o data channel não é um caminho privilegiado.
+func (m *Manager) handleWebRtcTerminal(sessionID string, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	sink := m.dataSinkFor(sessionID)
+	if sink.onTerminal == nil {
+		log.Printf("[remote-session-term] mensagem de terminal sem sessao ativa: session=%s bytes=%d", sessionID, len(data))
+		return
+	}
+	sink.onTerminal(data)
+}
+
+// handleWebRtcProcesses entrega uma requisição de processos/serviços.
+//
+// O data channel é orientado a MENSAGEM: cada callback é uma requisição inteira,
+// então o mesmo handleRequest do caminho NATS é aplicado sem framing.
+func (m *Manager) handleWebRtcProcesses(sessionID string, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	sink := m.dataSinkFor(sessionID)
+	if sink.onProcesses == nil {
+		log.Printf("[remote-session-processes] requisicao sem sessao ativa: session=%s bytes=%d", sessionID, len(data))
+		return
+	}
+	sink.onProcesses(data)
+}
+
+// webRtcSendOn monta um enviador para o data channel `label` da sessão.
+//
+// Devolve false quando o canal ainda não está utilizável (negociação em curso,
+// sessão sem WebRTC, payload acima do teto SCTP): o chamador decide cair para o
+// NATS. É o único lugar que decide "pode ir por P2P agora", para as rotas novas
+// não reimplementarem a checagem de stack/estado.
+func (m *Manager) webRtcSendOn(sessionID, label string) func([]byte) bool {
+	return func(data []byte) bool {
+		ws := m.webRtcSessionFor(sessionID)
+		if ws == nil {
+			return false
+		}
+		stack := ws.MediaStack()
+		if stack == nil || !stack.IsConnected() {
+			return false
+		}
+		return stack.Send(label, data)
+	}
 }
 
 // handleWebRtcPeerState traduz o estado do peer connection para o indicador.

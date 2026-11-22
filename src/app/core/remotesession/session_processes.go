@@ -90,6 +90,17 @@ type procResponse struct {
 	System    *sysctrl.SystemInfo   `json:"system,omitempty"`
 }
 
+// HandleRequest processa uma requisição e devolve a resposta serializada.
+//
+// Exportado para o caminho do data channel WebRTC: o canal entrega cada
+// requisição como uma mensagem inteira e o manager responde pelo mesmo canal,
+// reusando ESTA implementação. Não existe uma segunda cópia da lógica de
+// domínio — a validação de versão, as ações e os erros são os mesmos nos dois
+// transportes.
+func (sp *SessionProcesses) HandleRequest(reqData []byte) []byte {
+	return sp.handleRequest(reqData)
+}
+
 func (sp *SessionProcesses) handleRequest(reqData []byte) []byte {
 	var req procRequest
 	if err := json.Unmarshal(reqData, &req); err != nil {
