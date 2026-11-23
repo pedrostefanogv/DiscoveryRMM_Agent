@@ -164,6 +164,19 @@ func buildExecutionMetadata(task AutomationTask, triggerType TriggerType, stage 
 		if result.ExitCodeSet {
 			payload["exitCode"] = result.ExitCode
 		}
+		if trimmedOutput := strings.TrimSpace(result.Output); trimmedOutput != "" {
+			const maxMetadataOutputBytes = 8192
+			if len(trimmedOutput) > maxMetadataOutputBytes {
+				start := len(trimmedOutput) - maxMetadataOutputBytes
+				for start < len(trimmedOutput) && (trimmedOutput[start]&0xC0) == 0x80 {
+					start++
+				}
+				payload["output"] = trimmedOutput[start:]
+				payload["outputTruncated"] = true
+			} else {
+				payload["output"] = trimmedOutput
+			}
+		}
 		// NoOp: execução sem mudança no host (skip do decisor de pacote ou
 		// MDZ_SKIP do script). Vai no metadata do resultado para o servidor
 		// distinguir "instalou" de "já estava lá" no histórico.
