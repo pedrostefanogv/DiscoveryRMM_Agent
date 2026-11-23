@@ -46,6 +46,10 @@ type Collector interface {
 	CollectBitLocker(ctx context.Context) ([]models.BitLockerInfo, error)
 	// CollectBattery returns battery info.
 	CollectBattery(ctx context.Context) ([]models.BatteryInfo, error)
+	// CollectMachineProfile classifica o formato físico da máquina (notebook ×
+	// desktop × tablet × servidor) e a presença de bateria. isServer vem do
+	// inventário de SO e tem precedência (servidor nunca é notebook).
+	CollectMachineProfile(ctx context.Context, isServer bool) (models.MachineProfile, error)
 }
 
 // New returns a native Collector for the current platform.

@@ -106,6 +106,13 @@ type AgentHeartbeat struct {
 	UptimeSeconds         *int64   `json:"uptimeSeconds,omitempty"`
 	ProcessCount          *int     `json:"processCount,omitempty"`
 	CpuTemperatureCelsius *float64 `json:"cpuTemperatureCelsius,omitempty"`
+	// ── Energia (bateria × tomada), ao vivo ──
+	// hasBattery=false esconde o bloco de bateria no painel; campo OMITIDO
+	// quando o SO não soube responder (agente antigo/leitura incerta).
+	HasBattery      *bool `json:"hasBattery,omitempty"`
+	BatteryPercent  *int  `json:"batteryPercent,omitempty"`
+	BatteryOnAc     *bool `json:"batteryOnAc,omitempty"`
+	BatteryCharging *bool `json:"batteryCharging,omitempty"`
 	// ── NOVOS ──
 	PeerID string   `json:"peerId,omitempty"` // libp2p peer ID
 	Addrs  []string `json:"addrs,omitempty"`  // IPs roteáveis
@@ -181,6 +188,15 @@ type AgentHeartbeatMetrics struct {
 	// LoggedUserSince: início da sessão interativa atual (zero quando
 	// desconhecido/sem sessão).
 	LoggedUserSince time.Time
+
+	// ── Energia (bateria × tomada) ──
+	// Ponteiros de propósito: nil = não reportado/desconhecido. Usar "false"
+	// para desconhecido faria o painel esconder o bloco de bateria de um
+	// notebook real. Lidos de core/power (mesma fonte do inventário).
+	HasBattery      *bool
+	BatteryPercent  *int
+	BatteryOnAc     *bool
+	BatteryCharging *bool
 }
 
 type natsResultEnvelope struct {
@@ -664,6 +680,11 @@ func (r *Runtime) collectHeartbeat(cfg Config, ipAddr string) AgentHeartbeat {
 		hb.UptimeSeconds = &m.UptimeSeconds
 		hb.ProcessCount = &m.ProcessCount
 		hb.CpuTemperatureCelsius = nonNegFloatPtr(m.CpuTemperatureCelsius)
+		// Energia: cópia direta dos ponteiros — nil continua omitido no JSON.
+		hb.HasBattery = m.HasBattery
+		hb.BatteryPercent = m.BatteryPercent
+		hb.BatteryOnAc = m.BatteryOnAc
+		hb.BatteryCharging = m.BatteryCharging
 		// P2P addressing enriquecido no heartbeat
 		if m.PeerID != "" {
 			hb.PeerID = m.PeerID

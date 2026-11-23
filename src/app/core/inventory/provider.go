@@ -238,6 +238,15 @@ func (p *Provider) collectWithNative(ctx context.Context) (models.InventoryRepor
 		hw = mergeHardwareInfo(hw, hwDetail)
 	}
 
+	// Perfil físico da máquina (notebook × desktop × tablet × servidor) e
+	// presença de bateria. Não-fatal: qualquer falha deixa o perfil como
+	// "desconhecido" — o servidor guarda NULL e o painel não rotula errado.
+	if profile, profErr := p.native.CollectMachineProfile(ctx, osInfo.IsServer); profErr == nil {
+		hw.ApplyMachineProfile(profile)
+	} else {
+		log.Printf("[inventory] perfil de máquina indisponível (native): %v", profErr)
+	}
+
 	volumes, physicalDisks, err := p.native.CollectDisks(ctx)
 	if err != nil {
 		return models.InventoryReport{}, err
@@ -671,6 +680,17 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 	// exposto ao osquery. Preenche campos vazios (serial, motherboard, BIOS)
 	// usando consultas WMI diretas.
 	enrichHardwareFromWMI(&report.Hardware)
+
+	// Perfil físico da máquina: mesma fonte nativa do caminho principal. Fora do
+	// Windows (ou sem coletor nativo) o perfil fica "desconhecido" — nunca
+	// "desktop". O fallback osquery não resolve ProductType, então
+	// report.OS.IsServer pode vir false aqui: a regra de chassis/bateria não
+	// depende disso, só a precedência de servidor.
+	if p.native != nil {
+		if profile, profErr := p.native.CollectMachineProfile(ctx, report.OS.IsServer); profErr == nil {
+			report.Hardware.ApplyMachineProfile(profile)
+		}
+	}
 
 	diskMediaTypes := collectPhysicalDiskMediaTypes()
 	for i := range report.Volumes {

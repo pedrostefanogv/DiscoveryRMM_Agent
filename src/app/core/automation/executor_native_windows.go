@@ -11,11 +11,10 @@ import (
 	"os/exec"
 	"strings"
 	"time"
-	"unsafe"
 
-	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 
+	"discovery/app/core/power"
 	"discovery/app/core/processutil"
 )
 
@@ -56,7 +55,12 @@ func executePSADTWithLibrary(ctx context.Context, packageID, operation string, p
 		}
 	}
 	// Deploy inteligente: em laptops na bateria, adia para preservar energia.
-	if onBattery, hasBattery := powerStatusNative(); hasBattery && onBattery {
+	//
+	// Só bloqueia com sinal CONFIRMADO (bateria presente E fora da tomada);
+	// leitura incerta (ACLineStatus 255, API indisponível) não adia deploy —
+	// mesma semântica conservadora de antes, agora vinda de core/power para
+	// não divergir do inventário nem do heartbeat.
+	if st, ok := power.Read(); ok && st.BatteryKnown && st.HasBattery && st.OnAC != nil && !*st.OnAC {
 		return ExecutionResult{
 			Success: false, ExitCode: 1618, ExitCodeSet: true,
 			ErrorMessage: "laptop em bateria — deploy adiado para preservar energia",
@@ -221,30 +225,4 @@ func networkOnlineNative() bool {
 		}
 	}
 	return false
-}
-
-// systemPowerStatus espelha SYSTEMPOWERSTATUS (kernel32).
-type systemPowerStatus struct {
-	ACLineStatus        byte
-	BatteryFlag         byte
-	BatteryLifePercent  byte
-	Reserved1           byte
-	BatteryLifeTime     uint32
-	BatteryFullLifeTime uint32
-}
-
-var procGetSystemPowerStatus = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetSystemPowerStatus")
-
-// powerStatusNative devolve (emBateria, temBateria) via GetSystemPowerStatus.
-// Sem bateria (desktop) temBateria=false — nunca adia por energia.
-func powerStatusNative() (onBattery, hasBattery bool) {
-	var ps systemPowerStatus
-	ret, _, _ := procGetSystemPowerStatus.Call(uintptr(unsafe.Pointer(&ps)))
-	if ret == 0 {
-		return false, false
-	}
-	// ACLineStatus: 0 = offline (bateria), 1 = AC, 255 = desconhecido.
-	hasBattery = ps.BatteryFlag != 128 // 128 = NO SYSTEM BATTERY
-	onBattery = ps.ACLineStatus == 0
-	return onBattery, hasBattery
 }

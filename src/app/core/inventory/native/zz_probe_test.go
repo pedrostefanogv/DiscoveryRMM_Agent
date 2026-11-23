@@ -6,7 +6,24 @@ import (
 	"context"
 	"fmt"
 	"testing"
+
+	"discovery/app/core/power"
 )
+
+// derefBool/derefInt existem só para impressão legível no probe.
+func derefBool(v *bool) string {
+	if v == nil {
+		return "nil"
+	}
+	return fmt.Sprintf("%v", *v)
+}
+
+func derefInt(v *int) string {
+	if v == nil {
+		return "nil"
+	}
+	return fmt.Sprintf("%d", *v)
+}
 
 // TestZZProbeCollectorsManual é um probe manual (go test -run ZZProbeCollectors -v)
 // para validar no runtime real desta máquina os coletores corrigidos.
@@ -44,6 +61,19 @@ func TestZZProbeCollectorsManual(t *testing.T) {
 
 	bitlocker, blerr := collectBitLockerNative(ctx)
 	fmt.Printf("bitLocker=%d err=%v\n", len(bitlocker), blerr)
+
+	profile := collectMachineProfileNative(ctx, false)
+	fmt.Printf("machineProfile=%+v\n", profile)
+	if profile.IsLaptop != nil {
+		fmt.Printf("  isLaptop=%v\n", *profile.IsLaptop)
+	}
+	if profile.PCSystemType != nil {
+		fmt.Printf("  pcSystemType=%v\n", *profile.PCSystemType)
+	}
+	if st, ok := power.Read(); ok {
+		fmt.Printf("  power: batteryKnown=%v hasBattery=%v onAC=%v charging=%v percent=%v\n",
+			st.BatteryKnown, st.HasBattery, derefBool(st.OnAC), derefBool(st.Charging), derefInt(st.Percent))
+	}
 
 	rawCPU, cerr := wmiQuery("root\\cimv2", "SELECT Name, NumberOfCores, NumberOfLogicalProcessors FROM Win32_Processor")
 	fmt.Printf("rawCPU rows=%d err=%v\n", len(rawCPU), cerr)

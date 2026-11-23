@@ -78,3 +78,10 @@ func (unsupportedCollector) CollectBitLocker(context.Context) ([]models.BitLocke
 func (unsupportedCollector) CollectBattery(context.Context) ([]models.BatteryInfo, error) {
 	return nil, ErrUnsupported
 }
+
+// CollectMachineProfile devolve perfil desconhecido: fora do Windows não há
+// leitura de chassis/energia, e o consumidor precisa distinguir isso de
+// "desktop".
+func (unsupportedCollector) CollectMachineProfile(context.Context, bool) (models.MachineProfile, error) {
+	return models.MachineProfile{MachineType: models.MachineTypeUnknown}, nil
+}

@@ -56,6 +56,33 @@ type agentHardwareComponents struct {
 	// (sync parcial), a API preserva as listas já armazenadas (merge).
 	StartupItems   []agentStartupItemInfo   `json:"startupItems,omitempty"`
 	ScheduledTasks []agentScheduledTaskInfo `json:"scheduledTasks,omitempty"`
+
+	// Batteries: lista estruturada de baterias (desktop/VM = vazia). O raw
+	// continua carregando `battery` para agentes antigos e para quem já lê o
+	// inventário cru; esta lista é o contrato novo, com ON AC/charging.
+	Batteries []agentBatteryInfo `json:"batteries,omitempty"`
+}
+
+// agentBatteryInfo é uma bateria no formato do envelope da API.
+type agentBatteryInfo struct {
+	Manufacturer        string `json:"manufacturer,omitempty"`
+	Model               string `json:"model,omitempty"`
+	SerialNumber        string `json:"serialNumber,omitempty"`
+	Chemistry           string `json:"chemistry,omitempty"`
+	State               string `json:"state,omitempty"`
+	Present             *bool  `json:"present,omitempty"`
+	OnAC                *bool  `json:"onAc,omitempty"`
+	Charging            bool   `json:"charging"`
+	Charged             bool   `json:"charged"`
+	PercentRemaining    int    `json:"percentRemaining"`
+	DesignedCapacityMAh int    `json:"designedCapacityMAh,omitempty"`
+	MaxCapacityMAh      int    `json:"maxCapacityMAh,omitempty"`
+	CurrentCapacityMAh  int    `json:"currentCapacityMAh,omitempty"`
+	Health              string `json:"health,omitempty"`
+	CycleCount          int    `json:"cycleCount,omitempty"`
+	MinutesUntilEmpty   int    `json:"minutesUntilEmpty,omitempty"`
+	MinutesToCharge     int    `json:"minutesToCharge,omitempty"`
+	CollectedAt         string `json:"collectedAt"`
 }
 
 // agentStartupItemInfo item de inicialização no formato do envelope da API.
@@ -142,8 +169,16 @@ type agentHardwareInfo struct {
 	StorageRDS     *native.StorageRDSInventory `json:"storageRds,omitempty"`
 	TpmEkHash      string                      `json:"tpmEk,omitempty"`
 	SmbiosUuid     string                      `json:"smbiosUuid,omitempty"`
-	CollectedAt    string                      `json:"collectedAt"`
-	UpdatedAt      string                      `json:"updatedAt"`
+	// ── Formato físico da máquina (notebook × desktop × tablet × servidor) ──
+	// IsLaptop é *bool: OMITIDO = "não reportado" (nunca "não é notebook").
+	// A API guarda em coluna nullable e o painel esconde o selo nesse caso.
+	IsLaptop     *bool  `json:"isLaptop,omitempty"`
+	MachineType  string `json:"machineType,omitempty"`
+	ChassisType  *int   `json:"chassisType,omitempty"`
+	PCSystemType *int   `json:"pcSystemType,omitempty"`
+	HasBattery   *bool  `json:"hasBattery,omitempty"`
+	CollectedAt  string `json:"collectedAt"`
+	UpdatedAt    string `json:"updatedAt"`
 }
 
 type agentDiskInfo struct {
@@ -1677,6 +1712,11 @@ func buildAgentHardwareEnvelope(ctx context.Context, report models.InventoryRepo
 		OSDomain:                trimToMaxLen(strings.TrimSpace(report.OS.Domain), 100),
 		OSWorkgroup:             trimToMaxLen(strings.TrimSpace(report.OS.Workgroup), 100),
 		OSPartOfDomain:          report.OS.PartOfDomain,
+		IsLaptop:                report.Hardware.IsLaptop,
+		MachineType:             trimToMaxLen(strings.TrimSpace(report.Hardware.MachineType), 20),
+		ChassisType:             report.Hardware.ChassisType,
+		PCSystemType:            report.Hardware.PCSystemType,
+		HasBattery:              report.Hardware.HasBattery,
 		CollectedAt:             collected,
 		UpdatedAt:               updated,
 	}
@@ -1724,6 +1764,7 @@ func buildAgentHardwareEnvelope(ctx context.Context, report models.InventoryRepo
 		OpenSockets:     mapAgentOpenSockets(report.OpenSockets),
 		StartupItems:    mapAgentStartupItems(report.StartupItems),
 		ScheduledTasks:  mapAgentScheduledTasks(report.ScheduledTasks),
+		Batteries:       mapAgentBatteries(report.Battery, collected),
 	}
 	compJSON, _ := json.Marshal(components)
 
@@ -1760,6 +1801,53 @@ func primaryInventoryLoggedUser(users []models.LoggedInUser) string {
 		}
 	}
 	return ""
+}
+
+// mapAgentBatteries converte as baterias do inventário para o formato do
+// envelope da API. Desktop/VM devolvem nil (lista omitida) — a API preserva a
+// lista anterior nesse caso, como faz com as demais listas.
+func mapAgentBatteries(batteries []models.BatteryInfo, collected string) []agentBatteryInfo {
+	if len(batteries) == 0 {
+		return nil
+	}
+
+	items := make([]agentBatteryInfo, 0, len(batteries))
+	for _, b := range batteries {
+		items = append(items, agentBatteryInfo{
+			Manufacturer:        trimToMaxLen(strings.TrimSpace(b.Manufacturer), 200),
+			Model:               trimToMaxLen(strings.TrimSpace(b.Model), 200),
+			SerialNumber:        trimToMaxLen(strings.TrimSpace(b.SerialNumber), 100),
+			Chemistry:           trimToMaxLen(strings.TrimSpace(b.Chemistry), 50),
+			State:               trimToMaxLen(strings.TrimSpace(b.State), 50),
+			Present:             b.Present,
+			OnAC:                b.OnAC,
+			Charging:            b.Charging,
+			Charged:             b.Charged,
+			PercentRemaining:    clampBatteryPercent(b.PercentRemaining),
+			DesignedCapacityMAh: b.DesignedCapacityMAh,
+			MaxCapacityMAh:      b.MaxCapacityMAh,
+			CurrentCapacityMAh:  b.CurrentCapacityMAh,
+			Health:              trimToMaxLen(strings.TrimSpace(b.Health), 50),
+			CycleCount:          b.CycleCount,
+			MinutesUntilEmpty:   b.MinutesUntilEmpty,
+			MinutesToCharge:     b.MinutesToFullCharge,
+			CollectedAt:         collected,
+		})
+	}
+	return items
+}
+
+// clampBatteryPercent limita o percentual a 0-100. Defensivo: 255 é o
+// sentinela de "desconhecido" em SYSTEM_POWER_STATUS e valores fora da faixa
+// não podem chegar ao painel como "255%".
+func clampBatteryPercent(v int) int {
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 0
+	}
+	return v
 }
 
 func buildCleanInventoryRaw(report models.InventoryReport, disks []agentDiskInfo, adapters []agentNetworkAdapterInfo, modules []agentMemoryModuleInfo, printers []agentPrinterInfo) json.RawMessage {

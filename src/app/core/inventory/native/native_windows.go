@@ -91,3 +91,9 @@ func (windowsCollector) CollectBitLocker(ctx context.Context) ([]models.BitLocke
 func (windowsCollector) CollectBattery(ctx context.Context) ([]models.BatteryInfo, error) {
 	return collectBatteryNative(ctx)
 }
+
+// CollectMachineProfile classifica o formato físico da máquina via
+// PCSystemType/PCSystemTypeEx (WMI) + presença de bateria (GetSystemPowerStatus).
+func (windowsCollector) CollectMachineProfile(ctx context.Context, isServer bool) (models.MachineProfile, error) {
+	return collectMachineProfileNative(ctx, isServer), nil
+}

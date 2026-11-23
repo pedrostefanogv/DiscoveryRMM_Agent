@@ -188,6 +188,15 @@ func mergeHeartbeatMetrics(dst *agentconn.AgentHeartbeatMetrics, src *agentconn.
 	if src.Port > 0 {
 		dst.Port = src.Port
 	}
+
+	// Energia (bateria × tomada). Mesma armadilha do LoggedUser acima: o struct
+	// é REMONTADO em getHeartbeatMetrics, então sem esta cópia o valor coletado
+	// era descartado e o painel nunca recebia a bateria. Ponteiros são copiados
+	// como vieram — ausente continua ausente (nil = desconhecido), nunca false.
+	dst.HasBattery = src.HasBattery
+	dst.BatteryPercent = src.BatteryPercent
+	dst.BatteryOnAc = src.BatteryOnAc
+	dst.BatteryCharging = src.BatteryCharging
 }
 
 func (a *App) getKnownP2PPeers() int {

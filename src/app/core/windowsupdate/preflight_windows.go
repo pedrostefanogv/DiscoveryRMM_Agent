@@ -3,9 +3,9 @@
 package windowsupdate
 
 import (
-	"unsafe"
-
 	"golang.org/x/sys/windows"
+
+	"discovery/app/core/power"
 )
 
 // preflightDiskFloorBytes e o piso de espaco livre exigido antes de instalar.
@@ -15,31 +15,13 @@ import (
 // (MaxDownloadSize), o chamador pode exigir mais.
 const preflightDiskFloorBytes = int64(2) << 30 // 2 GiB
 
-// systemPowerStatus espelha SYSTEM_POWER_STATUS (winbase.h).
-type systemPowerStatus struct {
-	ACLineStatus        byte
-	BatteryFlag         byte
-	BatteryLifePercent  byte
-	SystemStatusFlag    byte
-	BatteryLifeTime     uint32
-	BatteryFullLifeTime uint32
-}
-
-var (
-	kernel32Power            = windows.NewLazySystemDLL("kernel32.dll")
-	procGetSystemPowerStatus = kernel32Power.NewProc("GetSystemPowerStatus")
-)
-
-// onBattery informa se a maquina esta sem energia AC. Em erro assume AC
-// (nao bloqueia por um sinal incerto).
+// onBattery informa se a maquina esta sem energia AC. Em erro (ou leitura
+// incerta) assume AC — nunca bloqueia update por um sinal incerto.
+//
+// A leitura em si vive em core/power para ser a MESMA usada pelo inventário,
+// pelo heartbeat e pelo adiamento de deploy.
 func onBattery() bool {
-	var status systemPowerStatus
-	ret, _, _ := procGetSystemPowerStatus.Call(uintptr(unsafe.Pointer(&status)))
-	if ret == 0 {
-		return false
-	}
-	// ACLineStatus: 0 = offline (bateria), 1 = online, 255 = desconhecido.
-	return status.ACLineStatus == 0
+	return power.OnBattery()
 }
 
 // freeDiskBytes devolve o espaco livre na unidade do sistema (C:).

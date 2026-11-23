@@ -62,6 +62,52 @@ type HardwareInfo struct {
 	BIOSReleaseDate         string `json:"biosReleaseDate"`
 	BIOSSerial              string `json:"biosSerial"`
 	MemoryModulesCount      int    `json:"memoryModulesCount"`
+
+	// ── Formato físico da máquina (notebook × desktop × tablet × servidor) ──
+	//
+	// IsLaptop/ChassisType/PCSystemType/HasBattery são PONTEIROS de propósito:
+	// nil = "não foi possível ler" e NUNCA "não é notebook". O servidor guarda
+	// colunas nullable com a mesma convenção, então VM/agente antigo não vira
+	// "desktop" por omissão no painel.
+	IsLaptop     *bool  `json:"isLaptop,omitempty"`
+	MachineType  string `json:"machineType,omitempty"`
+	ChassisType  *int   `json:"chassisType,omitempty"`
+	PCSystemType *int   `json:"pcSystemType,omitempty"`
+	HasBattery   *bool  `json:"hasBattery,omitempty"`
+}
+
+// Valores canônicos de MachineProfile.MachineType. O vocabulário é fechado e
+// compartilhado com a API (.NET) e com o painel: qualquer valor fora dele é
+// normalizado para MachineTypeUnknown pelo servidor.
+const (
+	MachineTypeNotebook = "notebook"
+	MachineTypeDesktop  = "desktop"
+	MachineTypeTablet   = "tablet"
+	MachineTypeServer   = "server"
+	MachineTypeUnknown  = "unknown"
+)
+
+// MachineProfile descreve o formato físico da máquina e se há bateria.
+//
+// Produzido pelos coletores nativos (ver core/inventory/native). Os campos
+// anuláveis seguem a convenção do pacote power: nil = desconhecido.
+type MachineProfile struct {
+	IsLaptop     *bool
+	MachineType  string
+	ChassisType  *int
+	PCSystemType *int
+	HasBattery   *bool
+}
+
+// ApplyMachineProfile copia o perfil para o HardwareInfo. Existe para que o
+// provider não precise repetir a mesma atribuição em todos os caminhos de
+// coleta (nativo e osquery).
+func (h *HardwareInfo) ApplyMachineProfile(p MachineProfile) {
+	h.IsLaptop = p.IsLaptop
+	h.MachineType = p.MachineType
+	h.ChassisType = p.ChassisType
+	h.PCSystemType = p.PCSystemType
+	h.HasBattery = p.HasBattery
 }
 
 type MemoryModule struct {
@@ -89,13 +135,19 @@ type MemoryModule struct {
 }
 
 type BatteryInfo struct {
-	Manufacturer         string `json:"manufacturer"`
-	Model                string `json:"model"`
-	SerialNumber         string `json:"serialNumber"`
-	CycleCount           int    `json:"cycleCount"`
-	State                string `json:"state"`
-	Charging             bool   `json:"charging"`
-	Charged              bool   `json:"charged"`
+	Manufacturer string `json:"manufacturer"`
+	Model        string `json:"model"`
+	SerialNumber string `json:"serialNumber"`
+	CycleCount   int    `json:"cycleCount"`
+	State        string `json:"state"`
+	Charging     bool   `json:"charging"`
+	Charged      bool   `json:"charged"`
+	// OnAC indica se a máquina estava NA TOMADA no momento da coleta.
+	// Ponteiro: nil = não reportado (agente antigo / SO não soube informar).
+	OnAC *bool `json:"onAc,omitempty"`
+	// Present indica presença física da bateria (false em desktop/VM, nil
+	// quando o SO não soube dizer).
+	Present              *bool  `json:"present,omitempty"`
 	DesignedCapacityMAh  int    `json:"designedCapacityMAh"`
 	MaxCapacityMAh       int    `json:"maxCapacityMAh"`
 	CurrentCapacityMAh   int    `json:"currentCapacityMAh"`

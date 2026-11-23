@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"discovery/app/core/agentconn"
+	"discovery/app/core/power"
 	"discovery/app/core/processutil"
 )
 
@@ -164,6 +165,20 @@ func collectHeartbeatMetricsWindows(ctx context.Context, metrics *agentconn.Agen
 
 	// Temperatura da CPU: PDH nativo (pdh.dll) — zero subprocessos
 	collectHeartbeatCPUTemperatureWindowsNative(ctx, metrics)
+
+	// Energia (bateria × tomada): mesma leitura nativa usada pelo inventário e
+	// pelo adiamento de deploy (core/power). Ponteiros: nil = desconhecido, o
+	// que mantém o painel honesto (não mostra "0%" nem "sem bateria" para
+	// leitura que falhou).
+	if st, ok := power.Read(); ok {
+		if st.BatteryKnown {
+			has := st.HasBattery
+			metrics.HasBattery = &has
+		}
+		metrics.BatteryOnAc = st.OnAC
+		metrics.BatteryCharging = st.Charging
+		metrics.BatteryPercent = st.Percent
+	}
 
 	// Usuário logado (sessão de console ativa) — reportado no heartbeat para
 	// exibição/busca no console web. Vazio quando não há sessão interativa.
