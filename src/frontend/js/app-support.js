@@ -739,15 +739,63 @@ function ticketDepartmentFormIsLoading(departmentId) {
   return false;
 }
 
+function renderTextWithLinks(container, text) {
+  if (!container) return;
+  var raw = String(text || '');
+  container.textContent = '';
+  if (!raw) return;
+  var re = /(https?:\/\/[^\s<>"')]+)/g;
+  var last = 0;
+  var m;
+  while ((m = re.exec(raw)) !== null) {
+    if (m.index > last) {
+      container.appendChild(document.createTextNode(raw.slice(last, m.index)));
+    }
+    var url = m[1];
+    var a = document.createElement('a');
+    a.href = url;
+    a.textContent = url;
+    a.className = 'support-inline-link';
+    a.rel = 'noopener noreferrer';
+    a.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      if (window.wails && typeof window.wails.openURL === 'function') {
+        window.wails.openURL(url);
+      } else {
+        window.open(url, '_blank', 'noopener');
+      }
+    });
+    container.appendChild(a);
+    last = re.lastIndex;
+  }
+  if (last < raw.length) {
+    container.appendChild(document.createTextNode(raw.slice(last)));
+  }
+}
+
 function updateTicketOpenFieldsVisibility() {
   var departmentId = selectedDepartmentId();
   var hasDepartment = !!departmentId;
   var section = document.getElementById('ticketOpenFields');
   if (section) section.classList.toggle('hidden', !hasDepartment);
+  var loading = hasDepartment && ticketDepartmentFormIsLoading(departmentId);
+  if (section) {
+    var loader = document.getElementById('ticketDeptLoadingHint');
+    if (loading) {
+      if (!loader) {
+        loader = document.createElement('div');
+        loader.id = 'ticketDeptLoadingHint';
+        loader.className = 'meta';
+        loader.textContent = 'Carregando campos do departamento...';
+        section.insertBefore(loader, section.firstChild);
+      }
+    } else if (loader) {
+      loader.remove();
+    }
+  }
   var btn = document.getElementById('submitTicketBtn');
   if (btn) {
     var offline = !!supportOfflineReadOnly || !!supportServerDisconnected;
-    var loading = hasDepartment && ticketDepartmentFormIsLoading(departmentId);
     btn.disabled = !hasDepartment || offline || loading;
   }
 }
@@ -1769,6 +1817,10 @@ function initSupport() {
       return;
     }
 
+    // Limpa marcações anteriores de erro.
+    var prevInvalid = document.querySelectorAll('#supportForm .field-invalid');
+    Array.prototype.forEach.call(prevInvalid, function (el) { el.classList.remove('field-invalid'); });
+
     // Obrigatorios: perguntas do modelo + campos personalizados do departamento.
     var templateExtra = collectTicketTemplateExtra(template);
     var departmentExtra = collectDepartmentFieldValues();
@@ -1776,6 +1828,12 @@ function initSupport() {
       .concat(departmentExtra.missing)
       .concat(collectTicketFormSchemaMissing());
     if (missingFields.length) {
+      var firstEmpty = document.querySelector('#supportForm [required]:invalid, #supportForm input[data-required="true"][value=""], #supportForm select[data-required="true"]');
+      if (firstEmpty) {
+        firstEmpty.classList.add('field-invalid');
+        if (typeof firstEmpty.scrollIntoView === 'function') firstEmpty.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        if (typeof firstEmpty.focus === 'function') firstEmpty.focus();
+      }
       showToast(translate('support.fieldRequired', { fields: missingFields.join(', ') }), 'error');
       return;
     }
@@ -1991,6 +2049,37 @@ function initSupport() {
     });
   }
 
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape') return;
+    if (closeTicketModalEl && !closeTicketModalEl.classList.contains('hidden')) {
+      hideCloseTicketModal();
+    }
+    var attModal = document.getElementById('ticketAttachmentsModal');
+    if (attModal && !attModal.classList.contains('hidden') && typeof hideTicketAttachmentsModal === 'function') {
+      hideTicketAttachmentsModal();
+    }
+  });
+
+  function bindSupportDropzone(containerEl, onDropFiles) {
+    if (!containerEl) return;
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(function (evName) {
+      containerEl.addEventListener(evName, function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (evName === 'dragenter' || evName === 'dragover') {
+          containerEl.classList.add('is-dragover');
+        } else {
+          containerEl.classList.remove('is-dragover');
+        }
+        if (evName === 'drop' && event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length) {
+          onDropFiles(event.dataTransfer.files);
+        }
+      });
+    });
+  }
+  bindSupportDropzone(document.getElementById('supportNewTicketView'), handleNewTicketFiles);
+  bindSupportDropzone(commentComposeEl, handleCommentFiles);
+
   if (openCloseTicketBtnEl) {
     openCloseTicketBtnEl.addEventListener('click', function () {
       if (!currentTicketId) return;
@@ -2045,7 +2134,9 @@ async function loadSupportTickets(opts) {
   var options = opts || {};
   if (!options.keepView) showSupportList();
 
-  supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('common.loading')) + '</div>';
+  supportTicketsListEl.innerHTML =
+    '<div class="sc-skeleton-list" aria-label="' + escapeHtml(translate('common.loading')) + '">' +
+    '<div class="support-skeleton"></div><div class="support-skeleton"></div><div class="support-skeleton"></div></div>';
   if (ticketsResultCountEl) ticketsResultCountEl.textContent = '';
 
   var staleBanner = document.getElementById('supportStaleBanner');
@@ -2271,7 +2362,7 @@ function renderTicketDetail(t) {
       (ratedAt ? '<span>' + escapeHtml(translate('support.ratedAt', { date: ratedAt })) + '</span>' : '') +
       (ratedBy ? '<span>' + escapeHtml(translate('support.ratedBy', { name: ratedBy })) + '</span>' : '');
   }
-  if (ticketDetailDescEl) ticketDetailDescEl.textContent = t.description || '';
+  if (ticketDetailDescEl) renderTextWithLinks(ticketDetailDescEl, t.description || '');
 
   // Fechado: sem botao de fechar e sem compositor de comentario; oferece
   // reabertura e a avaliacao (CSAT) quando ainda nao avaliado.
@@ -2637,15 +2728,34 @@ function renderCommentAttachments() {
       tile.classList.add('chat-attachment--error');
       var error = tile.querySelector('.chat-attachment-meta');
       if (error) {
-        // escapeHtml no texto do erro do binding: pode vir da resposta do
-        // servidor e o meta e textContent (escapeHtml mantem o padrao do
-        // arquivo para o caso de o titulo virar HTML).
         error.textContent = translate('support.attachmentError', {
           name: item.fileName || 'anexo',
           error: String(item.error || ''),
         });
       }
       tile.title = String(item.error || '');
+      if (item.commentId) {
+        var retryBtn = document.createElement('button');
+        retryBtn.type = 'button';
+        retryBtn.className = 'btn btn-xs btn-secondary';
+        retryBtn.textContent = 'Tentar novamente';
+        retryBtn.style.marginLeft = '6px';
+        retryBtn.addEventListener('click', async function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          item.failed = false;
+          item.error = null;
+          renderCommentAttachments();
+          await uploadCommentAttachment(currentTicketId, item.commentId, item);
+          commentAttachments = commentAttachments.filter(function (entry) { return entry.failed; });
+          renderCommentAttachments();
+          if (!item.failed) {
+            showToast(translate('support.commentSent'), 'success');
+            await loadTicketComments(currentTicketId);
+          }
+        });
+        tile.appendChild(retryBtn);
+      }
     } else if (item.uploading) {
       tile.classList.add('chat-attachment--uploading');
       var sending = tile.querySelector('.chat-attachment-meta');
@@ -2859,22 +2969,24 @@ async function submitTicketComment() {
     return;
   }
   var content = commentInputEl.value.trim();
-  if (!content) { showToast(translate('support.enterComment'), 'error'); return; }
+  var queuedAttachments = commentAttachments.filter(function (item) { return !item.failed && !item.attachmentId; });
+  if (!content && queuedAttachments.length === 0) { showToast(translate('support.enterComment'), 'error'); return; }
   if (commentAttachmentsUploading()) {
     showToast(translate('support.attachmentUploading'), 'error');
     return;
   }
-  var queuedAttachments = commentAttachments.filter(function (item) { return !item.failed && !item.attachmentId; });
+  var payloadContent = content || 'Anexo enviado';
   submitCommentBtnEl.disabled = true;
   try {
     // O comentario nasce ANTES dos anexos: o anexo de conversa e filho do
     // comentario (EntityType "TicketComment"), entao precisamos do id.
-    var created = await appApi().AddTicketCommentWithOptions(currentTicketId, content);
+    var created = await appApi().AddTicketCommentWithOptions(currentTicketId, payloadContent);
     var commentId = created && created.id;
     commentInputEl.value = '';
     if (queuedAttachments.length) {
       if (commentId) {
         for (var i = 0; i < queuedAttachments.length; i++) {
+          queuedAttachments[i].commentId = commentId;
           await uploadCommentAttachment(currentTicketId, commentId, queuedAttachments[i]);
         }
       } else {
@@ -3404,7 +3516,9 @@ async function loadTicketComments(ticketId) {
   if (!commentsListEl) return;
   // Policy do nivel conversa (limite/tipos) para validar o anexo antes da fila.
   void ensureCommentAttachmentSettings();
-  commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.loadingComments')) + '</div>';
+  commentsListEl.innerHTML =
+    '<div class="sc-skeleton-list" aria-label="' + escapeHtml(translate('support.loadingComments')) + '">' +
+    '<div class="support-skeleton"></div><div class="support-skeleton"></div></div>';
   try {
     var comments = await appApi().GetTicketComments(ticketId);
     // Ignora resposta tardia de um chamado que nao esta mais aberto (troca rapida).

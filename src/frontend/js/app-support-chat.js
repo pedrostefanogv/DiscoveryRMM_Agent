@@ -496,7 +496,11 @@
 
     var bubble = document.createElement("div");
     bubble.className = "sc-bubble";
-    bubble.textContent = message.body || "";
+    if (typeof renderTextWithLinks === "function") {
+      renderTextWithLinks(bubble, message.body || "");
+    } else {
+      bubble.textContent = message.body || "";
+    }
     row.appendChild(bubble);
 
     var attachments = Array.isArray(message.attachments) ? message.attachments : [];
@@ -508,7 +512,12 @@
     meta.className = "sc-meta";
     var who = own ? "Você" : (message.authorName || "Suporte");
     var when = formatTime(message.createdAt);
-    meta.textContent = when ? who + " · " + when : who;
+    if (own && (!message.sequenceNumber || message.sequenceNumber === 0)) {
+      meta.classList.add("sc-msg-sending");
+      meta.textContent = (when ? who + " · " + when + " · " : who + " · ") + "Enviando…";
+    } else {
+      meta.textContent = when ? who + " · " + when : who;
+    }
     row.appendChild(meta);
 
     return row;
@@ -1012,7 +1021,9 @@
     // Antes ela ordenava primeiro e a mensagem recém-enviada aparecia no topo da
     // conversa até o snapshot canônico chegar.
     function order(message) {
-      return message.sequenceNumber > 0 ? message.sequenceNumber : Number.MAX_SAFE_INTEGER;
+      if (message.sequenceNumber > 0) return message.sequenceNumber;
+      var ts = message.createdAt ? new Date(message.createdAt).getTime() : 0;
+      return Number.MAX_SAFE_INTEGER - 1000000000000 + (Number.isFinite(ts) ? Math.floor(ts / 1000) : 0);
     }
 
     merged.sort(function (a, b) {
@@ -1298,10 +1309,30 @@
     return err.message || String(err);
   }
 
-  function showBanner(text) {
+  var bannerDismissTimer = null;
+  function showBanner(text, autoDismissMs) {
     if (!els.banner) return;
+    if (bannerDismissTimer) {
+      clearTimeout(bannerDismissTimer);
+      bannerDismissTimer = null;
+    }
     els.banner.hidden = false;
-    els.banner.textContent = text;
+    els.banner.textContent = '';
+    els.banner.appendChild(document.createTextNode(String(text || '')));
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'sc-banner-close';
+    closeBtn.setAttribute('aria-label', 'Fechar aviso');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', function () {
+      if (els.banner) els.banner.hidden = true;
+    });
+    els.banner.appendChild(closeBtn);
+    if (autoDismissMs > 0) {
+      bannerDismissTimer = setTimeout(function () {
+        if (els.banner) els.banner.hidden = true;
+      }, autoDismissMs);
+    }
   }
 
   /**
@@ -1979,14 +2010,28 @@
       attachFiles(event.clipboardData.files);
     });
 
-    ["dragover", "drop"].forEach(function (name) {
+    ["dragenter", "dragover", "dragleave", "drop"].forEach(function (name) {
       document.addEventListener(name, function (event) {
         if (!supportChatOwnsAttachmentTarget(event.target)) return;
         event.preventDefault();
+        var view = byId("supportChatView");
+        if (view) {
+          if (name === "dragenter" || name === "dragover") {
+            view.classList.add("is-dragover");
+          } else if (name === "dragleave" || name === "drop") {
+            view.classList.remove("is-dragover");
+          }
+        }
         if (name === "drop" && event.dataTransfer && event.dataTransfer.files) {
           attachFiles(event.dataTransfer.files);
         }
       });
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && els.confirm && !els.confirm.hidden) {
+        els.confirm.hidden = true;
+      }
     });
 
     on(els.inviteAccept, "click", function () { respondInvite(true); });

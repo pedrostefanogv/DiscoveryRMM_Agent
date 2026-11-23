@@ -1459,6 +1459,10 @@ func (a *App) reconcileSupportChat() {
 	if !supportChatReconcileNeeded(windowOpen, status, tick) {
 		return
 	}
+	// Com NATS conectado e sem convite pendente nem conversa ativa, reduz polling REST para 5 min.
+	if status != supportchat.StatusWaiting && status != supportchat.StatusActive && a.supportChatService().State().Connected && tick%supportChatActiveReconcileEvery != 0 {
+		return
+	}
 
 	a.resumeSupportChatIfActive(0)
 }

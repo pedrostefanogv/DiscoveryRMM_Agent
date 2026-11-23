@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"reflect"
 	"regexp"
 	"sort"
@@ -1629,8 +1630,9 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+	s.observeAuthorization(resp, respBody)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+		wrapped := fmt.Errorf("%s", ticketAPIErrorMessage(resp.StatusCode, string(respBody)))
 		s.supportLogf("erro na criação do chamado: %v | payload=%s | resposta=%s", wrapped, shortBodyForLog(reqBody), shortBodyForLog(respBody))
 		return APITicket{}, wrapped
 	}
@@ -1927,8 +1929,9 @@ func (s *Service) AddTicketCommentWithOptions(ticketID, content string) (TicketC
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+	s.observeAuthorization(resp, respBody)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return TicketComment{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+		return TicketComment{}, fmt.Errorf("%s", ticketAPIErrorMessage(resp.StatusCode, string(respBody)))
 	}
 
 	s.markReachable()
@@ -2346,6 +2349,82 @@ func (s *Service) DownloadTicketCommentAttachment(ticketID, commentID, attachmen
 	return data, contentType, nil
 }
 
+// DownloadTicketCommentAttachmentToFile faz streaming de um anexo do comentário direto para destPath (sem carregar em RAM).
+func (s *Service) DownloadTicketCommentAttachmentToFile(ticketID, commentID, attachmentID, destPath string) error {
+	ticketID = strings.TrimSpace(ticketID)
+	commentID = strings.TrimSpace(commentID)
+	attachmentID = strings.TrimSpace(attachmentID)
+	if !guidPattern.MatchString(ticketID) || !guidPattern.MatchString(commentID) || !guidPattern.MatchString(attachmentID) {
+		return fmt.Errorf("identificador inválido")
+	}
+
+	cfg := s.debugConfig()
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID +
+		"/comments/" + commentID + "/attachments/" + attachmentID + "/download"
+	return s.streamDownloadToFile(target, "baixar anexo do comentário", destPath)
+}
+
+// DownloadTicketAttachmentToFile faz streaming de um anexo do chamado direto para destPath (sem carregar em RAM).
+func (s *Service) DownloadTicketAttachmentToFile(ticketID, attachmentID, destPath string) error {
+	ticketID = strings.TrimSpace(ticketID)
+	attachmentID = strings.TrimSpace(attachmentID)
+	if !guidPattern.MatchString(ticketID) || !guidPattern.MatchString(attachmentID) {
+		return fmt.Errorf("identificador inválido")
+	}
+
+	cfg := s.debugConfig()
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID +
+		"/attachments/" + attachmentID + "/download"
+	return s.streamDownloadToFile(target, "baixar anexo", destPath)
+}
+
+func (s *Service) streamDownloadToFile(target, action, destPath string) error {
+	cfg := s.debugConfig()
+	req, err := http.NewRequestWithContext(s.ctxOrBackground(), http.MethodGet, target, nil)
+	if err != nil {
+		return err
+	}
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return err
+	}
+	resp, err := tlsutil.NewHTTPClient(90 * time.Second).Do(req)
+	if err != nil {
+		return s.transportError(action, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		s.observeAuthorization(resp, body)
+		return fmt.Errorf("%s", ticketAPIErrorMessage(resp.StatusCode, string(body)))
+	}
+
+	tmpPath := destPath + ".part"
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("não foi possível criar arquivo de destino: %w", err)
+	}
+	n, copyErr := io.Copy(f, resp.Body)
+	closeErr := f.Close()
+	if copyErr != nil {
+		_ = os.Remove(tmpPath)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return closeErr
+	}
+	if n == 0 {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("anexo vazio")
+	}
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("não foi possível salvar o anexo: %w", err)
+	}
+	s.markReachable()
+	return nil
+}
+
 // GetTicketAttachments lista os anexos do chamado na visao CONSOLIDADA
 // (repositório do chamado + conversa), paginada no servidor. Antes o agent só
 // enxergava os anexos de conversa grudados nos comentários; os do repositório
@@ -2505,8 +2584,9 @@ func (s *Service) CloseSupportTicket(ticketID string, input CloseTicketInput) (A
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+	s.observeAuthorization(resp, respBody)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return APITicket{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+		return APITicket{}, fmt.Errorf("%s", ticketAPIErrorMessage(resp.StatusCode, string(respBody)))
 	}
 
 	// O /close devolve um resumo ({ticketId, closed, workflowStateId, rating}),
@@ -2568,8 +2648,9 @@ func (s *Service) ReopenSupportTicket(ticketID, reason string) (APITicket, error
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+	s.observeAuthorization(resp, respBody)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return APITicket{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+		return APITicket{}, fmt.Errorf("%s", ticketAPIErrorMessage(resp.StatusCode, string(respBody)))
 	}
 
 	ticket, err := s.GetSupportTicketDetails(ticketID)
@@ -2626,8 +2707,9 @@ func (s *Service) RateSupportTicket(ticketID string, rating int, feedback string
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+	s.observeAuthorization(resp, respBody)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return APITicket{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+		return APITicket{}, fmt.Errorf("%s", ticketAPIErrorMessage(resp.StatusCode, string(respBody)))
 	}
 
 	ticket, err := s.GetSupportTicketDetails(ticketID)

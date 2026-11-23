@@ -46,6 +46,8 @@ const (
 	// supportRPCWriteTimeout cobre mutações (create/close/comment): o POST tem
 	// retry idempotente de até 2×15s no serviço.
 	supportRPCWriteTimeout = 30 * time.Second
+	// supportRPCTransferTimeout cobre upload/download de anexos (HTTP até 60s + storage).
+	supportRPCTransferTimeout = 120 * time.Second
 )
 
 // supportCompanionCall executa um RPC de suporte no serviço.
@@ -130,4 +132,9 @@ func supportReadOrLocal[T any](a *App, method string, payload map[string]any, lo
 // supportWriteOrLocal é o atalho para mutações.
 func supportWriteOrLocal[T any](a *App, method string, payload map[string]any, local func() (T, error)) (T, error) {
 	return supportCompanionOrLocal(a, method, payload, supportRPCWriteTimeout, local)
+}
+
+// supportTransferOrLocal é o atalho para transferências de anexos (upload/download).
+func supportTransferOrLocal[T any](a *App, method string, payload map[string]any, local func() (T, error)) (T, error) {
+	return supportCompanionOrLocal(a, method, payload, supportRPCTransferTimeout, local)
 }

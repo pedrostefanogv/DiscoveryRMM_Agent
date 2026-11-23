@@ -263,38 +263,47 @@ func saveAttachmentFromRPC(payload map[string]any, fileName string, data []byte)
 	return saveDownloadedAttachment(fileName, data)
 }
 
+func resolveAttachmentTargetFromRPC(payload map[string]any, fileName string) (string, error) {
+	if destPath := ipcRPCString(payload, "destPath"); destPath != "" {
+		return resolveAttachmentExactTarget(destPath, fileName)
+	}
+	if destDir := ipcRPCString(payload, "destDir"); destDir != "" {
+		return resolveAttachmentDirTarget(destDir, fileName)
+	}
+	return resolveAttachmentDirTarget(resolveAttachmentDownloadDir(), fileName)
+}
+
 func (a *App) ipcRPCSupportTicketAttachmentSave(payload map[string]any) map[string]any {
 	if err := a.requireSupportSvc(); err != nil {
 		return ipcRPCError(err)
 	}
-	data, _, err := a.SupportSvc.DownloadTicketAttachment(
-		ipcRPCString(payload, "ticketId"), ipcRPCString(payload, "attachmentId"))
+	target, err := resolveAttachmentTargetFromRPC(payload, ipcRPCString(payload, "fileName"))
 	if err != nil {
 		return ipcRPCError(err)
 	}
-	path, err := saveAttachmentFromRPC(payload, ipcRPCString(payload, "fileName"), data)
-	if err != nil {
+	if err := a.SupportSvc.DownloadTicketAttachmentToFile(
+		ipcRPCString(payload, "ticketId"), ipcRPCString(payload, "attachmentId"), target); err != nil {
 		return ipcRPCError(err)
 	}
-	return ipcRPCResult(map[string]any{"path": path})
+	return ipcRPCResult(map[string]any{"path": target})
 }
 
 func (a *App) ipcRPCSupportCommentAttachmentSave(payload map[string]any) map[string]any {
 	if err := a.requireSupportSvc(); err != nil {
 		return ipcRPCError(err)
 	}
-	data, _, err := a.SupportSvc.DownloadTicketCommentAttachment(
+	target, err := resolveAttachmentTargetFromRPC(payload, ipcRPCString(payload, "fileName"))
+	if err != nil {
+		return ipcRPCError(err)
+	}
+	if err := a.SupportSvc.DownloadTicketCommentAttachmentToFile(
 		ipcRPCString(payload, "ticketId"),
 		ipcRPCString(payload, "commentId"),
-		ipcRPCString(payload, "attachmentId"))
-	if err != nil {
+		ipcRPCString(payload, "attachmentId"),
+		target); err != nil {
 		return ipcRPCError(err)
 	}
-	path, err := saveAttachmentFromRPC(payload, ipcRPCString(payload, "fileName"), data)
-	if err != nil {
-		return ipcRPCError(err)
-	}
-	return ipcRPCResult(map[string]any{"path": path})
+	return ipcRPCResult(map[string]any{"path": target})
 }
 
 // ── Anexos de COMENTARIO (conversa) ──────────────────────────────────────

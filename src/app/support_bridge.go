@@ -191,7 +191,7 @@ func (a *App) UploadTicketAttachment(ticketID, fileName, contentType, dataBase64
 	type result struct {
 		AttachmentID string `json:"attachmentId"`
 	}
-	res, err := supportWriteOrLocal(a, "support:ticket_attachment_upload", map[string]any{
+	res, err := supportTransferOrLocal(a, "support:ticket_attachment_upload", map[string]any{
 		"ticketId":    ticketID,
 		"fileName":    fileName,
 		"contentType": contentType,
@@ -262,7 +262,7 @@ func (a *App) UploadTicketCommentAttachment(ticketID, commentID, fileName, conte
 	type result struct {
 		AttachmentID string `json:"attachmentId"`
 	}
-	res, err := supportWriteOrLocal(a, "support:comment_attachment_upload", map[string]any{
+	res, err := supportTransferOrLocal(a, "support:comment_attachment_upload", map[string]any{
 		"ticketId":    ticketID,
 		"commentId":   commentID,
 		"fileName":    fileName,

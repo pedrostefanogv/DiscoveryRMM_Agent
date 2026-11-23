@@ -92,6 +92,37 @@ func existingAttachmentDir() string {
 
 // saveDownloadedAttachmentToDir grava os bytes em dir (criando-a se preciso) e
 // devolve o caminho absoluto. Nunca sobrescreve: acrescenta timestamp.
+func resolveAttachmentDirTarget(dir, fileName string) (string, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return "", fmt.Errorf("pasta de destino vazia")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("não foi possível criar a pasta de destino: %w", err)
+	}
+	target := filepath.Join(dir, sanitizeAttachmentFileName(fileName))
+	if _, err := os.Stat(target); err == nil {
+		ext := filepath.Ext(target)
+		base := strings.TrimSuffix(target, ext)
+		target = fmt.Sprintf("%s-%s%s", base, time.Now().Format("20060102-150405"), ext)
+	}
+	return target, nil
+}
+
+func resolveAttachmentExactTarget(destPath, fallbackName string) (string, error) {
+	clean := filepath.Clean(strings.TrimSpace(destPath))
+	if clean == "" || clean == "." || !filepath.IsAbs(clean) {
+		return "", fmt.Errorf("caminho de destino inválido: %q", destPath)
+	}
+	if info, err := os.Stat(clean); err == nil && info.IsDir() {
+		return resolveAttachmentDirTarget(clean, fallbackName)
+	}
+	if err := os.MkdirAll(filepath.Dir(clean), 0o755); err != nil {
+		return "", fmt.Errorf("não foi possível criar a pasta de destino: %w", err)
+	}
+	return clean, nil
+}
+
 func saveDownloadedAttachmentToDir(dir, fileName string, data []byte) (string, error) {
 	if len(data) == 0 {
 		return "", fmt.Errorf("anexo vazio")
@@ -215,21 +246,20 @@ func (a *App) SaveTicketAttachment(ticketID, attachmentID, fileName string) (str
 	if err := a.requireSupportSvc(); err != nil {
 		return "", err
 	}
-	res, err := supportWriteOrLocal(a, "support:ticket_attachment_save",
+	res, err := supportTransferOrLocal(a, "support:ticket_attachment_save",
 		attachmentSavePayload(map[string]any{
 			"ticketId":     ticketID,
 			"attachmentId": attachmentID,
 			"fileName":     fileName,
 		}, resolveAttachmentDownloadDir(), ""), func() (attachmentSaveResult, error) {
-			data, _, downloadErr := a.SupportSvc.DownloadTicketAttachment(ticketID, attachmentID)
-			if downloadErr != nil {
+			target, pathErr := resolveAttachmentDirTarget(resolveAttachmentDownloadDir(), fileName)
+			if pathErr != nil {
+				return attachmentSaveResult{}, pathErr
+			}
+			if downloadErr := a.SupportSvc.DownloadTicketAttachmentToFile(ticketID, attachmentID, target); downloadErr != nil {
 				return attachmentSaveResult{}, downloadErr
 			}
-			path, saveErr := saveDownloadedAttachment(fileName, data)
-			if saveErr != nil {
-				return attachmentSaveResult{}, saveErr
-			}
-			return attachmentSaveResult{Path: path}, nil
+			return attachmentSaveResult{Path: target}, nil
 		})
 	if err != nil {
 		return "", err
@@ -243,21 +273,20 @@ func (a *App) SaveTicketAttachmentAs(ticketID, attachmentID, fileName, destPath 
 	if err := a.requireSupportSvc(); err != nil {
 		return "", err
 	}
-	res, err := supportWriteOrLocal(a, "support:ticket_attachment_save",
+	res, err := supportTransferOrLocal(a, "support:ticket_attachment_save",
 		attachmentSavePayload(map[string]any{
 			"ticketId":     ticketID,
 			"attachmentId": attachmentID,
 			"fileName":     fileName,
 		}, "", destPath), func() (attachmentSaveResult, error) {
-			data, _, downloadErr := a.SupportSvc.DownloadTicketAttachment(ticketID, attachmentID)
-			if downloadErr != nil {
+			target, pathErr := resolveAttachmentExactTarget(destPath, fileName)
+			if pathErr != nil {
+				return attachmentSaveResult{}, pathErr
+			}
+			if downloadErr := a.SupportSvc.DownloadTicketAttachmentToFile(ticketID, attachmentID, target); downloadErr != nil {
 				return attachmentSaveResult{}, downloadErr
 			}
-			path, saveErr := saveAttachmentBytesAt(destPath, fileName, data)
-			if saveErr != nil {
-				return attachmentSaveResult{}, saveErr
-			}
-			return attachmentSaveResult{Path: path}, nil
+			return attachmentSaveResult{Path: target}, nil
 		})
 	if err != nil {
 		return "", err
@@ -271,22 +300,21 @@ func (a *App) SaveTicketCommentAttachment(ticketID, commentID, attachmentID, fil
 	if err := a.requireSupportSvc(); err != nil {
 		return "", err
 	}
-	res, err := supportWriteOrLocal(a, "support:comment_attachment_save",
+	res, err := supportTransferOrLocal(a, "support:comment_attachment_save",
 		attachmentSavePayload(map[string]any{
 			"ticketId":     ticketID,
 			"commentId":    commentID,
 			"attachmentId": attachmentID,
 			"fileName":     fileName,
 		}, resolveAttachmentDownloadDir(), ""), func() (attachmentSaveResult, error) {
-			data, _, downloadErr := a.SupportSvc.DownloadTicketCommentAttachment(ticketID, commentID, attachmentID)
-			if downloadErr != nil {
+			target, pathErr := resolveAttachmentDirTarget(resolveAttachmentDownloadDir(), fileName)
+			if pathErr != nil {
+				return attachmentSaveResult{}, pathErr
+			}
+			if downloadErr := a.SupportSvc.DownloadTicketCommentAttachmentToFile(ticketID, commentID, attachmentID, target); downloadErr != nil {
 				return attachmentSaveResult{}, downloadErr
 			}
-			path, saveErr := saveDownloadedAttachment(fileName, data)
-			if saveErr != nil {
-				return attachmentSaveResult{}, saveErr
-			}
-			return attachmentSaveResult{Path: path}, nil
+			return attachmentSaveResult{Path: target}, nil
 		})
 	if err != nil {
 		return "", err
@@ -300,22 +328,21 @@ func (a *App) SaveTicketCommentAttachmentAs(ticketID, commentID, attachmentID, f
 	if err := a.requireSupportSvc(); err != nil {
 		return "", err
 	}
-	res, err := supportWriteOrLocal(a, "support:comment_attachment_save",
+	res, err := supportTransferOrLocal(a, "support:comment_attachment_save",
 		attachmentSavePayload(map[string]any{
 			"ticketId":     ticketID,
 			"commentId":    commentID,
 			"attachmentId": attachmentID,
 			"fileName":     fileName,
 		}, "", destPath), func() (attachmentSaveResult, error) {
-			data, _, downloadErr := a.SupportSvc.DownloadTicketCommentAttachment(ticketID, commentID, attachmentID)
-			if downloadErr != nil {
+			target, pathErr := resolveAttachmentExactTarget(destPath, fileName)
+			if pathErr != nil {
+				return attachmentSaveResult{}, pathErr
+			}
+			if downloadErr := a.SupportSvc.DownloadTicketCommentAttachmentToFile(ticketID, commentID, attachmentID, target); downloadErr != nil {
 				return attachmentSaveResult{}, downloadErr
 			}
-			path, saveErr := saveAttachmentBytesAt(destPath, fileName, data)
-			if saveErr != nil {
-				return attachmentSaveResult{}, saveErr
-			}
-			return attachmentSaveResult{Path: path}, nil
+			return attachmentSaveResult{Path: target}, nil
 		})
 	if err != nil {
 		return "", err
