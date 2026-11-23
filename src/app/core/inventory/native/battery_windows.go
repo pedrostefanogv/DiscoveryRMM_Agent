@@ -58,14 +58,13 @@ func collectBatteryNative(ctx context.Context) ([]models.BatteryInfo, error) {
 				Charging:            isChargingBatteryStatus(status),
 			}
 
-			applyPowerStatus(&info, powerStatus, powerOK)
+			// A própria linha do WMI é prova de presença física: marcamos antes de
+			// aplicar o estado de energia para que um BatteryFlag desconhecido
+			// (255) não marque a bateria como ausente.
+			present := true
+			info.Present = &present
 
-			// Linha do WMI já é prova de presença física, mesmo que o
-			// GetSystemPowerStatus não tenha sabido responder.
-			if info.Present == nil {
-				present := true
-				info.Present = &present
-			}
+			applyPowerStatus(&info, powerStatus, powerOK)
 
 			items = append(items, info)
 		}
@@ -98,7 +97,10 @@ func applyPowerStatus(info *models.BatteryInfo, st power.Status, ok bool) {
 		return
 	}
 
-	if st.BatteryKnown {
+	// Só define presença quando ninguém já a estabeleceu: uma linha do WMI
+	// (presença física confirmada) não pode ser contraditada por um flag
+	// desconhecido do GetSystemPowerStatus.
+	if st.BatteryKnown && info.Present == nil {
 		present := st.HasBattery
 		info.Present = &present
 	}
