@@ -1001,6 +1001,15 @@ func (a *App) initSupportAndDebug(reg *mcp.Registry, opts AppStartupOptions) {
 	// Somente o processo de serviço (ServiceMode) lê/decifra segredos do disco;
 	// a UI companion obtém a config redigida do serviço via IPC.
 	if opts.ServiceMode {
+		// O diretório de dados precisa ser CONFIÁVEL antes de qualquer leitura ou
+		// validação de ACL dos arquivos de segredo. Instalações antigas deixaram
+		// Users:(M) herdado em %ProgramData%\Discovery, e o debug_config.json era
+		// rejeitado como "diretorio pai nao confiavel" e quarentenado a cada boot
+		// (o que também derrubava o cloud-bootstrap P2P e o sync-manifest).
+		// Best-effort: falha vira aviso e o boot continua.
+		if err := platform.HardenDataDirACL(platform.DataDir()); err != nil {
+			a.Logs.Append("[config] aviso: nao foi possivel endurecer a ACL do diretorio de dados: " + err.Error())
+		}
 		a.DebugSvc.LoadPersistedConfig()
 		a.DebugSvc.LoadConnectionConfigFromProduction()
 		// Alteração externa do debug_config.json (admin/editores) precisa reaplicar

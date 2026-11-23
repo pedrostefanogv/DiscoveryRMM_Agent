@@ -30,7 +30,7 @@ func resolveTrayIconState(configured bool, connected bool) int32 {
 }
 
 func (a *App) currentTrayIconState() int32 {
-	configured := isAgentConfigured()
+	configured := a.hasServerCredentialsEffective()
 	if !configured {
 		return resolveTrayIconState(false, false)
 	}

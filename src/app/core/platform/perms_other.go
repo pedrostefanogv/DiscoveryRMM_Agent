@@ -12,6 +12,12 @@ func EnsureWorldReadable(filePath string) error {
 	return nil
 }
 
+// HardenDataDirACL is a no-op on non-Windows platforms (o modo 0o700 do
+// diretório de dados já restringe no POSIX).
+func HardenDataDirACL(dir string) error {
+	return nil
+}
+
 // IsElevated is a no-op on non-Windows platforms (não há modelo UAC fora
 // do Windows; considera elevado para não bloquear fluxos).
 func IsElevated() bool {

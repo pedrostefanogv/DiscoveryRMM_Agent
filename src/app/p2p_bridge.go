@@ -308,8 +308,12 @@ func (a *App) GetAutoProvisioningStats() P2PAutoProvisioningStats {
 		events[i], events[j] = events[j], events[i]
 	}
 
+	// Mesmo raciocínio do tray: na UI companion o config.json não é legível
+	// (ACL SYSTEM/Administrators) e isAgentConfigured() devolveria false,
+	// mostrando auto-provisioning "desligado" quando o serviço o tem ligado —
+	// justamente no caminho de fallback usado quando o RPC acima dá timeout.
 	return P2PAutoProvisioningStats{
-		Enabled:          enabled && isAgentConfigured(),
+		Enabled:          enabled && a.hasServerCredentialsEffective(),
 		TotalProvisioned: total,
 		RecentEvents:     events,
 	}
@@ -359,7 +363,7 @@ func (a *App) GetOnboardingStatus() map[string]interface{} {
 // serviço, em modo companion). É a MESMA função que alimenta o snapshot IPC,
 // para a UI nunca divergir da verdade do processo que fala com o servidor.
 func (a *App) localOnboardingStatus() map[string]interface{} {
-	configured := hasServerCredentials()
+	configured := a.hasServerCredentialsEffective()
 	result := map[string]interface{}{
 		"configured": configured,
 		"mode":       "normal",

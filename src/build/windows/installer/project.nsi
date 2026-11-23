@@ -1013,8 +1013,21 @@ Function SaveAgentConfig
    ; nos subdiretórios WebView2/ (UDF de fallback da UI) e logs/.
    ; SYSTEM+Administrators mantêm controle total (herdam para os filhos).
    ; SIDs bem conhecidos evitam falha em SOs localizados.
-   ; /inheritance:e + /T aplica em filhos existentes (ex.: config.json legado).
-   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(RX)" /T /C /Q'
+   ; /inheritance:r (e não :e): C:\ProgramData concede a Users ACEs de escrita
+   ; por herança (mask 0x116 — create files/append data) e, com a herança
+   ; habilitada, o diretório continuava "gravavel por trustee nao
+   ; administrativo". Isso fazia VerifyTrustedSecretFileWritableSafety rejeitar
+   ; a raiz como "diretorio pai nao confiavel" e o debug_config.json era
+   ; quarentenado a cada boot do serviço (derrubando também cloud-bootstrap P2P
+   ; e sync-manifest).
+   ; SEM /T (validado empiricamente em 2026-11-23): para ARQUIVOS o icacls
+   ; rejeita as flags de herança — "Parâmetro inválido (OI)(CI)F" — e com /C
+   ; segue em frente deixando o arquivo SEM NENHUMA ACE depois do
+   ; /inheritance:r (DACL vazia: ninguém lê, nem SYSTEM). Num upgrade isso
+   ; inutilizaria config.json/discovery.db/libp2p-identity.key já existentes.
+   ; Aqui a raiz recebe só as ACEs explícitas; os filhos ficam como estão (e os
+   ; dois graváveis pelo usuário são re-concedidos logo abaixo).
+   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:r /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(RX)" /Q'
    Pop $R9
    ${If} $R9 != 0
       DetailPrint "Aviso: nao foi possivel ajustar ACL de $R0\Discovery (icacls codigo $R9)"
@@ -1301,8 +1314,11 @@ Function EnsureSharedDataDir
    ; SEGURANÇA (F11/P0): raiz apenas RX para BUILTIN\Users — escrita de
    ; usuário isolada em logs/ e WebView2/ (ver SaveAgentConfig).
    ; SIDs evitam dependência de nomes localizados de grupos.
-   ; /inheritance:e + /T cobre arquivos preexistentes no diretorio.
-   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(RX)" /T /C /Q'
+   ; /inheritance:r + SEM /T — mesma regra do SaveAgentConfig: a herança de
+   ; C:\ProgramData traz Users:(M) para a raiz e derruba a validação de
+   ; "diretorio pai nao confiavel"; e o /T com flags (OI)(CI) deixa ARQUIVOS
+   ; sem nenhuma ACE (ver comentário lá). A raiz recebe só as ACEs explícitas.
+   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:r /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(RX)" /Q'
    Pop $R9
    ${If} $R9 != 0
       DetailPrint "Aviso: nao foi possivel ajustar ACL de $R0\Discovery (icacls codigo $R9)"

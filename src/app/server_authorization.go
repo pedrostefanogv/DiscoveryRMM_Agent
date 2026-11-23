@@ -214,7 +214,7 @@ func (a *App) noteServerAuthorizationRefusal(resp *http.Response, body []byte, e
 		//
 		// A chamada é feita TAMBÉM quando já está pendente: a razão precisa
 		// acompanhar a evidência (ver markServerAuthorizationPending).
-		if !a.serverAuth.verifiedOnce.Load() && !isHTTPStatusError(err) && isConnectionError(err) && hasServerCredentials() {
+		if !a.serverAuth.verifiedOnce.Load() && !isHTTPStatusError(err) && isConnectionError(err) && a.hasServerCredentialsEffective() {
 			a.markServerAuthorizationPending(onboardingPendingReasonServerUnreachable)
 		}
 		return
@@ -320,7 +320,40 @@ func isHTTPStatusError(err error) bool {
 // hasServerCredentials diz se o agente já está PROVISIONADO (token + servidor
 // persistidos). É a variável que separa "aguardando provisionamento" de
 // "aguardando liberação". Existe como função para os testes fixarem o estado.
+//
+// Lê o config.json de produção do disco: só é fonte confiável no PROCESSO DO
+// SERVIÇO (roda como SYSTEM). Na UI companion o arquivo tem ACL restrita a
+// SYSTEM/Administrators e a UI roda sem elevação — a leitura falha SEMPRE.
+// Consumidores que rodam na UI (tray, overlay) precisam de
+// hasServerCredentialsEffective, não desta.
 var hasServerCredentials = isAgentConfigured
+
+// hasServerCredentialsEffective responde se ESTE processo tem evidência de que
+// o agente está provisionado.
+//
+// O core vive no serviço (SYSTEM), que lê o config.json de produção. A UI
+// companion roda no contexto do usuário, SEM elevação, e o config.json é
+// endurecido para SYSTEM/Administrators (platform.HardenSecretFileACL): a
+// leitura direta dá Access Denied e o resultado seria "sem credenciais" para
+// sempre. Era exatamente isso que prendia o ícone do tray em "provisionamento"
+// (laranja) com o agente online. Em companion mode o estado vem do serviço pelo
+// snapshot IPC (agent:status_snapshot → onboardingConfigured), calculado no
+// processo que realmente fala com o servidor.
+func (a *App) hasServerCredentialsEffective() bool {
+	// Companion (UI): a evidência é SEMPRE a do serviço. Não consultamos o disco
+	// de propósito — além de a leitura falhar, ela é tentada a cada ciclo do
+	// tray (5s) e inundaria o log com "aviso: nao foi possivel ler config
+	// candidate" na UI do usuário.
+	if a != nil && a.ipcClient != nil {
+		st := a.getCompanionOnboarding()
+		if st == nil {
+			return false
+		}
+		configured, _ := st["configured"].(bool)
+		return configured
+	}
+	return hasServerCredentials()
+}
 
 // probeServerAuthorization faz um GET curto em /me/configuration só para
 // atualizar o estado de autorização (usado no boot e no pós-bootstrap, quando

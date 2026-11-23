@@ -392,6 +392,30 @@ func ipcEventToFrontend(payload map[string]any) (string, []any) {
 	return name, []any{data}
 }
 
+// handleCompanionSnapshotEvent aplica um evento agent:status_snapshot /
+// agent:connectivity vindo do serviço: conectividade (tray/status) + estado de
+// onboarding (overlay) e, por fim, atualiza o tray. Extraído do closure de
+// startIPCClient para ser testável de ponta a ponta — é o caminho que alimenta
+// o ícone do tray ("provisioning" laranja x normal) na UI companion.
+//
+// Campos de onboarding ausentes (serviço antigo) → mantém o último estado.
+func (a *App) handleCompanionSnapshotEvent(payload map[string]any) {
+	if a == nil {
+		return
+	}
+	a.storeCompanionStatus(payload)
+	if rawMode, ok := payload["onboardingMode"]; ok {
+		mode, _ := rawMode.(string)
+		cfgd, _ := payload["onboardingConfigured"].(bool)
+		msg, _ := payload["onboardingMessage"].(string)
+		reason, _ := payload["onboardingPendingReason"].(string)
+		a.storeCompanionOnboarding(mode, cfgd, msg, reason)
+	}
+	a.syncTrayVisualState()
+	a.updateTrayMenu()
+	a.updateTrayTooltip()
+}
+
 // storeCompanionOnboarding guarda o último estado de onboarding recebido do
 // serviço via snapshot IPC (companion mode). Nil-safe.
 func (a *App) storeCompanionOnboarding(mode string, configured bool, message string, pendingReason string) {
@@ -524,19 +548,7 @@ func (a *App) startIPCClient() {
 				// Guarda o snapshot de conectividade para o tray/status Go-side
 				// (GetAgentStatus) refletirem o core que roda no serviço.
 				if name == "agent:status_snapshot" || name == "agent:connectivity" {
-					a.storeCompanionStatus(msg.Payload)
-					// Estado de onboarding do serviço (overlay de provisionamento/
-					// aprovação). Campos ausentes (serviço antigo) → mantém o último.
-					if rawMode, ok := msg.Payload["onboardingMode"]; ok {
-						mode, _ := rawMode.(string)
-						cfgd, _ := msg.Payload["onboardingConfigured"].(bool)
-						msg2, _ := msg.Payload["onboardingMessage"].(string)
-						reason, _ := msg.Payload["onboardingPendingReason"].(string)
-						a.storeCompanionOnboarding(mode, cfgd, msg2, reason)
-					}
-					a.syncTrayVisualState()
-					a.updateTrayMenu()
-					a.updateTrayTooltip()
+					a.handleCompanionSnapshotEvent(msg.Payload)
 				}
 				// Config de debug atualizada no serviço (SetConfig, segurança
 				// remota, bootstrap): adota a config na cópia em memória da UI

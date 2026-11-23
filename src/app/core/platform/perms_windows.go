@@ -87,6 +87,60 @@ func EnsureSharedStagingAccess(path string) error {
 	return nil
 }
 
+// HardenDataDirACL torna o diretório de dados do agente (ex.:
+// %ProgramData%\Discovery) CONFIÁVEL para os arquivos de segredo que vivem nele
+// (config.json, debug_config.json, chat_config.json, discovery.db,
+// libp2p-identity.key):
+//
+//   - herança removida e DACL explícita: SYSTEM:F e Administrators:F, com
+//     herança (OI)(CI) para os filhos; Users:RX (somente leitura);
+//   - owner SYSTEM.
+//
+// Sem ACE de escrita para trustee não administrativo, que é exatamente o que
+// VerifyTrustedDirectoryWriteACL exige. Sem isto, um diretório herdado de
+// instalação antiga (Users:(M) — o caso do relato) faz o arquivo de segredo ser
+// rejeitado como "diretorio pai nao confiavel" e quarentenado a cada boot.
+//
+// A leitura por Users é PRESERVADA de propósito: a UI companion e a coleta de
+// logs continuam lendo o que já liam; o que sai é a escrita. NÃO usa /T: aplicar
+// as concessões nos filhos enfraqueceria os arquivos de segredo já endurecidos
+// (Users:RX em config.json). Best-effort — o caller apenas loga a falha.
+func HardenDataDirACL(dir string) error {
+	cleanDir := strings.TrimSpace(dir)
+	if cleanDir == "" {
+		return errors.New("diretorio vazio para HardenDataDirACL")
+	}
+	if _, err := os.Stat(cleanDir); err != nil {
+		return fmt.Errorf("diretorio de dados indisponivel: %w", err)
+	}
+	if err := verifyNoReparsePoint(cleanDir); err != nil {
+		return fmt.Errorf("diretorio de dados invalido: %w", err)
+	}
+
+	// /inheritance:r descarta os ACEs herdados (o Users:(M) legado) e os
+	// /grant:r substituem os ACEs explícitos de cada trustee.
+	cmd := exec.Command("icacls.exe", cleanDir,
+		"/inheritance:r",
+		"/grant:r", wellKnownSidSystem+":(OI)(CI)F",
+		"/grant:r", wellKnownSidAdministrators+":(OI)(CI)F",
+		"/grant:r", wellKnownSidUsers+":(OI)(CI)RX",
+		"/Q")
+	processutil.HideWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("icacls falhou: %w — saida: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// Owner SYSTEM: é o que torna o diretório confiável para isAdminOrSystemSID
+	// mesmo quando o instalador original deixou um usuário comum como dono.
+	ownerCmd := exec.Command("icacls.exe", cleanDir, "/setowner", wellKnownSidSystem, "/Q")
+	processutil.HideWindow(ownerCmd)
+	if out, err := ownerCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("icacls /setowner falhou: %w — saida: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // HardenSecretFileACL restringe a DACL de um arquivo que contém segredos
 // (config.json com deployToken/authTokenDpapi, debug_config.json, chat_config.json,
 // discovery.db, libp2p-identity.key).
