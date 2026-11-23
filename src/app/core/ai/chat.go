@@ -57,8 +57,8 @@ type Service struct {
 	registry        *mcp.Registry
 	toolAllowFilter func(string) bool
 	history         []Message
-	sessionID string
-	logger    func(string)
+	sessionID       string
+	logger          func(string)
 
 	streamMu           sync.Mutex
 	activeStreamID     uint64

@@ -3,6 +3,7 @@
 package app
 
 import (
+	"discovery/app/core/testutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +15,7 @@ import (
 // (ex.: "C:\Program Files\App\unins.exe" /quiet) e, com o quoting padrão do
 // exec do Go, o cmd.exe recebia \\" no meio da linha e rejeitava o comando.
 func TestRunUninstallCommandQuotedPathWithSpace(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "Space Dir")
+	dir := filepath.Join(testutil.TempDir(t), "Space Dir")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("criar diretorio: %v", err)
 	}
@@ -36,7 +37,7 @@ func TestRunUninstallCommandQuotedPathWithSpace(t *testing.T) {
 // Regressão /D /S /C: UninstallString com caminho citado E argumento citado
 // (ex.: /DEST="C:... com espaço") — o /C simples quebrava no primeiro espaço.
 func TestRunUninstallCommandQuotedPathAndQuotedArg(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "Space Dir")
+	dir := filepath.Join(testutil.TempDir(t), "Space Dir")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("criar diretorio: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"discovery/app/core/database"
+	"discovery/app/core/testutil"
 )
 
 func TestServiceNilDBGuard(t *testing.T) {
@@ -24,7 +25,7 @@ func TestServiceNilDBGuard(t *testing.T) {
 }
 
 func TestServiceCRUDAndValidation(t *testing.T) {
-	db, err := database.Open(t.TempDir())
+	db, err := database.Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("database.Open failed: %v", err)
 	}

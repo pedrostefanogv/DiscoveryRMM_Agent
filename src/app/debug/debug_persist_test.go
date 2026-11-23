@@ -4,6 +4,7 @@ package debug
 // (coberta no pacote platform) e watcher de alteração externa.
 
 import (
+	"discovery/app/core/testutil"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +19,7 @@ import (
 
 func testConfigPath(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(t.TempDir(), debugConfigFile)
+	return filepath.Join(testutil.TempDir(t), debugConfigFile)
 }
 
 func serviceForPath(path string, interval time.Duration) *Service {
@@ -60,6 +61,9 @@ func TestPersistConfigUsesAtomicWriteAndKeepsOldFileOnRenameFailure(t *testing.T
 	osRename = func(string, string) error { return errors.New("rename falhou (simulado)") }
 
 	svc := serviceForPath(path, time.Hour)
+	// Mesmo cuidado do teste seguinte: sem parar o watcher a goroutine sobrevive
+	// ao teste e segura/toca o diretório temporário no cleanup.
+	defer svc.StopWatcher()
 	err := svc.PersistConfig(validConfig("new.example.local"))
 	if err == nil {
 		t.Fatal("esperava erro quando o rename atômico falha")
@@ -83,6 +87,11 @@ func TestPersistConfigUsesAtomicWriteAndKeepsOldFileOnRenameFailure(t *testing.T
 func TestPersistConfigConcurrentWritesStayValid(t *testing.T) {
 	path := testConfigPath(t)
 	svc := serviceForPath(path, time.Hour)
+	// Sem isto a goroutine do watcher sobrevive ao teste e segura/toca o
+	// diretório temporário — era a origem do cleanup intermitente
+	// "The directory is not empty" neste teste (os demais testes do arquivo já
+	// param o watcher).
+	defer svc.StopWatcher()
 
 	const writes = 10
 	var wg sync.WaitGroup

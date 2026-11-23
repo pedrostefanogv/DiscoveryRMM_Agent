@@ -3,6 +3,7 @@ package screenshot
 import (
 	"bytes"
 	"crypto/sha256"
+	"discovery/app/core/testutil"
 	"encoding/base64"
 	"encoding/hex"
 	"image"
@@ -39,7 +40,7 @@ func TestParseSaveImageOptionsDefaults(t *testing.T) {
 }
 
 func TestParseSaveImageOptionsNormalizes(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	raw := `{"format":"JPEG","directory":"` + strings.ReplaceAll(dir, "\\", "\\\\") + `","prefix":"../Relatório final"}`
 	opts, err := ParseSaveImageOptions(raw)
 	if err != nil {
@@ -137,7 +138,7 @@ func TestSHA256AndEvidence(t *testing.T) {
 }
 
 func TestPathWithinDir(t *testing.T) {
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 	inside := filepath.Join(base, "captura.png")
 	if !PathWithinDir(base, inside) {
 		t.Fatal("arquivo dentro da pasta deveria passar")
@@ -157,7 +158,7 @@ func TestPathWithinDir(t *testing.T) {
 }
 
 func TestResolveGalleryPath(t *testing.T) {
-	gallery := t.TempDir()
+	gallery := testutil.TempDir(t)
 	inside, err := ResolveGalleryPath(gallery, filepath.Join(gallery, "ok.png"))
 	if err != nil || filepath.Base(inside) != "ok.png" {
 		t.Fatalf("caminho interno: %q err=%v", inside, err)

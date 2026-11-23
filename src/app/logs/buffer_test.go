@@ -7,13 +7,14 @@ import (
 	"testing"
 
 	"discovery/app/core/buildinfo"
+	"discovery/app/core/testutil"
 )
 
 // Toda linha persistida no agent.log deve carregar a assinatura de revisão
 // (hash curto do commit) junto da data — contrato compartilhado com
 // chat_logs.jsonl e agent-service.log.
 func TestBufferFilePersistenceStampsCodeRev(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "agent.log")
 	b := New()
 	if err := b.EnableFilePersistence(path); err != nil {

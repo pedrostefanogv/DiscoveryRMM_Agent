@@ -1,6 +1,7 @@
 package selfupdate
 
 import (
+	"discovery/app/core/testutil"
 	"testing"
 )
 
@@ -34,7 +35,7 @@ func TestSameBuildInstalled_Contract(t *testing.T) {
 // TestEffectiveCurrent_MarkerOverridesZeroBuildinfo valida que o buildinfo
 // "0.0.0"/"unknown" é substituído pelo marker do último install confirmado.
 func TestEffectiveCurrent_MarkerOverridesZeroBuildinfo(t *testing.T) {
-	u := &Updater{TempDir: t.TempDir()}
+	u := &Updater{TempDir: testutil.TempDir(t)}
 
 	// Sem marker: retorna o buildinfo como veio.
 	v, c := u.effectiveCurrent("0.0.0", "unknown")

@@ -3,6 +3,7 @@ package p2p
 import (
 	"bytes"
 	"context"
+	"discovery/app/core/testutil"
 	"io"
 	"net"
 	"net/http"
@@ -44,7 +45,7 @@ func TestSanitizeArtifactName(t *testing.T) {
 }
 
 func TestComputeFileSHA256(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "sample.txt")
 	if err := os.WriteFile(path, []byte("abc"), 0o600); err != nil {
 		t.Fatalf("write temp file: %v", err)
@@ -90,7 +91,7 @@ func TestVerifyReplicationControl(t *testing.T) {
 // pelo atacante (achado C4 da análise de segurança do agent).
 func TestP2PTransferServerAcceptsLoopbackOnly(t *testing.T) {
 	srv := NewTransferServer(nil, nil)
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	if err := os.WriteFile(filepath.Join(tempDir, "artifact.bin"), []byte("payload"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
@@ -148,7 +149,7 @@ func TestP2PTransferServerAcceptsLoopbackOnly(t *testing.T) {
 // rota de download).
 func TestDownloadArtifactRequiresToken(t *testing.T) {
 	srv := NewTransferServer(nil, nil)
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	payload := []byte("conteudo-do-artifact")
 	if err := os.WriteFile(filepath.Join(tempDir, "artifact.bin"), payload, 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)

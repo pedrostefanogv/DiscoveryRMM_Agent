@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"discovery/app/core/testutil"
 	"path/filepath"
 	"testing"
 )
@@ -11,7 +12,7 @@ import (
 // peers pedindo o mesmo manifest disparavam N leituras completas. O
 // ensureServingManifest deduplica e reusa o cache.
 func TestEnsureServingManifestCachesAndReuses(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	name := "artifact.bin"
 	path := filepath.Join(dir, name)
 	if err := writeTestFile(path, 4096); err != nil {

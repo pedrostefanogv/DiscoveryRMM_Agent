@@ -1,12 +1,16 @@
 package database
 
-import "testing"
+import (
+	"testing"
+
+	"discovery/app/core/testutil"
+)
 
 // Garante que o teto de page cache do SQLite está efetivamente aplicado pela
 // DSN (e não apenas declarado no código): era 64 MB num Exec avulso e passou
 // para 8 MB no DSN, valendo para toda conexão do pool.
 func TestOpenAppliesCacheSizePragma(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

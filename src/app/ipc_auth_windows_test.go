@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"discovery/app/core/buildinfo"
+	"discovery/app/core/testutil"
 )
 
 type ipcTestPeer struct {
@@ -761,7 +762,7 @@ func captureIPCStructuredLogs(t *testing.T) func() []string {
 // teste não depender do Program Files da máquina.
 func isolateUIDirs(t *testing.T) string {
 	t.Helper()
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 	t.Setenv("ProgramFiles", base)
 	t.Setenv("ProgramFiles(x86)", "")
 	t.Setenv("LOCALAPPDATA", "")
@@ -893,7 +894,7 @@ func TestBroadcastIPCEventTargetsNotificationSession(t *testing.T) {
 	peer8 := attachIPCTestPeer(t, server, false, testIdentity(8))
 	peer8.hello(t)
 	// Sessão 7 sem identidade autenticada: nunca pode receber evento targeted.
-	unauth7 := attachIPCTestPeer(t, server, false, testUIImageIdentity(7, filepath.Join(t.TempDir(), "x.exe")))
+	unauth7 := attachIPCTestPeer(t, server, false, testUIImageIdentity(7, filepath.Join(testutil.TempDir(t), "x.exe")))
 	unauth7.hello(t)
 
 	a := &App{ipcServer: server}
@@ -956,9 +957,9 @@ func TestBroadcastIPCEventFallsBackWhenNoSessionTarget(t *testing.T) {
 	server := newIPCTestServer(func(net.Conn, IPCMessage) {})
 	// Chamadores não-UI: identityOK=false → currentNotificationTarget não tem
 	// alvo conhecido; a compatibilidade exige Broadcast.
-	peerA := attachIPCTestPeer(t, server, false, testUIImageIdentity(1, filepath.Join(t.TempDir(), "a.exe")))
+	peerA := attachIPCTestPeer(t, server, false, testUIImageIdentity(1, filepath.Join(testutil.TempDir(t), "a.exe")))
 	peerA.hello(t)
-	peerB := attachIPCTestPeer(t, server, false, testUIImageIdentity(2, filepath.Join(t.TempDir(), "b.exe")))
+	peerB := attachIPCTestPeer(t, server, false, testUIImageIdentity(2, filepath.Join(testutil.TempDir(t), "b.exe")))
 	peerB.hello(t)
 
 	a := &App{ipcServer: server}
@@ -1140,7 +1141,7 @@ func TestIPCMutatingOutcomeAuditOnFailure(t *testing.T) {
 func TestIPCAllowedUIDirectoriesAnchorOnServiceDir(t *testing.T) {
 	base := isolateUIDirs(t) // ProgramFiles=<base>; (x86)/LOCALAPPDATA vazios
 
-	custom := filepath.Join(t.TempDir(), "Apps", "Discovery")
+	custom := filepath.Join(testutil.TempDir(t), "Apps", "Discovery")
 	oldExec := ipcServiceExecutablePath
 	ipcServiceExecutablePath = func() (string, error) {
 		return filepath.Join(custom, "discovery-service.exe"), nil
@@ -1155,7 +1156,7 @@ func TestIPCAllowedUIDirectoriesAnchorOnServiceDir(t *testing.T) {
 		t.Fatal("diretório padrão do instalador deveria continuar aceito")
 	}
 
-	local := filepath.Join(t.TempDir(), "AppData", "Local")
+	local := filepath.Join(testutil.TempDir(t), "AppData", "Local")
 	t.Setenv("LOCALAPPDATA", local)
 	if ipcIsDiscoveryUIImagePath(filepath.Join(local, "Programs", "Discovery", ipcUIExecutableName), ipcAllowedUIDirectories()) {
 		t.Fatal("caminho gravável pelo usuário (%LOCALAPPDATA%/Programs/Discovery) não pode ser aceito")

@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"discovery/app/core/testutil"
 	"path/filepath"
 	"testing"
 )
@@ -9,7 +10,7 @@ import (
 // cresciam indefinidamente — arquivos removidos pela limpeza de TTL deixavam
 // entradas órfãs, e artifactIDs fora de circulação ficavam para sempre.
 func TestPruneStaleCachesRemovesGhostEntries(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	name := "winget-foxitfoxitreader.exe"
 	if err := writeTestFile(filepath.Join(dir, name), 1024); err != nil {
 		t.Fatal(err)

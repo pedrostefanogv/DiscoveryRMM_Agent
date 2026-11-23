@@ -1,6 +1,7 @@
 package logstore
 
 import (
+	"discovery/app/core/testutil"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,7 +10,7 @@ import (
 // O teto por BYTES da fila protege o processo de uma rajada de linhas grandes
 // sem descartar o caso normal (muitas linhas pequenas).
 func TestQueueByteBudgetDropsOnlyOversizedBurst(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "logs.db")
+	path := filepath.Join(testutil.TempDir(t), "logs.db")
 	// Fila mínima + teto de 64 KB: cada linha de 16 KB cabe, mas só algumas.
 	s := openTest(t, Options{
 		Path:           path,
@@ -41,7 +42,7 @@ func TestQueueByteBudgetDropsOnlyOversizedBurst(t *testing.T) {
 
 // Linhas pequenas (caso real) não são afetadas pelo teto por bytes.
 func TestQueueByteBudgetKeepsNormalBurst(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "logs.db")
+	path := filepath.Join(testutil.TempDir(t), "logs.db")
 	s := openTest(t, Options{Path: path, Kind: KindLogs, QueueSize: 4096, MaxQueuedBytes: DefaultMaxQueuedBytes})
 
 	msg := strings.Repeat("y", 512)

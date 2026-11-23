@@ -7,13 +7,14 @@ import (
 	"time"
 
 	"discovery/app/core/database"
+	"discovery/app/core/testutil"
 )
 
 // newWatchdogService cria um Service com DB real (SQLite em tempdir) e uma
 // policy minima, necessaria para recalcular as chaves dos marcadores de trigger.
 func newWatchdogService(t *testing.T, tasks []AutomationTask, fingerprint string) (*Service, *database.DB) {
 	t.Helper()
-	db, err := database.Open(t.TempDir())
+	db, err := database.Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

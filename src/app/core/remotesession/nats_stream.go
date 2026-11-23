@@ -14,8 +14,8 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"discovery/app/core/remotesession/rdcleanpath"
-	"discovery/app/core/sessioncontrol"
 	"discovery/app/core/screen"
+	"discovery/app/core/sessioncontrol"
 )
 
 // stripHyphens remove hifens de UUIDs para garantir compatibilidade com o

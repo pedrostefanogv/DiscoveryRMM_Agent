@@ -2,6 +2,7 @@ package winget
 
 import (
 	"context"
+	"discovery/app/core/testutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -66,7 +67,7 @@ func TestProfileLocalAppDataDirs_ScansUsers(t *testing.T) {
 }
 
 func TestAliasUnder_ValidatesPath(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	target := filepath.Join(dir, "Microsoft", "WindowsApps")
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		t.Fatal(err)
@@ -86,7 +87,7 @@ func TestAliasUnder_ValidatesPath(t *testing.T) {
 }
 
 func TestNewestMatch_PicksHighestVersion(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	older := filepath.Join(dir, "v1")
 	newer := filepath.Join(dir, "v2")
 	for _, d := range []string{older, newer} {
@@ -110,7 +111,7 @@ func TestNewestMatch_PicksHighestVersion(t *testing.T) {
 // TestFirstWingetPath_ParsesOsqueryRows garante a extração do caminho a partir
 // das linhas do osquery (fallback de último recurso).
 func TestFirstWingetPath_ParsesOsqueryRows(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	exe := filepath.Join(dir, "winget.exe")
 	if err := os.WriteFile(exe, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
@@ -138,7 +139,7 @@ func TestFirstWingetPath_ParsesOsqueryRows(t *testing.T) {
 // TestFromOsquery_UsedOnlyAsFallback garante que o osquery é consultado com a
 // query esperada e que o resultado é aproveitado.
 func TestFromOsquery_UsedOnlyAsFallback(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	exe := filepath.Join(dir, "winget.exe")
 	if err := os.WriteFile(exe, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)

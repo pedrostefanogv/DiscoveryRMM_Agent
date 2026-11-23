@@ -1,13 +1,14 @@
 package chocolatey
 
 import (
+	"discovery/app/core/testutil"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
 func TestScanInstalledPackages_ReadsNuspecMetadata(t *testing.T) {
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 
 	gitDir := filepath.Join(base, "lib", "git")
 	if err := os.MkdirAll(gitDir, 0o755); err != nil {

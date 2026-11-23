@@ -144,11 +144,11 @@ type WebRtcSession struct {
 
 	// Callbacks do caminho de DADOS. O pacote de tela/túnel/arquivos injeta os
 	// seus para receber o que chega pelos data channels.
-	onMediaFrame      func([]byte)
-	onControlFrame    func([]byte)
-	onTunnelFrame     func([]byte)
-	onFilesFrame      func([]byte)
-	onRdpFrame        func([]byte)
+	onMediaFrame   func([]byte)
+	onControlFrame func([]byte)
+	onTunnelFrame  func([]byte)
+	onFilesFrame   func([]byte)
+	onRdpFrame     func([]byte)
 	// onTerminalFrame entrega stdin/resize/hello do viewer.
 	onTerminalFrame func([]byte)
 	// onProcessesFrame entrega uma requisição de processos/serviços.

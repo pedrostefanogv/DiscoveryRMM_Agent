@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"discovery/app/core/testutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,7 @@ func newRetentionCoordinator(dir string) *Coordinator {
 // O Chrome (520 MB) fica no P2P_Temp mesmo com o pacote instalado: a retenção
 // por estado deve removê-lo, mantendo o artifact de pacote ainda pendente.
 func TestPruneFinalStateArtifacts_RemovesOnlyFinalState(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	brave := "winget-bravebrave.exe"
 	chrome := "winget-googlechromeexe.exe"
 	for _, name := range []string{brave, chrome} {
@@ -58,7 +59,7 @@ func TestPruneFinalStateArtifacts_RemovesOnlyFinalState(t *testing.T) {
 }
 
 func TestPruneFinalStateArtifacts_NoHookDoesNothing(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	name := "winget-bravebrave.exe"
 	if err := writeTestFile(filepath.Join(dir, name), 1024); err != nil {
 		t.Fatal(err)
@@ -78,7 +79,7 @@ func TestPruneFinalStateArtifacts_NoHookDoesNothing(t *testing.T) {
 
 // Não remove artifact com transferência em andamento (peer baixando agora).
 func TestPruneFinalStateArtifacts_SkipsBeingServed(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	name := "winget-bravebrave.exe"
 	if err := writeTestFile(filepath.Join(dir, name), 1024); err != nil {
 		t.Fatal(err)

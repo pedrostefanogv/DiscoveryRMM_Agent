@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"discovery/app/appstore"
+	"discovery/app/core/testutil"
 )
 
 func TestApplyCustomCommandPlaceholders(t *testing.T) {
@@ -82,13 +83,13 @@ func TestCommandReferencesInstaller(t *testing.T) {
 }
 
 func TestExtractZipArchiveAndResolveRoot(t *testing.T) {
-	zipPath := filepath.Join(t.TempDir(), "pacote.zip")
+	zipPath := filepath.Join(testutil.TempDir(t), "pacote.zip")
 	createTestZip(t, zipPath, map[string]string{
 		"app/setup.exe":       "binario",
 		"app/conf/config.ini": "cfg",
 	})
 
-	dest := filepath.Join(t.TempDir(), "extracted")
+	dest := filepath.Join(testutil.TempDir(t), "extracted")
 	if err := extractZipArchive(zipPath, dest); err != nil {
 		t.Fatalf("extractZipArchive falhou: %v", err)
 	}
@@ -104,10 +105,10 @@ func TestExtractZipArchiveAndResolveRoot(t *testing.T) {
 }
 
 func TestExtractZipArchiveRejectsZipSlip(t *testing.T) {
-	zipPath := filepath.Join(t.TempDir(), "malicioso.zip")
+	zipPath := filepath.Join(testutil.TempDir(t), "malicioso.zip")
 	createTestZip(t, zipPath, map[string]string{"../escaped.txt": "x"})
 
-	err := extractZipArchive(zipPath, filepath.Join(t.TempDir(), "out"))
+	err := extractZipArchive(zipPath, filepath.Join(testutil.TempDir(t), "out"))
 	if err == nil {
 		t.Fatal("esperava erro para entrada com path traversal")
 	}

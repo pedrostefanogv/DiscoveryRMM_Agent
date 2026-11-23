@@ -5,10 +5,11 @@ import (
 	"time"
 
 	"discovery/app/core/database"
+	"discovery/app/core/testutil"
 )
 
 func TestDeferredStatePersistenceAndReload(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	db, err := database.Open(dir)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -47,7 +48,7 @@ func TestDeferredStatePersistenceAndReload(t *testing.T) {
 }
 
 func TestDeferredStateMarksCompletedOnClear(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	db, err := database.Open(dir)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -84,7 +85,7 @@ func TestDeferredStateMarksCompletedOnClear(t *testing.T) {
 }
 
 func TestDeferredStateDeadlineExhaustion(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	db, err := database.Open(dir)
 	if err != nil {
 		t.Fatalf("open db: %v", err)

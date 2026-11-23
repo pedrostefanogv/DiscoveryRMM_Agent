@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"discovery/app/core/testutil"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,7 +12,7 @@ import (
 // peers anunciavam "winget:<pkg>". Sem o casamento por nome, o re-seed
 // considerava o arquivo ausente para sempre e re-baixava indefinidamente.
 func TestArtifactPresentLocallyMatchesDivergentIDByName(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	name := "winget-foxitfoxitreader.exe"
 	if err := writeTestFile(filepath.Join(dir, name), 4096); err != nil {
 		t.Fatal(err)
@@ -36,7 +37,7 @@ func TestArtifactPresentLocallyMatchesDivergentIDByName(t *testing.T) {
 // recordArtifactIdentity deve fazer ListArtifacts devolver o ID lógico anunciado
 // pela rede, em vez do ID derivado do nome do arquivo.
 func TestRecordArtifactIdentityPersistsMeta(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	name := "winget-foxitfoxitreader.exe"
 	if err := writeTestFile(filepath.Join(dir, name), 2048); err != nil {
 		t.Fatal(err)
@@ -64,7 +65,7 @@ func TestRecordArtifactIdentityPersistsMeta(t *testing.T) {
 // o handler de download já os rejeita, então anuncia-los só gerava tentativas
 // de download fadadas a falhar (e re-seed sobre arquivos incompletos).
 func TestListArtifactsIgnoresPartialAndMeta(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	target := "winget-googlechromeexe.exe"
 	if err := writeTestFile(filepath.Join(dir, target), 2048); err != nil {
 		t.Fatal(err)

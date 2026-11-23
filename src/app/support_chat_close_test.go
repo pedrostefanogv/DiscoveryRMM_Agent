@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"discovery/app/core/testutil"
 	"discovery/app/supportchat"
 )
 
@@ -83,7 +84,7 @@ func TestSupportChatOpenRevealAttachment_ValidaCaminho(t *testing.T) {
 	if err := a.SupportChatRevealAttachment("Z:\\definitivamente\\nao\\existe\\arquivo.pdf"); err == nil {
 		t.Fatal("arquivo inexistente precisa ser recusado (reveal)")
 	}
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	if err := a.SupportChatOpenAttachment(dir); err == nil {
 		t.Fatal("abrir uma PASTA precisa ser recusado (é arquivo que se abre)")
 	}

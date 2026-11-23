@@ -1,6 +1,7 @@
 package database
 
 import (
+	"discovery/app/core/testutil"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,7 +30,7 @@ func pragmaInt(t *testing.T, db *DB, query string) int {
 // journal_size_limit no DSN limita o WAL, e o checkpoint TRUNCATE devolve o
 // espaco em repouso (sem leitores concorrentes).
 func TestJournalSizeLimitAndCheckpointTruncatesWAL(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	db, err := Open(dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -65,7 +66,7 @@ func TestJournalSizeLimitAndCheckpointTruncatesWAL(t *testing.T) {
 }
 
 func TestOptimizeIsSafe(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestOptimizeIsSafe(t *testing.T) {
 // Close precisa deixar WAL truncado e ser idempotente (chamado mais de uma vez
 // no shutdown do agente).
 func TestCloseTruncatesWALAndIsIdempotent(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	db, err := Open(dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -99,7 +100,7 @@ func TestCloseTruncatesWALAndIsIdempotent(t *testing.T) {
 
 // StartMaintenance é idempotente e Close encerra o ticker sem vazar goroutine.
 func TestMaintenanceStartIsIdempotentAndStopsOnClose(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	db, err := Open(dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -124,7 +125,7 @@ func TestMaintenanceStartIsIdempotentAndStopsOnClose(t *testing.T) {
 
 func TestCloseClearsWALSidecarsAndAllowsImmediateRemoveAll(t *testing.T) {
 	for i := 0; i < 10; i++ {
-		dir := t.TempDir()
+		dir := testutil.TempDir(t)
 		db, err := Open(dir)
 		if err != nil {
 			t.Fatalf("iter %d Open: %v", i, err)
@@ -140,7 +141,12 @@ func TestCloseClearsWALSidecarsAndAllowsImmediateRemoveAll(t *testing.T) {
 				t.Fatalf("iter %d sidecar %s still present after Close: %v", i, suffix, statErr)
 			}
 		}
-		if err := os.RemoveAll(dir); err != nil {
+		// O invariante é o arquivo poder ser removido SEM o banco aberto. No
+		// Windows o unlink do .db recém-fechado pode falhar por alguns ms
+		// (Defender/indexador segurando o handle), então a remoção usa o retry do
+		// testutil — a tolerância é do harness, não uma promessa mais fraca do
+		// produto (os sidecars continuam obrigatoriamente ausentes acima).
+		if err := testutil.RemoveAllWithRetry(dir); err != nil {
 			t.Fatalf("iter %d RemoveAll(%s) after Close: %v", i, dir, err)
 		}
 	}

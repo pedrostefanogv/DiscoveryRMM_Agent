@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"discovery/app/core/platform"
+	"discovery/app/core/testutil"
 	debug "discovery/app/debug"
 )
 
@@ -20,7 +21,7 @@ const configSetTestAgentID = "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"
 
 func newConfigSetTestApp(t *testing.T) (*App, *debug.Service, string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "debug_config.json")
+	path := filepath.Join(testutil.TempDir(t), "debug_config.json")
 	svc := debug.NewService(debug.Options{
 		ConfigPaths:     func() []string { return []string{path} },
 		WatcherInterval: time.Hour,

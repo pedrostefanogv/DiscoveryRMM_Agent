@@ -4,6 +4,7 @@ package remotesession
 
 import (
 	"context"
+	"discovery/app/core/testutil"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -17,7 +18,7 @@ import (
 
 func TestApplyReportedCwd_AtualizaEstado(t *testing.T) {
 	st := &SessionTerminal{sessionID: "sess-cwd", termShellKind: "pwsh"}
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	st.applyReportedCwd(dir)
 
 	if got := st.ReportedCwd(); got != dir {
@@ -30,8 +31,8 @@ func TestApplyReportedCwd_AtualizaEstado(t *testing.T) {
 
 func TestApplyReportedCwd_ReportadoVenceHeuristico(t *testing.T) {
 	st := &SessionTerminal{sessionID: "sess-cwd"}
-	reportado := t.TempDir()
-	outro := t.TempDir()
+	reportado := testutil.TempDir(t)
+	outro := testutil.TempDir(t)
 	st.applyReportedCwd(reportado)
 	st.noteTerminalInput("cd " + outro + "\r")
 
@@ -66,7 +67,7 @@ func TestPublishCwd_SubjectPayload(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	st.applyReportedCwd(dir)
 	_ = nc.Flush()
 
@@ -99,7 +100,7 @@ func TestTermReadyPayload_IncluiCwd(t *testing.T) {
 // ── Fallback heurístico de cd/Set-Location ──
 
 func TestNoteTerminalInput_CdFallback(t *testing.T) {
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 	sub := filepath.Join(base, "sub")
 	if err := os.Mkdir(sub, 0o755); err != nil {
 		t.Fatalf("mkdir sub: %v", err)
@@ -193,7 +194,7 @@ func TestNoteTerminalInput_CdFallback(t *testing.T) {
 
 func TestCurrentCwd_CaiParaHeuristicoQuandoReportadoNaoExiste(t *testing.T) {
 	st := &SessionTerminal{sessionID: "s"}
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	st.applyReportedCwd(filepath.Join(dir, "apagado"))
 	st.noteTerminalInput("cd " + dir + "\n")
 	if got := st.CurrentCwd(); got != dir {
@@ -204,7 +205,7 @@ func TestCurrentCwd_CaiParaHeuristicoQuandoReportadoNaoExiste(t *testing.T) {
 // ── Completação usa o cwd reportado ──
 
 func TestCompletionRes_UsaCwdReportado(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "alpha.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write alpha: %v", err)
 	}
@@ -239,7 +240,7 @@ func TestCompletionRes_UsaCwdReportado(t *testing.T) {
 }
 
 func TestCompletionRes_TrazCwdMesmoComErro(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	st := &SessionTerminal{sessionID: "s", termShellKind: "powershell", termBackend: "legacy"}
 	st.applyReportedCwd(dir)
 	out := st.buildCompletionResponse([]byte("{\"reqId\":\"r1\",\"input\":\"Get-\",\"cursor\":4}"))
@@ -256,7 +257,7 @@ func TestCompletionRes_TrazCwdMesmoComErro(t *testing.T) {
 }
 
 func TestCompletionCwdContext(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	ctx := withCompletionCwd(context.Background(), dir)
 	if got := completionCwdFromContext(ctx); got != dir {
 		t.Fatalf("completionCwdFromContext = %q, want %q", got, dir)

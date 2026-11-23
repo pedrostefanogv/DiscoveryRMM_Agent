@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"discovery/app/core/database"
+	"discovery/app/core/testutil"
 )
 
 // Estado mínimo com uma task de pacote ativa (o cenário real das tasks
@@ -83,7 +84,7 @@ func TestPackageAuthorizedByPolicyIgnoresScriptTasks(t *testing.T) {
 // Task editada na policy (mesmo TaskId, LastUpdatedAt novo) apaga os markers
 // circuit:fail e skipbackoff — destrava a task pausada pelo breaker.
 func TestResetBreakersForChangedTasksResetsOnEdit(t *testing.T) {
-	db, err := database.Open(t.TempDir())
+	db, err := database.Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -112,7 +113,7 @@ func TestResetBreakersForChangedTasksResetsOnEdit(t *testing.T) {
 // Task NÃO editada (LastUpdatedAt igual) preserva o breaker — só a edição
 // destrava.
 func TestResetBreakersForChangedTasksPreservesUnchanged(t *testing.T) {
-	db, err := database.Open(t.TempDir())
+	db, err := database.Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

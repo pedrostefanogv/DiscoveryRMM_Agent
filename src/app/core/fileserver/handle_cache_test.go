@@ -2,6 +2,7 @@ package fileserver
 
 import (
 	"bytes"
+	"discovery/app/core/testutil"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,7 +13,7 @@ import (
 )
 
 func TestSetProgressCallbackAndAllowOtherVolumesConcurrencyRace(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(tmp)
 	defer srv.Close()
 
@@ -54,7 +55,7 @@ func TestSetProgressCallbackAndAllowOtherVolumesConcurrencyRace(t *testing.T) {
 }
 
 func TestHandleCacheReuseAcrossChunksGetAndPut(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := newServerWithHandleCache(tmp, 8, 10*time.Second)
 	defer srv.Close()
 
@@ -113,7 +114,7 @@ func TestHandleCacheReuseAcrossChunksGetAndPut(t *testing.T) {
 }
 
 func TestHandleCacheLRUEvictionAndCloseAllowsRemoveOnWindows(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := newServerWithHandleCache(tmp, 2, 10*time.Second)
 
 	for _, name := range []string{"a.bin", "b.bin", "c.bin"} {
@@ -180,7 +181,7 @@ func TestHandleCacheLRUEvictionAndCloseAllowsRemoveOnWindows(t *testing.T) {
 }
 
 func TestHandleCacheTTLExpiration(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := newServerWithHandleCache(tmp, 4, 50*time.Millisecond)
 	defer srv.Close()
 
@@ -218,7 +219,7 @@ func TestHandleCacheConcurrentPutChunk0SamePathNoLeak(t *testing.T) {
 	const goroutines = 4
 
 	for round := 0; round < rounds; round++ {
-		tmp := t.TempDir()
+		tmp := testutil.TempDir(t)
 		srv := NewServer(tmp)
 		target := "race-0.bin"
 		tmpPath := filepath.Join(tmp, target+".tmp")

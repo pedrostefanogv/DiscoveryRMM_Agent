@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"discovery/app/core/database"
+	"discovery/app/core/testutil"
 	"discovery/app/logs"
 )
 
@@ -73,7 +74,7 @@ func TestParseAgentDecommissionPayload(t *testing.T) {
 }
 
 func TestValidateUninstallerPath(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	valid := filepath.Join(dir, uninstallerFileName)
 	if err := os.WriteFile(valid, []byte("stub"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
@@ -108,7 +109,7 @@ func TestValidateUninstallerPath(t *testing.T) {
 }
 
 func TestValidateUninstallerPathRejectsUntrustedPaths(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	tempUninstall := filepath.Join(tempDir, uninstallerFileName)
 	if err := os.WriteFile(tempUninstall, []byte("stub"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
@@ -149,7 +150,7 @@ func TestResumeAgentDecommissionIfPending_RejectsPoisonedCachePath(t *testing.T)
 
 	db := database.OpenForTest(t)
 
-	poisonedPath := filepath.Join(t.TempDir(), uninstallerFileName)
+	poisonedPath := filepath.Join(testutil.TempDir(t), uninstallerFileName)
 	if err := os.WriteFile(poisonedPath, []byte("evil"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"discovery/app/appstore"
+	"discovery/app/core/testutil"
 	"discovery/app/debug"
 )
 
@@ -31,7 +32,7 @@ func TestRunCustomInstallCommandPrefereP2PEViraSeed(t *testing.T) {
 	}))
 	defer server.Close()
 
-	p2pDir := t.TempDir()
+	p2pDir := testutil.TempDir(t)
 	publishedSource := ""
 	publishedPackage := ""
 	publishedVersion := ""

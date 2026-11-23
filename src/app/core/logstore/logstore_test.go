@@ -2,6 +2,7 @@ package logstore
 
 import (
 	"database/sql"
+	"discovery/app/core/testutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +52,7 @@ func queryStr(t *testing.T, path, query string) string {
 // O banco precisa ficar autocontido em repouso: um unico arquivo, sem -wal/-shm
 // e com journal DELETE + auto_vacuum incremental.
 func TestOpenLeavesSingleFileInRepose(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "logs.db")
 	s := openTest(t, Options{Path: path, Kind: KindLogs, Source: "agent", Process: "discovery-agent"})
 	s.AppendLog("INFO", "rev1", "linha de teste")
@@ -83,7 +84,7 @@ func TestOpenLeavesSingleFileInRepose(t *testing.T) {
 }
 
 func TestAppendReadBack(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "logs.db")
+	path := filepath.Join(testutil.TempDir(t), "logs.db")
 	s := openTest(t, Options{Path: path, Kind: KindLogs, Source: "service", Process: "discovery-service"})
 	s.AppendLog("INFO", "abc12345", "primeira")
 	s.AppendLog("ERROR", "abc12345", "segunda")
@@ -111,7 +112,7 @@ func TestAppendReadBack(t *testing.T) {
 
 // Retencao por idade: 8 dias cai, agora fica. Usa relogio injetado.
 func TestRetentionByAge(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "logs.db")
+	path := filepath.Join(testutil.TempDir(t), "logs.db")
 	now := time.Now().Add(-8 * 24 * time.Hour)
 	s := openTest(t, Options{Path: path, Kind: KindLogs, Now: func() time.Time { return now }})
 	s.AppendLog("INFO", "rev", "velha")
@@ -134,7 +135,7 @@ func TestRetentionByAge(t *testing.T) {
 
 // Teto de tamanho: arquivo acima do cap perde linhas antigas E devolve espaco.
 func TestSizeCapTrimsAndShrinks(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "logs.db")
+	path := filepath.Join(testutil.TempDir(t), "logs.db")
 	// Cap folgado em relação ao chunk da purga (500 linhas) para que o teste
 	// detecte overshoot: 2 MB de teto com ~6 MB de dados de 1 KB por linha.
 	const capBytes = int64(2 << 20)
@@ -176,7 +177,7 @@ func TestSizeCapTrimsAndShrinks(t *testing.T) {
 
 // Append nunca bloqueia e nada se perde quando a fila está ociosa.
 func TestAppendNeverBlocksAndCountsEverything(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "logs.db")
+	path := filepath.Join(testutil.TempDir(t), "logs.db")
 	s := openTest(t, Options{
 		Path:       path,
 		Kind:       KindLogs,
@@ -202,7 +203,7 @@ func TestAppendNeverBlocksAndCountsEverything(t *testing.T) {
 }
 
 func TestCloseFlushesPending(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "logs.db")
+	path := filepath.Join(testutil.TempDir(t), "logs.db")
 	s := openTest(t, Options{Path: path, Kind: KindLogs, FlushEvery: time.Hour, BatchSize: 1 << 30})
 	for i := 0; i < 50; i++ {
 		s.AppendLog("INFO", "rev", "pendente")
@@ -216,7 +217,7 @@ func TestCloseFlushesPending(t *testing.T) {
 }
 
 func TestOpenFailsForDirectoryPath(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	if s, err := Open(Options{Path: dir}); err == nil {
 		_ = s.Close()
 		t.Fatal("esperava erro ao abrir um diretório como arquivo de banco")
@@ -224,7 +225,7 @@ func TestOpenFailsForDirectoryPath(t *testing.T) {
 }
 
 func TestConcurrentAppend(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "logs.db")
+	path := filepath.Join(testutil.TempDir(t), "logs.db")
 	s := openTest(t, Options{Path: path, Kind: KindLogs, QueueSize: 1024})
 	var wg sync.WaitGroup
 	const goroutines, perG = 8, 250
@@ -253,7 +254,7 @@ func TestConcurrentAppend(t *testing.T) {
 }
 
 func TestChatStoreRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "chat.db")
+	path := filepath.Join(testutil.TempDir(t), "chat.db")
 	s := openTest(t, Options{Path: path, Kind: KindChat})
 	s.AppendChat(ChatEntry{
 		Type:       "stream_error",
@@ -292,7 +293,7 @@ func TestChatStoreRoundTrip(t *testing.T) {
 // Banco criado antes de uma coluna nova precisa recebê-la (upgrade sem perda
 // de escrita). CREATE TABLE IF NOT EXISTS não adiciona colunas.
 func TestChatSchemaAddsMissingColumn(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "chat.db")
+	path := filepath.Join(testutil.TempDir(t), "chat.db")
 	// Cria o schema completo e remove a coluna nova: simula um banco gravado
 	// pela versão anterior à migração aditiva.
 	fresh := openTest(t, Options{Path: path, Kind: KindChat})
@@ -339,7 +340,7 @@ func TestParseLevel(t *testing.T) {
 // Dois Stores no MESMO arquivo simulam serviço (SYSTEM) + UI (usuário)
 // escrevendo em logs.db ao mesmo tempo. Valida busy_timeout + journal DELETE.
 func TestTwoStoresSameFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "logs.db")
 	a := openTest(t, Options{Path: path, Kind: KindLogs, Source: "agent", Process: "discovery-agent"})
 	b := openTest(t, Options{Path: path, Kind: KindLogs, Source: "service", Process: "discovery-service"})
@@ -387,7 +388,7 @@ func TestTwoStoresSameFile(t *testing.T) {
 // A purga periódica (ticker) precisa rodar sem reiniciar o agente — é o que
 // limita o crescimento em máquina ligada por semanas.
 func TestMaintenancePurgesPeriodically(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "logs.db")
+	path := filepath.Join(testutil.TempDir(t), "logs.db")
 	s := openTest(t, Options{
 		Path:                path,
 		Kind:                KindLogs,
@@ -409,7 +410,7 @@ func TestMaintenancePurgesPeriodically(t *testing.T) {
 }
 
 func TestPurgeStaleFiles(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	past := time.Now().Add(-8 * 24 * time.Hour)
 
 	installer := filepath.Join(dir, "installer.log")
@@ -450,7 +451,7 @@ func TestPurgeStaleFiles(t *testing.T) {
 }
 
 func TestArchiveLegacyLogs(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	for _, name := range []string{"agent.log", "chat_logs-20260101-000000.jsonl"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)

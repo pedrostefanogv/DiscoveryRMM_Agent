@@ -31,7 +31,13 @@ type cachedHandle struct {
 // handleCache é um cache LRU + TTL limitado de handles abertos para reduzir
 // CreateFile/CloseHandle repetidos em transferências chunked (get/put).
 type handleCache struct {
-	mu         sync.Mutex
+	mu sync.Mutex
+	// writeMu serializa o RECOMEÇO de um arquivo (chunk 0 / truncamento). Sem
+	// ele, dois chunk-0 no mesmo caminho corriam juntos e, no Windows, o
+	// os.Remove do .tmp marcava o arquivo como delete-pending (o handle do outro
+	// goroutine continua aberto quando refs > 0) — o O_CREATE seguinte falhava
+	// com ACCESS_DENIED e o upload morria com "abrir arquivo: Access is denied".
+	writeMu    sync.Mutex
 	entries    map[string]*cachedHandle
 	lru        *list.List
 	maxEntries int
@@ -147,12 +153,19 @@ func (c *handleCache) acquireWrite(tmpPath string, createTrunc bool) (*cachedHan
 	norm := normalizeCachePath(tmpPath)
 
 	if createTrunc {
-		// Garante que qualquer handle anterior para o mesmo .tmp seja fechado
-		// antes de truncar/remover o arquivo (no Windows, arquivo aberto
-		// bloqueia os.Remove).
-		c.invalidatePath(tmpPath)
-		_ = os.Remove(tmpPath)
+		// Serializa invalidate + open: um segundo chunk-0 no mesmo caminho espera
+		// o primeiro terminar de truncar/abrir, em vez de correr junto.
+		c.writeMu.Lock()
+		defer c.writeMu.Unlock()
 
+		// Garante que qualquer handle anterior para o mesmo .tmp saia do cache
+		// (um handle EM USO não é fechado: invalidatePath só fecha quando
+		// refs == 0).
+		c.invalidatePath(tmpPath)
+
+		// NÃO removemos o arquivo antes de abrir: O_TRUNC já zera o conteúdo e a
+		// remoção criava o estado delete-pending no Windows — origem do
+		// ACCESS_DENIED quando outro goroutine ainda tinha o arquivo aberto.
 		f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 		if err != nil {
 			return nil, err

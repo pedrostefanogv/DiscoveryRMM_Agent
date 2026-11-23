@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"discovery/app/appstore"
+	"discovery/app/core/testutil"
 )
 
 func TestBuildCustomCommandSpecCommandKind(t *testing.T) {
@@ -110,7 +111,7 @@ func TestBuildCustomCommandSpecScriptWithoutWorkDirUsesTemp(t *testing.T) {
 // runCustomShellCommandKind gravando .cmd e executando de verdade.
 func TestRunCustomShellCommandKindCmdScriptExecutes(t *testing.T) {
 	// Workdir com espaço de propósito: o caminho do .cmd passa pelo exec do Go.
-	workDir := filepath.Join(t.TempDir(), "dir com espaco")
+	workDir := filepath.Join(testutil.TempDir(t), "dir com espaco")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		t.Fatalf("criar workdir: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestRunCustomShellCommandKindCmdScriptExecutes(t *testing.T) {
 }
 
 func TestRunCustomShellCommandKindPowerShellScriptExecutes(t *testing.T) {
-	workDir := t.TempDir()
+	workDir := testutil.TempDir(t)
 	svc := &Service{}
 
 	out, err := svc.runCustomShellCommandKind(context.Background(), "Write-Output 'script-ps-ok'", workDir, appstore.CommandKindPowerShellScript)
@@ -150,7 +151,7 @@ func TestRunCustomShellCommandKindRejectsEmptyAndNonZeroExit(t *testing.T) {
 		t.Fatal("comando vazio deveria ser rejeitado")
 	}
 
-	_, err := svc.runCustomShellCommandKind(context.Background(), "exit /b 1", t.TempDir(), appstore.CommandKindCmdScript)
+	_, err := svc.runCustomShellCommandKind(context.Background(), "exit /b 1", testutil.TempDir(t), appstore.CommandKindCmdScript)
 	if err == nil {
 		t.Fatal("script com exit != 0 deveria devolver erro")
 	}
@@ -179,7 +180,7 @@ func TestRunCustomShellCommandKindWithoutWorkDirRemovesScript(t *testing.T) {
 // escapava aspas embutidas como \\". Modo Comando com caminho citado e caminho
 // com espaço precisam de SysProcAttr.CmdLine (linha crua) para funcionar.
 func TestRunCustomShellCommandKindCommandQuotedPathWithSpace(t *testing.T) {
-	workDir := filepath.Join(t.TempDir(), "Space Dir")
+	workDir := filepath.Join(testutil.TempDir(t), "Space Dir")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		t.Fatalf("criar workdir: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestRunCustomShellCommandKindCommandQuotedPathWithSpace(t *testing.T) {
 }
 
 func TestRunCustomShellCommandKindPowerShellScriptWorkDirWithSpace(t *testing.T) {
-	workDir := filepath.Join(t.TempDir(), "Space Dir")
+	workDir := filepath.Join(testutil.TempDir(t), "Space Dir")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		t.Fatalf("criar workdir: %v", err)
 	}
@@ -219,7 +220,7 @@ func TestRunCustomShellCommandKindPowerShellScriptWorkDirWithSpace(t *testing.T)
 // parsing cru removia a 1a e a última aspa e o comando quebrava no primeiro
 // espaço. O envelope /D /S /C "<comando>" preserva as aspas internas.
 func TestRunCustomShellCommandKindCommandQuotedExeAndQuotedArg(t *testing.T) {
-	workDir := filepath.Join(t.TempDir(), "Space Dir")
+	workDir := filepath.Join(testutil.TempDir(t), "Space Dir")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		t.Fatalf("criar workdir: %v", err)
 	}
@@ -257,7 +258,7 @@ func TestRunCustomShellCommandKindCommandNoQuotesStillWorks(t *testing.T) {
 // runCustomShellCommand mantém o comportamento legado (cmd /C) para os
 // chamadores que não informam o tipo.
 func TestRunCustomShellCommandKeepsLegacyBehaviour(t *testing.T) {
-	out, err := (&Service{}).runCustomShellCommand(context.Background(), "echo legado-ok", t.TempDir())
+	out, err := (&Service{}).runCustomShellCommand(context.Background(), "echo legado-ok", testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("erro inesperado: %v", err)
 	}

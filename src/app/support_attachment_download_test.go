@@ -1,6 +1,7 @@
 package app
 
 import (
+	"discovery/app/core/testutil"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -31,7 +32,7 @@ func TestSanitizeAttachmentFileName(t *testing.T) {
 }
 
 func TestSaveDownloadedAttachmentToDirNaoSobrescreve(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 
 	first, err := saveDownloadedAttachmentToDir(dir, "nota.txt", []byte("primeiro"))
 	if err != nil {
@@ -62,7 +63,7 @@ func TestSaveDownloadedAttachmentToDirNaoSobrescreve(t *testing.T) {
 }
 
 func TestSaveAttachmentBytesAtCaminhoEscolhido(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	target := filepath.Join(dir, "escolhido.png")
 
 	got, err := saveAttachmentBytesAt(target, "ignorado.png", []byte("conteudo"))
@@ -101,7 +102,7 @@ func TestSaveAttachmentBytesAtCaminhoEscolhido(t *testing.T) {
 // O override por ambiente tem prioridade — permite fixar a pasta sem depender
 // do token da sessao interativa.
 func TestResolveAttachmentDownloadDirOverride(t *testing.T) {
-	custom := t.TempDir()
+	custom := testutil.TempDir(t)
 	t.Setenv(attachmentDownloadDirOverrideEnv, custom)
 	if got := resolveAttachmentDownloadDir(); got != custom {
 		t.Fatalf("resolveAttachmentDownloadDir() = %q, esperado %q", got, custom)
@@ -127,7 +128,7 @@ func TestAttachmentSaveResultSobreviveAoRPC(t *testing.T) {
 
 // Perfil do sistema (servico) NAO pode ser usado como pasta de download.
 func TestResolveAttachmentDownloadDirNaoUsaPerfilDoSistema(t *testing.T) {
-	systemProfile := filepath.Join(t.TempDir(), "Windows", "system32", "config", "systemprofile")
+	systemProfile := filepath.Join(testutil.TempDir(t), "Windows", "system32", "config", "systemprofile")
 	t.Setenv(attachmentDownloadDirOverrideEnv, "")
 	t.Setenv("USERPROFILE", systemProfile)
 	t.Setenv("HOME", systemProfile)

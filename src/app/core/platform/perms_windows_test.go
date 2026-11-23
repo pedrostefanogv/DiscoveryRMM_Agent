@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"discovery/app/core/testutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -124,7 +125,7 @@ func TestHardenAndVerifySecretFileACL_LiveWhenElevated(t *testing.T) {
 	if !IsElevated() {
 		t.Skip("skipping live SYSTEM/Administrators ACL hardening test on non-elevated runner")
 	}
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	p := filepath.Join(dir, "secret.json")
 	if err := os.WriteFile(p, []byte(`{"authToken":"x"}`), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
@@ -156,11 +157,11 @@ func TestHardenDataDirACL_LiveWhenElevated(t *testing.T) {
 	if err := HardenDataDirACL(""); err == nil {
 		t.Fatal("diretório vazio precisa ser rejeitado")
 	}
-	if err := HardenDataDirACL(filepath.Join(t.TempDir(), "nao-existe")); err == nil {
+	if err := HardenDataDirACL(filepath.Join(testutil.TempDir(t), "nao-existe")); err == nil {
 		t.Fatal("diretório inexistente precisa ser rejeitado")
 	}
 
-	dir := filepath.Join(t.TempDir(), "Discovery")
+	dir := filepath.Join(testutil.TempDir(t), "Discovery")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}

@@ -5,6 +5,7 @@ package screenshot
 import (
 	"bufio"
 	"bytes"
+	"discovery/app/core/testutil"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -82,7 +83,7 @@ func TestPrintWorkerClientProtocolInProcess(t *testing.T) {
 	client.stdout = bufio.NewReader(clientOut)
 
 	for i := 0; i < 2; i += 1 {
-		out := filepath.Join(t.TempDir(), fmt.Sprintf("pedido-%d.png", i))
+		out := filepath.Join(testutil.TempDir(t), fmt.Sprintf("pedido-%d.png", i))
 		if err := client.requestLocked(uintptr(target.Handle), out); err != nil {
 			if strings.Contains(err.Error(), "worker de PrintWindow: ") {
 				t.Skipf("PrintWindow do alvo %q falhou no ambiente: %v", target.Title, err)

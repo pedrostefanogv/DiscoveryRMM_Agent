@@ -1,6 +1,7 @@
 package fileserver
 
 import (
+	"discovery/app/core/testutil"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -72,7 +73,7 @@ func TestSafePath_DriveRelativeInput(t *testing.T) {
 	}
 
 	// Sandbox em subpasta continua bloqueando o restante do mesmo volume.
-	sub := NewServer(filepath.Join(t.TempDir(), "sandbox"))
+	sub := NewServer(filepath.Join(testutil.TempDir(t), "sandbox"))
 	if _, err := sub.safePath("C:\\Windows"); err == nil {
 		t.Fatal("safePath(C:\\Windows) em sandbox de subpasta deveria falhar")
 	}
@@ -117,7 +118,7 @@ func TestHandleRequest_Drives(t *testing.T) {
 // TestHandleRequest_DrivesRestrictedSandbox garante que um sandbox em subpasta
 // NÃO oferece troca de disco (a UI esconde o seletor).
 func TestHandleRequest_DrivesRestrictedSandbox(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(filepath.Join(tmp, "sandbox"))
 	if srv.AllowOtherVolumes() {
 		t.Fatal("sandbox em subpasta: esperava AllowOtherVolumes=false")
@@ -142,7 +143,7 @@ func TestHandleRequest_DrivesRestrictedSandbox(t *testing.T) {
 //   - UNC permanece bloqueado mesmo com a troca de disco ligada.
 func TestSafePath_OtherVolumePolicy(t *testing.T) {
 	srvRoot := NewServer("C:\\")
-	srvSub := NewServer(filepath.Join(t.TempDir(), "sandbox"))
+	srvSub := NewServer(filepath.Join(testutil.TempDir(t), "sandbox"))
 
 	drives := ListDrives()
 	var other *DriveInfo
@@ -177,7 +178,7 @@ func TestSafePath_OtherVolumePolicy(t *testing.T) {
 // TestHandleRequest_ListMarksHidden valida o atributo HIDDEN do Windows no list
 // e que o item oculto continua navegável.
 func TestHandleRequest_ListMarksHidden(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(tmp)
 
 	if err := os.WriteFile(filepath.Join(tmp, "visivel.txt"), []byte("ok"), 0644); err != nil {

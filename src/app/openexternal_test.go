@@ -1,6 +1,7 @@
 package app
 
 import (
+	"discovery/app/core/testutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +20,7 @@ func TestResolveOpenFolderPath_AliasesAndAbsolute(t *testing.T) {
 	knownFolderPath = nil
 	t.Cleanup(func() { knownFolderPath = origKnown })
 
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 	downloads := filepath.Join(base, "Downloads")
 	if err := os.MkdirAll(downloads, 0o755); err != nil {
 		t.Fatal(err)
@@ -41,7 +42,7 @@ func TestResolveOpenFolderPath_AliasesAndAbsolute(t *testing.T) {
 }
 
 func TestResolveOpenFolderPath_Rejections(t *testing.T) {
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 	file := filepath.Join(base, "arquivo.txt")
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
@@ -67,7 +68,7 @@ func TestResolveOpenFolderPath_Rejections(t *testing.T) {
 }
 
 func TestResolveLaunchAppTarget_StartMenuAndAppPaths(t *testing.T) {
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 	startMenu := filepath.Join(base, "Microsoft", "Windows", "Start Menu", "Programs")
 	if err := os.MkdirAll(filepath.Join(startMenu, "Google"), 0o755); err != nil {
 		t.Fatal(err)
@@ -118,7 +119,7 @@ func TestResolveLaunchAppTarget_StartMenuAndAppPaths(t *testing.T) {
 }
 
 func TestAppCandidatesForMessage_ListsSimilarNames(t *testing.T) {
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 	startMenu := filepath.Join(base, "Microsoft", "Windows", "Start Menu", "Programs")
 	if err := os.MkdirAll(startMenu, 0o755); err != nil {
 		t.Fatal(err)
@@ -137,7 +138,7 @@ func TestAppCandidatesForMessage_ListsSimilarNames(t *testing.T) {
 // Pasta conhecida REDIRECIONADA: o hook do SO vence o fallback por env — é o
 // caso de máquinas com Downloads/Documentos em outro disco (perfil móvel).
 func TestResolveOpenFolderPath_PrefersKnownFolder(t *testing.T) {
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 	moved := filepath.Join(base, "DownloadEmOutroDisco")
 	if err := os.MkdirAll(moved, 0o755); err != nil {
 		t.Fatal(err)
@@ -163,7 +164,7 @@ func TestResolveOpenFolderPath_PrefersKnownFolder(t *testing.T) {
 }
 
 func TestInstalledAppNames_FilterAndLimit(t *testing.T) {
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 	startMenu := filepath.Join(base, "Microsoft", "Windows", "Start Menu", "Programs")
 	if err := os.MkdirAll(startMenu, 0o755); err != nil {
 		t.Fatal(err)

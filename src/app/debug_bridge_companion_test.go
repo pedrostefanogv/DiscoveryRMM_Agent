@@ -8,6 +8,7 @@ package app
 
 import (
 	"context"
+	"discovery/app/core/testutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,7 +18,7 @@ import (
 )
 
 func TestSetDebugConfigCompanionRPCFailureDoesNotWriteLocalConfig(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "debug_config.json")
+	path := filepath.Join(testutil.TempDir(t), "debug_config.json")
 	svc := debug.NewService(debug.Options{
 		ConfigPaths:     func() []string { return []string{path} },
 		WatcherInterval: time.Hour,

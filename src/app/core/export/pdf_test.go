@@ -10,6 +10,7 @@ import (
 	"github.com/go-pdf/fpdf"
 
 	"discovery/app/core/models"
+	"discovery/app/core/testutil"
 )
 
 // Regressão do erro relatado pelo usuário: "falha ao gerar pdf: undefined font:
@@ -22,7 +23,7 @@ func TestWritePDFWithoutAnyFontStillSucceeds(t *testing.T) {
 	t.Setenv(pdfFontConfigEnvVar, "")
 	t.Setenv("WINDIR", "") // sem fontes do sistema: exercita o fallback core puro
 
-	out := filepath.Join(t.TempDir(), "inventario.pdf")
+	out := filepath.Join(testutil.TempDir(t), "inventario.pdf")
 	report := models.InventoryReport{
 		CollectedAt: "2026-10-07T20:48:03Z",
 		Source:      "teste",
@@ -51,10 +52,10 @@ func TestWritePDFWithoutAnyFontStillSucceeds(t *testing.T) {
 // Caminho de fonte inválido não pode derrubar a exportação: a resolução de fonte
 // precisa ignorar o arquivo inexistente e usar o fallback core.
 func TestWritePDFIgnoresBogusFontPath(t *testing.T) {
-	t.Setenv(pdfFontPathEnvVar, filepath.Join(t.TempDir(), "nao-existe.ttf"))
+	t.Setenv(pdfFontPathEnvVar, filepath.Join(testutil.TempDir(t), "nao-existe.ttf"))
 	t.Setenv(pdfFontConfigEnvVar, "")
 
-	out := filepath.Join(t.TempDir(), "inventario.pdf")
+	out := filepath.Join(testutil.TempDir(t), "inventario.pdf")
 	if err := WritePDF(models.InventoryReport{Source: "teste"}, out, false); err != nil {
 		t.Fatalf("WritePDF falhou com caminho de fonte inexistente: %v", err)
 	}
@@ -87,7 +88,7 @@ func TestWritePDFUsesSystemUTF8FontWhenAvailable(t *testing.T) {
 		t.Skip("arial.ttf não encontrada nesta máquina")
 	}
 
-	out := filepath.Join(t.TempDir(), "inventario.pdf")
+	out := filepath.Join(testutil.TempDir(t), "inventario.pdf")
 	if err := WritePDF(models.InventoryReport{Source: "teste"}, out, false); err != nil {
 		t.Fatalf("WritePDF falhou com fonte do sistema disponível: %v", err)
 	}

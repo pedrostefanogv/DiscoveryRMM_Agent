@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"discovery/app/core/testutil"
 	"discovery/app/logs"
 )
 
@@ -12,7 +13,7 @@ import (
 // (o teste nunca toca no %ProgramData% real da máquina).
 func newScreenshotTestApp(t *testing.T) *App {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	prev := screenshotPolicyPathOverride
 	screenshotPolicyPathOverride = filepath.Join(dir, "screenshot_policy.json")
 	t.Cleanup(func() { screenshotPolicyPathOverride = prev })

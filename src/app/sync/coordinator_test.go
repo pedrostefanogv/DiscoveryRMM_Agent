@@ -9,6 +9,7 @@ import (
 	"discovery/app/appstore"
 	"discovery/app/core/agentconn"
 	"discovery/app/core/database"
+	"discovery/app/core/testutil"
 	debug "discovery/app/debug"
 	"discovery/app/p2pmeta"
 	"discovery/app/syncmeta"
@@ -70,7 +71,7 @@ func (f *fakeDeps) PostP2PTelemetryPayload(_ context.Context, _ p2pmeta.Telemetr
 
 func newFakeDeps(t *testing.T) *fakeDeps {
 	t.Helper()
-	db, err := database.Open(t.TempDir())
+	db, err := database.Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

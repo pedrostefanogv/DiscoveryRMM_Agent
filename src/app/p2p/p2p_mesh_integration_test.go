@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"discovery/app/core/agentconn"
+	"discovery/app/core/testutil"
 	debug "discovery/app/debug"
 
 	"github.com/libp2p/go-libp2p"
@@ -35,11 +36,11 @@ type testMeshNode struct {
 
 func newTestMeshNode(t *testing.T, agentID, clientID string) *testMeshNode {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	deps := &mockDeps{
 		cfg:      DefaultConfig(),
 		tempDir:  dir,
-		dataDir:  t.TempDir(),
+		dataDir:  testutil.TempDir(t),
 		debugCfg: debug.Config{AgentID: agentID},
 	}
 	deps.agentCfg.ClientID = clientID

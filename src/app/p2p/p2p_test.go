@@ -12,6 +12,7 @@ import (
 
 	"discovery/app/agentconfig"
 	"discovery/app/core/agentconn"
+	"discovery/app/core/testutil"
 	debug "discovery/app/debug"
 	"discovery/app/logs"
 	"discovery/app/p2pmeta"
@@ -427,7 +428,7 @@ func TestLibP2PProviderName(t *testing.T) {
 // ── Epic 8: chunking ──────────────────────────────────────────────────────────
 
 func TestBuildChunkManifestSingleChunk(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "small.bin")
 	if err := writeTestFile(path, 512); err != nil {
 		t.Fatal(err)
@@ -448,7 +449,7 @@ func TestBuildChunkManifestSingleChunk(t *testing.T) {
 }
 
 func TestBuildChunkManifestMultipleChunks(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "large.bin")
 	if err := writeTestFile(path, 3*1024*1024); err != nil {
 		t.Fatal(err)
@@ -471,7 +472,7 @@ func TestBuildChunkManifestMultipleChunks(t *testing.T) {
 }
 
 func TestBuildChunkManifestRemainder(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "uneven.bin")
 	size := int64(2*1024*1024 + 512*1024)
 	if err := writeTestFile(path, size); err != nil {
@@ -491,7 +492,7 @@ func TestBuildChunkManifestRemainder(t *testing.T) {
 }
 
 func TestBuildChunkManifestChecksumConsistent(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "file.bin")
 	if err := writeTestFile(path, 4*1024*1024); err != nil {
 		t.Fatal(err)

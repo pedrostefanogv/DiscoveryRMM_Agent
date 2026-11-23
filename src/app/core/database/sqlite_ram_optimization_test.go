@@ -2,6 +2,7 @@ package database
 
 import (
 	"bytes"
+	"discovery/app/core/testutil"
 	"fmt"
 	"strings"
 	"testing"
@@ -9,7 +10,7 @@ import (
 )
 
 func TestCacheSetBytesRoundTripAndStaleRead(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestCacheSetBytesRoundTripAndStaleRead(t *testing.T) {
 }
 
 func TestCleanOldInventoryKeepingLatestPreservesNewestPerAgent(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestCleanOldInventoryKeepingLatestPreservesNewestPerAgent(t *testing.T) {
 }
 
 func TestCleanOldInventoryKeepingLatestRejectsInvalidDays(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -108,7 +109,7 @@ func TestCleanOldInventoryKeepingLatestRejectsInvalidDays(t *testing.T) {
 }
 
 func TestCompactIfBloatedVacuumsAfterLargeDelete(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -154,7 +155,7 @@ func TestShrinkMemoryIsNoOpSafe(t *testing.T) {
 	if err := (*DB)(nil).ShrinkMemory(); err != nil {
 		t.Fatalf("ShrinkMemory nil = %v", err)
 	}
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestShrinkMemoryIsNoOpSafe(t *testing.T) {
 }
 
 func TestPruneInventoryHistoryKeepsNewestPerAgentByCount(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -233,7 +234,7 @@ func TestPruneInventoryHistoryKeepsNewestPerAgentByCount(t *testing.T) {
 }
 
 func TestPruneInventoryHistoryClampsKeep(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"discovery/app/core/logstore"
+	"discovery/app/core/testutil"
 )
 
 // Regressão: cada linha aparecia DUAS vezes em logs.db (ids consecutivos, mesmo
@@ -16,7 +17,7 @@ import (
 // storeSink (o buffer só as guarda em memória/arquivo); linhas de
 // a.Logs.Append(...) — que não passam pelo logger — são gravadas pelo buffer.
 func TestBufferCapturedLinesDoNotDoubleWrite(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	st, err := logstore.Open(logstore.Options{
 		Path:    filepath.Join(dir, "logs.db"),
 		Kind:    logstore.KindLogs,

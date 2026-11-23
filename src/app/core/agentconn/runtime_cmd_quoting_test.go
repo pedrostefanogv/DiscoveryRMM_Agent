@@ -4,6 +4,7 @@ package agentconn
 
 import (
 	"context"
+	"discovery/app/core/testutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,7 @@ import (
 // tem caminho citado E argumento citado (mais de duas aspas), que é o caso que o
 // /C puro também quebra — por isso o envelope /D /S /C.
 func TestExecuteCommandCmdQuotedPathsWithSpace(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "Space Dir")
+	dir := filepath.Join(testutil.TempDir(t), "Space Dir")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("criar diretorio: %v", err)
 	}

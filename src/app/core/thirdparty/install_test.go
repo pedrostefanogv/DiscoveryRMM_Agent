@@ -3,6 +3,7 @@ package thirdparty
 import (
 	"context"
 	"crypto/sha256"
+	"discovery/app/core/testutil"
 	"encoding/hex"
 	"errors"
 	"net/http"
@@ -184,7 +185,7 @@ func TestInstallerRunsExeWithSilentArgs(t *testing.T) {
 }
 
 func TestVerifyFileSHA256(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := dir + "/file.bin"
 	payload := []byte("dados")
 	if err := os.WriteFile(path, payload, 0o600); err != nil {

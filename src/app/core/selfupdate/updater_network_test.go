@@ -3,6 +3,7 @@ package selfupdate
 import (
 	"context"
 	"crypto/sha256"
+	"discovery/app/core/testutil"
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
@@ -74,7 +75,7 @@ func TestDownloadFromCacheOrPublic_RefusesDownloadWithoutServerHash(t *testing.T
 			downloads++
 			return "", nil
 		},
-		TempDir: t.TempDir(),
+		TempDir: testutil.TempDir(t),
 	}
 
 	_, _, fromP2P, err := updater.downloadFromCacheOrPublic(context.Background(), "")
@@ -124,7 +125,7 @@ func TestDownloadFromCacheOrPublic_HTTPMismatchAbortsAndRemoves(t *testing.T) {
 		t.Fatalf("url.Parse: %v", err)
 	}
 
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	updater := &Updater{
 		ApiScheme: apiURL.Scheme,
 		ApiServer: apiURL.Host,

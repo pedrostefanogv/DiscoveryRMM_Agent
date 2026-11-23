@@ -15,6 +15,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"discovery/app/core/fileserver"
+	"discovery/app/core/testutil"
 )
 
 func buildTestDFFrame(t *testing.T, hdr any, payload []byte) []byte {
@@ -52,7 +53,7 @@ func TestSessionFiles_BinaryDFRoundTripAndReadyFlags(t *testing.T) {
 		ses = "44444444444444444444444444444444"
 	)
 
-	rootDir := t.TempDir()
+	rootDir := testutil.TempDir(t)
 	h := NewNatsStreamHandler(ncAgent, cid, sid, aid)
 	sf := NewSessionFiles(ses, h, rootDir)
 

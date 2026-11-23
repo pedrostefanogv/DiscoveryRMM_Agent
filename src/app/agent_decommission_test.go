@@ -5,11 +5,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"discovery/app/core/testutil"
 	"discovery/app/decommission"
 )
 
 func TestCleanupAgentDecommissionPathsRemovesDirectories(t *testing.T) {
-	root := t.TempDir()
+	root := testutil.TempDir(t)
 	tempDir := filepath.Join(root, "Discovery")
 	p2pDir := filepath.Join(tempDir, "P2P_Temp")
 
@@ -33,7 +34,7 @@ func TestCleanupAgentDecommissionPathsRemovesDirectories(t *testing.T) {
 }
 
 func TestCleanupAgentDecommissionPathsAcceptsDuplicatesAndMissing(t *testing.T) {
-	root := t.TempDir()
+	root := testutil.TempDir(t)
 	tempDir := filepath.Join(root, "Discovery")
 
 	if err := os.MkdirAll(tempDir, 0o755); err != nil {

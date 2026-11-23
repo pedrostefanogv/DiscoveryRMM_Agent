@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"discovery/app/core/testutil"
 	debug "discovery/app/debug"
 	"discovery/app/logs"
 )
@@ -16,7 +17,7 @@ import (
 func TestWorkerConfigFailClosedWithoutStdinAuthToken(t *testing.T) {
 	// Even if a disk config.json/debug_config.json exists in ProgramData,
 	// worker MUST NOT read authToken from disk.
-	pd := t.TempDir()
+	pd := testutil.TempDir(t)
 	t.Setenv("ProgramData", pd)
 	discDir := filepath.Join(pd, "Discovery")
 	if err := os.MkdirAll(discDir, 0o755); err != nil {
@@ -57,7 +58,7 @@ func TestWorkerConfigFailClosedWithoutStdinAuthToken(t *testing.T) {
 func TestInjectWorkerRuntimeHintsAndMerge(t *testing.T) {
 	a := &App{ctx: context.Background()}
 	a.Logs.Buffer = logs.New()
-	cfgPath := filepath.Join(t.TempDir(), "debug_config.json")
+	cfgPath := filepath.Join(testutil.TempDir(t), "debug_config.json")
 	a.DebugSvc = debug.NewService(debug.Options{
 		ConfigPaths:         func() []string { return []string{cfgPath} },
 		WatcherInterval:     time.Hour,

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"discovery/app/core/testutil"
 	debugsvc "discovery/app/debug"
 	"discovery/app/debughttp"
 	"discovery/app/logs"
@@ -216,7 +217,7 @@ func TestServeDebugAPI_BlocksTokenDisclosureMethods(t *testing.T) {
 
 func TestGetDebugConfig_RedactsAuthTokenAndBlocksHTTPReflection(t *testing.T) {
 	a, srv := newTestDebugHTTPApp(t, false)
-	cfgPath := t.TempDir() + `\debug_config.json`
+	cfgPath := testutil.TempDir(t) + `\debug_config.json`
 	a.DebugSvc = debugsvc.NewService(debugsvc.Options{
 		ConfigPaths:     func() []string { return []string{cfgPath} },
 		WatcherInterval: time.Hour,

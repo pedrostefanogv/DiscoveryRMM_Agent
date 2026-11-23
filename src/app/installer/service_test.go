@@ -1,6 +1,7 @@
 package installer
 
 import (
+	"discovery/app/core/testutil"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,7 +11,7 @@ import (
 )
 
 func TestInstallerPersistUsesDPAPIAndHardenACL(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	cfgPath := filepath.Join(dir, "config.json")
 	var hardened []string
 
@@ -73,7 +74,7 @@ func TestInstallerPersistUsesDPAPIAndHardenACL(t *testing.T) {
 }
 
 func TestInstallerLoadMigratesLegacyPlaintextAndEnsureDefaultHardensACL(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	cfgPath := filepath.Join(dir, "config.json")
 	var hardened []string
 

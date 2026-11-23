@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"discovery/app/core/buildinfo"
+	"discovery/app/core/testutil"
 )
 
 func TestDownloadFromURL_DownloadsAndReturnsSHA256(t *testing.T) {
@@ -42,7 +43,7 @@ func TestDownloadFromURL_DownloadsAndReturnsSHA256(t *testing.T) {
 		ApiServer:  apiURL.Host,
 		GetToken:   func() string { return "mdz_token_123" },
 		GetAgentID: func() string { return "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" },
-		TempDir:    t.TempDir(),
+		TempDir:    testutil.TempDir(t),
 	}
 
 	downloadURL := apiServer.URL + "/api/v1/download/agent"
@@ -98,7 +99,7 @@ func TestDownloadFromCacheOrPublic_UsesPublicEndpoint(t *testing.T) {
 		ApiServer:  apiURL.Host,
 		GetToken:   func() string { return "mdz_token_123" },
 		GetAgentID: func() string { return "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" },
-		TempDir:    t.TempDir(),
+		TempDir:    testutil.TempDir(t),
 	}
 
 	path, sha, fromP2P, err := updater.downloadFromCacheOrPublic(context.Background(), "")
@@ -132,7 +133,7 @@ func TestResumePendingInstallReport_ClearsStateOnVersionMatch(t *testing.T) {
 	}()
 
 	releaseID := "rel-3"
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	updater := &Updater{
 		TempDir: tempDir,
 	}
@@ -158,7 +159,7 @@ func TestResumePendingInstallReport_ClearsStateOnVersionMatch(t *testing.T) {
 // que incrementava InstallAttempts: cada launch consumia 2 tentativas e o
 // updater podia declarar "install-loop" e descartar um install bem-sucedido.
 func TestPersistInstallerPIDDoesNotIncrementAttempts(t *testing.T) {
-	u := &Updater{TempDir: t.TempDir(), Logf: func(string, ...any) {}}
+	u := &Updater{TempDir: testutil.TempDir(t), Logf: func(string, ...any) {}}
 	state := pendingInstallState{
 		CurrentVersion: "1.0.0",
 		TargetVersion:  "1.1.0",
@@ -322,7 +323,7 @@ func TestParseNSISLogTimestamp_Invalid(t *testing.T) {
 }
 
 func TestCorrelateInstallerLog_FindsSuccessMarker(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	logPath := filepath.Join(tempDir, "installer.log")
 
 	// recordedAt em UTC; o NSIS loga em hora local. Usamos o fuso local para
@@ -346,7 +347,7 @@ func TestCorrelateInstallerLog_FindsSuccessMarker(t *testing.T) {
 }
 
 func TestCorrelateInstallerLog_NoMarker(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	logPath := filepath.Join(tempDir, "installer.log")
 
 	recordedAt := time.Now().Add(-2 * time.Minute)
@@ -364,7 +365,7 @@ func TestCorrelateInstallerLog_NoMarker(t *testing.T) {
 }
 
 func TestCleanupOldDownloads_PreservesPendingInstaller(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 
 	// Cria um instalador pendente (referenciado no pending state) e um antigo.
 	pendingExe := filepath.Join(tempDir, "selfupdate-aaa.exe")
@@ -402,7 +403,7 @@ func TestCleanupOldDownloads_PreservesPendingInstaller(t *testing.T) {
 }
 
 func TestHandleLaunchFailure_PreservesStateForRetry(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	updater := &Updater{TempDir: tempDir}
 
 	// Persiste um estado pendente com 1 tentativa.
@@ -437,7 +438,7 @@ func TestHandleLaunchFailure_PreservesStateForRetry(t *testing.T) {
 }
 
 func TestHandleLaunchFailure_ClearsAfterMaxAttempts(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	updater := &Updater{TempDir: tempDir}
 
 	// Persiste um estado pendente já no limite de tentativas.
@@ -462,7 +463,7 @@ func TestHandleLaunchFailure_ClearsAfterMaxAttempts(t *testing.T) {
 }
 
 func TestHasPendingInstallRetry(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	updater := &Updater{TempDir: tempDir}
 
 	// Sem estado pendente → false.
@@ -506,7 +507,7 @@ func TestHasPendingInstallRetry(t *testing.T) {
 }
 
 func TestWriteInstallerLogMarker(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	logPath := filepath.Join(tempDir, "installer.log")
 	updater := &Updater{InstallerLogPath: logPath}
 

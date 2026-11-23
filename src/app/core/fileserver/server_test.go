@@ -2,6 +2,7 @@ package fileserver
 
 import (
 	"archive/zip"
+	"discovery/app/core/testutil"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -13,7 +14,7 @@ import (
 // TestHandleRequest_ListPutGetRenameDelete valida o ciclo completo do protocolo v1:
 // list → put (chunked) → get (chunked) → rename → delete + path traversal.
 func TestHandleRequest_ListPutGetRenameDelete(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(tmp)
 
 	// ── list raiz (vazia) ──
@@ -88,7 +89,7 @@ func TestHandleRequest_ListPutGetRenameDelete(t *testing.T) {
 
 // TestHandleRequest_PathTraversal valida que `..\..` e absolutos fora do base são bloqueados.
 func TestHandleRequest_PathTraversal(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(filepath.Join(tmp, "sandbox"))
 	if err := os.MkdirAll(filepath.Join(tmp, "sandbox"), 0755); err != nil {
 		t.Fatal(err)
@@ -129,7 +130,7 @@ func TestHandleRequest_PathTraversal(t *testing.T) {
 
 // TestHandleRequest_ZipUnzip valida compactar (zip) e descompactar (unzip).
 func TestHandleRequest_ZipUnzip(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(tmp)
 
 	// Cria arquivo e pasta para compactar.
@@ -216,7 +217,7 @@ func TestHandleRequest_ZipUnzip(t *testing.T) {
 // forma atomica: durante os chunks, apenas <destino>.tmp existe no disco; o
 // arquivo com o nome final so existe (sem .tmp residual) apos o ultimo chunk.
 func TestHandleRequest_PutUsesTempNameAndRenames(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(tmp)
 
 	content := []byte("0123456789abcdefghijklmnopqrstuv") // 32 bytes
@@ -274,7 +275,7 @@ func TestHandleRequest_PutUsesTempNameAndRenames(t *testing.T) {
 // TestHandleRequest_PutFailsRemovesTemp valida que, em falha no meio do upload,
 // o arquivo final nao fica parcial e o .tmp e removido.
 func TestHandleRequest_PutFailsRemovesTemp(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(tmp)
 	defer srv.Close()
 
@@ -315,7 +316,7 @@ func TestHandleRequest_PutFailsRemovesTemp(t *testing.T) {
 // sem um .tmp existente retorna erro claro (não cria arquivo com "buracos"),
 // forçando o viewer a recomeçar do chunk 0.
 func TestHandleRequest_PutResumeWithoutTempFails(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(tmp)
 
 	// Chunk 1 de um total de 3, mas NENHUM chunk 0 foi enviado antes (sem .tmp).
@@ -338,7 +339,7 @@ func TestHandleRequest_PutResumeWithoutTempFails(t *testing.T) {
 // TestHandleRequest_DeleteRemovesOrphanTemp valida que apagar um arquivo
 // tambem remove um .tmp orfao associado (upload abortado).
 func TestHandleRequest_DeleteRemovesOrphanTemp(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(tmp)
 
 	finalPath := filepath.Join(tmp, "app.exe")
@@ -366,7 +367,7 @@ func TestHandleRequest_DeleteRemovesOrphanTemp(t *testing.T) {
 // de um upload em andamento: o arquivo final ainda não existe, mas o .tmp
 // parcial sim. O delete do path final deve limpar o .tmp e retornar sucesso.
 func TestHandleRequest_DeleteCancelsUploadHandlesTempOnly(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(tmp)
 
 	finalPath := filepath.Join(tmp, "app.exe")
@@ -391,7 +392,7 @@ func TestHandleRequest_DeleteCancelsUploadHandlesTempOnly(t *testing.T) {
 // TestHandleRequest_DeleteMissingFileFails valida que apagar um arquivo que
 // nunca existiu (sem .tmp órfão) ainda retorna erro.
 func TestHandleRequest_DeleteMissingFileFails(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(tmp)
 
 	r := srv.HandleRequest(mustJSON(t, map[string]any{"version": 1, "requestId": "d3", "action": "delete", "path": "nao-existe.txt"}))
@@ -408,7 +409,7 @@ func TestHandleRequest_DeleteMissingFileFails(t *testing.T) {
 // do range (inconsistência do viewer) é rejeitado e não renomeia o .tmp com
 // dados incompletos.
 func TestHandleRequest_PutChunkOutOfRangeFails(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(tmp)
 	defer srv.Close()
 
@@ -439,7 +440,7 @@ func TestHandleRequest_PutChunkOutOfRangeFails(t *testing.T) {
 
 // TestHandleRequest_LegacyFallback garante compatibilidade com o protocolo legado.
 func TestHandleRequest_LegacyFallback(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	srv := NewServer(tmp)
 
 	r := srv.HandleRequest([]byte(`{"action":"list","path":""}`))

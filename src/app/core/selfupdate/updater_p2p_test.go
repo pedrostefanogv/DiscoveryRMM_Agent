@@ -3,6 +3,7 @@ package selfupdate
 import (
 	"context"
 	"crypto/sha256"
+	"discovery/app/core/testutil"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -19,7 +20,7 @@ func TestDownloadFromCacheOrPublic_P2PFallbackToLegacyNameID(t *testing.T) {
 	checksum := sha256.Sum256(payload)
 	checksumHex := strings.ToLower(hex.EncodeToString(checksum[:]))
 
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	var queriedIDs []string
 	updater := &Updater{
 		TempDir: tempDir,
@@ -72,7 +73,7 @@ func TestDownloadFromCacheOrPublic_P2PCanonicalIDFirst(t *testing.T) {
 	checksum := sha256.Sum256(payload)
 	checksumHex := strings.ToLower(hex.EncodeToString(checksum[:]))
 
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	var queriedIDs []string
 	updater := &Updater{
 		TempDir: tempDir,
@@ -120,7 +121,7 @@ func TestDownloadFromCacheOrPublic_P2PStalePeerRejected(t *testing.T) {
 	staleChecksum := sha256.Sum256(stalePayload)
 	staleHex := strings.ToLower(hex.EncodeToString(staleChecksum[:]))
 
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	updater := &Updater{
 		TempDir: tempDir,
 		FindPeersByReleaseID: func(ctx context.Context, artifactID string) ([]string, error) {

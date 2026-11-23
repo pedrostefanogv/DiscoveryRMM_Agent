@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"discovery/app/core/testutil"
 	debug "discovery/app/debug"
 	"discovery/app/p2pmeta"
 
@@ -120,11 +121,11 @@ func TestLibP2PHandshakeAcceptsUnprovisionedPeer(t *testing.T) {
 // alcançava o /p2p/health do peer. O servidor de health de LAN resolve isso
 // sem expor as rotas sensíveis.
 func TestLANHealthServerServesHealth(t *testing.T) {
-	deps := &mockDeps{cfg: DefaultConfig(), tempDir: t.TempDir(), dataDir: t.TempDir()}
+	deps := &mockDeps{cfg: DefaultConfig(), tempDir: testutil.TempDir(t), dataDir: testutil.TempDir(t)}
 	srv := NewTransferServer(deps, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := srv.Start(ctx, DefaultConfig(), "agent-health-1", t.TempDir(), func() []P2PPeerView { return nil }); err != nil {
+	if err := srv.Start(ctx, DefaultConfig(), "agent-health-1", testutil.TempDir(t), func() []P2PPeerView { return nil }); err != nil {
 		t.Fatalf("start transfer server: %v", err)
 	}
 	defer srv.Close()
@@ -175,7 +176,7 @@ func TestLANHealthServerServesHealth(t *testing.T) {
 // TestPeerTTLFloorKeepsPeer cobre o achado D5: TTL de 2 min < intervalo do
 // probe de 5 min fazia o peer expirar antes de ser redescoberto ("pisca").
 func TestPeerTTLFloorKeepsPeer(t *testing.T) {
-	deps := &mockDeps{cfg: DefaultConfig(), tempDir: t.TempDir(), dataDir: t.TempDir()}
+	deps := &mockDeps{cfg: DefaultConfig(), tempDir: testutil.TempDir(t), dataDir: testutil.TempDir(t)}
 	c := NewCoordinator(deps)
 	peer := p2pDiscoveredPeer{AgentID: "agent-old", Address: "192.168.10.9", Port: 41080, Source: "lan-probe"}
 
@@ -257,7 +258,7 @@ func (d *onboardingTestDeps) BuildOnboardingOffer(sourceAgentID, serverURL, depl
 // TestOnboardingOfferStreamOverLibP2P cobre Z1: a oferta de zero-touch precisa
 // viajar pelo libp2p porque o HTTP de onboarding é loopback-only.
 func TestOnboardingOfferStreamOverLibP2P(t *testing.T) {
-	deps := &onboardingTestDeps{mockDeps: &mockDeps{cfg: DefaultConfig(), tempDir: t.TempDir(), dataDir: t.TempDir()}}
+	deps := &onboardingTestDeps{mockDeps: &mockDeps{cfg: DefaultConfig(), tempDir: testutil.TempDir(t), dataDir: testutil.TempDir(t)}}
 	transfer := &TransferServer{deps: deps, agentID: "agent-provisioner"}
 
 	h1, close1 := newTestLibP2PHost(t)
@@ -384,7 +385,7 @@ func TestIsPrivateOrLoopback(t *testing.T) {
 // contra token de 10 min → 401/403 no registro).
 func TestOnboardingOfferTTLCap(t *testing.T) {
 	// expiresAt vazio → usa o teto onboardingDeployKeyTTL.
-	depsEmpty := &onboardingTestDeps{mockDeps: &mockDeps{cfg: DefaultConfig(), tempDir: t.TempDir(), dataDir: t.TempDir()}}
+	depsEmpty := &onboardingTestDeps{mockDeps: &mockDeps{cfg: DefaultConfig(), tempDir: testutil.TempDir(t), dataDir: testutil.TempDir(t)}}
 	depsEmpty.expiresAt = ""
 	transfer := &TransferServer{deps: depsEmpty, agentID: "agent-ttl"}
 	offer, status, err := transfer.buildOnboardingOffer(context.Background())
@@ -400,7 +401,7 @@ func TestOnboardingOfferTTLCap(t *testing.T) {
 	}
 
 	// expiresAt no passado → recusa (não emite oferta com TTL inventado).
-	depsPast := &onboardingTestDeps{mockDeps: &mockDeps{cfg: DefaultConfig(), tempDir: t.TempDir(), dataDir: t.TempDir()}}
+	depsPast := &onboardingTestDeps{mockDeps: &mockDeps{cfg: DefaultConfig(), tempDir: testutil.TempDir(t), dataDir: testutil.TempDir(t)}}
 	depsPast.expiresAt = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
 	transferPast := &TransferServer{deps: depsPast, agentID: "agent-ttl"}
 	if _, status, err = transferPast.buildOnboardingOffer(context.Background()); err == nil {
@@ -495,7 +496,7 @@ func TestLegacyVsAuthClassification(t *testing.T) {
 // TestInvalidateArtifactOnManifestError garante que erro de CREDENCIAL não
 // remove o artifact do catálogo (só staleness real remove).
 func TestInvalidateArtifactOnManifestError(t *testing.T) {
-	deps := &mockDeps{cfg: DefaultConfig(), tempDir: t.TempDir(), dataDir: t.TempDir()}
+	deps := &mockDeps{cfg: DefaultConfig(), tempDir: testutil.TempDir(t), dataDir: testutil.TempDir(t)}
 	c := NewCoordinator(deps)
 	c.mu.Lock()
 	canonicalID := CanonicalArtifactID("", "pacote.exe", "")
@@ -536,7 +537,7 @@ func TestSameIPSet(t *testing.T) {
 // TestFetchOnboardingOfferFromPeersWithoutPeers garante erro explícito (e não
 // silêncio) quando não há peer — o operador precisa saber a causa (Z9).
 func TestFetchOnboardingOfferFromPeersWithoutPeers(t *testing.T) {
-	deps := &onboardingTestDeps{mockDeps: &mockDeps{cfg: DefaultConfig(), tempDir: t.TempDir(), dataDir: t.TempDir()}}
+	deps := &onboardingTestDeps{mockDeps: &mockDeps{cfg: DefaultConfig(), tempDir: testutil.TempDir(t), dataDir: testutil.TempDir(t)}}
 	h, closeH := newTestLibP2PHost(t)
 	defer closeH()
 	coord := &Coordinator{

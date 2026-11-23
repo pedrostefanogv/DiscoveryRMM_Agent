@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"discovery/app/core/testutil"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -495,7 +496,7 @@ func TestChatResponsePreviewSkipsCodeAndTables(t *testing.T) {
 // logo (Windows exige URI file:/// no src do toast).
 func TestEnsureNotificationIconMaterializesPNG(t *testing.T) {
 	a := NewApp(AppStartupOptions{})
-	a.notificationIconDir = t.TempDir()
+	a.notificationIconDir = testutil.TempDir(t)
 	a.trayIcon = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
 
 	url := a.ensureNotificationIcon()

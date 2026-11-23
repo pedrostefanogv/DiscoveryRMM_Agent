@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"discovery/app/core/agentconn"
+	"discovery/app/core/testutil"
 	"discovery/app/core/tlsutil"
 )
 
@@ -206,7 +207,7 @@ func TestCleanInstallerConfigForPersistenceUsesServerAPI(t *testing.T) {
 }
 
 func TestLoadInstallerConfigFromCandidates_StripsUTF8BOM(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := testutil.TempDir(t)
 	path := tempDir + string(os.PathSeparator) + "config.json"
 	content := append([]byte{0xEF, 0xBB, 0xBF}, []byte(`{"serverUrl":"https://srv/api/","deployToken":"token-bom"}`)...)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
@@ -262,7 +263,7 @@ func TestLoadPersistedConfig_StripsUTF8BOM(t *testing.T) {
 	osExecutable = func() (string, error) { return "", errors.New("sem executavel") }
 	osUserHomeDir = func() (string, error) { return "", errors.New("sem home") }
 
-	t.Setenv("ProgramData", t.TempDir())
+	t.Setenv("ProgramData", testutil.TempDir(t))
 	svc := NewService(Options{})
 	svc.LoadPersistedConfig()
 	defer svc.StopWatcher()
@@ -309,7 +310,7 @@ func TestGetRealtimeStatus_SetsAgentAuthHeadersAndAgentID(t *testing.T) {
 		t.Fatalf("url.Parse: %v", err)
 	}
 
-	t.Setenv("ProgramData", t.TempDir())
+	t.Setenv("ProgramData", testutil.TempDir(t))
 	svc := NewService(Options{})
 	svc.ApplyRuntimeConnectionConfig("http", u.Host, token, agentID, "", "")
 
@@ -328,7 +329,7 @@ func TestGetRealtimeStatus_SetsAgentAuthHeadersAndAgentID(t *testing.T) {
 func TestApplyRuntimeConnectionConfig_DerivesNativeNATSServerFromAPIServer(t *testing.T) {
 	const agentID = "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"
 
-	t.Setenv("ProgramData", t.TempDir())
+	t.Setenv("ProgramData", testutil.TempDir(t))
 	svc := NewService(Options{})
 	svc.ApplyRuntimeConnectionConfig("https", "tngplacas.com.br", "token-123", agentID, "", "")
 

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"discovery/app/core/envutil"
+	"discovery/app/core/testutil"
 )
 
 // Testes do App que dependem de funções do package app (onboarding,
@@ -35,7 +36,7 @@ func TestResolveP2PTempDir(t *testing.T) {
 }
 
 func TestClearAllP2PArtifacts(t *testing.T) {
-	root := t.TempDir()
+	root := testutil.TempDir(t)
 	// Registrar envutil.Reset ANTES de t.Setenv (LIFO): garante que o cache seja
 	// limpo DEPOIS que t.Setenv restaurar HOME/PROGRAMDATA/WINDIR no teardown.
 	t.Cleanup(envutil.Reset)

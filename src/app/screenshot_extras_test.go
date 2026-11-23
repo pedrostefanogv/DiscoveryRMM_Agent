@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"discovery/app/core/screenshot"
+	"discovery/app/core/testutil"
 )
 
 func testGalleryPNG(t *testing.T, width, height int) (string, []byte) {
@@ -44,7 +45,7 @@ func withGalleryDir(t *testing.T, dir string) {
 
 func TestScreenshotGalleryBindingsRoundTrip(t *testing.T) {
 	app := newScreenshotTestApp(t)
-	gallery := t.TempDir()
+	gallery := testutil.TempDir(t)
 	withGalleryDir(t, gallery)
 
 	dataURL, original := testGalleryPNG(t, 20, 12)
@@ -129,8 +130,8 @@ func TestScreenshotGalleryBindingsRoundTrip(t *testing.T) {
 
 func TestSaveScreenshotImageHonorsDirectoryAndJPG(t *testing.T) {
 	app := newScreenshotTestApp(t)
-	withGalleryDir(t, t.TempDir())
-	customDir := t.TempDir()
+	withGalleryDir(t, testutil.TempDir(t))
+	customDir := testutil.TempDir(t)
 	opts, _ := json.Marshal(map[string]string{
 		"format":    "jpg",
 		"directory": customDir,
@@ -159,7 +160,7 @@ func TestSaveScreenshotImageHonorsDirectoryAndJPG(t *testing.T) {
 
 func TestSaveScreenshotImageRejectsRelativeDirectory(t *testing.T) {
 	app := newScreenshotTestApp(t)
-	withGalleryDir(t, t.TempDir())
+	withGalleryDir(t, testutil.TempDir(t))
 	dataURL, _ := testGalleryPNG(t, 4, 4)
 	if _, err := app.SaveScreenshotImage(dataURL, `{"directory":"relativo\\x"}`); err == nil {
 		t.Fatal("diretorio relativo deveria ser recusado")
@@ -191,7 +192,7 @@ func TestSaveScreenshotPolicyPreservesGalleryFields(t *testing.T) {
 // gerava o mesmo nome e os.WriteFile truncava a captura anterior.
 func TestSaveScreenshotImageNaoSobrescreveArquivoEmColisaoDeNome(t *testing.T) {
 	app := newScreenshotTestApp(t)
-	gallery := t.TempDir()
+	gallery := testutil.TempDir(t)
 	withGalleryDir(t, gallery)
 	prevSuffix := screenshotRandomSuffix
 	screenshotRandomSuffix = func(int) string { return "aaaa" }
@@ -264,8 +265,8 @@ func makeDirLink(t *testing.T, target, link string) {
 // em "acesso negado" — o arquivo salvo existia, mas a miniatura não carregava.
 func TestScreenshotGalleryLeituraPorPastaRedirecionada(t *testing.T) {
 	app := newScreenshotTestApp(t)
-	realDir := t.TempDir()
-	link := filepath.Join(t.TempDir(), "Discovery Capturas")
+	realDir := testutil.TempDir(t)
+	link := filepath.Join(testutil.TempDir(t), "Discovery Capturas")
 	makeDirLink(t, realDir, link)
 	withGalleryDir(t, link)
 
@@ -290,9 +291,9 @@ func TestScreenshotGalleryLeituraPorPastaRedirecionada(t *testing.T) {
 // para fora não pode liberar leitura nem exclusão.
 func TestScreenshotGalleryRejectsJuncaoParaFora(t *testing.T) {
 	app := newScreenshotTestApp(t)
-	gallery := t.TempDir()
+	gallery := testutil.TempDir(t)
 	withGalleryDir(t, gallery)
-	outside := t.TempDir()
+	outside := testutil.TempDir(t)
 	outsideFile := filepath.Join(outside, "segredo.png")
 	if err := os.WriteFile(outsideFile, []byte("nao-e-imagem"), 0o644); err != nil {
 		t.Fatal(err)

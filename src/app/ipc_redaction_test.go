@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"discovery/app/core/testutil"
 	debug "discovery/app/debug"
 	"discovery/app/logs"
 )
@@ -19,7 +20,7 @@ func newTestAppWithDebugService(t *testing.T, initial debug.Config) (*App, *[]de
 	}
 	a.Logs.Buffer = logs.New()
 
-	cfgPath := filepath.Join(t.TempDir(), "debug_config.json")
+	cfgPath := filepath.Join(testutil.TempDir(t), "debug_config.json")
 	a.DebugSvc = debug.NewService(debug.Options{
 		ConfigPaths:         func() []string { return []string{cfgPath} },
 		WatcherInterval:     time.Hour,

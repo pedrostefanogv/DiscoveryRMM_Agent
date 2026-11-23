@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"discovery/app/core/models"
+	"discovery/app/core/testutil"
 )
 
 // Regressão 1: a pasta do executável (Program Files) vinha primeiro e exigia
@@ -15,7 +16,7 @@ import (
 // usuário não enxerga no dia a dia. A ordem agora é Desktop → Documentos, com
 // LocalAppData apenas como fallback.
 func TestExportDirCandidatesPrefersDesktopThenDocuments(t *testing.T) {
-	home := t.TempDir()
+	home := testutil.TempDir(t)
 	desktop := filepath.Join(home, "Desktop")
 	documents := filepath.Join(home, "Documents")
 	for _, dir := range []string{desktop, documents} {
@@ -66,8 +67,8 @@ func TestExportDirCandidatesPrefersDesktopThenDocuments(t *testing.T) {
 // do usuário — o relatório deve ir para Documentos Públicos, não para
 // C:\Windows\system32\config\systemprofile (invisível para o usuário).
 func TestExportDirCandidates_SystemProfileUsesPublicDocuments(t *testing.T) {
-	home := filepath.Join(t.TempDir(), "Windows", "system32", "config", "systemprofile")
-	public := filepath.Join(t.TempDir(), "Public")
+	home := filepath.Join(testutil.TempDir(t), "Windows", "system32", "config", "systemprofile")
+	public := filepath.Join(testutil.TempDir(t), "Public")
 	for _, dir := range []string{home, filepath.Join(public, "Documents")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("preparar %s: %v", dir, err)
@@ -92,8 +93,8 @@ func TestExportDirCandidates_SystemProfileUsesPublicDocuments(t *testing.T) {
 // Pastas pessoais inexistentes (ex.: Desktop antigo após o Known Folder Move do
 // OneDrive) não podem ser preferidas às que existem de fato.
 func TestExportDirCandidatesPrefersExistingPersonalDirs(t *testing.T) {
-	home := t.TempDir()
-	oneDrive := filepath.Join(t.TempDir(), "OneDrive")
+	home := testutil.TempDir(t)
+	oneDrive := filepath.Join(testutil.TempDir(t), "OneDrive")
 	oneDriveDesktop := filepath.Join(oneDrive, "Desktop")
 	if err := os.MkdirAll(oneDriveDesktop, 0o755); err != nil {
 		t.Fatalf("preparar %s: %v", oneDriveDesktop, err)

@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"discovery/app/core/testutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,7 +13,7 @@ import (
 // um temp dir real (necessário para RegisterArtifactIDForFile).
 func newRegisterTestCoordinator(t *testing.T) (*Coordinator, string) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	c := &Coordinator{
 		deps:        &mockDeps{tempDir: dir},
 		sha256Cache: make(map[string]artifactSHA256CacheEntry),
@@ -65,7 +66,7 @@ func TestRegisterArtifactIDForFile_Success(t *testing.T) {
 func TestRegisterArtifactIDForFile_RejectsPathOutsideTempDir(t *testing.T) {
 	c, _ := newRegisterTestCoordinator(t)
 
-	outside := filepath.Join(t.TempDir(), "selfupdate-outside.exe")
+	outside := filepath.Join(testutil.TempDir(t), "selfupdate-outside.exe")
 	if err := os.WriteFile(outside, []byte("x"), 0o644); err != nil {
 		t.Fatalf("criar arquivo: %v", err)
 	}

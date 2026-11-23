@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"discovery/app/core/agentconn"
+	"discovery/app/core/testutil"
 	"discovery/app/debug"
 )
 
@@ -26,7 +27,7 @@ func (f *syncTestAgentConn) GetStatus() agentconn.Status {
 }
 
 func TestRefreshAgentConfiguration_AppliesRemoteSecurityAndReloads(t *testing.T) {
-	tempBase := t.TempDir()
+	tempBase := testutil.TempDir(t)
 	oldProgramData := os.Getenv("ProgramData")
 	oldLocalAppData := os.Getenv("LOCALAPPDATA")
 	oldHome := os.Getenv("HOME")
@@ -98,7 +99,7 @@ func TestRefreshAgentConfiguration_AppliesRemoteSecurityAndReloads(t *testing.T)
 }
 
 func TestRefreshAgentConfiguration_ZeroTouchPendingSkipsRemoteApply(t *testing.T) {
-	tempBase := t.TempDir()
+	tempBase := testutil.TempDir(t)
 	oldProgramData := os.Getenv("ProgramData")
 	oldLocalAppData := os.Getenv("LOCALAPPDATA")
 	oldHome := os.Getenv("HOME")
@@ -152,7 +153,7 @@ func TestRefreshAgentConfiguration_ZeroTouchPendingSkipsRemoteApply(t *testing.T
 }
 
 func TestRefreshAgentConfiguration_ClearsZeroTouchPendingAfterApproval(t *testing.T) {
-	tempBase := t.TempDir()
+	tempBase := testutil.TempDir(t)
 	oldProgramData := os.Getenv("ProgramData")
 	oldLocalAppData := os.Getenv("LOCALAPPDATA")
 	oldHome := os.Getenv("HOME")

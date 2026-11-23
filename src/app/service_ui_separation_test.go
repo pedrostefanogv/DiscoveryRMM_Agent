@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"discovery/app/core/testutil"
 	"discovery/app/services/notifications"
 )
 
@@ -146,7 +147,7 @@ func TestDispatchWithContextNoNativeFallback(t *testing.T) {
 }
 
 func TestNewApp_NonServiceModeDoesNotLoadDiskSecrets(t *testing.T) {
-	programData := t.TempDir()
+	programData := testutil.TempDir(t)
 	t.Setenv("ProgramData", programData)
 
 	cfgDir := filepath.Join(programData, "Discovery")

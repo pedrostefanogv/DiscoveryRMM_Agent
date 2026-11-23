@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"discovery/app/core/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 // (dados são cache descartável — decisão do dono), o schema atual é criado e
 // user_version é gravado.
 func TestM8_LegacyDatabaseMigratedAndRecreated(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	dbPath := filepath.Join(dir, "discovery.db")
 
 	// Simula banco legado: tabela antiga + user_version 1.
@@ -68,7 +69,7 @@ func TestM8_LegacyDatabaseMigratedAndRecreated(t *testing.T) {
 // TestM8_CurrentVersionPreservesData valida que reabrir um banco já na versão
 // atual NÃO recria o schema (dados de cache sobrevivem entre restarts).
 func TestM8_CurrentVersionPreservesData(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 
 	db1, err := Open(dir)
 	if err != nil {

@@ -48,9 +48,13 @@ func applyServiceActionNative(name string, action sysctrl.ServiceAction) error {
 	return res.Err
 }
 
-func startServiceNative(name string) error   { return applyServiceActionNative(name, sysctrl.ActionStart) }
-func stopServiceNative(name string) error    { return applyServiceActionNative(name, sysctrl.ActionStop) }
-func restartServiceNative(name string) error { return applyServiceActionNative(name, sysctrl.ActionRestart) }
+func startServiceNative(name string) error {
+	return applyServiceActionNative(name, sysctrl.ActionStart)
+}
+func stopServiceNative(name string) error { return applyServiceActionNative(name, sysctrl.ActionStop) }
+func restartServiceNative(name string) error {
+	return applyServiceActionNative(name, sysctrl.ActionRestart)
+}
 
 // listProcessesNative lista os processos em execucao via sysctrl.
 func listProcessesNative() (json.RawMessage, error) {

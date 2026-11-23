@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"discovery/app/appstore"
+	"discovery/app/core/testutil"
 	"discovery/app/debug"
 )
 
@@ -29,7 +30,7 @@ func TestPrepareCustomInstallerAssetUninstallPublishesButKeepsLocalCopy(t *testi
 	}))
 	defer server.Close()
 
-	p2pDir := t.TempDir()
+	p2pDir := testutil.TempDir(t)
 	publishedPackage := ""
 	publishedVersion := ""
 	publishedSource := ""

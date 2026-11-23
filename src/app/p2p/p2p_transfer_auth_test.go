@@ -7,6 +7,7 @@ package p2p
 import (
 	"bytes"
 	"context"
+	"discovery/app/core/testutil"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,8 +41,8 @@ func requireModeTransferServer(agentID, tempDir string) *TransferServer {
 // o stream sem token. Antes da correção o cliente nunca enviava o frame e o
 // catálogo remoto vinha sempre vazio.
 func TestPeerGossipRequiresDiscoveryToken(t *testing.T) {
-	deps := &mockDeps{cfg: DefaultConfig(), tempDir: t.TempDir(), dataDir: t.TempDir()}
-	srv := requireModeTransferServer("agent-server", t.TempDir())
+	deps := &mockDeps{cfg: DefaultConfig(), tempDir: testutil.TempDir(t), dataDir: testutil.TempDir(t)}
+	srv := requireModeTransferServer("agent-server", testutil.TempDir(t))
 	coord := NewCoordinator(deps)
 
 	h1, close1 := newTestLibP2PHost(t)
@@ -99,7 +100,7 @@ func TestPeerGossipRequiresDiscoveryToken(t *testing.T) {
 // TestDiscoveryTokenNotAcceptedForArtifact garante que o token de discovery não
 // vira passe livre para baixar artifacts: o HMAC cobre o nome do artifact.
 func TestDiscoveryTokenNotAcceptedForArtifact(t *testing.T) {
-	srv := requireModeTransferServer("agent-server", t.TempDir())
+	srv := requireModeTransferServer("agent-server", testutil.TempDir(t))
 	_, token, err := srv.BuildDiscoveryAccess("peer-a")
 	if err != nil {
 		t.Fatalf("BuildDiscoveryAccess: %v", err)
@@ -180,8 +181,8 @@ func TestPeerGossipLegacyPeerMarksOnce(t *testing.T) {
 // TestManifestRequestCarriesToken cobre T2: o cliente do manifest precisa
 // enviar o token de acesso; no modo require o servidor recusa o pedido sem ele.
 func TestManifestRequestCarriesToken(t *testing.T) {
-	deps := &mockDeps{cfg: DefaultConfig(), tempDir: t.TempDir(), dataDir: t.TempDir()}
-	tempDir := t.TempDir()
+	deps := &mockDeps{cfg: DefaultConfig(), tempDir: testutil.TempDir(t), dataDir: testutil.TempDir(t)}
+	tempDir := testutil.TempDir(t)
 	if err := os.WriteFile(filepath.Join(tempDir, "agent.bin"), bytes.Repeat([]byte("x"), 4096), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}

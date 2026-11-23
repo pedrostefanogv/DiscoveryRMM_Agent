@@ -8,6 +8,7 @@ package thirdparty
 // Uso: $env:DISCOVERY_WUA_SMOKE='1'; go test ./app/core/thirdparty/ -run TestAuthenticodeSmoke -v
 
 import (
+	"discovery/app/core/testutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,7 +40,7 @@ func TestAuthenticodeSmokeUnsignedFile(t *testing.T) {
 		t.Skip("defina DISCOVERY_WUA_SMOKE=1 para validar assinatura em maquina real")
 	}
 
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	unsigned := filepath.Join(dir, "instalador.bin")
 	if err := os.WriteFile(unsigned, []byte("conteudo sem assinatura"), 0o600); err != nil {
 		t.Fatal(err)

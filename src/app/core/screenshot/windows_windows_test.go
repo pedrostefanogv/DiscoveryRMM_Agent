@@ -4,6 +4,7 @@ package screenshot
 
 import (
 	"bytes"
+	"discovery/app/core/testutil"
 	"image"
 	"os"
 	"path/filepath"
@@ -46,7 +47,7 @@ func TestWritePrintWindowPNGSmoke(t *testing.T) {
 	if target == nil {
 		t.Skip("nenhuma janela alvo elegivel")
 	}
-	out := filepath.Join(t.TempDir(), "worker.png")
+	out := filepath.Join(testutil.TempDir(t), "worker.png")
 	if err := writePrintWindowPNG(target.Handle, out); err != nil {
 		t.Skipf("PrintWindow do alvo %q falhou no ambiente: %v", target.Title, err)
 	}

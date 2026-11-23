@@ -1,12 +1,13 @@
 package database
 
 import (
+	"discovery/app/core/testutil"
 	"testing"
 	"time"
 )
 
 func TestCommandResultOutboxLifecycle(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -82,7 +83,7 @@ func TestCommandResultOutboxLifecycle(t *testing.T) {
 }
 
 func TestCommandResultOutboxIdempotencyAndCleanup(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestCommandResultOutboxIdempotencyAndCleanup(t *testing.T) {
 }
 
 func TestCommandResultOutboxListDueFiltersByTransport(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -190,7 +191,7 @@ func TestCommandResultOutboxListDueFiltersByTransport(t *testing.T) {
 }
 
 func TestP2PTelemetryOutboxLifecycleAndCleanup(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -300,7 +301,7 @@ func TestP2PTelemetryOutboxLifecycleAndCleanup(t *testing.T) {
 }
 
 func TestConsolidationWindowStateUpsertAndGet(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

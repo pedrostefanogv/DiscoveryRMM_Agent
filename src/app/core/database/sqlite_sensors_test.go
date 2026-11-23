@@ -1,6 +1,7 @@
 package database
 
 import (
+	"discovery/app/core/testutil"
 	"fmt"
 	"testing"
 	"time"
@@ -9,7 +10,7 @@ import (
 // TestSensorConfigStateRoundTrip cobre a tabela sensor_config_state (espelho de
 // automation_policy_state): gravar, ler, substituir e o caso "sem registro".
 func TestSensorConfigStateRoundTrip(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -63,7 +64,7 @@ func sensorPendingSample(sensorID, payload string, at time.Time) SensorPendingSa
 
 // TestSensorPendingSamplesRoundTrip grava um lote, lê em ordem FIFO e apaga por id.
 func TestSensorPendingSamplesRoundTrip(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -147,7 +148,7 @@ func TestSensorPendingSamplesRoundTrip(t *testing.T) {
 
 // TestSensorPendingSamplesPruneByIdade cobre a retenção por idade (7 dias).
 func TestSensorPendingSamplesPruneByIdade(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -183,7 +184,7 @@ func TestSensorPendingSamplesPruneByIdade(t *testing.T) {
 // TestSensorPendingSamplesPruneByTamanho cobre o teto de disco: mantém as N mais
 // recentes e remove as antigas.
 func TestSensorPendingSamplesPruneByTamanho(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -226,7 +227,7 @@ func TestSensorPendingSamplesPruneByTamanho(t *testing.T) {
 // TestSensorPendingSamplesPruneEscopoPorAgente garante que a poda não toca em
 // outro agente (o mesmo banco pode hospedar mais de um).
 func TestSensorPendingSamplesPruneEscopoPorAgente(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -248,7 +249,7 @@ func TestSensorPendingSamplesPruneEscopoPorAgente(t *testing.T) {
 
 // TestSensorPendingSamplesNoOp: entradas vazias não são erro nem gravam nada.
 func TestSensorPendingSamplesNoOp(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"discovery/app/core/testutil"
 	"testing"
 	"time"
 )
@@ -9,7 +10,7 @@ import (
 // CacheGetStale devolve o valor MESMO com expires_at no passado e NÃO apaga a
 // entrada (diferente de CacheGet, que deleta expirados na leitura).
 func TestCacheGetStaleReturnsExpiredValue(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("falha ao abrir database: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestCacheGetStaleReturnsExpiredValue(t *testing.T) {
 
 // TestCacheGetStaleMissingKey valida (nil, nil) para chave inexistente.
 func TestCacheGetStaleMissingKey(t *testing.T) {
-	db, err := Open(t.TempDir())
+	db, err := Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("falha ao abrir database: %v", err)
 	}

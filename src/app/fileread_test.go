@@ -1,6 +1,7 @@
 package app
 
 import (
+	"discovery/app/core/testutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,7 +80,7 @@ func TestBuildReadFileQuestionIncludesPathAndWarning(t *testing.T) {
 }
 
 func TestReadFileCappedTruncates(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "grande.txt")
 	if err := os.WriteFile(path, []byte(strings.Repeat("x", 5000)), 0o600); err != nil {
 		t.Fatal(err)

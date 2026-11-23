@@ -1,6 +1,7 @@
 package selfupdate
 
 import (
+	"discovery/app/core/testutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,7 +11,7 @@ import (
 // (fix homologação 2026-09-13): 3 instalações da MESMA versão do servidor
 // com o processo continuando a reportar 0.0.0 → checks pausados.
 func TestGuardBlocksCheck_AfterMaxInstalls(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	u := &Updater{TempDir: dir, Logf: func(string, ...any) {}}
 
 	// Nenhuma instalação ainda → não bloqueia.
@@ -44,7 +45,7 @@ func TestGuardBlocksCheck_AfterMaxInstalls(t *testing.T) {
 // TestGuard_ServerVersionChangedResets valida que a versão do servidor
 // mudando recomeça a contagem do breaker.
 func TestGuard_ServerVersionChangedResets(t *testing.T) {
-	u := &Updater{TempDir: t.TempDir()}
+	u := &Updater{TempDir: testutil.TempDir(t)}
 	u.guardRecordInstall("1.2.1")
 	u.guardRecordInstall("1.2.1")
 	u.guardRecordInstall("1.2.1")
@@ -58,7 +59,7 @@ func TestGuard_ServerVersionChangedResets(t *testing.T) {
 // TestClearGuardIfResolved valida a limpeza do breaker quando a situação
 // se resolve (processo passou a reportar a versão correta).
 func TestClearGuardIfResolved(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	u := &Updater{TempDir: dir}
 	u.guardRecordInstall("1.2.1")
 	u.guardRecordInstall("1.2.1")

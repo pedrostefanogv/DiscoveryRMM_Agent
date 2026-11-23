@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"discovery/app/core/database"
+	"discovery/app/core/testutil"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -66,7 +67,7 @@ func persistedRunIDs(t *testing.T, db *database.DB) []string {
 
 // ── (a) TESTE CENTRAL: persistir -> restart com o MESMO db -> recuperar -> entregar ──
 func TestSensorPendingSurvivesRestart(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	db1, err := database.Open(dir)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -163,7 +164,7 @@ func TestSensorPendingSurvivesRestart(t *testing.T) {
 
 // (a2) Recuperar duas vezes NÃO duplica (idempotência por RunID).
 func TestSensorPendingRestoreIsIdempotent(t *testing.T) {
-	db, err := database.Open(t.TempDir())
+	db, err := database.Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -188,7 +189,7 @@ func TestSensorPendingRestoreIsIdempotent(t *testing.T) {
 
 // ── (b) Poda por IDADE ──
 func TestSensorPendingPruneByAgeOnPersist(t *testing.T) {
-	db, err := database.Open(t.TempDir())
+	db, err := database.Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -216,7 +217,7 @@ func TestSensorPendingPruneByAgeOnPersist(t *testing.T) {
 
 // ── (c) Poda por TAMANHO ──
 func TestSensorPendingPruneBySizeRetention(t *testing.T) {
-	db, err := database.Open(t.TempDir())
+	db, err := database.Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -265,7 +266,7 @@ func TestSensorPendingPruneBySizeRetention(t *testing.T) {
 
 // ── (d) Falha de persistência NÃO impede coleta nem envio (best-effort) ──
 func TestSensorPendingPersistFailureDoesNotBlockDelivery(t *testing.T) {
-	db, err := database.Open(t.TempDir())
+	db, err := database.Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -307,7 +308,7 @@ func TestSensorPendingPersistFailureDoesNotBlockDelivery(t *testing.T) {
 
 // ── (e) Amostra entregue com sucesso tem a linha removida ──
 func TestSensorPendingDeliveredRemovesRow(t *testing.T) {
-	db, err := database.Open(t.TempDir())
+	db, err := database.Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -334,7 +335,7 @@ func TestSensorPendingDeliveredRemovesRow(t *testing.T) {
 
 // ── (ALINHAMENTO) lote entregue apaga SOMENTE as suas linhas ──
 func TestSensorPendingBatchDeletesOnlyItsOwnRows(t *testing.T) {
-	db, err := database.Open(t.TempDir())
+	db, err := database.Open(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -379,7 +380,7 @@ func TestSensorPendingBatchDeletesOnlyItsOwnRows(t *testing.T) {
 // perderia a amostra para sempre. Aqui o servidor responde com erro retentável,
 // mas o banco está fechado, então o enfileiramento falha.
 func TestSensorPendingKeepsRowsWhenOutboxUnavailable(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	db, err := database.Open(dir)
 	if err != nil {
 		t.Fatalf("open db: %v", err)

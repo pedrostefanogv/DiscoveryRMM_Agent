@@ -2,6 +2,7 @@ package agentconn
 
 import (
 	"context"
+	"discovery/app/core/testutil"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -19,7 +20,7 @@ func startEmbeddedJetStreamNATS(t *testing.T) (*natsserver.Server, *nats.Conn, n
 		Host:      "127.0.0.1",
 		Port:      -1,
 		JetStream: true,
-		StoreDir:  t.TempDir(),
+		StoreDir:  testutil.TempDir(t),
 	}
 	srv, err := natsserver.NewServer(opts)
 	if err != nil {

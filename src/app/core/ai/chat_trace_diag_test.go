@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 
 	"discovery/app/core/mcp"
+	"discovery/app/core/testutil"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -313,7 +314,7 @@ func typesOf(rows []map[string]any) []string {
 // newTestChatLogger abre um chat.db temporário e devolve o logger ativo.
 func newTestChatLogger(t *testing.T) (string, *ChatLogger) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	logger := NewChatLogger(dir)
 	if !logger.IsEnabled() {
 		t.Fatal("ChatLogger não habilitou o banco temporário")

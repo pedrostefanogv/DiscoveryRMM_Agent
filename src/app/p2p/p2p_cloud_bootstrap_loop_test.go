@@ -1,13 +1,14 @@
 package p2p
 
 import (
+	"discovery/app/core/testutil"
 	"testing"
 )
 
 // cloudBootstrapCycle deve re-checkar em 5 min quando o toggle esta desligado
 // (barato: so le a config local; nao ha chamada HTTP).
 func TestCloudBootstrapCycleDisabledRecheck(t *testing.T) {
-	deps := &mockDeps{cfg: DefaultConfig(), tempDir: t.TempDir(), dataDir: t.TempDir()}
+	deps := &mockDeps{cfg: DefaultConfig(), tempDir: testutil.TempDir(t), dataDir: testutil.TempDir(t)}
 	c := NewCoordinator(deps)
 	// BootstrapConfig.CloudBootstrapEnabled = false por default
 	got := c.cloudBootstrapCycle(p2pCloudBootstrapInterval)
@@ -18,7 +19,7 @@ func TestCloudBootstrapCycleDisabledRecheck(t *testing.T) {
 
 // cloudBootstrapCycle em falha dobra o intervalo ate o teto de 6h.
 func TestCloudBootstrapCycleBackoffOnFailure(t *testing.T) {
-	deps := &mockDeps{cfg: DefaultConfig(), tempDir: t.TempDir(), dataDir: t.TempDir()}
+	deps := &mockDeps{cfg: DefaultConfig(), tempDir: testutil.TempDir(t), dataDir: testutil.TempDir(t)}
 	deps.cfg.BootstrapConfig.CloudBootstrapEnabled = true
 	// debugCfg vazio: RunCloudBootstrap falha deterministica
 	// ("configuracao incompleta") sem tocar rede.
