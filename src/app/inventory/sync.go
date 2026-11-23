@@ -1687,6 +1687,15 @@ func buildAgentHardwareEnvelope(ctx context.Context, report models.InventoryRepo
 		osIsServerPtr = &isServer
 	}
 
+	// Formato físico da máquina: só valores do vocabulário fechado contam como
+	// reportados. "unknown" é NÃO REPORTADO — omitir evita que uma leitura de WMI
+	// que falhou sobrescreva "notebook"/"desktop" já conhecidos na API (o painel
+	// passaria a mostrar "—" no tipo de máquina até a próxima coleta boa).
+	machineType := trimToMaxLen(strings.TrimSpace(report.Hardware.MachineType), 20)
+	if !isCanonicalMachineType(machineType) {
+		machineType = ""
+	}
+
 	hostname := trimToMaxLen(strings.TrimSpace(report.Hardware.Hostname), 100)
 	if len(hostname) < 2 {
 		hostname = "unknown-host"
@@ -1731,7 +1740,7 @@ func buildAgentHardwareEnvelope(ctx context.Context, report models.InventoryRepo
 		OSWorkgroup:             trimToMaxLen(strings.TrimSpace(report.OS.Workgroup), 100),
 		OSPartOfDomain:          report.OS.PartOfDomain,
 		IsLaptop:                report.Hardware.IsLaptop,
-		MachineType:             trimToMaxLen(strings.TrimSpace(report.Hardware.MachineType), 20),
+		MachineType:             machineType,
 		ChassisType:             report.Hardware.ChassisType,
 		PCSystemType:            report.Hardware.PCSystemType,
 		HasBattery:              report.Hardware.HasBattery,
@@ -1819,6 +1828,18 @@ func primaryInventoryLoggedUser(users []models.LoggedInUser) string {
 		}
 	}
 	return ""
+}
+
+// isCanonicalMachineType informa se o MachineType está no vocabulário fechado
+// (notebook | desktop | tablet | server). "unknown" e vazio significam não
+// reportado — e não podem sobrescrever o último tipo conhecido.
+func isCanonicalMachineType(machineType string) bool {
+	switch machineType {
+	case models.MachineTypeNotebook, models.MachineTypeDesktop, models.MachineTypeTablet, models.MachineTypeServer:
+		return true
+	default:
+		return false
+	}
 }
 
 // isCanonicalProductType informa se o ProductType veio de uma leitura

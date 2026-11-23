@@ -107,6 +107,40 @@ func TestBuildAgentHardwareEnvelope_EnviaPerfilDeMaquina(t *testing.T) {
 	}
 }
 
+// TestBuildAgentHardwareEnvelope_MachineTypeUnknownNaoSobrescreve trava a
+// semântica "unknown = não reportado" para o formato físico.
+//
+// Histórico: o classificador devolve MachineType "unknown" quando o WMI falha.
+// Esse valor era enviado como se fosse um tipo válido e SOBRESCREVIA o último
+// tipo conhecido na API (o painel passava a mostrar "—" no tipo de máquina de um
+// notebook já identificado).
+func TestBuildAgentHardwareEnvelope_MachineTypeUnknownNaoSobrescreve(t *testing.T) {
+	report := models.InventoryReport{
+		CollectedAt: "2026-11-23T12:00:00Z",
+		Hardware: models.HardwareInfo{
+			Hostname: "NOTE-01",
+			// Leitura de WMI falhou: o coletor devolve "unknown" (não reportado).
+			MachineType: models.MachineTypeUnknown,
+		},
+	}
+
+	env := buildAgentHardwareEnvelope(context.Background(), report, "1.0.0", "", nil)
+	body, _ := json.Marshal(env)
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	hw := payload["hardware"].(map[string]any)
+
+	if _, presente := hw["machineType"]; presente {
+		t.Fatalf("machineType não deveria ser reportado quando é %q (veio %v)", models.MachineTypeUnknown, hw["machineType"])
+	}
+	if _, presente := hw["isLaptop"]; presente {
+		t.Fatalf("isLaptop não deveria ser reportado quando o perfil é desconhecido (veio %v)", hw["isLaptop"])
+	}
+}
+
 // TestBuildAgentHardwareEnvelope_PerfilDesconhecidoNaoPolui garante que um
 // agente que não conseguiu classificar a máquina NÃO envia isLaptop=false nem
 // machineType: a API guarda NULL ("não reportado") e o painel não rotula
