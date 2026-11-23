@@ -681,11 +681,37 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 	// usando consultas WMI diretas.
 	enrichHardwareFromWMI(&report.Hardware)
 
+	// ── Identidade do SO neste caminho (osquery) ──────────────────────────
+	//
+	// As consultas osquery não trazem ProductType/domínio, então o relatório
+	// sairia com IsServer=false e ProductType vazio. Isso tinha duas
+	// consequências: (a) o site perdia o ícone de servidor, porque passava a
+	// confiar no campo `false` em vez de cair na heurística do nome do SO;
+	// (b) a classificação de formato físico marcava servidor como candidato a
+	// notebook (uma UPS exposta como bateria bastava).
+	//
+	// A identidade vem do coletor NATIVO (registro ProductOptions + WMI
+	// Win32_ComputerSystem), com duas leituras — nada de osquery, PowerShell ou
+	// subprocesso. Só preenche o que o osquery não trouxe; "unknown" continua
+	// sendo enviado como não reportado pelo envelope (ver sync.go).
+	if p.native != nil {
+		identity := native.DetectOSIdentity()
+		report.OS.IsServer = report.OS.IsServer || identity.IsServer
+		report.OS.PartOfDomain = report.OS.PartOfDomain || identity.PartOfDomain
+		if report.OS.ProductType == "" {
+			report.OS.ProductType = identity.ProductType
+		}
+		if report.OS.Domain == "" {
+			report.OS.Domain = identity.Domain
+		}
+		if report.OS.Workgroup == "" {
+			report.OS.Workgroup = identity.Workgroup
+		}
+	}
+
 	// Perfil físico da máquina: mesma fonte nativa do caminho principal. Fora do
 	// Windows (ou sem coletor nativo) o perfil fica "desconhecido" — nunca
-	// "desktop". O fallback osquery não resolve ProductType, então
-	// report.OS.IsServer pode vir false aqui: a regra de chassis/bateria não
-	// depende disso, só a precedência de servidor.
+	// "desktop".
 	if p.native != nil {
 		if profile, profErr := p.native.CollectMachineProfile(ctx, report.OS.IsServer); profErr == nil {
 			report.Hardware.ApplyMachineProfile(profile)

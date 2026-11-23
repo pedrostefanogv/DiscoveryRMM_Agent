@@ -25,8 +25,8 @@ const (
 	ProductTypeServerNT = "ServerNT"
 	// ProductTypeLanmanNT = "LanmanNT": servidor controlador de domínio (DC).
 	ProductTypeLanmanNT = "LanmanNT"
-	// ProductTypeUnknown: não foi possível ler/interpretar o registro.
-	ProductTypeUnknown = "unknown"
+	// ProductTypeUnknown vive em osidentity.go (arquivo neutro de plataforma),
+	// porque a identidade do SO também é consultada fora do Windows.
 )
 
 // normalizeProductType converte o valor bruto lido do registro em um dos

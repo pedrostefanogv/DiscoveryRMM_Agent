@@ -152,7 +152,11 @@ type agentHardwareInfo struct {
 	// Identificam se a máquina é Windows Server (membro ou DC) e a que
 	// domínio/grupo de trabalho pertence. OsProductType carrega o valor
 	// canônico do registry ("WinNT" | "ServerNT" | "LanmanNT" | "unknown").
-	OSIsServer     bool   `json:"osIsServer"`
+	// OSIsServer é PONTEIRO: omitido (nil) quando o ProductType é "unknown" —
+	// leitura ilegível do registro é NÃO REPORTADO, nunca "não é servidor".
+	// Enviar false nesse caso fazia o site confiar no campo e perder o ícone de
+	// servidor de uma máquina real (o campo vence a heurística do nome do SO).
+	OSIsServer     *bool  `json:"osIsServer,omitempty"`
 	OSProductType  string `json:"osProductType,omitempty"`
 	OSDomain       string `json:"osDomain,omitempty"`
 	OSWorkgroup    string `json:"osWorkgroup,omitempty"`
@@ -1669,6 +1673,20 @@ func buildAgentHardwareEnvelope(ctx context.Context, report models.InventoryRepo
 		}
 	}
 
+	// Identidade do SO: apenas valores canônicos contam como reportados.
+	// "unknown"/vazio (registro ilegível ou plataforma sem coleta nativa) é
+	// NÃO REPORTADO — os campos são omitidos e a API preserva o último valor
+	// conhecido, em vez de gravar um false que derrubaria o ícone de servidor.
+	osProductType := trimToMaxLen(strings.TrimSpace(report.OS.ProductType), 20)
+	if !isCanonicalProductType(osProductType) {
+		osProductType = ""
+	}
+	var osIsServerPtr *bool
+	if osProductType != "" {
+		isServer := report.OS.IsServer
+		osIsServerPtr = &isServer
+	}
+
 	hostname := trimToMaxLen(strings.TrimSpace(report.Hardware.Hostname), 100)
 	if len(hostname) < 2 {
 		hostname = "unknown-host"
@@ -1707,8 +1725,8 @@ func buildAgentHardwareEnvelope(ctx context.Context, report models.InventoryRepo
 		OSEdition:               trimToMaxLen(strings.TrimSpace(report.OS.Edition), 100),
 		OSBuild:                 trimToMaxLen(strings.TrimSpace(report.OS.Build), 100),
 		OSArchitecture:          trimToMaxLen(strings.TrimSpace(report.OS.Architecture), 100),
-		OSIsServer:              report.OS.IsServer,
-		OSProductType:           trimToMaxLen(strings.TrimSpace(report.OS.ProductType), 20),
+		OSIsServer:              osIsServerPtr,
+		OSProductType:           osProductType,
 		OSDomain:                trimToMaxLen(strings.TrimSpace(report.OS.Domain), 100),
 		OSWorkgroup:             trimToMaxLen(strings.TrimSpace(report.OS.Workgroup), 100),
 		OSPartOfDomain:          report.OS.PartOfDomain,
@@ -1801,6 +1819,18 @@ func primaryInventoryLoggedUser(users []models.LoggedInUser) string {
 		}
 	}
 	return ""
+}
+
+// isCanonicalProductType informa se o ProductType veio de uma leitura
+// CONCLUSIVA do registro ("WinNT" | "ServerNT" | "LanmanNT"). "unknown" e
+// vazio significam não reportado — e não podem virar "não é servidor".
+func isCanonicalProductType(productType string) bool {
+	switch productType {
+	case native.ProductTypeWorkstation, native.ProductTypeServerNT, native.ProductTypeLanmanNT:
+		return true
+	default:
+		return false
+	}
 }
 
 // mapAgentBatteries converte as baterias do inventário para o formato do
