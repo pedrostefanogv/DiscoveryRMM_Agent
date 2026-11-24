@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"image"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -35,6 +36,8 @@ type SessionScreen struct {
 	// um comando do viewer pode chegar nesse intervalo e deve ser ignorado (não
 	// corromper a leitura).
 	inputLock atomic.Pointer[InputLockManager]
+	// annotations: overlay transparente click-through para desenhos do técnico.
+	annotations atomic.Pointer[screen.AnnotationOverlay]
 
 	// Dirty rect detection
 	dirtyDetector *screen.DirtyDetector
@@ -1180,6 +1183,19 @@ func (s *SessionScreen) swapCapturer(kind, reason string) {
 	s.usingDXGIFallback = kind == "dxgi"
 	s.capturerMu.Unlock()
 
+	if ov := s.annotations.Load(); ov != nil && newCap != nil {
+		gx, gy, gw, gh := newCap.Geometry()
+		var oldRect image.Rectangle
+		if old != nil {
+			ox, oy, ow, oh := old.Geometry()
+			oldRect = image.Rect(ox, oy, ox+ow, oy+oh)
+		}
+		newRect := image.Rect(gx, gy, gx+gw, gy+gh)
+		if newRect != oldRect {
+			ov.SetBounds(newRect)
+		}
+	}
+
 	// A capacidade de dirty rects de hardware muda com o capturer (GDI não tem;
 	// DXGI tem). Reavaliar ANTES de resetar o detector: se o novo capturer
 	// decide por hardware, o diff de software deixa de ser necessário.
@@ -1241,6 +1257,25 @@ func (s *SessionScreen) InputLock() *InputLockManager {
 	return s.inputLock.Load()
 }
 
+// SetAnnotationOverlay anexa o overlay de anotações visuais da sessão.
+func (s *SessionScreen) SetAnnotationOverlay(ov *screen.AnnotationOverlay) {
+	s.annotations.Store(ov)
+}
+
+// AnnotationOverlay devolve o overlay de anotações (nil quando não anexado).
+func (s *SessionScreen) AnnotationOverlay() *screen.AnnotationOverlay {
+	return s.annotations.Load()
+}
+
+// Geometry devolve a geometria física (x, y, w, h) do monitor capturado.
+func (s *SessionScreen) Geometry() (int, int, int, int) {
+	cap := s.currentCapturer()
+	if cap == nil {
+		return 0, 0, 0, 0
+	}
+	return cap.Geometry()
+}
+
 // Stop encerra o loop de captura.
 func (s *SessionScreen) Stop() {
 	select {
@@ -1263,6 +1298,10 @@ func (s *SessionScreen) Stop() {
 	// ser o menor possível. Idempotente.
 	if lk := s.inputLock.Load(); lk != nil {
 		lk.Close()
+	}
+
+	if ov := s.annotations.Load(); ov != nil {
+		ov.Close()
 	}
 
 	// Libera teclas/modificadores que tenham ficado "presas" no remoto

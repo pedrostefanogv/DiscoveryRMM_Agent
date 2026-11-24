@@ -517,6 +517,21 @@ func (h *NatsStreamHandler) SubscribeToClipboardReq(sessionID string, handler fu
 	return sub, err
 }
 
+// SubscribeToAnnotate subscreve a comandos de anotação visual na tela
+// (subject .annotate — viewer→agent).
+func (h *NatsStreamHandler) SubscribeToAnnotate(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
+	pattern := h.subscribePattern(sessionID, "annotate")
+	sub, err := h.nc.Subscribe(pattern, func(msg *nats.Msg) {
+		handler(msg.Data)
+	})
+	if err != nil {
+		log.Printf("[remote-session-nats] SubscribeToAnnotate erro: pattern=%s err=%v\n", pattern, err)
+	} else {
+		log.Printf("[remote-session-nats] SubscribeToAnnotate ok: pattern=%s\n", pattern)
+	}
+	return sub, err
+}
+
 // SubscribeToTermIn subscreve a stdin do terminal enviado pelo viewer.
 func (h *NatsStreamHandler) SubscribeToTermIn(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
 	pattern := h.subscribePattern(sessionID, "term.in")

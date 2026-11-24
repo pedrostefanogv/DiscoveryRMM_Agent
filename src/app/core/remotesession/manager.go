@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"log"
 	"os"
 	"strings"
@@ -1423,6 +1424,21 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	// Estado inicial (destravado) para viewers que já estejam assinando; quem
 	// conectar depois manda query e recebe a resposta pelo .control.
 	lockMgr.PublishCurrent("session_start")
+
+	// ── Anotações visuais na tela (overlay click-through) ──
+	gx, gy, gw, gh := screenSession.Geometry()
+	annoOverlay := screen.NewAnnotationOverlay(image.Rect(gx, gy, gx+gw, gy+gh))
+	screenSession.SetAnnotationOverlay(annoOverlay)
+	annoSub, annoErr := m.natsStream.SubscribeToAnnotate(session.ID, func(data []byte) {
+		if err := annoOverlay.HandleCommand(data); err != nil {
+			log.Printf("[remote-session-screen] comando .annotate ignorado: %v", err)
+		}
+	})
+	if annoErr != nil {
+		log.Printf("[remote-session-screen] ERRO ao subscrever annotate: %v", annoErr)
+	} else {
+		defer annoSub.Unsubscribe()
+	}
 
 	// O canal .control e assinado uma unica vez em handleStart (para todos os
 	// kinds); o keyframe chega por handleControlFrame -> RequestKeyFrame().

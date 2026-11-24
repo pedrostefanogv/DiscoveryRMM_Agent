@@ -250,6 +250,16 @@ func wmiFloat(row map[string]any, key string) float64 {
 		return float64(t)
 	case float64:
 		return t
+	case float32:
+		return float64(t)
+	case int:
+		return float64(t)
+	case int32:
+		return float64(t)
+	case uint32:
+		return float64(t)
+	case uint64:
+		return float64(t)
 	case string:
 		f := 0.0
 		fmt.Sscanf(t, "%f", &f)
