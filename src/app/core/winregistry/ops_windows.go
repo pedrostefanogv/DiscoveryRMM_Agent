@@ -46,7 +46,7 @@ func ListKey(hive Hive, keyPath, token string) (*ListPage, error) {
 		return nil, err
 	}
 
-	key, err := openKey(hive, normalized, false)
+	key, user, err := openKeyWithUser(hive, normalized, false)
 	if err != nil {
 		return nil, err
 	}
@@ -81,15 +81,20 @@ func ListKey(hive Hive, keyPath, token string) (*ListPage, error) {
 	}
 	pageKeys := subkeys[offset:end]
 
-	values, err := readValues(key)
-	if err != nil {
-		return nil, err
+	values := []ValueEntry{}
+	if offset == 0 {
+		values, err = readValues(key)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	next := ""
 	if hasMore {
 		next = strconv.Itoa(end)
 	}
+
+	writable, denyReason := Writable(hive, normalized)
 
 	return &ListPage{
 		Hive:        string(hive),
@@ -100,6 +105,9 @@ func ListKey(hive Hive, keyPath, token string) (*ListPage, error) {
 		NextToken:   next,
 		SubkeyCount: len(subkeys),
 		ValueCount:  len(values),
+		Writable:    &writable,
+		DenyReason:  denyReason,
+		ActiveUser:  user,
 	}, nil
 }
 
@@ -139,7 +147,7 @@ func StatKey(hive Hive, keyPath string) (*KeyInfo, error) {
 		return nil, err
 	}
 
-	key, err := openKey(hive, normalized, false)
+	key, user, err := openKeyWithUser(hive, normalized, false)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +171,7 @@ func StatKey(hive Hive, keyPath string) (*KeyInfo, error) {
 		ValueCount:  len(values),
 		Writable:    writable,
 		DenyReason:  denyReason,
+		ActiveUser:  user,
 	}, nil
 }
 
@@ -416,9 +425,9 @@ func DeleteKey(hive Hive, keyPath string, recursive, confirmed bool) error {
 		return ErrInvalidPath // nunca apagar a raiz de um hive
 	}
 
-	root, ok := hiveRoot(hive)
-	if !ok {
-		return ErrInvalidHive
+	root, osPath, _, err := resolveTarget(hive, normalized)
+	if err != nil {
+		return err
 	}
 
 	if !recursive {
@@ -427,7 +436,7 @@ func DeleteKey(hive Hive, keyPath string, recursive, confirmed bool) error {
 		// SO. Sem isto o operador via "acesso negado" (o SO devolve
 		// ERROR_ACCESS_DENIED para chave com filhos) e concluia que faltava
 		// privilegio — quando o problema era a chave ter subchaves.
-		key, oerr := registry.OpenKey(root, normalized, registry.ENUMERATE_SUB_KEYS|registry.QUERY_VALUE|registry.WOW64_64KEY)
+		key, oerr := registry.OpenKey(root, osPath, registry.ENUMERATE_SUB_KEYS|registry.QUERY_VALUE|registry.WOW64_64KEY)
 		if oerr != nil {
 			return mapRegistryError(oerr, normalized)
 		}
@@ -444,14 +453,14 @@ func DeleteKey(hive Hive, keyPath string, recursive, confirmed bool) error {
 			return fmt.Errorf("%w: a chave tem %d subchave(s) e %d valor(es); use a exclusao recursiva para remove-la",
 				ErrKeyNotEmpty, len(children), len(names))
 		}
-		if derr := registry.DeleteKey(root, normalized); derr != nil {
+		if derr := registry.DeleteKey(root, osPath); derr != nil {
 			return mapRegistryError(derr, normalized)
 		}
 		return nil
 	}
 
 	// Recursivo: apaga de baixo para cima (o SO recusa remover chave com filhos).
-	if derr := deleteTree(root, normalized); derr != nil {
+	if derr := deleteTree(root, osPath); derr != nil {
 		return mapRegistryError(derr, normalized)
 	}
 	return nil
@@ -520,27 +529,31 @@ func RenameKey(hive Hive, keyPath, newName string, confirmed bool) error {
 		return gerr
 	}
 
-	root, ok := hiveRoot(hive)
-	if !ok {
-		return ErrInvalidHive
+	root, osSrc, user, err := resolveTarget(hive, normalized)
+	if err != nil {
+		return err
+	}
+	osDst := targetPath
+	if user != nil && user.SID != "" {
+		osDst = user.SID + "\\" + targetPath
 	}
 
 	// Ja existe destino? Recusar evita merge silencioso de duas chaves.
-	if existing, oerr := registry.OpenKey(root, targetPath, registry.QUERY_VALUE|registry.WOW64_64KEY); oerr == nil {
+	if existing, oerr := registry.OpenKey(root, osDst, registry.QUERY_VALUE|registry.WOW64_64KEY); oerr == nil {
 		existing.Close()
 		return fmt.Errorf("%w: ja existe uma chave com o nome de destino", ErrInvalidPath)
 	}
 
-	source, oerr := registry.OpenKey(root, normalized, registry.QUERY_VALUE|registry.ENUMERATE_SUB_KEYS|registry.WOW64_64KEY)
+	source, oerr := registry.OpenKey(root, osSrc, registry.QUERY_VALUE|registry.ENUMERATE_SUB_KEYS|registry.WOW64_64KEY)
 	if oerr != nil {
 		return mapRegistryError(oerr, normalized)
 	}
 	source.Close()
 
-	if cerr := copyTree(root, normalized, targetPath); cerr != nil {
+	if cerr := copyTree(root, osSrc, osDst); cerr != nil {
 		return mapRegistryError(cerr, normalized)
 	}
-	if derr := deleteTree(root, normalized); derr != nil {
+	if derr := deleteTree(root, osSrc); derr != nil {
 		return mapRegistryError(derr, normalized)
 	}
 	return nil
@@ -626,14 +639,14 @@ func ExportKey(hive Hive, keyPath string, recursive bool) (string, error) {
 		return "", err
 	}
 
-	root, ok := hiveRoot(hive)
-	if !ok {
-		return "", ErrInvalidHive
+	root, osPath, _, err := resolveTarget(hive, normalized)
+	if err != nil {
+		return "", err
 	}
 
 	var sb strings.Builder
 	sb.WriteString("Windows Registry Editor Version 5.00\r\n\r\n")
-	if err := exportNode(&sb, root, hive, normalized, recursive, 0); err != nil {
+	if err := exportNode(&sb, root, hive, osPath, normalized, recursive, 0); err != nil {
 		return "", err
 	}
 
@@ -652,7 +665,7 @@ const maxExportBytes = 4 << 20 // 4 MB
 // maxExportDepth limita a profundidade da exportacao recursiva.
 const maxExportDepth = 32
 
-func exportNode(sb *strings.Builder, root registry.Key, hive Hive, keyPath string, recursive bool, depth int) error {
+func exportNode(sb *strings.Builder, root registry.Key, hive Hive, osPath, logicalPath string, recursive bool, depth int) error {
 	if sb.Len() > maxExportBytes {
 		return ErrLimitExceeded
 	}
@@ -660,23 +673,27 @@ func exportNode(sb *strings.Builder, root registry.Key, hive Hive, keyPath strin
 		return ErrLimitExceeded
 	}
 
-	key, err := registry.OpenKey(root, keyPath, registry.QUERY_VALUE|registry.ENUMERATE_SUB_KEYS|registry.WOW64_64KEY)
+	key, err := registry.OpenKey(root, osPath, registry.QUERY_VALUE|registry.ENUMERATE_SUB_KEYS|registry.WOW64_64KEY)
 	if err != nil {
-		return mapRegistryError(err, keyPath)
+		return mapRegistryError(err, logicalPath)
 	}
 	names, verr := key.ReadValueNames(-1)
 	if verr != nil {
 		key.Close()
-		return mapRegistryError(verr, keyPath)
+		return mapRegistryError(verr, logicalPath)
 	}
 	children, cerr := key.ReadSubKeyNames(-1)
 	if cerr != nil {
 		key.Close()
-		return mapRegistryError(cerr, keyPath)
+		return mapRegistryError(cerr, logicalPath)
 	}
 
 	// O .reg usa o nome LONGO do hive (HKEY_LOCAL_MACHINE), nao a abreviacao.
-	sb.WriteString("[" + longHiveName(hive) + "\\" + escapeRegPath(keyPath) + "]\r\n")
+	headerPath := longHiveName(hive)
+	if logicalPath != "" {
+		headerPath += "\\" + escapeRegPath(logicalPath)
+	}
+	sb.WriteString("[" + headerPath + "]\r\n")
 
 	sort.Strings(names)
 	for _, name := range names {
@@ -694,11 +711,15 @@ func exportNode(sb *strings.Builder, root registry.Key, hive Hive, keyPath strin
 	}
 	sort.Strings(children)
 	for _, child := range children {
-		childPath := child
-		if keyPath != "" {
-			childPath = keyPath + "\\" + child
+		childOSPath := child
+		if osPath != "" {
+			childOSPath = osPath + "\\" + child
 		}
-		if err := exportNode(sb, root, hive, childPath, recursive, depth+1); err != nil {
+		childLogicalPath := child
+		if logicalPath != "" {
+			childLogicalPath = logicalPath + "\\" + child
+		}
+		if err := exportNode(sb, root, hive, childOSPath, childLogicalPath, recursive, depth+1); err != nil {
 			return err
 		}
 	}

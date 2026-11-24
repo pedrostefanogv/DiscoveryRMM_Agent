@@ -338,19 +338,28 @@ func TestRegistryErrorClassification(t *testing.T) {
 	}
 }
 
-// TestRegistrySession_HiveNote: HKCU precisa avisar que e a chave do SYSTEM.
-//
-// Sem o aviso, "HKCU mostra chaves do SYSTEM" e reportado como bug pelo operador.
+// TestRegistrySession_HiveNote: HKCU informa o usuario conectado (quando ha)
+// ou o fallback SYSTEM (quando nao ha sessao ativa).
 func TestRegistrySession_HiveNote(t *testing.T) {
-	note := registryHiveNote(winregistry.HiveCurrentUser)
-	if note == "" {
-		t.Fatal("HKCU deveria trazer nota explicando a visao do hive")
+	userNote := registryHiveNote(winregistry.HiveCurrentUser, &winregistry.UserContext{
+		SID:      "S-1-5-21-1000-2000-3000-1001",
+		Username: "pedro",
+		Domain:   "WORKGROUP",
+	})
+	if !strings.Contains(userNote, "pedro") || !strings.Contains(userNote, "S-1-5-21-1000-2000-3000-1001") {
+		t.Errorf("nota de HKCU com usuario deveria mencionar usuario e SID; veio: %q", userNote)
 	}
-	if !strings.Contains(note, "SYSTEM") {
-		t.Errorf("nota de HKCU deveria mencionar que a chave e do SYSTEM; veio: %q", note)
+
+	fallbackNote := registryHiveNote(winregistry.HiveCurrentUser, nil)
+	if fallbackNote == "" {
+		t.Fatal("HKCU sem usuario deveria trazer nota explicando o fallback SYSTEM")
 	}
+	if !strings.Contains(fallbackNote, "SYSTEM") {
+		t.Errorf("nota de HKCU sem usuario deveria mencionar que a chave e do SYSTEM; veio: %q", fallbackNote)
+	}
+
 	// Hives de maquina nao precisam de nota.
-	if got := registryHiveNote(winregistry.HiveLocalMachine); got != "" {
+	if got := registryHiveNote(winregistry.HiveLocalMachine, nil); got != "" {
 		t.Errorf("HKLM nao deveria trazer nota; veio: %q", got)
 	}
 }

@@ -60,27 +60,59 @@ func openMode(forMutation bool) uint32 {
 	return mode
 }
 
-// openKey abre uma chave existente, mapeando os erros do SO.
-func openKey(hive Hive, keyPath string, forMutation bool) (registry.Key, error) {
+// resolveTarget traduz (hive, normalizedPath) para a chave raiz real do SO e
+// o caminho fisico correspondente.
+//
+// Quando hive == HiveCurrentUser e ha um usuario interativo conectado com hive
+// montado em HKEY_USERS\<SID>, redireciona automaticamente para
+// (registry.USERS, "<SID>\\<normalizedPath>"), evitando que HKCU exiba a conta
+// SYSTEM do servico. Caso nao haja usuario logado, faz fallback para
+// registry.CURRENT_USER.
+func resolveTarget(hive Hive, normalizedPath string) (registry.Key, string, *UserContext, error) {
+	if hive == HiveCurrentUser {
+		if user := activeUserResolver(); user != nil && user.SID != "" {
+			osPath := user.SID
+			if normalizedPath != "" {
+				osPath = user.SID + "\\" + normalizedPath
+			}
+			return registry.USERS, osPath, user, nil
+		}
+	}
 	root, ok := hiveRoot(hive)
 	if !ok {
-		return 0, ErrInvalidHive
+		return 0, "", nil, ErrInvalidHive
 	}
-	key, err := registry.OpenKey(root, keyPath, openMode(forMutation))
+	return root, normalizedPath, nil, nil
+}
+
+// openKeyWithUser abre uma chave existente e devolve tambem o UserContext
+// efetivamente resolvido (nao-nil quando HKCU foi mapeado para um usuario).
+func openKeyWithUser(hive Hive, keyPath string, forMutation bool) (registry.Key, *UserContext, error) {
+	root, osPath, user, err := resolveTarget(hive, keyPath)
 	if err != nil {
-		return 0, mapRegistryError(err, keyPath)
+		return 0, nil, err
 	}
-	return key, nil
+	key, err := registry.OpenKey(root, osPath, openMode(forMutation))
+	if err != nil {
+		return 0, nil, mapRegistryError(err, keyPath)
+	}
+	return key, user, nil
+}
+
+// openKey abre uma chave existente, mapeando os erros do SO.
+func openKey(hive Hive, keyPath string, forMutation bool) (registry.Key, error) {
+	key, _, err := openKeyWithUser(hive, keyPath, forMutation)
+	return key, err
 }
 
 // createKey opens or creates a key (for CreateKey / SetValue on a new path).
 func createKeyHandle(hive Hive, keyPath string) (registry.Key, error) {
-	root, ok := hiveRoot(hive)
-	if !ok {
-		return 0, ErrInvalidHive
+	root, osPath, _, err := resolveTarget(hive, keyPath)
+	if err != nil {
+		return 0, err
 	}
 	mode := openMode(true) | registry.WRITE
-	key, _, err := registry.CreateKey(root, keyPath, mode)
+	key, _, err := registry.CreateKey(root, osPath, mode)
 	if err != nil {
 		return 0, mapRegistryError(err, keyPath)
 	}

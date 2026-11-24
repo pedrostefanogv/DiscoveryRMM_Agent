@@ -62,10 +62,14 @@ func (sr *SessionRegistry) Start(ctx context.Context) error {
 	// Notifica o viewer que o subscribe está ativo (anti-race, igual a
 	// proc.ready/files.ready). Carrega a versão do protocolo para o viewer
 	// recusar cedo se houver incompatibilidade.
-	_ = sr.natsStream.PublishRegistryReady(sr.sessionID, map[string]any{
+	readyPayload := map[string]any{
 		"status":  "ready",
 		"version": registryProtocolVersion,
-	})
+	}
+	if activeUser := winregistry.ActiveUserContext(); activeUser != nil {
+		readyPayload["activeUser"] = activeUser
+	}
+	_ = sr.natsStream.PublishRegistryReady(sr.sessionID, readyPayload)
 
 	select {
 	case <-ctx.Done():
@@ -123,7 +127,8 @@ type registryResponse struct {
 	Value     *winregistry.ValueEntry `json:"value,omitempty"`
 	Export    string                  `json:"export,omitempty"`
 	// Note carrega limitações/avisos ao operador (ex.: a visão de HKCU).
-	Note string `json:"note,omitempty"`
+	Note       string                   `json:"note,omitempty"`
+	ActiveUser *winregistry.UserContext `json:"activeUser,omitempty"`
 }
 
 // Ações suportadas. Lista fechada: qualquer outra coisa é recusada sem tocar no
@@ -174,13 +179,18 @@ func (sr *SessionRegistry) handleRequest(reqData []byte) []byte {
 		if err != nil {
 			return sr.encode(sr.fail(req, classifyRegistryError(err), err))
 		}
+		var userCtx *winregistry.UserContext
+		if hive == winregistry.HiveCurrentUser {
+			userCtx = page.ActiveUser
+		}
 		return sr.encode(registryResponse{
-			RequestID: req.RequestID,
-			Success:   true,
-			Hive:      string(hive),
-			Path:      page.Path,
-			Page:      page,
-			Note:      registryHiveNote(hive),
+			RequestID:  req.RequestID,
+			Success:    true,
+			Hive:       string(hive),
+			Path:       page.Path,
+			Page:       page,
+			Note:       registryHiveNote(hive, userCtx),
+			ActiveUser: userCtx,
 		})
 
 	case ActionStatKey:
@@ -188,13 +198,18 @@ func (sr *SessionRegistry) handleRequest(reqData []byte) []byte {
 		if err != nil {
 			return sr.encode(sr.fail(req, classifyRegistryError(err), err))
 		}
+		var userCtx *winregistry.UserContext
+		if hive == winregistry.HiveCurrentUser {
+			userCtx = info.ActiveUser
+		}
 		return sr.encode(registryResponse{
-			RequestID: req.RequestID,
-			Success:   true,
-			Hive:      string(hive),
-			Path:      info.Path,
-			Key:       info,
-			Note:      registryHiveNote(hive),
+			RequestID:  req.RequestID,
+			Success:    true,
+			Hive:       string(hive),
+			Path:       info.Path,
+			Key:        info,
+			Note:       registryHiveNote(hive, userCtx),
+			ActiveUser: userCtx,
 		})
 
 	case ActionGetValue:
@@ -314,15 +329,19 @@ func classifyRegistryError(err error) string {
 	}
 }
 
-// registryHiveNote expõe a limitação de visão do hive ao operador.
+// registryHiveNote expõe a visão efetiva do hive ao operador.
 //
-// Sem isto, "HKCU mostra as chaves do SYSTEM" é reportado como bug: o agente roda
-// como serviço, então HKCU é a chave do SYSTEM, não a do usuário interativo.
-func registryHiveNote(hive winregistry.Hive) string {
-	if hive == winregistry.HiveCurrentUser {
-		return "HKCU é a chave da conta em que o agente roda (SYSTEM no serviço), não a do usuário interativo. Visão 64-bit."
+// Quando há usuário interativo conectado, informa o usuário e SID para o qual
+// HKCU está mapeado via HKEY_USERS\<SID>. Sem usuário conectado, avisa que
+// HKCU exibe a chave da conta do agente (SYSTEM no serviço).
+func registryHiveNote(hive winregistry.Hive, user *winregistry.UserContext) string {
+	if hive != winregistry.HiveCurrentUser {
+		return ""
 	}
-	return ""
+	if user != nil {
+		return fmt.Sprintf("HKCU mapeado para o usuário conectado: %s (%s). Visão 64-bit.", user.DisplayName(), user.SID)
+	}
+	return "Nenhum usuário interativo conectado — HKCU exibe a chave da conta do agente (SYSTEM no serviço). Visão 64-bit."
 }
 
 func (sr *SessionRegistry) encode(resp registryResponse) []byte {

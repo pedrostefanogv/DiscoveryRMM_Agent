@@ -84,6 +84,26 @@ type ValueEntry struct {
 	ReadError string `json:"readError,omitempty"`
 }
 
+// UserContext descreve o usuario interativo conectado cuja arvore HKCU esta
+// sendo exibida via HKEY_USERS\<SID>.
+type UserContext struct {
+	SID       string `json:"sid"`
+	Username  string `json:"username"`
+	Domain    string `json:"domain,omitempty"`
+	SessionID uint32 `json:"sessionId"`
+}
+
+// DisplayName devolve "DOMAIN\\user" quando Domain esta preenchido, ou apenas Username.
+func (u *UserContext) DisplayName() string {
+	if u == nil {
+		return ""
+	}
+	if u.Domain != "" {
+		return u.Domain + "\\" + u.Username
+	}
+	return u.Username
+}
+
 // ListPage e o resultado paginado de um listKey.
 //
 // HasMore + NextToken existem porque HKLM\SOFTWARE\Classes tem dezenas de
@@ -100,6 +120,11 @@ type ListPage struct {
 	// SubkeyCount/ValueCount sao os totais reais, para a UI mostrar "200 de 8.431".
 	SubkeyCount int `json:"subkeyCount"`
 	ValueCount  int `json:"valueCount"`
+	// Writable e DenyReason permitem que a UI saiba a politica da chave sem
+	// precisar disparar um statKey paralelo a cada listKey.
+	Writable   *bool        `json:"writable,omitempty"`
+	DenyReason string       `json:"denyReason,omitempty"`
+	ActiveUser *UserContext `json:"-"`
 }
 
 // KeyInfo e um no da arvore, devolvido pela navegacao (sem valores).
@@ -113,5 +138,6 @@ type KeyInfo struct {
 	// experiencia de clicar e receber erro.
 	Writable bool `json:"writable"`
 	// DenyReason explica por que Writable=false (regra do guard).
-	DenyReason string `json:"denyReason,omitempty"`
+	DenyReason string       `json:"denyReason,omitempty"`
+	ActiveUser *UserContext `json:"-"`
 }
