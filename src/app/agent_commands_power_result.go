@@ -64,6 +64,10 @@ var (
 	powerCountdownHook func(a *App, action string, delaySeconds int, message string, force bool) string
 	// powerExecHook substitui executeSystemPowerAction.
 	powerExecHook func(a *App, parent context.Context, action string, delaySeconds int, force bool, message string) (int, string, string)
+	// powerCancelHook substitui cancelPendingSystemShutdown (shutdown /a).
+	powerCancelHook func(a *App, parent context.Context) (string, string)
+	// powerLockFunc substitui lockWorkstationSession (bloqueio de sessão).
+	powerLockFunc func(ctx context.Context) error = lockWorkstationSession
 )
 
 // firstNonEmptyPower devolve a primeira string não vazia. (Nome distinto de

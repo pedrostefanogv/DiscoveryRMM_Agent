@@ -201,10 +201,22 @@ func ParseTicketChatInvitePayload(payload any) (supportchat.Invite, error) {
 
 // ── Power Action Commands ──
 
-// PowerActionRestartFirmware é o verbo (campo action) do comando genérico
-// "poweraction" que reinicia a máquina direto no setup do firmware (BIOS/UEFI).
-// Só é executável em máquinas com boot UEFI — o handler valida antes.
-const PowerActionRestartFirmware = "restart-firmware"
+// Verbos (campo action) do comando genérico "poweraction". Cada verbo tem
+// fluxo próprio no agent, sem o contador/adiamento do PSADT dos tipos legados
+// restart/shutdown.
+const (
+	// PowerActionRestartFirmware reinicia direto no setup do firmware
+	// (BIOS/UEFI) — `shutdown /r /fw`. Exige boot UEFI: o handler valida antes.
+	PowerActionRestartFirmware = "restart-firmware"
+	// PowerActionRestartAdvanced reinicia nas Opções Avançadas de inicialização
+	// (menu do WinRE, onde ficam modo de segurança e reparo) — `shutdown /r /o`.
+	PowerActionRestartAdvanced = "restart-advanced"
+	// PowerActionCancel cancela um desligamento/reinício pendente —
+	// `shutdown /a`.
+	PowerActionCancel = "cancel"
+	// PowerActionLock bloqueia a sessão interativa (LockWorkStation).
+	PowerActionLock = "lock"
+)
 
 // PowerCommandPayload representa o payload de um comando de power.
 type PowerCommandPayload struct {
@@ -225,6 +237,17 @@ type PowerCommandPayload struct {
 func IsPowerActionCommandType(cmdType string) bool {
 	switch strings.ToLower(strings.TrimSpace(cmdType)) {
 	case "restart", "reboot", "shutdown", "poweraction":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsPowerActionVerb verifica se o verbo (campo action) pertence ao comando
+// genérico "poweraction".
+func IsPowerActionVerb(verb string) bool {
+	switch strings.ToLower(strings.TrimSpace(verb)) {
+	case PowerActionRestartFirmware, PowerActionRestartAdvanced, PowerActionCancel, PowerActionLock:
 		return true
 	default:
 		return false

@@ -58,10 +58,13 @@ func parsePowerContract(t *testing.T, output string) map[string]any {
 func restorePowerHooks(t *testing.T) {
 	t.Helper()
 	origNow, origCountdown, origExec := maintenanceNow, powerCountdownHook, powerExecHook
+	origCancel, origLock := powerCancelHook, powerLockFunc
 	t.Cleanup(func() {
 		maintenanceNow = origNow
 		powerCountdownHook = origCountdown
 		powerExecHook = origExec
+		powerCancelHook = origCancel
+		powerLockFunc = origLock
 	})
 }
 

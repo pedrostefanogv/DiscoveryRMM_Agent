@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -281,23 +282,71 @@ func resolvePowerShellExe() string {
 	return psPath
 }
 
-// executeSystemPowerAction executa o restart/shutdown no SO (shutdown.exe).
-// delaySeconds == 0 executa imediatamente; force=true adiciona /f.
-// O verbo "restart-firmware" usa shutdown.exe /r /fw (reinício direto no setup
-// do firmware) — recurso exclusivo de boot UEFI, que o handler valida antes.
-func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySeconds int, force bool, message string) (int, string, string) {
-	flag := "/s"
-	label := "shutdown"
-	firmwareBoot := false
+// powerShutdownInvocation descreve o comando de desligamento/reinício a
+// executar: o rótulo (log/mensagem) e os argumentos já montados do shutdown.exe.
+type powerShutdownInvocation struct {
+	Label string
+	Args  []string
+}
+
+// resolvePowerShutdownInvocation monta os argumentos do shutdown.exe para a
+// ação de energia. Ordem canônica: verbo, diretiva exclusiva (/fw|/o), /t, /f,
+// /c. Devolve ok=false para ações que NÃO são desligamento/reinício — assim um
+// verbo inesperado nunca cai num /s (desligar) por default.
+func resolvePowerShutdownInvocation(action string, delaySeconds int, force bool, message string) (powerShutdownInvocation, bool) {
+	flag := ""
+	label := ""
+	directive := "" // flag exclusiva do verbo: /fw (firmware) ou /o (Opções Avançadas)
 	switch {
 	case action == "restart" || action == "reboot":
-		flag = "/r"
-		label = "restart"
+		flag, label = "/r", "restart"
+	case action == "shutdown":
+		flag, label = "/s", "shutdown"
 	case action == powerActionRestartFirmware:
-		flag = "/r"
-		label = "restart-firmware"
-		firmwareBoot = true
+		flag, label, directive = "/r", "restart-firmware", "/fw"
+	case action == powerActionRestartAdvanced:
+		flag, label, directive = "/r", "restart-advanced", "/o"
+	default:
+		return powerShutdownInvocation{}, false
 	}
+
+	if delaySeconds < 0 {
+		delaySeconds = 0
+	}
+
+	args := []string{flag}
+	if directive != "" {
+		args = append(args, directive)
+	}
+	args = append(args, "/t", fmt.Sprintf("%d", delaySeconds))
+	if force {
+		args = append(args, "/f")
+	}
+	if strings.TrimSpace(message) != "" {
+		args = append(args, "/c", message)
+	}
+
+	return powerShutdownInvocation{Label: label, Args: args}, true
+}
+
+// executeSystemPowerAction executa a ação de energia no SO (shutdown.exe).
+// delaySeconds == 0 executa imediatamente; force=true adiciona /f.
+//
+// Verbos diretos do comando genérico "poweraction":
+//   - restart-firmware → shutdown.exe /r /fw (setup do firmware — boot UEFI);
+//   - restart-advanced → shutdown.exe /r /o (Opções Avançadas de inicialização,
+//     o menu do WinRE onde ficam modo de segurança e reparo).
+func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySeconds int, force bool, message string) (int, string, string) {
+	label := strings.TrimSpace(action)
+	args := []string{}
+
+	invocation, known := resolvePowerShutdownInvocation(action, delaySeconds, force, message)
+	if !known {
+		a.logPowerAction(label, "[ERRO] acao de energia nao suportada por shutdown.exe: "+label)
+		return 1, "", fmt.Sprintf("acao de energia nao suportada: %q", action)
+	}
+	label = invocation.Label
+	args = invocation.Args
 
 	shutdownExe := resolveShutdownExe()
 	if _, statErr := os.Stat(shutdownExe); statErr != nil {
@@ -307,21 +356,6 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 			a.logPowerAction(label, fmt.Sprintf("[FATAL] shutdown.exe nao encontrado: Stat=%v LookPath=%v", statErr, lookErr))
 			return 1, fmt.Sprintf("shutdown.exe nao encontrado: %v", statErr), fmt.Sprintf("falha ao localizar shutdown.exe: %v / PATH: %v", statErr, lookErr)
 		}
-	}
-
-	if delaySeconds < 0 {
-		delaySeconds = 0
-	}
-
-	args := []string{flag, "/t", fmt.Sprintf("%d", delaySeconds)}
-	if firmwareBoot {
-		args = append(args, "/fw")
-	}
-	if force {
-		args = append(args, "/f")
-	}
-	if strings.TrimSpace(message) != "" {
-		args = append(args, "/c", message)
 	}
 
 	a.logPowerAction(label, fmt.Sprintf("[EXEC] exe=%s args=%s (modo=delay %ds force=%t)", shutdownExe, strings.Join(args, " "), delaySeconds, force))
@@ -337,4 +371,41 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 
 	a.logPowerAction(label, fmt.Sprintf("[OK] exe=%s (modo=delay %ds)", shutdownExe, delaySeconds))
 	return 0, fmt.Sprintf("%s agendado com sucesso (delay=%ds)", label, delaySeconds), ""
+}
+
+// cancelPendingSystemShutdown executa `shutdown.exe /a` para cancelar um
+// desligamento/reinício pendente do Windows. Devolve (output, errText):
+// errText != "" apenas quando o comando NÃO pôde ser executado.
+//
+// Um exit code diferente de zero é BENIGNO aqui (tipicamente 1116, "nada
+// pendente"): o texto do Windows vai no output, o operador é informado e a
+// intenção (não reiniciar/desligar) já foi cumprida pelos timers do agent.
+func (a *App) cancelPendingSystemShutdown(_ context.Context) (string, string) {
+	shutdownExe := resolveShutdownExe()
+	if _, statErr := os.Stat(shutdownExe); statErr != nil {
+		resolved, lookErr := exec.LookPath("shutdown.exe")
+		if lookErr != nil {
+			return "", fmt.Sprintf("shutdown.exe nao encontrado: %v / PATH: %v", statErr, lookErr)
+		}
+		shutdownExe = resolved
+	}
+
+	a.logPowerAction(powerActionCancel, fmt.Sprintf("[EXEC] exe=%s args=/a", shutdownExe))
+	cmd := exec.Command(shutdownExe, "/a")
+	processutil.HideWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(out))
+
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			a.logPowerAction(powerActionCancel, fmt.Sprintf("[ERRO] exe=%s err=%v output=%q", shutdownExe, err, output))
+			return output, fmt.Sprintf("falha ao executar shutdown.exe /a: %v", err)
+		}
+		a.logPowerAction(powerActionCancel, fmt.Sprintf("[INFO] /a retornou exit %d: %q", exitErr.ExitCode(), output))
+		return output, ""
+	}
+
+	a.logPowerAction(powerActionCancel, "[OK] /a executado")
+	return output, ""
 }

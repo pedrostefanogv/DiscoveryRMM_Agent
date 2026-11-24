@@ -88,3 +88,9 @@ func (a *App) handlePsadtAlert(_ context.Context, p PsadtAlertPayload) (int, str
 func (a *App) executeSystemPowerAction(_ context.Context, action string, _ int, _ bool, _ string) (int, string, string) {
 	return 1, "", fmt.Sprintf("acao %s nao suportada neste sistema operacional", strings.TrimSpace(action))
 }
+
+// cancelPendingSystemShutdown: shutdown.exe /a é um recurso exclusivo do
+// Windows, como o resto da família de energia.
+func (a *App) cancelPendingSystemShutdown(_ context.Context) (string, string) {
+	return "", "cancelamento de energia pendente suportado apenas no Windows"
+}

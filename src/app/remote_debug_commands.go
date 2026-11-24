@@ -157,16 +157,12 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		pp := parsePowerCommandPayload(payload)
 		action := resolvePowerVerb(cmdType, pp)
 
-		// Reinício direto no setup do firmware (BIOS/UEFI): fluxo próprio, sem
-		// o contador/adiamento do PSADT — ver handleFirmwareRestart.
-		if action == powerActionRestartFirmware {
-			return a.handleFirmwareRestart(parent, pp)
-		}
-		// Tipo genérico "poweraction": só verbos reconhecidos passam. Qualquer
-		// outro é payload inválido (a API valida, mas o agent é fail-safe).
+		// Comando genérico "poweraction": cada verbo tem fluxo próprio, sem o
+		// contador/adiamento do PSADT — ver handleDirectPowerAction. Verbos
+		// desconhecidos viram falha tipada lá dentro (a API valida, mas o agent
+		// é fail-safe e um verbo inesperado NUNCA pode cair no fluxo legado).
 		if cmdType == "poweraction" {
-			msg := fmt.Sprintf("acao de energia desconhecida: %q", pp.Action)
-			return true, 1, newPowerOutput("failed", "poweraction", msg).line(), msg
+			return a.handleDirectPowerAction(parent, action, pp)
 		}
 		if pp.DelaySeconds <= 0 {
 			if pp.Force {
