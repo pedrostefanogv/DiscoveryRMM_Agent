@@ -43,6 +43,20 @@ func TestSessionTerminal_PublishOutPrefereODataChannel(t *testing.T) {
 	}
 }
 
+// Regressão (commit ec14f20): o fallback para o NATS era st.publishOut(...), isto
+// é, a própria função — recursão infinita e "fatal error: stack overflow" sempre
+// que o data channel NÃO aceita (o caso normal com WebRTC desligado). Antes da
+// correção este teste derrubava o binário de teste por stack overflow.
+func TestSessionTerminal_PublishOutSemCanalNemNATSNaoRecursa(t *testing.T) {
+	st := NewSessionTerminal("sess-term-4", nil, false)
+	st.SetWebRtcSend(func(string) bool { return false })
+
+	err := st.publishOut("saida")
+	if err == nil {
+		t.Fatal("sem data channel que aceite e sem NATS, publishOut deveria devolver erro (e nao recursar)")
+	}
+}
+
 // Mesma costura do StartRunAs: o setter é chamado pelo manager FORA de qualquer
 // lock do terminal. Mantido como teste direto porque o deadlock que já ocorreu
 // aqui era exatamente "setter chamado com st.mu preso" — e sync.RWMutex não é

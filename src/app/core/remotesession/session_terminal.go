@@ -997,7 +997,17 @@ func (st *SessionTerminal) publishOut(payload string) error {
 	if send != nil && send(payload) {
 		return nil
 	}
-	return st.publishOut(payload)
+	// Fallback para o NATS — o transporte BASE, que nunca é desligado (o data
+	// channel é sempre aditivo).
+	//
+	// BUG (ec14f20): este retorno chamava st.publishOut(payload), ou seja, a
+	// própria função — recursão infinita e "fatal error: stack overflow" sempre
+	// que o data channel não aceita (o caso NORMAL com WebRTC desligado), o que
+	// derrubava o processo do serviço em qualquer saída do terminal remoto.
+	if st.natsStream == nil {
+		return fmt.Errorf("session-terminal: sem transporte de saida (data channel indisponivel e NATS ausente)")
+	}
+	return st.natsStream.PublishTermOut(st.sessionID, payload)
 }
 
 // SetReadyPayload guarda o payload do term.ready para republicar no primeiro
