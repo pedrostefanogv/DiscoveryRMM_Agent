@@ -12,8 +12,7 @@ import (
 	"time"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/google/go-tpm/tpmutil"
+	"github.com/google/go-tpm/tpm2/transport/windowstpm"
 
 	"discovery/app/core/processutil"
 )
@@ -74,14 +73,14 @@ func readTPMEndorsementKey() (hashHex, alg string, err error) {
 
 // readTPMEndorsementKeyBlocking executa a leitura da EK de forma bloqueante.
 func readTPMEndorsementKeyBlocking() (hashHex, alg string, err error) {
-	rwc, err := tpmutil.OpenTPM()
+	// windowstpm é o transporte TBS mantido do go-tpm (tpmutil.OpenTPM está
+	// deprecado no módulo) e valida que o dispositivo é TPM 2.0, devolvendo
+	// windowstpm.ErrNotTPM20 com mensagem clara quando não é.
+	tpmDev, err := windowstpm.Open()
 	if err != nil {
 		return "", "", fmt.Errorf("abrir TPM via TBS: %w", err)
 	}
-	defer rwc.Close()
-
-	// Converte o io.ReadWriteCloser em transport.TPM para o tpm2.
-	tpmDev := transport.FromReadWriteCloser(rwc)
+	defer tpmDev.Close()
 
 	// Cria a EK no hierarchy de Endorsement usando o template RSA padrão.
 	// A EK é determinística: o mesmo template + mesmo TPM gera sempre a mesma

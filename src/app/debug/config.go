@@ -32,6 +32,13 @@ type Config struct {
 	Scheme                            string `json:"scheme,omitempty"`
 	Server                            string `json:"server,omitempty"`
 	AutomationP2PWingetInstallEnabled *bool  `json:"automationP2pWingetInstallEnabled,omitempty"`
+	// TpmRecoveryEnabled reflete a política herdável (tpmRecoveryEnabled) vinda
+	// do servidor. É um campo informativo (status/diagnóstico): NUNCA decide a
+	// leitura do TPM no boot — a leitura é incondicional; a política governa
+	// apenas gravar/apagar na camada de serviço. Entra no round-trip de
+	// persistência (PersistConfig/parsePersistedConfigData) sem tratamento
+	// especial.
+	TpmRecoveryEnabled *bool `json:"tpmRecoveryEnabled,omitempty"`
 	// ApiInsecure quando true indica que o servidor usa HTTP simples (sem TLS).
 	// O padrão (false/ausente) é HTTPS. Substitui o campo legado apiScheme.
 	ApiInsecure bool `json:"apiInsecure,omitempty"`

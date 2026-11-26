@@ -44,6 +44,9 @@ import * as models$0 from "./core/models/models.js";
 import * as runtimediag$0 from "./core/runtimediag/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as tpmvault$0 from "./core/tpmvault/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as coreagent$0 from "./coreagent/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -625,6 +628,20 @@ export function EnsureChatSSEServer() {
  */
 export function EnsureMainWindow() {
     return $Call.ByID(2651337809);
+}
+
+/**
+ * EraseTpmVault apaga o registro do cofre TPM (pedido explícito de operador).
+ * 
+ * NÃO é exposto via HTTP de debug: está em debugBlockedReflectionMethods, porque
+ * apagar o cofre é destrutivo e não pode ser disparado por um simples request
+ * autenticado pelo token de debug. O uso legítimo é o comando remoto de
+ * descomissionamento e a flag CLI --tpm-vault-clear (elevada).
+ * @param {string} reason
+ * @returns {$CancellablePromise<void>}
+ */
+export function EraseTpmVault(reason) {
+    return $Call.ByID(1690123901, reason);
 }
 
 /**
@@ -1553,6 +1570,20 @@ export function GetTicketWorkflowStates() {
 }
 
 /**
+ * GetTpmVaultStatus devolve o retrato MASCARADO do cofre TPM de credenciais
+ * (política efetiva, disponibilidade, host, prefixo do token, último erro).
+ * 
+ * Nunca devolve o token: o status é exposto ao frontend via Wails, ao HTTP de
+ * debug (/api/GetTpmVaultStatus) e aos bridges da UI companion.
+ * @returns {$CancellablePromise<tpmvault$0.Status>}
+ */
+export function GetTpmVaultStatus() {
+    return $Call.ByID(3561704785).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType75($result);
+    }));
+}
+
+/**
  * HasActiveChatStream informa se há um turno de chat em execução no core.
  * Usado pelo timer de segurança da UI para reconciliar o estado quando um
  * evento terminal (chat:done/error/stopped) se perde — antes disso a UI se
@@ -1760,7 +1791,7 @@ export function ListOpenWindowsJSON(includeUntitled) {
  */
 export function ListP2PArtifacts() {
     return $Call.ByID(1832312099).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType75($result);
+        return $$createType76($result);
     }));
 }
 
@@ -1769,7 +1800,7 @@ export function ListP2PArtifacts() {
  */
 export function ListP2PAuditEvents() {
     return $Call.ByID(2100415322).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType77($result);
+        return $$createType78($result);
     }));
 }
 
@@ -1781,7 +1812,7 @@ export function ListP2PAuditEvents() {
  */
 export function ListP2PAuditEventsFiltered(action, peerAgentID, status) {
     return $Call.ByID(1530405413, action, peerAgentID, status).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType77($result);
+        return $$createType78($result);
     }));
 }
 
@@ -1845,7 +1876,7 @@ export function ListTicketDepartmentsJSON() {
  */
 export function LoadEffectiveAppStorePolicy(forceRefresh) {
     return $Call.ByID(2011064705, forceRefresh).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType78($result);
+        return $$createType79($result);
     }));
 }
 
@@ -1855,7 +1886,7 @@ export function LoadEffectiveAppStorePolicy(forceRefresh) {
  */
 export function LoadInstallerConfig() {
     return $Call.ByID(336072596).then(/** @type {($result: any) => any} */(($result) => {
-        $result[0] = $$createType79($result[0]);
+        $result[0] = $$createType80($result[0]);
         return $result;
     }));
 }
@@ -2158,7 +2189,7 @@ export function RefreshKnowledgeBase() {
  */
 export function RefreshListeningPorts() {
     return $Call.ByID(1221992142).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType81($result);
+        return $$createType82($result);
     }));
 }
 
@@ -2167,7 +2198,7 @@ export function RefreshListeningPorts() {
  */
 export function RefreshNetworkConnections() {
     return $Call.ByID(964299066).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType82($result);
+        return $$createType83($result);
     }));
 }
 
@@ -2205,7 +2236,7 @@ export function RefreshSensorPolicyDebug() {
  */
 export function RefreshSoftware() {
     return $Call.ByID(2717679924).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType84($result);
+        return $$createType85($result);
     }));
 }
 
@@ -2214,7 +2245,7 @@ export function RefreshSoftware() {
  */
 export function RefreshStartupItems() {
     return $Call.ByID(3800784882).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType86($result);
+        return $$createType87($result);
     }));
 }
 
@@ -2398,7 +2429,7 @@ export function RunCore() {
  */
 export function RunNativePreflightChecks() {
     return $Call.ByID(1841104790).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType87($result);
+        return $$createType88($result);
     }));
 }
 
@@ -2622,7 +2653,7 @@ export function SendTestHeartbeat() {
  */
 export function SensorDebugSnapshotCore() {
     return $Call.ByID(3612081968).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType88($result);
+        return $$createType89($result);
     }));
 }
 
@@ -2647,7 +2678,7 @@ export function SensorDebugSnapshotCore() {
  */
 export function SensorDebugSnapshotForMCP() {
     return $Call.ByID(1611227978).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType88($result);
+        return $$createType89($result);
     }));
 }
 
@@ -2950,7 +2981,7 @@ export function SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, su
  */
 export function SupportChatRefresh() {
     return $Call.ByID(277848266).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType89($result);
+        return $$createType90($result);
     }));
 }
 
@@ -3278,18 +3309,19 @@ const $$createType71 = supportmeta$0.TicketTemplateOption.createFrom;
 const $$createType72 = $Create.Array($$createType71);
 const $$createType73 = supportmeta$0.APIWorkflowState.createFrom;
 const $$createType74 = $Create.Array($$createType73);
-const $$createType75 = $Create.Array($$createType13);
-const $$createType76 = p2pmeta$0.AuditEvent.createFrom;
-const $$createType77 = $Create.Array($$createType76);
-const $$createType78 = appstore$0.EffectivePolicy.createFrom;
-const $$createType79 = debug$0.InstallerConfig.createFrom;
-const $$createType80 = models$0.ListeningPortInfo.createFrom;
-const $$createType81 = $Create.Array($$createType80);
-const $$createType82 = models$0.NetworkConnectionsReport.createFrom;
-const $$createType83 = models$0.SoftwareItem.createFrom;
-const $$createType84 = $Create.Array($$createType83);
-const $$createType85 = models$0.StartupItem.createFrom;
-const $$createType86 = $Create.Array($$createType85);
-const $$createType87 = $models.NativePreflightResult.createFrom;
-const $$createType88 = automation$1.SensorDebugSnapshot.createFrom;
-const $$createType89 = supportchat$0.State.createFrom;
+const $$createType75 = tpmvault$0.Status.createFrom;
+const $$createType76 = $Create.Array($$createType13);
+const $$createType77 = p2pmeta$0.AuditEvent.createFrom;
+const $$createType78 = $Create.Array($$createType77);
+const $$createType79 = appstore$0.EffectivePolicy.createFrom;
+const $$createType80 = debug$0.InstallerConfig.createFrom;
+const $$createType81 = models$0.ListeningPortInfo.createFrom;
+const $$createType82 = $Create.Array($$createType81);
+const $$createType83 = models$0.NetworkConnectionsReport.createFrom;
+const $$createType84 = models$0.SoftwareItem.createFrom;
+const $$createType85 = $Create.Array($$createType84);
+const $$createType86 = models$0.StartupItem.createFrom;
+const $$createType87 = $Create.Array($$createType86);
+const $$createType88 = $models.NativePreflightResult.createFrom;
+const $$createType89 = automation$1.SensorDebugSnapshot.createFrom;
+const $$createType90 = supportchat$0.State.createFrom;

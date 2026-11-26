@@ -106,6 +106,14 @@ func (a *App) handleAgentDecommissionCommand(_ context.Context, payload any) (bo
 		return true, 0, "desinstalação já em andamento", ""
 	}
 
+	// Apaga o cofre TPM antes de resolver/lançar o uninstaller (pedido remoto).
+	// nil-safe e idempotente; erro apenas é logado.
+	if a.DebugSvc != nil {
+		if err := a.DebugSvc.EraseTPMVault("remote-decommission"); err != nil {
+			a.Logs.Append("[decommission] falha ao apagar cofre TPM: " + err.Error())
+		}
+	}
+
 	requestedBy, reason := parseAgentDecommissionPayload(payload)
 
 	uninstallerPath, err := agentDecommissionResolveUninstaller()
@@ -184,6 +192,12 @@ func (a *App) resumeAgentDecommissionIfPending() {
 	}
 	if !agentDecommissionLaunching.CompareAndSwap(false, true) {
 		return
+	}
+
+	if a.DebugSvc != nil {
+		if err := a.DebugSvc.EraseTPMVault("remote-decommission"); err != nil {
+			a.Logs.Append("[decommission] falha ao apagar cofre TPM: " + err.Error())
+		}
 	}
 
 	a.Logs.Append("[decommission] retomando desinstalação pendente: " + validated)

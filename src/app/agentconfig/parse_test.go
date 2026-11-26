@@ -311,6 +311,47 @@ func TestParseAgentConfiguration_P2PWingetInstallServerOnly(t *testing.T) {
 	}
 }
 
+func TestParseAgentConfiguration_TpmRecoveryHierarchy(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+		wantNil bool
+		want    bool
+	}{
+		{name: "flat ausente = nil (no-op)", payload: `{"siteId":"s1"}`, wantNil: true},
+		// Regressao (bug do fallback hierarquico): payload COM "server" mas SEM o
+		// campo em nenhum nivel nao pode virar false — false apaga o cofre.
+		{name: "hierarquico sem o campo em nenhum nivel = nil (no-op)", payload: `{"server":{"recoveryEnabled":true},"client":{},"site":{}}`, wantNil: true},
+		{name: "hierarquico sem o campo, client definido", payload: `{"server":{"discoveryEnabled":true},"client":{"supportEnabled":true},"site":{}}`, wantNil: true},
+		{name: "flat true", payload: `{"tpmRecoveryEnabled":true}`, want: true},
+		{name: "flat false", payload: `{"tpmRecoveryEnabled":false}`, want: false},
+		{name: "site vence client e server", payload: `{"server":{"tpmRecoveryEnabled":false},"client":{"tpmRecoveryEnabled":true},"site":{"tpmRecoveryEnabled":false}}`, want: false},
+		{name: "site true vence client e server", payload: `{"server":{"tpmRecoveryEnabled":false},"client":{"tpmRecoveryEnabled":false},"site":{"tpmRecoveryEnabled":true}}`, want: true},
+		{name: "client vence server", payload: `{"server":{"tpmRecoveryEnabled":true},"client":{"tpmRecoveryEnabled":false},"site":{}}`, want: false},
+		{name: "herda do server", payload: `{"server":{"tpmRecoveryEnabled":true},"client":{},"site":{}}`, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := ParseAgentConfiguration([]byte(tc.payload))
+			if err != nil {
+				t.Fatalf("expected parse, got %v", err)
+			}
+			if tc.wantNil {
+				if cfg.TpmRecoveryEnabled != nil {
+					t.Fatalf("expected nil (no-op), got %v", *cfg.TpmRecoveryEnabled)
+				}
+				return
+			}
+			if cfg.TpmRecoveryEnabled == nil {
+				t.Fatalf("expected %v, got nil", tc.want)
+			}
+			if *cfg.TpmRecoveryEnabled != tc.want {
+				t.Fatalf("expected %v, got %v", tc.want, *cfg.TpmRecoveryEnabled)
+			}
+		})
+	}
+}
+
 func TestParseAgentConfiguration_ZeroTouchHierarchy(t *testing.T) {
 	payload := []byte(`{
 		"server": {"zeroTouchEnabled": true},

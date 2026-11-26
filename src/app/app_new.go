@@ -30,6 +30,7 @@ import (
 	"discovery/app/core/selfupdate"
 	"discovery/app/core/services"
 	"discovery/app/core/thirdparty"
+	"discovery/app/core/tpmvault"
 	"discovery/app/core/windowsupdate"
 	"discovery/app/core/winget"
 	"discovery/app/coreagent"
@@ -634,6 +635,24 @@ func (a *App) initConnectivityAndRemote() {
 			}
 			return a.HardwareIDSvc.Get()
 		},
+		// Cofre TPM: a LEITURA no boot é incondicional (Enabled=true sempre); a
+		// política herdável do servidor governa apenas GRAVAR/APAGAR, na camada
+		// de serviço. TPMVaultWritable restringe escrita/apagamento ao processo
+		// do serviço (a UI só lê status). Fingerprint via hardwareid (EK + SMBIOS).
+		TPMVault: tpmvault.Open(tpmvault.Options{
+			Logf: func(line string) {
+				a.Logs.Append(line)
+			},
+			Fingerprint: func() (string, string) {
+				if a.HardwareIDSvc == nil {
+					return "", ""
+				}
+				hw := a.HardwareIDSvc.Get()
+				return hw.TPMEK, hw.SMBIOSUUID
+			},
+			Enabled: true,
+		}),
+		TPMVaultWritable: a.RuntimeFlags.ServiceMode,
 	})
 	a.AgentConfigSvc = agentconfig.New(agentconfig.FetchDeps{
 		GetDebugConfig: a.getDebugConfigInternal,

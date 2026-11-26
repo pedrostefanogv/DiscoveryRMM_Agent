@@ -25,6 +25,7 @@ import (
 	"discovery/app/core/agentconn"
 	"discovery/app/core/platform"
 	"discovery/app/core/tlsutil"
+	"discovery/app/core/tpmvault"
 	"discovery/app/netutil"
 	"discovery/app/p2pmeta"
 	"discovery/app/services/hardwareid"
@@ -73,6 +74,15 @@ type Options struct {
 	// HardwareIdentity retorna a identidade de hardware (TPM EK + SMBIOS UUID)
 	// usada como fingerprint na Recuperação de Dispositivos. Pode ser nil.
 	HardwareIdentity func() hardwareid.Info
+	// TPMVault é o cofre TPM 2.0 (token+URL) usado para recuperação
+	// pós-formatação. Pode ser nil: o serviço funciona normalmente sem TPM e
+	// nenhuma falha do cofre pode impedir o boot/registro do agente.
+	TPMVault tpmvault.Vault
+	// TPMVaultWritable restringe GRAVAÇÃO/APAGAMENTO do cofre ao processo do
+	// serviço (SYSTEM/elevado). A UI (usuário) só lê status; sem elevação o TBS
+	// bloqueia NVDefineSpace/NVUndefineSpace. Mantém a escrita/apagamento no
+	// debug.Service do serviço, nunca na UI.
+	TPMVaultWritable bool
 	// OnConfigChanged é chamado sempre que a config de conexão muda em memória
 	// (SetConfig, ApplyRuntimeConnectionConfig, segurança remota). Usado pela
 	// App para propagar a config às UIs companion via IPC
@@ -112,6 +122,8 @@ type Service struct {
 	version            string
 	hardwareIdentity   func() hardwareid.Info
 	onConfigChanged    func(Config)
+	tpmVault           tpmvault.Vault
+	tpmVaultWritable   bool
 
 	// persistMu serializa as gravações do arquivo de config: o serviço é o
 	// dono único e duas gravações concorrentes não podem intercalar temp/rename.
@@ -171,6 +183,8 @@ func NewService(opts Options) *Service {
 		version:            strings.TrimSpace(opts.Version),
 		hardwareIdentity:   opts.HardwareIdentity,
 		onConfigChanged:    opts.OnConfigChanged,
+		tpmVault:           opts.TPMVault,
+		tpmVaultWritable:   opts.TPMVaultWritable,
 		configPathsFn:      opts.ConfigPaths,
 		watchInterval:      opts.WatcherInterval,
 		hardenACL:          hardenACL,
@@ -870,6 +884,278 @@ func (s *Service) ApplyP2PWingetInstallEnabledRemote(enabled *bool) (bool, error
 	return true, nil
 }
 
+// tpmRecoveryPolicy devolve a política efetiva do cofre TPM: só true quando o
+// servidor enviou explicitamente tpmRecoveryEnabled=true. nil/false = no-op
+// (não grava e, para nil, também não apaga) — servidor antigo sem o campo
+// preserva o comportamento atual.
+func (s *Service) tpmRecoveryPolicy() bool {
+	if s == nil {
+		return false
+	}
+	cfg := s.GetConfig()
+	return cfg.TpmRecoveryEnabled != nil && *cfg.TpmRecoveryEnabled
+}
+
+// tpmVaultWritesEnabled indica se ESTE processo pode gravar/apagar o cofre.
+// A UI (usuário, sem elevação) só lê status; o TBS bloqueia NVDefineSpace/
+// NVUndefineSpace sem elevação. Assim a gravação/apagamento ficam restritos ao
+// debug.Service do serviço (SYSTEM).
+func (s *Service) tpmVaultWritesEnabled() bool {
+	return s != nil && s.tpmVaultWritable
+}
+
+// ApplyTpmRecoveryRemote aplica a política herdável tpmRecoveryEnabled vinda da
+// API remota, no molde de ApplyP2PWingetInstallEnabledRemote: nil = no-op;
+// valor igual ao atual = no-op; mudança = persiste e age no cofre.
+// true -> grava/renova o registro com a credencial efetiva; false -> apaga.
+func (s *Service) ApplyTpmRecoveryRemote(enabled *bool) (bool, error) {
+	if s == nil || enabled == nil {
+		return false, nil
+	}
+	s.applyMu.Lock()
+	s.mu.Lock()
+	cfg := s.config
+	// "Desconhecido" (nil, ex.: debug_config.json apagado pela formatação) NÃO é
+	// o mesmo que "explicitamente false": como false APAGA o registro do TPM, o
+	// primeiro valor que o servidor enviar conta como mudança — inclusive false,
+	// para que desligar a política realmente apague um cofre herdado de uma
+	// instalação anterior (máquina formatada/reinstalada).
+	known := cfg.TpmRecoveryEnabled != nil
+	changed := false
+	if !known || *cfg.TpmRecoveryEnabled != *enabled {
+		v := *enabled
+		cfg.TpmRecoveryEnabled = &v
+		changed = true
+	}
+	normalizeSecurityConfig(&cfg)
+	s.config = cfg
+	s.mu.Unlock()
+
+	if !changed {
+		s.applyMu.Unlock()
+		return false, nil
+	}
+
+	persistErr := s.PersistConfig(cfg)
+	s.applyMu.Unlock()
+	if persistErr != nil {
+		s.logf("[tpm-vault] falha ao persistir atualização remota: " + persistErr.Error())
+		return true, persistErr
+	}
+
+	if *enabled {
+		if err := s.SyncVaultFromCurrentConfig(); err != nil {
+			s.logf("[tpm-vault] falha ao gravar cofre: " + err.Error())
+		}
+	} else {
+		if err := s.EraseTPMVault("disabled-by-policy"); err != nil {
+			s.logf("[tpm-vault] falha ao apagar cofre: " + err.Error())
+		} else {
+			s.logf("[tpm-vault] cofre apagado por politica do servidor")
+		}
+	}
+	s.notifyConfigChanged(s.GetConfig())
+	return true, nil
+}
+
+// SyncVaultFromCurrentConfig grava/renova o registro do cofre com a credencial
+// efetiva em memória. Só age quando a política efetiva é true e o agente está
+// provisionado (ApiServer/AuthToken/AgentID); é idempotente e nunca se
+// realimenta do próprio TPM. Erros do cofre são devolvidos para o chamador
+// logar — nunca propagam para o boot.
+func (s *Service) SyncVaultFromCurrentConfig() error {
+	if s == nil || s.tpmVault == nil {
+		return nil
+	}
+	if !s.tpmVaultWritesEnabled() {
+		s.logf("[tpm-vault] gravacao ignorada: cofre somente leitura fora do modo servico")
+		return nil
+	}
+	cfg := s.GetConfig()
+	if strings.TrimSpace(cfg.ApiServer) == "" || strings.TrimSpace(cfg.AuthToken) == "" || strings.TrimSpace(cfg.AgentID) == "" {
+		return nil
+	}
+	if cfg.TpmRecoveryEnabled == nil || !*cfg.TpmRecoveryEnabled {
+		return nil
+	}
+	value, err := tpmvault.FormatValue(cfg.AuthToken, cfg.ApiServer, cfg.APIScheme() == "http")
+	if err != nil {
+		return err
+	}
+	rec := tpmvault.Record{
+		Schema:           tpmvault.Schema,
+		APIURL:           value,
+		AllowInsecureTLS: cfg.AllowInsecureTLS,
+	}
+	if err := s.tpmVault.Save(rec); err != nil {
+		return err
+	}
+	s.logf(fmt.Sprintf("[tpm-vault] registro gravado (host=%s token=%s)", rec.Host(), tpmvault.TokenPrefix(rec.Token())))
+	return nil
+}
+
+// EraseTPMVault apaga o registro do cofre (nil-safe; nil vault = no-op nil).
+// Fora do processo do serviço é no-op: a UI nunca apaga o cofre.
+func (s *Service) EraseTPMVault(reason string) error {
+	if s == nil || s.tpmVault == nil {
+		return nil
+	}
+	if !s.tpmVaultWritesEnabled() {
+		s.logf("[tpm-vault] apagamento ignorado: cofre somente leitura fora do modo servico")
+		return nil
+	}
+	if err := s.tpmVault.Erase(); err != nil {
+		return err
+	}
+	s.logf("[tpm-vault] registro apagado (reason=" + strings.TrimSpace(reason) + ")")
+	return nil
+}
+
+// GetTPMVaultStatus devolve o status mascarado do cofre (nunca o token).
+// Nil-safe: sem cofre injetado explica o motivo em LastError.
+func (s *Service) GetTPMVaultStatus() tpmvault.Status {
+	if s == nil {
+		return tpmvault.Status{LastError: "servico de debug indisponivel"}
+	}
+	if s.tpmVault == nil {
+		return tpmvault.Status{
+			Enabled:   s.tpmRecoveryPolicy(),
+			Available: false,
+			LastError: "cofre TPM nao foi injetado neste processo",
+		}
+	}
+	st := s.tpmVault.Status()
+	st.Enabled = s.tpmRecoveryPolicy()
+	return st
+}
+
+// extractAgentIdentityRouting extrai agentId/clientId/siteId de uma resposta de
+// identidade do agente (/api/v1/agent-auth/me), tolerante a variações de caixa,
+// aliases e wrappers (data/result/payload).
+func extractAgentIdentityRouting(body []byte) (agentID, clientID, siteID string, err error) {
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return "", "", "", fmt.Errorf("resposta JSON invalida: %w", err)
+	}
+	tryExtract := func(m map[string]any) (string, string, string) {
+		a := firstNonEmptyAnyString(m["agentId"], m["agentID"], m["id"])
+		c := firstNonEmptyAnyString(m["clientId"], m["clientID"], m["client_id"])
+		s := firstNonEmptyAnyString(m["siteId"], m["siteID"], m["site_id"])
+		return strings.TrimSpace(a), strings.TrimSpace(c), strings.TrimSpace(s)
+	}
+	agentID, clientID, siteID = tryExtract(raw)
+	if agentID != "" {
+		return agentID, clientID, siteID, nil
+	}
+	for _, key := range []string{"data", "result", "payload"} {
+		nested, ok := raw[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		agentID, clientID, siteID = tryExtract(nested)
+		if agentID != "" {
+			return agentID, clientID, siteID, nil
+		}
+	}
+	return "", "", "", fmt.Errorf("resposta sem agentId")
+}
+
+// tryBootstrapFromTPMVault tenta recuperar token+URL do cofre TPM quando o
+// config.json não tem credenciais utilizáveis (máquina formatada/reinstalada).
+// A recuperação é token-only: GET /api/v1/agent-auth/me com APENAS o Bearer
+// token (sem X-Agent-ID — ver a mudança de middleware da WS6).
+//
+// Devolve true SOMENTE quando as credenciais foram recuperadas, persistidas e
+// aplicadas em runtime. Qualquer falha (cofre ausente/indisponível, rede,
+// 401/403) devolve false e NUNCA apaga o registro: o fluxo atual
+// (provisionamento/deploy token) segue normalmente.
+func (s *Service) tryBootstrapFromTPMVault(ctx context.Context, inst InstallerConfig, path string) bool {
+	if s == nil || s.tpmVault == nil {
+		return false
+	}
+	rec, ok, err := s.tpmVault.Load()
+	if err != nil {
+		s.logf("[tpm-vault] sem registro utilizavel (" + err.Error() + ")")
+		return false
+	}
+	if !ok {
+		s.logf("[tpm-vault] sem registro utilizavel (ausente)")
+		return false
+	}
+	host := strings.TrimSpace(rec.Host())
+	token := strings.TrimSpace(rec.Token())
+	if host == "" || token == "" {
+		s.logf("[tpm-vault] sem registro utilizavel (registro incompleto)")
+		return false
+	}
+	scheme := "https"
+	if rec.Insecure() {
+		scheme = "http"
+	}
+	target := scheme + "://" + host + "/api/v1/agent-auth/me"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		s.logf("[tpm-vault] credenciais do TPM inacessiveis: " + err.Error())
+		return false
+	}
+	// Token-only: SEM X-Agent-ID (o middleware aceita o fallback pelo token).
+	if err := netutil.SetAgentAuthHeaders(req, token); err != nil {
+		s.logf("[tpm-vault] credenciais do TPM inacessiveis: " + err.Error())
+		return false
+	}
+	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
+	if err != nil {
+		s.logf("[tpm-vault] credenciais do TPM inacessiveis: " + err.Error())
+		return false
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		s.logf("[tpm-vault] credenciais do TPM inacessiveis: " + readErr.Error())
+		return false
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		s.logf(fmt.Sprintf("[tpm-vault] credenciais do TPM rejeitadas: HTTP %d", resp.StatusCode))
+		return false
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		s.logf(fmt.Sprintf("[tpm-vault] credenciais do TPM inacessiveis: HTTP %d: %s", resp.StatusCode, netutil.SanitizeHTTPErrorBody(resp.StatusCode, string(body))))
+		return false
+	}
+	agentID, clientID, siteID, err := extractAgentIdentityRouting(body)
+	if err != nil {
+		s.logf("[tpm-vault] resposta de identidade invalida: " + err.Error())
+		return false
+	}
+	if !IsValidAgentID(agentID) {
+		s.logf("[tpm-vault] resposta de identidade sem agentId valido")
+		return false
+	}
+	insecure := scheme == "http"
+	tlsAllow := rec.AllowInsecureTLS
+	inst.ApiScheme = scheme
+	inst.ApiServer = host
+	inst.ApiInsecure = &insecure
+	inst.AllowInsecureTLS = &tlsAllow
+	inst.AuthToken = token
+	inst.AgentID = agentID
+	inst.ClientID = clientID
+	inst.SiteID = siteID
+	if tlsAllow {
+		s.applyAllowInsecureTLS(true)
+	}
+	if _, persistErr := persistInstallerConfig(path, inst); persistErr != nil {
+		s.logf("[tpm-vault] falha ao persistir credenciais recuperadas: " + persistErr.Error())
+		return false
+	}
+	s.ApplyRuntimeConnectionConfig(scheme, host, token, agentID, inst.NatsServer, inst.NatsWsServer)
+	s.logf(fmt.Sprintf("[tpm-vault] credenciais recuperadas do TPM (host=%s, agentId=%s)", host, agentID))
+	if s.agentConn != nil {
+		s.agentConn.Reload()
+	}
+	return true
+}
+
 func (s *Service) testAgentAPIConnectivity(ctx context.Context, apiScheme, apiServer, authToken, agentID string) error {
 	apiScheme = strings.TrimSpace(strings.ToLower(apiScheme))
 	apiServer = strings.TrimSpace(apiServer)
@@ -907,11 +1193,29 @@ func (s *Service) testAgentAPIConnectivity(ctx context.Context, apiScheme, apiSe
 	return nil
 }
 
+// syncVaultAfterBootstrap renova o registro do cofre depois de credenciais
+// válidas no config OU recém-registradas. Sem isto, uma ROTAÇÃO DE TOKEN (novo
+// token emitido e o anterior revogado pelo servidor) deixava o cofre com o token
+// morto: em máquina formatada a recuperação falharia com 401 para sempre, porque
+// ApplyTpmRecoveryRemote(true) não roda de novo quando a política já está true.
+//
+// No-op quando a política efetiva não é true e quando o registro é idêntico
+// (o Save do cofre compara o registro desselado). Nunca propaga erro: o cofre é
+// acessório e não pode quebrar o bootstrap.
+func (s *Service) syncVaultAfterBootstrap() {
+	if err := s.SyncVaultFromCurrentConfig(); err != nil {
+		s.logf("[tpm-vault] falha ao renovar cofre apos bootstrap: " + err.Error())
+	}
+}
+
 // BootstrapAgentCredentialsFromInstallerConfig registers the agent when needed and persists token+agentId.
 func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Context) {
 	inst, path, err := s.loadInstallerConfig()
 	if err != nil {
 		s.logf("[installer-bootstrap] sem bootstrap de instalador: " + err.Error())
+		// Sem arquivo ainda é possível subir pelo cofre TPM (máquina formatada).
+		// Falha do cofre apenas loga e o fluxo atual segue.
+		s.tryBootstrapFromTPMVault(ctx, InstallerConfig{}, "")
 		return
 	}
 	s.applyAllowInsecureTLS(installerConfigAllowInsecureTLS(inst))
@@ -923,6 +1227,7 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 		parsedScheme, parsedServer, err := parseInstallerServerURL(inst.ServerURL)
 		if err != nil {
 			s.logf("[installer-bootstrap] serverUrl invalida no config do instalador: " + err.Error())
+			s.tryBootstrapFromTPMVault(ctx, inst, path)
 			return
 		}
 		scheme = parsedScheme
@@ -964,9 +1269,19 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 				}
 			}
 			s.logf("[installer-bootstrap] credenciais validas; deploy token removido")
+			// Renova o cofre se token/URL/scheme mudaram desde o último bootstrap
+			// (ex.: rotação de token no servidor).
+			s.syncVaultAfterBootstrap()
 			return
 		}
 		s.logf("[installer-bootstrap] credenciais invalidas, tentando re-registrar: " + err.Error())
+	}
+
+	// Sem authToken+agentId utilizáveis no config: tenta o cofre TPM ANTES de
+	// desistir (recuperação token-only). Só quando o cofre devolve um registro
+	// válido confirmado pelo /me; falha não apaga nada e o fluxo atual segue.
+	if s.tryBootstrapFromTPMVault(ctx, inst, path) {
+		return
 	}
 
 	if strings.TrimSpace(inst.APIKey) == "" {
@@ -1039,6 +1354,8 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 	if s.agentConn != nil {
 		s.agentConn.Reload()
 	}
+	// Registro novo token (o anterior foi revogado): o cofre precisa refletir isso.
+	s.syncVaultAfterBootstrap()
 }
 
 // GetAgentStatus returns the current agent connectivity status.

@@ -103,6 +103,17 @@ func (a *App) applyAgentConfiguration(cfg agentconfig.AgentConfiguration) {
 			a.Logs.Append("[config] automationP2pWingetInstallEnabled atualizado pela API")
 		}
 	}
+	// Cofre TPM (recuperação pós-formatação): política herdável do servidor.
+	// nil = no-op (servidor antigo); true grava/renova, false apaga. A leitura no
+	// boot é incondicional e NÃO depende deste campo.
+	if a.DebugSvc != nil {
+		changed, err := a.DebugSvc.ApplyTpmRecoveryRemote(cfg.TpmRecoveryEnabled)
+		if err != nil {
+			a.Logs.Append("[config] falha ao aplicar tpmRecoveryEnabled remoto: " + err.Error())
+		} else if changed {
+			a.Logs.Append(fmt.Sprintf("[config] tpmRecoveryEnabled=%t aplicado (cofre TPM)", *cfg.TpmRecoveryEnabled))
+		}
+	}
 	if a.DebugSvc != nil {
 		changed, err := a.DebugSvc.ApplyRemoteConnectionSecurity(
 			cfg.NatsServerHost,

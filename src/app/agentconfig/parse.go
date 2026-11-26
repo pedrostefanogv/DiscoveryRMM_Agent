@@ -97,6 +97,7 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		RecoveryEnabled:                   getBoolPtr("recoveryEnabled"),
 		DiscoveryEnabled:                  getBoolPtr("discoveryEnabled"),
 		P2PFilesEnabled:                   getBoolPtr("p2pFilesEnabled"),
+		TpmRecoveryEnabled:                getBoolPtr("tpmRecoveryEnabled"),
 		SupportEnabled:                    getBoolPtr("supportEnabled"),
 		NatsServerHost:                    getString("natsServerHost"),
 		NatsServerHostInternal:            getString("natsServerHostInternal"),
@@ -303,6 +304,21 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.P2PFilesEnabled }),
 		srv.P2PFilesEnabled,
 	))
+	// Cofre TPM (recuperação pós-formatação): mesma herança do P2P
+	// (site > client > server), MAS com um cuidado que o P2P não precisa ter:
+	// aqui false é DESTRUTIVO (apaga o registro do TPM). Ausência do campo em
+	// TODOS os níveis do payload hierárquico (API antiga / payload incompleto)
+	// deixa nil = no-op; nunca inferimos "desligado" a partir de ausência.
+	if siteVal := boolFromPtr(site, func(s *SiteConfiguration) *bool { return s.TpmRecoveryEnabled }); siteVal != nil {
+		v := *siteVal
+		cfg.TpmRecoveryEnabled = &v
+	} else if cliVal := boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.TpmRecoveryEnabled }); cliVal != nil {
+		v := *cliVal
+		cfg.TpmRecoveryEnabled = &v
+	} else if srv.TpmRecoveryEnabled != nil {
+		v := *srv.TpmRecoveryEnabled
+		cfg.TpmRecoveryEnabled = &v
+	}
 	cfg.SupportEnabled = boolPtr(resolveBool(
 		boolFromPtr(site, func(s *SiteConfiguration) *bool { return s.SupportEnabled }),
 		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.SupportEnabled }),

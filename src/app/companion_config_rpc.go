@@ -87,6 +87,22 @@ func (a *App) StartDebugConfigWatcher() {
 		if a.AgentConn != nil {
 			a.AgentConn.Reload()
 		}
+		// Alteração EXTERNA do debug_config.json pode ter mexido na política do
+		// cofre TPM: reconcilia o registro para o estado não ficar divergente
+		// (true grava/renova; false apaga; nil não mexe). Fora do processo do
+		// serviço as duas chamadas são no-op (gate TPMVaultWritable) e falha do
+		// cofre é engolida — o cofre nunca pode derrubar o agente.
+		switch {
+		case cfg.TpmRecoveryEnabled == nil:
+		case *cfg.TpmRecoveryEnabled:
+			if err := a.DebugSvc.SyncVaultFromCurrentConfig(); err != nil {
+				a.Logs.Append("[tpm-vault] falha ao renovar cofre apos config externa: " + err.Error())
+			}
+		default:
+			if err := a.DebugSvc.EraseTPMVault("external-config-disabled"); err != nil {
+				a.Logs.Append("[tpm-vault] falha ao apagar cofre apos config externa: " + err.Error())
+			}
+		}
 		a.EmitEvent("debug:config_updated", "config", redactDebugConfig(cfg))
 	})
 	a.DebugSvc.StartWatcher()

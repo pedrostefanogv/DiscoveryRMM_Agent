@@ -24,6 +24,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -33,6 +35,9 @@ import (
 
 	appkg "discovery/app"
 	"discovery/app/core/memlimit"
+	"discovery/app/core/platform"
+	"discovery/app/core/tpmvault"
+	"discovery/app/services/hardwareid"
 )
 
 // hasStartupArg replica a detecção de flags do main.go da UI (case-insensitive,
@@ -77,6 +82,20 @@ func main() {
 		return
 	}
 
+	// ── Diagnóstico/limpeza do cofre TPM (token+URL) ──
+	// --tpm-vault-status: NVReadPublic funciona sem elevação; se a leitura
+	// falhar (ex.: TPM_E_COMMAND_BLOCKED) imprime o erro exato e sai com 1.
+	// --tpm-vault-clear: NVUndefineSpace exige elevação — fail-closed, no
+	// mesmo padrão de --agent-delete-cleanup.
+	if hasStartupArg("--tpm-vault-status") || hasStartupArg("/tpm-vault-status") || hasStartupArg("-tpm-vault-status") {
+		runTpmVaultStatus()
+		return
+	}
+	if hasStartupArg("--tpm-vault-clear") || hasStartupArg("/tpm-vault-clear") || hasStartupArg("-tpm-vault-clear") {
+		runTpmVaultClear()
+		return
+	}
+
 	// Teto suave de memória do runtime Go (default 192 MiB; override por
 	// DISCOVERY_MEMORY_LIMIT_MB, 0 desabilita). Só para o processo do SERVIÇO/
 	// core: os modos auxiliares acima (worker de sessão remota, dispatcher do
@@ -88,4 +107,66 @@ func main() {
 	}
 
 	appkg.RunServiceMode()
+}
+
+// openTpmVaultForCLI abre o cofre TPM com a identidade de hardware (EK/SMBIOS).
+// Enabled=true é o kill switch OPERACIONAL (a política do servidor governa
+// gravar/apagar na camada de serviço, nunca a leitura de boot).
+func openTpmVaultForCLI() tpmvault.Vault {
+	return tpmvault.Open(tpmvault.Options{
+		Logf: func(line string) {
+			log.Printf("%s", line)
+		},
+		Fingerprint: func() (string, string) {
+			hw := hardwareid.New(hardwareid.Deps{
+				Logf: func(line string) { log.Printf("%s", line) },
+			}).Get()
+			return hw.TPMEK, hw.SMBIOSUUID
+		},
+		Enabled: true,
+	})
+}
+
+// runTpmVaultStatus imprime o status MASCARADO do cofre (sem token) como JSON.
+// Sem registro = exit 0. Falha de leitura (TPM indisponível/comando bloqueado)
+// imprime o erro exato e sai com 1 para não mascarar o diagnóstico.
+func runTpmVaultStatus() {
+	v := openTpmVaultForCLI()
+	st := v.Status()
+	rec, ok, err := v.Load()
+	if err == nil {
+		st.Present = ok
+		if ok {
+			st.Host = rec.Host()
+			st.TokenPrefix = tpmvault.TokenPrefix(rec.Token())
+			st.AllowInsecureTLS = rec.AllowInsecureTLS
+		}
+	} else if strings.TrimSpace(st.LastError) == "" {
+		st.LastError = err.Error()
+	}
+	data, marshalErr := json.MarshalIndent(st, "", "  ")
+	if marshalErr != nil {
+		fmt.Fprintf(os.Stderr, "tpm-vault-status: %v\n", marshalErr)
+		os.Exit(1)
+	}
+	fmt.Println(string(data))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tpm-vault-status: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runTpmVaultClear apaga o registro do cofre. Fail-closed: NVUndefineSpace é
+// bloqueado pelo TBS sem elevação, então sem token elevado sai com 1.
+func runTpmVaultClear() {
+	if !platform.IsElevated() {
+		fmt.Fprintln(os.Stderr, "tpm-vault-clear: requer execucao elevada (admin/SYSTEM) para apagar o cofre TPM")
+		os.Exit(1)
+	}
+	v := openTpmVaultForCLI()
+	if err := v.Erase(); err != nil {
+		fmt.Fprintf(os.Stderr, "tpm-vault-clear: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("cofre TPM apagado")
 }

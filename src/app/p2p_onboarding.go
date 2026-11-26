@@ -712,6 +712,12 @@ func (a *App) persistZeroTouchCredentials(credentials zeroTouchRegisterCredentia
 	}
 
 	a.applyZeroTouchRuntimeConnection(inst)
+	// Cofre TPM: só age se a política efetiva for true (nil-safe). Erro apenas loga.
+	if a.DebugSvc != nil {
+		if err := a.DebugSvc.SyncVaultFromCurrentConfig(); err != nil {
+			a.Logs.Append("[zero-touch] falha ao sincronizar cofre TPM: " + err.Error())
+		}
+	}
 	if !isAgentConfigured() {
 		return P2POnboardingResult{}, fmt.Errorf("credenciais persistidas, mas agente ainda não aparece provisionado")
 	}

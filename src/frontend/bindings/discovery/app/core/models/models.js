@@ -329,6 +329,24 @@ export class BatteryInfo {
              */
             this["charged"] = false;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * OnAC indica se a máquina estava NA TOMADA no momento da coleta.
+             * Ponteiro: nil = não reportado (agente antigo / SO não soube informar).
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["onAc"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Present indica presença física da bateria (false em desktop/VM, nil
+             * quando o SO não soube dizer).
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["present"] = undefined;
+        }
         if (!("designedCapacityMAh" in $$source)) {
             /**
              * @member
@@ -1069,6 +1087,47 @@ export class HardwareInfo {
              * @type {number}
              */
             this["memoryModulesCount"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * ── Formato físico da máquina (notebook × desktop × tablet × servidor) ──
+             * 
+             * IsLaptop/ChassisType/PCSystemType/HasBattery são PONTEIROS de propósito:
+             * nil = "não foi possível ler" e NUNCA "não é notebook". O servidor guarda
+             * colunas nullable com a mesma convenção, então VM/agente antigo não vira
+             * "desktop" por omissão no painel.
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["isLaptop"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["machineType"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["chassisType"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["pcSystemType"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["hasBattery"] = undefined;
         }
 
         Object.assign(this, $$source);

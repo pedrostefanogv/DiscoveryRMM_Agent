@@ -194,6 +194,38 @@ export class AgentHeartbeatMetrics {
              */
             this["LoggedUserSince"] = "0001-01-01T00:00:00.000Z";
         }
+        if (!("HasBattery" in $$source)) {
+            /**
+             * ── Energia (bateria × tomada) ──
+             * Ponteiros de propósito: nil = não reportado/desconhecido. Usar "false"
+             * para desconhecido faria o painel esconder o bloco de bateria de um
+             * notebook real. Lidos de core/power (mesma fonte do inventário).
+             * @member
+             * @type {boolean | null}
+             */
+            this["HasBattery"] = null;
+        }
+        if (!("BatteryPercent" in $$source)) {
+            /**
+             * @member
+             * @type {number | null}
+             */
+            this["BatteryPercent"] = null;
+        }
+        if (!("BatteryOnAc" in $$source)) {
+            /**
+             * @member
+             * @type {boolean | null}
+             */
+            this["BatteryOnAc"] = null;
+        }
+        if (!("BatteryCharging" in $$source)) {
+            /**
+             * @member
+             * @type {boolean | null}
+             */
+            this["BatteryCharging"] = null;
+        }
 
         Object.assign(this, $$source);
     }

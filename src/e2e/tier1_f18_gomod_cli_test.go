@@ -112,6 +112,20 @@ func TestF18_T1_AgentDeleteCleanupFailsClosedNonElevated(t *testing.T) {
 	}
 }
 
+// --tpm-vault-clear é fail-closed: sem elevação o NVUndefineSpace é barrado pelo
+// TBS (TPM_E_COMMAND_BLOCKED), então o processo precisa sair com código != 0 e
+// mensagem explícita ANTES de tocar no TPM.
+func TestF18_T1_TpmVaultClearFailsClosedNonElevated(t *testing.T) {
+	code, out, errOut, _ := execCLI(t, 5*time.Second, nil, "discovery-service.exe", "--tpm-vault-clear")
+	if code == 0 {
+		t.Fatalf("--tpm-vault-clear nao pode retornar exit 0 quando nao elevado")
+	}
+	combined := out + errOut
+	if !strings.Contains(combined, "requer execucao elevada") {
+		t.Fatalf("saida inesperada de --tpm-vault-clear (code=%d): %q", code, combined)
+	}
+}
+
 func TestF18_T1_RemoteSessionWorkerRejectsMalformedStdinBothBinaries(t *testing.T) {
 	for _, bin := range []string{"discovery-agent.exe", "discovery-service.exe"} {
 		code, out, errOut, _ := execCLI(t, 5*time.Second, []byte("not-valid-4byte-frame"), bin, "--remote-session-worker")

@@ -156,6 +156,7 @@ type AgentConfiguration struct {
 	RecoveryEnabled                   *bool  `json:"recoveryEnabled"`
 	DiscoveryEnabled                  *bool  `json:"discoveryEnabled"`
 	P2PFilesEnabled                   *bool  `json:"p2pFilesEnabled"`
+	TpmRecoveryEnabled                *bool  `json:"tpmRecoveryEnabled"`
 	SupportEnabled                    *bool  `json:"supportEnabled"`
 	NatsServerHost                    string `json:"natsServerHost"`
 	NatsServerHostInternal            string `json:"natsServerHostInternal"`
@@ -219,10 +220,13 @@ type AgentConfiguration struct {
 
 // ServerConfiguration representa a configuração global do servidor (API v1).
 type ServerConfiguration struct {
-	ID                                string `json:"id"`
-	RecoveryEnabled                   bool   `json:"recoveryEnabled"`
-	DiscoveryEnabled                  bool   `json:"discoveryEnabled"`
-	P2PFilesEnabled                   bool   `json:"p2PFilesEnabled"`
+	ID               string `json:"id"`
+	RecoveryEnabled  bool   `json:"recoveryEnabled"`
+	DiscoveryEnabled bool   `json:"discoveryEnabled"`
+	P2PFilesEnabled  bool   `json:"p2PFilesEnabled"`
+	// Ponteiro para o DTO hierarquico: ausencia do campo (payload antigo) precisa
+	// ser distinguivel de false, porque false APAGA o cofre no TPM.
+	TpmRecoveryEnabled                *bool  `json:"tpmRecoveryEnabled"`
 	CloudBootstrapEnabled             bool   `json:"cloudBootstrapEnabled"`
 	SupportEnabled                    bool   `json:"supportEnabled"`
 	ChatAIEnabled                     bool   `json:"chatAIEnabled"`
@@ -271,6 +275,7 @@ type ClientConfiguration struct {
 	RecoveryEnabled                   *bool   `json:"recoveryEnabled"`
 	DiscoveryEnabled                  *bool   `json:"discoveryEnabled"`
 	P2PFilesEnabled                   *bool   `json:"p2PFilesEnabled"`
+	TpmRecoveryEnabled                *bool   `json:"tpmRecoveryEnabled"`
 	CloudBootstrapEnabled             *bool   `json:"cloudBootstrapEnabled"`
 	SupportEnabled                    *bool   `json:"supportEnabled"`
 	ChatAIEnabled                     *bool   `json:"chatAIEnabled"`
@@ -308,6 +313,7 @@ type SiteConfiguration struct {
 	RecoveryEnabled                   *bool   `json:"recoveryEnabled"`
 	DiscoveryEnabled                  *bool   `json:"discoveryEnabled"`
 	P2PFilesEnabled                   *bool   `json:"p2PFilesEnabled"`
+	TpmRecoveryEnabled                *bool   `json:"tpmRecoveryEnabled"`
 	SupportEnabled                    *bool   `json:"supportEnabled"`
 	ChatAIEnabled                     *bool   `json:"chatAIEnabled"`
 	KnowledgeBaseEnabled              *bool   `json:"knowledgeBaseEnabled"`

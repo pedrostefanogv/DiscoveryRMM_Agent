@@ -30,6 +30,9 @@ var debugBlockedReflectionMethods = map[string]bool{
 	"GetChatSSEInfo":  true,
 	"GetDebugConfig":  true,
 	"GetDebugHTTPURL": true,
+	// Apagar o cofre TPM é destrutivo: só por CLI elevada ou comando remoto de
+	// descomissionamento. GetTpmVaultStatus continua exposto (mascarado).
+	"EraseTpmVault": true,
 }
 
 func (a *App) ensureDebugAuthToken() string {
