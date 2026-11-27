@@ -42,7 +42,7 @@ const (
 	envelopeMagic = "DVLT"
 	// envelopeVersion é a versão corrente do formato do envelope.
 	envelopeVersion byte = 1
-	// envelopeFlagInsecureTLS marca servidor HTTP simples no registro.
+	// envelopeFlagInsecureTLS marca servidor com AllowInsecureTLS (certificado TLS não validado).
 	envelopeFlagInsecureTLS byte = 0x01
 
 	// envelopeHeaderSize é magic+versão+flags+payloadLen.

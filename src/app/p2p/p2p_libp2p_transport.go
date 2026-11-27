@@ -51,6 +51,8 @@ const (
 	libp2pManifestTimeout       = 5 * time.Minute // cobre leitura completa do arquivo para gerar manifest
 	libp2pMinTransferSpeed      = 512 * 1024      // 512 KB/s - piso conservador para clculo de timeout
 	libp2pTransferTimeoutMargin = 30 * time.Second
+	maxLibp2pControlFrameBytes  = 64 * 1024       // teto para frames JSON de controle/handshake
+	maxLibp2pCatalogFrameBytes  = 8 * 1024 * 1024 // teto para respostas de peers/manifest
 )
 
 // computeTransferDeadline calcula um deadline adaptativo baseado no tamanho dos dados.
@@ -520,7 +522,7 @@ func handleStreamPeers(s network.Stream, coord *Coordinator, transfer *TransferS
 	// envia credencial ela precisa ser válida (defesa contra catálogo servido a
 	// quem reaproveita token adulterado) e, no modo REQUIRE, é obrigatória.
 	req := libp2pPeersRequest{}
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil && err != io.EOF {
+	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&req); err != nil && err != io.EOF {
 		req = libp2pPeersRequest{} // frame inválido do requester = sem credencial
 	}
 	if err := validateDiscoveryAccessToken(transfer, strings.TrimSpace(req.RequesterID), strings.TrimSpace(req.Token)); err != nil {
@@ -549,7 +551,7 @@ func handleStreamArtifactAccess(s network.Stream, transfer *TransferServer) {
 	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
 
 	var req libp2pAccessRequest
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
+	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&req); err != nil {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
 		return
 	}
@@ -587,7 +589,7 @@ func handleStreamArtifactManifest(s network.Stream, transfer *TransferServer) {
 	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
 
 	var req libp2pManifestRequest
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
+	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&req); err != nil {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
 		return
 	}
@@ -699,7 +701,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 	defer s.Close()
 
 	var req libp2pGetRequest
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
+	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&req); err != nil {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
 		return
 	}
@@ -745,25 +747,36 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 	checksum := ""
 	if transfer != nil {
 		manifestDir := transfer.manifestDir()
-		if cached := loadCachedManifest(manifestDir, req.ArtifactName, path); cached != nil {
-			if manifestMatchesFile(cached, path) {
-				checksum = cached.SHA256
-			} else {
-				// Manifest stale: invalida para forçar regeneração no próximo
-				// serve-manifest e recalcula o checksum do arquivo atual.
-				if transfer.coord != nil && transfer.coord.deps != nil {
+		if transfer.coord != nil {
+			var wasStale bool
+			if cachedSHA, valid, stale := transfer.coord.cachedManifestChecksum(manifestDir, req.ArtifactName, path, info.ModTime(), info.Size()); valid {
+				checksum = cachedSHA
+			} else if stale {
+				wasStale = true
+			}
+			if wasStale {
+				if transfer.coord.deps != nil {
 					transfer.coord.deps.Log(fmt.Sprintf(
 						"[p2p][serve] manifest stale detectado no GET artifact=%s (mtime arquivo=%d) — invalidando cache",
 						req.ArtifactName, info.ModTime().UnixNano()))
-					transfer.coord.recordStaleManifest()
 				}
+				transfer.coord.recordStaleManifest()
+			}
+		} else if cached := loadCachedManifest(manifestDir, req.ArtifactName, path); cached != nil {
+			if manifestMatchesFile(cached, path) {
+				checksum = cached.SHA256
+			} else {
 				_ = os.Remove(cachedManifestPath(manifestDir, req.ArtifactName))
 			}
 		}
 	}
 	if checksum == "" {
 		var csErr error
-		checksum, csErr = computeFileSHA256(path)
+		if transfer != nil && transfer.coord != nil {
+			checksum, csErr = transfer.coord.cachedFileSHA256(path, info.ModTime())
+		} else {
+			checksum, csErr = computeFileSHA256(path)
+		}
 		if csErr != nil {
 			_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "erro ao calcular checksum"})
 			return
@@ -960,7 +973,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 func handleStreamArtifactReplicate(s network.Stream) {
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
-	_ = json.NewDecoder(bufio.NewReader(s)).Decode(&struct{}{}) // consume request
+	_ = json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&struct{}{}) // consume request
 	_ = json.NewEncoder(s).Encode(libp2pReplicateResponse{
 		Gone:    true,
 		Message: "modo push desabilitado: use transferencia pull sob demanda",
@@ -995,7 +1008,7 @@ func libp2pFetchPeers(ctx context.Context, h host.Host, peerID peer.ID, requeste
 	// O servidor pode responder libp2pErrorResponse (token ausente/inválido,
 	// modo require). Lê tudo e diferencia erro de resposta — sem isso o JSON de
 	// erro decodificava como "peers vazio" e a causa real (permissão) se perdia.
-	raw, err := io.ReadAll(bufio.NewReader(s))
+	raw, err := io.ReadAll(io.LimitReader(s, maxLibp2pCatalogFrameBytes))
 	if err != nil {
 		return libp2pPeersResponse{}, fmt.Errorf("read peers resp: %w", err)
 	}
@@ -1151,7 +1164,7 @@ func libp2pRequestAccess(ctx context.Context, h host.Host, peerID peer.ID, artif
 		return P2PArtifactAccess{}, fmt.Errorf("encode access req: %w", err)
 	}
 	// Lê resposta: pode ser P2PArtifactAccess ou libp2pErrorResponse.
-	raw, err := io.ReadAll(bufio.NewReader(s))
+	raw, err := io.ReadAll(io.LimitReader(s, maxLibp2pControlFrameBytes))
 	if err != nil {
 		return P2PArtifactAccess{}, fmt.Errorf("read access resp: %w", err)
 	}
@@ -1180,7 +1193,7 @@ func libp2pRequestDiscoveryAccess(ctx context.Context, h host.Host, peerID peer.
 	if err := json.NewEncoder(s).Encode(req); err != nil {
 		return libp2pDiscoveryAccess{}, fmt.Errorf("encode access req: %w", err)
 	}
-	raw, err := io.ReadAll(bufio.NewReader(s))
+	raw, err := io.ReadAll(io.LimitReader(s, maxLibp2pControlFrameBytes))
 	if err != nil {
 		return libp2pDiscoveryAccess{}, fmt.Errorf("read access resp: %w", err)
 	}
@@ -1216,7 +1229,7 @@ func libp2pFetchManifest(ctx context.Context, h host.Host, peerID peer.ID, artif
 	if err := json.NewEncoder(s).Encode(req); err != nil {
 		return P2PChunkManifest{}, fmt.Errorf("encode manifest req: %w", err)
 	}
-	raw, err := io.ReadAll(bufio.NewReader(s))
+	raw, err := io.ReadAll(io.LimitReader(s, maxLibp2pCatalogFrameBytes))
 	if err != nil {
 		return P2PChunkManifest{}, fmt.Errorf("read manifest resp: %w", err)
 	}
@@ -1231,6 +1244,24 @@ func libp2pFetchManifest(ctx context.Context, h host.Host, peerID peer.ID, artif
 	return manifest, nil
 }
 
+func readBoundedHeaderLine(br *bufio.Reader, maxBytes int) ([]byte, error) {
+	var line []byte
+	for {
+		frag, err := br.ReadSlice('\n')
+		if len(line)+len(frag) > maxBytes {
+			return nil, fmt.Errorf("header excede limite de %d bytes", maxBytes)
+		}
+		line = append(line, frag...)
+		if err == nil {
+			return line, nil
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		return nil, err
+	}
+}
+
 func decodeLibp2pGetHeaderAndPayload(stream io.Reader) (libp2pGetResponse, io.Reader, error) {
 	// O header é enviado via json.Encoder.Encode, que grava `{...}\n` (uma
 	// única linha JSON seguida de newline). Lemos a linha inteira até o
@@ -1243,7 +1274,7 @@ func decodeLibp2pGetHeaderAndPayload(stream io.Reader) (libp2pGetResponse, io.Re
 	// fazendo um byte legítimo do payload ser removido (checksum divergente).
 	// Ler a linha do header e tratar o restante como payload puro é robusto.
 	br := bufio.NewReader(stream)
-	headerLine, err := br.ReadBytes('\n')
+	headerLine, err := readBoundedHeaderLine(br, maxLibp2pControlFrameBytes)
 	if err != nil {
 		return libp2pGetResponse{}, nil, fmt.Errorf("decode get hdr: %w", err)
 	}

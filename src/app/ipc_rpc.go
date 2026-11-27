@@ -41,6 +41,10 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCP2PDebugStatus()
 	case "p2p:ztc_stats":
 		return a.ipcRPCP2PZtcStats()
+	case "p2p:refresh_catalog":
+		return a.ipcRPCP2PRefreshCatalog()
+	case "p2p:sync_bootstrap":
+		return a.ipcRPCP2PSyncBootstrap()
 	case "status:pending_counts":
 		return a.ipcRPCPendingCounts()
 	case "config:get":
@@ -455,4 +459,17 @@ func (a *App) ipcRPCP2PZtcStats() map[string]any {
 		return map[string]any{"ok": true, "data": P2PAutoProvisioningStats{RecentEvents: []P2POnboardingAuditEvent{}}}
 	}
 	return map[string]any{"ok": true, "data": a.GetAutoProvisioningStats()}
+}
+
+func (a *App) ipcRPCP2PRefreshCatalog() map[string]any {
+	a.RefreshP2PPeerCatalog()
+	return map[string]any{"ok": true}
+}
+
+func (a *App) ipcRPCP2PSyncBootstrap() map[string]any {
+	summary, err := a.SyncP2PBootstrapNow()
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	return map[string]any{"ok": true, "data": summary}
 }

@@ -107,10 +107,12 @@ func (a *App) handleAgentDecommissionCommand(_ context.Context, payload any) (bo
 	}
 
 	// Apaga o cofre TPM antes de resolver/lançar o uninstaller (pedido remoto).
-	// nil-safe e idempotente; erro apenas é logado.
+	// nil-safe e idempotente; erro é logado e reportado na saída do comando.
+	var tpmWarn string
 	if a.DebugSvc != nil {
 		if err := a.DebugSvc.EraseTPMVault("remote-decommission"); err != nil {
 			a.Logs.Append("[decommission] falha ao apagar cofre TPM: " + err.Error())
+			tpmWarn = " (aviso: cofre TPM nao apagado: " + err.Error() + ")"
 		}
 	}
 
@@ -144,7 +146,7 @@ func (a *App) handleAgentDecommissionCommand(_ context.Context, payload any) (bo
 		a.markAgentDecommissionLaunched()
 	})
 
-	return true, 0, "desinstalação iniciada", ""
+	return true, 0, "desinstalação iniciada" + tpmWarn, ""
 }
 
 // runAgentUninstaller lança o uninstaller em modo silencioso e registra o PID.

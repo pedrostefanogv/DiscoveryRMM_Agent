@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1060,6 +1061,30 @@ func extractAgentIdentityRouting(body []byte) (agentID, clientID, siteID string,
 	return "", "", "", fmt.Errorf("resposta sem agentId")
 }
 
+// tpmBootstrapRetryBaseDelay define o backoff inicial para tentativas
+// transitórias de rede/5xx em tryBootstrapFromTPMVault (sobrescritível em testes).
+var tpmBootstrapRetryBaseDelay = 2 * time.Second
+
+func newTPMVaultBootstrapHTTPClient(allowInsecureTLS bool) *http.Client {
+	if allowInsecureTLS && !tlsutil.AllowInsecureTLS() {
+		var base *http.Transport
+		if dt, ok := http.DefaultTransport.(*http.Transport); ok && dt != nil {
+			base = dt.Clone()
+		} else {
+			base = &http.Transport{}
+		}
+		base.TLSClientConfig = &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: true,
+		}
+		return &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: base,
+		}
+	}
+	return tlsutil.NewHTTPClient(10 * time.Second)
+}
+
 // tryBootstrapFromTPMVault tenta recuperar token+URL do cofre TPM quando o
 // config.json não tem credenciais utilizáveis (máquina formatada/reinstalada).
 // A recuperação é token-only: GET /api/v1/agent-auth/me com APENAS o Bearer
@@ -1093,33 +1118,81 @@ func (s *Service) tryBootstrapFromTPMVault(ctx context.Context, inst InstallerCo
 		scheme = "http"
 	}
 	target := scheme + "://" + host + "/api/v1/agent-auth/me"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		s.logf("[tpm-vault] credenciais do TPM inacessiveis: " + err.Error())
-		return false
+	client := newTPMVaultBootstrapHTTPClient(rec.AllowInsecureTLS)
+	defer client.CloseIdleConnections()
+
+	const maxAttempts = 3
+	var (
+		respStatus int
+		body       []byte
+	)
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if reqErr != nil {
+			s.logf("[tpm-vault] credenciais do TPM inacessiveis: " + reqErr.Error())
+			return false
+		}
+		// Token-only: SEM X-Agent-ID (o middleware aceita o fallback pelo token).
+		if hdrErr := netutil.SetAgentAuthHeaders(req, token); hdrErr != nil {
+			s.logf("[tpm-vault] credenciais do TPM inacessiveis: " + hdrErr.Error())
+			return false
+		}
+
+		resp, doErr := client.Do(req)
+		if doErr != nil {
+			if attempt < maxAttempts && ctx.Err() == nil {
+				backoff := tpmBootstrapRetryBaseDelay * (1 << uint(attempt-1))
+				s.logf(fmt.Sprintf("[tpm-vault] tentativa %d/%d falhou (%v) — retry em %s", attempt, maxAttempts, doErr, backoff))
+				select {
+				case <-ctx.Done():
+					return false
+				case <-time.After(backoff):
+					continue
+				}
+			}
+			s.logf("[tpm-vault] credenciais do TPM inacessiveis: " + doErr.Error())
+			return false
+		}
+
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if readErr != nil {
+			if attempt < maxAttempts && ctx.Err() == nil {
+				backoff := tpmBootstrapRetryBaseDelay * (1 << uint(attempt-1))
+				s.logf(fmt.Sprintf("[tpm-vault] leitura da resposta %d/%d falhou (%v) — retry em %s", attempt, maxAttempts, readErr, backoff))
+				select {
+				case <-ctx.Done():
+					return false
+				case <-time.After(backoff):
+					continue
+				}
+			}
+			s.logf("[tpm-vault] credenciais do TPM inacessiveis: " + readErr.Error())
+			return false
+		}
+
+		respStatus = resp.StatusCode
+		body = respBody
+
+		if respStatus == http.StatusUnauthorized || respStatus == http.StatusForbidden {
+			s.logf(fmt.Sprintf("[tpm-vault] credenciais do TPM rejeitadas: HTTP %d", respStatus))
+			return false
+		}
+		if respStatus >= 500 && attempt < maxAttempts && ctx.Err() == nil {
+			backoff := tpmBootstrapRetryBaseDelay * (1 << uint(attempt-1))
+			s.logf(fmt.Sprintf("[tpm-vault] servidor respondeu HTTP %d (tentativa %d/%d) — retry em %s", respStatus, attempt, maxAttempts, backoff))
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(backoff):
+				continue
+			}
+		}
+		break
 	}
-	// Token-only: SEM X-Agent-ID (o middleware aceita o fallback pelo token).
-	if err := netutil.SetAgentAuthHeaders(req, token); err != nil {
-		s.logf("[tpm-vault] credenciais do TPM inacessiveis: " + err.Error())
-		return false
-	}
-	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
-	if err != nil {
-		s.logf("[tpm-vault] credenciais do TPM inacessiveis: " + err.Error())
-		return false
-	}
-	defer resp.Body.Close()
-	body, readErr := io.ReadAll(resp.Body)
-	if readErr != nil {
-		s.logf("[tpm-vault] credenciais do TPM inacessiveis: " + readErr.Error())
-		return false
-	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		s.logf(fmt.Sprintf("[tpm-vault] credenciais do TPM rejeitadas: HTTP %d", resp.StatusCode))
-		return false
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		s.logf(fmt.Sprintf("[tpm-vault] credenciais do TPM inacessiveis: HTTP %d: %s", resp.StatusCode, netutil.SanitizeHTTPErrorBody(resp.StatusCode, string(body))))
+
+	if respStatus < 200 || respStatus >= 300 {
+		s.logf(fmt.Sprintf("[tpm-vault] credenciais do TPM inacessiveis: HTTP %d: %s", respStatus, netutil.SanitizeHTTPErrorBody(respStatus, string(body))))
 		return false
 	}
 	agentID, clientID, siteID, err := extractAgentIdentityRouting(body)

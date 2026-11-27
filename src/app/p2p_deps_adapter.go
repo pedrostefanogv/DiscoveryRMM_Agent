@@ -25,9 +25,10 @@ func (a *App) Log(line string) {
 	a.Logs.Append(line)
 }
 
-// GetHeartbeatMetrics expõe getHeartbeatMetrics via interface.
+// GetHeartbeatMetrics expõe o último snapshot recente de métricas (ou coleta
+// sob demanda se expirado) para não perturbar a janela deslizante do heartbeat.
 func (a *App) GetHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
-	return a.getHeartbeatMetrics()
+	return a.getCachedHeartbeatMetrics(30 * time.Second)
 }
 
 // Context expõe ctx via interface.

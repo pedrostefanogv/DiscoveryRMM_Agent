@@ -1,9 +1,12 @@
 package p2p
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"sort"
@@ -152,6 +155,22 @@ func replaceWildcardMultiaddrIP(addr, replacement string) string {
 	return addr
 }
 
+func isIgnoredVirtualInterfaceName(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	if lower == "" {
+		return false
+	}
+	for _, token := range []string{
+		"vethernet", "wsl", "docker", "hyper-v",
+		"vmware", "virtualbox", "vboxnet", "npcap",
+	} {
+		if strings.Contains(lower, token) {
+			return true
+		}
+	}
+	return false
+}
+
 func localRoutableIPv4Addrs() []string {
 	interfaces, err := net.Interfaces()
 	if err != nil {
@@ -161,6 +180,9 @@ func localRoutableIPv4Addrs() []string {
 	out := make([]string, 0, len(interfaces))
 	for _, iface := range interfaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if isIgnoredVirtualInterfaceName(iface.Name) {
 			continue
 		}
 		addrs, err := iface.Addrs()
@@ -266,7 +288,14 @@ func (c *Coordinator) RunLANDiscoveryProbe(ctx context.Context, source string) (
 		return 0, fmt.Errorf("nenhuma porta elegivel para probe LAN")
 	}
 
-	client := &http.Client{Timeout: p2pLANProbeRequestTimeout}
+	tr := &http.Transport{
+		DisableKeepAlives: true,
+	}
+	defer tr.CloseIdleConnections()
+	client := &http.Client{
+		Timeout:   p2pLANProbeRequestTimeout,
+		Transport: tr,
+	}
 	selfAgentID := strings.TrimSpace(c.deps.GetDebugConfig().AgentID)
 	targets := make(chan p2pLANProbeTarget, len(hosts))
 	workerCount := p2pLANProbeWorkers
@@ -348,9 +377,24 @@ func (c *Coordinator) probeLANPeer(ctx context.Context, client *http.Client, h h
 		return false, false
 	}
 
+	var localClientID string
+	var selfPort int
+	if c != nil && c.deps != nil {
+		localClientID = normalizeClientID(strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID))
+	}
+	if c != nil && c.transferServer != nil {
+		selfPort, _ = parsePortFromURL(c.transferServer.BaseURL())
+	}
+
 	connectedVia := "lan-probe"
-	if err := connectLANProbePeer(ctx, h, registry, health); err == nil {
+	if err := connectLANProbePeer(ctx, h, registry, health, selfAgentID, localClientID, selfPort); err == nil {
 		connectedVia = p2pDiscoveryLibP2P
+	} else if errors.Is(err, errLANProbeClientIDMismatch) || errors.Is(err, errLANProbeHandshakeFailed) {
+		if c != nil && c.deps != nil {
+			c.deps.Log(fmt.Sprintf("[p2p][lan-probe] peer rejeitado no handshake: agentId=%s addr=%s err=%v",
+				health.AgentID, strings.TrimSpace(target.Host), err))
+		}
+		return false, false
 	}
 
 	peerPort := target.Port
@@ -382,7 +426,44 @@ func (c *Coordinator) probeLANPeer(ctx context.Context, client *http.Client, h h
 	return true, inserted
 }
 
-func connectLANProbePeer(ctx context.Context, h host.Host, registry *libp2pPeerRegistry, health p2pHealthResponse) error {
+var (
+	errLANProbeClientIDMismatch = errors.New("clientId divergente")
+	errLANProbeHandshakeFailed  = errors.New("handshake falhou")
+)
+
+func verifyLANProbePeerClientID(ctx context.Context, h host.Host, peerID peer.ID, selfAgentID, localClientID string, selfPort int) error {
+	if localClientID == "" || h == nil {
+		return nil
+	}
+	hsCtx, cancel := context.WithTimeout(ctx, p2pLibP2PHandshakeTimeout)
+	defer cancel()
+	s, err := h.NewStream(hsCtx, peerID, p2pLibP2PProtocolID)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	_ = s.SetDeadline(time.Now().Add(p2pLibP2PHandshakeTimeout))
+
+	mine := p2pLibP2PPeerInfo{
+		AgentID:  selfAgentID,
+		ClientID: localClientID,
+		HTTPPort: selfPort,
+	}
+	if err := json.NewEncoder(s).Encode(mine); err != nil {
+		return err
+	}
+	var remote p2pLibP2PPeerInfo
+	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&remote); err != nil {
+		return err
+	}
+	remoteClientID := normalizeClientID(remote.ClientID)
+	if remoteClientID != "" && !strings.EqualFold(remoteClientID, localClientID) {
+		return fmt.Errorf("%w: esperado=%s recebido=%s", errLANProbeClientIDMismatch, localClientID, remoteClientID)
+	}
+	return nil
+}
+
+func connectLANProbePeer(ctx context.Context, h host.Host, registry *libp2pPeerRegistry, health p2pHealthResponse, selfAgentID, localClientID string, selfPort int) error {
 	if h == nil || registry == nil {
 		return fmt.Errorf("libp2p indisponivel")
 	}
@@ -398,6 +479,13 @@ func connectLANProbePeer(ctx context.Context, h host.Host, registry *libp2pPeerR
 		if err != nil {
 			lastErr = err
 			continue
+		}
+		if hsErr := verifyLANProbePeerClientID(ctx, h, info.ID, selfAgentID, localClientID, selfPort); hsErr != nil {
+			_ = h.Network().ClosePeer(info.ID)
+			if errors.Is(hsErr, errLANProbeClientIDMismatch) {
+				return hsErr
+			}
+			return fmt.Errorf("%w: %v", errLANProbeHandshakeFailed, hsErr)
 		}
 		if ok, existing, conflict := registry.RegisterStrict(strings.TrimSpace(health.AgentID), info.ID); conflict {
 			_ = h.Network().ClosePeer(info.ID)

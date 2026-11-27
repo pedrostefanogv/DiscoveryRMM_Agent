@@ -3,6 +3,8 @@
 package inventory
 
 import (
+	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -54,10 +56,19 @@ func collectUptimeSeconds() int64 {
 
 // ─── Disk Space ──────────────────────────────────────────────────────
 
-// collectDiskSpaceNative returns disk C: total GB, used GB, and usage
+func systemDriveRootPath() string {
+	drive := strings.TrimSpace(os.Getenv("SystemDrive"))
+	drive = strings.TrimRight(drive, "\\/")
+	if len(drive) == 2 && drive[1] == ':' {
+		return drive + `\`
+	}
+	return `C:\`
+}
+
+// collectDiskSpaceNative returns system drive total GB, used GB, and usage
 // percent via GetDiskFreeSpaceExW.
 func collectDiskSpaceNative() (float64, float64, float64, bool) {
-	path, err := syscall.UTF16PtrFromString("C:\\")
+	path, err := syscall.UTF16PtrFromString(systemDriveRootPath())
 	if err != nil {
 		return -1, -1, -1, false
 	}
@@ -102,7 +113,7 @@ func collectProcessCountNative() int {
 	r, _, _ := procProcess32FirstW.Call(handle, uintptr(unsafe.Pointer(&pe)))
 	for r != 0 {
 		count++
-		pe = processEntry32W{dwSize: uint32(unsafe.Sizeof(pe))}
+		pe.dwSize = uint32(unsafe.Sizeof(pe))
 		r, _, _ = procProcess32NextW.Call(handle, uintptr(unsafe.Pointer(&pe)))
 	}
 	return count
@@ -117,6 +128,13 @@ var (
 	lastUserTime   uint64
 	cpuInitialized bool
 )
+
+func isWindowsCPUBaselineSeeded() bool {
+	cpuSlidingMu.Lock()
+	seeded := cpuInitialized
+	cpuSlidingMu.Unlock()
+	return seeded
+}
 
 // collectWindowsCPUPercentNative returns CPU usage percent using a
 // sliding-window delta of GetSystemTimes calls. The first invocation

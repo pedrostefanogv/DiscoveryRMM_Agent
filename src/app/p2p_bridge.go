@@ -82,6 +82,10 @@ func (a *App) GetP2PPeers() []P2PPeerView {
 }
 
 func (a *App) RefreshP2PPeerCatalog() {
+	if a.ipcClient != nil {
+		_, _ = a.ipcRequestTimeout("p2p:refresh_catalog", nil, 30*time.Second)
+		return
+	}
 	if a.P2PCoord == nil {
 		return
 	}
@@ -89,6 +93,19 @@ func (a *App) RefreshP2PPeerCatalog() {
 }
 
 func (a *App) SyncP2PBootstrapNow() (string, error) {
+	if a.ipcClient != nil {
+		resp, ok := a.ipcRequestTimeout("p2p:sync_bootstrap", nil, p2pCloudBootstrapTimeout+10*time.Second)
+		if !ok {
+			return "", fmt.Errorf("falha ao sincronizar bootstrap P2P via serviço")
+		}
+		if errStr, _ := resp["error"].(string); strings.TrimSpace(errStr) != "" {
+			return "", fmt.Errorf("%s", errStr)
+		}
+		if dataStr, ok := resp["data"].(string); ok {
+			return dataStr, nil
+		}
+		return fmt.Sprint(resp["data"]), nil
+	}
 	if a.P2PCoord == nil {
 		return "", fmt.Errorf("coordinator P2P indisponível")
 	}

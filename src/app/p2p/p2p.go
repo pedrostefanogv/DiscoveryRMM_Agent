@@ -528,6 +528,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 	}()
 
 	lanProbeSem := make(chan struct{}, 2)
+	var lastPeriodicLANProbe time.Time
 
 	for {
 		select {
@@ -568,6 +569,12 @@ func (c *Coordinator) Run(ctx context.Context) {
 			// O IP pode ter mudado (DHCP/VPN/wifi): reconcilia o health de LAN
 			// antes do sweep para não anunciar num endereço obsoleto.
 			c.refreshLANHealthServer()
+			// Em máquinas com baixa CPU/rede, evita varrer /24 a cada 5 min
+			// quando já existem peers libp2p conectados (mantém varredura a cada 30 min).
+			if c.CountConnectedLibp2pPeers() > 0 && !lastPeriodicLANProbe.IsZero() && time.Since(lastPeriodicLANProbe) < 30*time.Minute {
+				continue
+			}
+			lastPeriodicLANProbe = time.Now()
 			select {
 			case lanProbeSem <- struct{}{}:
 				go func() {

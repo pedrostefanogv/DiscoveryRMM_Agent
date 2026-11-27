@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -22,7 +23,7 @@ func handleStreamFetchCandidacy(s network.Stream, coord *Coordinator) {
 	_ = s.SetDeadline(time.Now().Add(libp2pCandidacyTimeout))
 
 	var req libp2pCandidacyRequest
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
+	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&req); err != nil {
 		_ = json.NewEncoder(s).Encode(libp2pCandidacyResponse{Accepted: false, Message: "payload inválido"})
 		return
 	}
@@ -49,7 +50,7 @@ func handleStreamFetchHeartbeat(s network.Stream, coord *Coordinator) {
 	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
 
 	var hb ArtifactFetchHeartbeat
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&hb); err != nil {
+	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&hb); err != nil {
 		return
 	}
 
@@ -59,18 +60,19 @@ func handleStreamFetchHeartbeat(s network.Stream, coord *Coordinator) {
 		return
 	}
 
-	// Se o heartbeat é de outro peer, renovar o lease remoto no fetchStates
+	// Se o heartbeat é de outro peer, renovar o lease remoto no fetchStates sob lock (A7).
 	if coord != nil && coord.deps != nil {
 		selfAgentID := strings.TrimSpace(coord.deps.GetDebugConfig().AgentID)
 		if !strings.EqualFold(hb.OwnerPeerID, selfAgentID) {
 			clientID := strings.TrimSpace(coord.deps.GetAgentConfiguration().ClientID)
-			state := coord.fetchStates.getOrCreate(hb.ArtifactID, clientID)
-			state.OwnerPeerID = hb.OwnerPeerID
-			state.Status = hb.Status
-			state.LeaseUntil = hb.LeaseUntil
-			if hb.ProgressPct > state.ProgressPct {
-				state.ProgressPct = hb.ProgressPct
-			}
+			coord.fetchStates.mutate(hb.ArtifactID, clientID, func(state *ArtifactFetchState) {
+				state.OwnerPeerID = hb.OwnerPeerID
+				state.Status = hb.Status
+				state.LeaseUntil = hb.LeaseUntil
+				if hb.ProgressPct > state.ProgressPct {
+					state.ProgressPct = hb.ProgressPct
+				}
+			})
 		}
 	}
 }
@@ -92,7 +94,7 @@ func libp2pBroadcastCandidacy(ctx context.Context, h host.Host, peerID peer.ID, 
 	}
 
 	var resp libp2pCandidacyResponse
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&resp); err != nil {
+	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&resp); err != nil {
 		return false, fmt.Errorf("decode candidacy resp: %w", err)
 	}
 

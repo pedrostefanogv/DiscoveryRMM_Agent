@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -164,6 +165,8 @@ func (p *p2pLibP2PProvider) Start(
 			libp2p.Security(libp2ptls.ID, libp2ptls.New),
 			libp2p.ConnectionManager(cm),
 			libp2p.ConnectionGater(gater),
+			libp2p.DisableMetrics(),
+			libp2p.DisableRelay(),
 		}
 		if identity != nil {
 			opts = append(opts, libp2p.Identity(identity))
@@ -406,7 +409,7 @@ func (n *libp2pMDNSNotifee) exchangeWithPeer(pi peer.AddrInfo) {
 		return
 	}
 	var remote p2pLibP2PPeerInfo
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&remote); err != nil {
+	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&remote); err != nil {
 		return
 	}
 
@@ -496,7 +499,7 @@ func handleLibP2PHandshakeStream(
 	_ = s.SetDeadline(time.Now().Add(p2pLibP2PHandshakeTimeout))
 
 	var remote p2pLibP2PPeerInfo
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&remote); err != nil {
+	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&remote); err != nil {
 		return
 	}
 	mine := p2pLibP2PPeerInfo{AgentID: self.AgentID, Host: self.Host, ClientID: clientID, HTTPPort: self.Port}

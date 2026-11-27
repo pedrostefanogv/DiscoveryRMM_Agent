@@ -19,6 +19,11 @@ const (
 	p2pIdentityFileName = "libp2p-identity.key"
 )
 
+// hardenIdentityFileACL permite sobrescrita em testes sem elevação (no Windows,
+// HardenSecretFileACL restringe o arquivo a SYSTEM/Administrators, bloqueando o
+// usuário comum que roda `go test`).
+var hardenIdentityFileACL = platform.HardenSecretFileACL
+
 // loadOrCreateLibp2PIdentity carrega (ou cria e persiste) a chave Ed25519 da
 // identidade libp2p local.
 //
@@ -40,8 +45,8 @@ func loadOrCreateLibp2PIdentity(dataDir string) (crypto.PrivKey, error) {
 	keyPath := filepath.Join(dir, p2pIdentityFileName)
 
 	if raw, readErr := os.ReadFile(keyPath); readErr == nil && len(raw) > 0 {
-		if priv, unmarshalErr := crypto.UnmarshalEd25519PrivateKey(raw); unmarshalErr == nil {
-			if aclErr := platform.HardenSecretFileACL(keyPath); aclErr != nil {
+		if priv, unmarshalErr := crypto.UnmarshalPrivateKey(raw); unmarshalErr == nil {
+			if aclErr := hardenIdentityFileACL(keyPath); aclErr != nil {
 				log.Printf("[p2p][identity] aviso: nao foi possivel restringir ACL de %s: %v", keyPath, aclErr)
 			}
 			return priv, nil
@@ -62,7 +67,7 @@ func loadOrCreateLibp2PIdentity(dataDir string) (crypto.PrivKey, error) {
 	}
 	// É uma chave PRIVADA: restringe a DACL exclusivamente para SYSTEM:F e
 	// Administrators:F (sem Users/Everyone).
-	if aclErr := platform.HardenSecretFileACL(keyPath); aclErr != nil {
+	if aclErr := hardenIdentityFileACL(keyPath); aclErr != nil {
 		log.Printf("[p2p][identity] aviso: nao foi possivel restringir ACL de %s: %v", keyPath, aclErr)
 	}
 	return priv, nil

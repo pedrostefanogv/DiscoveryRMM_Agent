@@ -4,6 +4,7 @@ package inventory
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"syscall"
 	"time"
@@ -56,15 +57,18 @@ type pdhFmtCounterValue struct {
 
 var (
 	diskIOPdhMu      sync.Mutex
-	diskIOPdhQuery   uintptr // HQUERY
-	diskIOCtrRead    uintptr // HCOUNTER
-	diskIOCtrWrite   uintptr // HCOUNTER
-	diskIOCtrBusy    uintptr // HCOUNTER
-	diskIOCtrLatency uintptr // HCOUNTER
-	diskIOPdhReady   bool    // query aberta e counters adicionados
-	diskIOPdhSeeded  bool    // primeira amostra coletada
-	diskIOPdhInitErr error   // erro de inicialização (evita retry)
+	diskIOPdhQuery   uintptr   // HQUERY
+	diskIOCtrRead    uintptr   // HCOUNTER
+	diskIOCtrWrite   uintptr   // HCOUNTER
+	diskIOCtrBusy    uintptr   // HCOUNTER
+	diskIOCtrLatency uintptr   // HCOUNTER
+	diskIOPdhReady   bool      // query aberta e counters adicionados
+	diskIOPdhSeeded  bool      // primeira amostra coletada
+	diskIOPdhInitErr error     // erro de inicialização
+	diskIOPdhRetryAt time.Time // próxima tentativa após falha de init
 )
+
+const diskIOPdhInitRetryDelay = 5 * time.Minute
 
 // diskIOCounters contém os paths dos contadores PDH para disco.
 var diskIOCounterPaths = []string{
@@ -83,15 +87,17 @@ func ensureDiskIOPdhInit() bool {
 	if diskIOPdhReady {
 		return true
 	}
-	if diskIOPdhInitErr != nil {
+	if diskIOPdhInitErr != nil && time.Now().Before(diskIOPdhRetryAt) {
 		return false
 	}
+	diskIOPdhInitErr = nil
 
 	// PdhOpenQueryW(NULL, 0, &hQuery)
 	var hQuery uintptr
 	ret, _, _ := procPdhOpenQueryW.Call(0, 0, uintptr(unsafe.Pointer(&hQuery)))
 	if ret != 0 {
 		diskIOPdhInitErr = fmt.Errorf("pdh: PdhOpenQueryW failed: 0x%X", ret)
+		diskIOPdhRetryAt = time.Now().Add(diskIOPdhInitRetryDelay)
 		return false
 	}
 
@@ -102,6 +108,7 @@ func ensureDiskIOPdhInit() bool {
 			// cleanup
 			procPdhCloseQuery.Call(hQuery)
 			diskIOPdhInitErr = fmt.Errorf("pdh: UTF16 encoding failed for %q: %w", path, err)
+			diskIOPdhRetryAt = time.Now().Add(diskIOPdhInitRetryDelay)
 			return false
 		}
 		var hCtr uintptr
@@ -113,7 +120,8 @@ func ensureDiskIOPdhInit() bool {
 		)
 		if ret != 0 {
 			procPdhCloseQuery.Call(hQuery)
-			diskIOPdhInitErr = fmt.Errorf("pdh: PdhAddEnglishCounterW failed for %q: 0x%X", path, ret)
+			diskIOPdhInitErr = fmt.Errorf("pdh: PdhAddEnglishCounterW failed for %q: 0x%X", path, err)
+			diskIOPdhRetryAt = time.Now().Add(diskIOPdhInitRetryDelay)
 			return false
 		}
 		*counters[i] = hCtr
@@ -195,15 +203,20 @@ func getPdhCounterDouble(hCounter uintptr) float64 {
 		return -1
 	}
 
-	result := value.DoubleValue
-	// Valores negativos ou NaN são inválidos
+	return sanitizePdhCounterValue(value.DoubleValue)
+}
+
+func sanitizePdhCounterValue(result float64) float64 {
+	if math.IsNaN(result) || math.IsInf(result, 0) {
+		return -1
+	}
 	if result < 0 {
 		return 0
 	}
 	// PDH pode retornar valores > 100 para % (soma de read+write pode exceder 100
 	// em discos com múltiplos spindles/controladoras). Limitamos a 100.
 	if result > 100 {
-		result = 100
+		return 100
 	}
 	return result
 }

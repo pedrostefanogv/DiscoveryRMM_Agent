@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"errors"
+	"math"
 	"runtime"
 	"testing"
 	"time"
@@ -391,5 +392,75 @@ func TestCollectHeartbeatMetrics_IncludesLoggedUser(t *testing.T) {
 	}
 	if !metrics.LoggedUserSince.Equal(since) {
 		t.Fatalf("LoggedUserSince = %v, want %v", metrics.LoggedUserSince, since)
+	}
+}
+
+func TestSanitizePdhCounterValue(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PDH Windows-only")
+	}
+	if got := sanitizePdhCounterValue(math.NaN()); got != -1 {
+		t.Fatalf("NaN = %v, want -1", got)
+	}
+	if got := sanitizePdhCounterValue(math.Inf(1)); got != -1 {
+		t.Fatalf("+Inf = %v, want -1", got)
+	}
+	if got := sanitizePdhCounterValue(math.Inf(-1)); got != -1 {
+		t.Fatalf("-Inf = %v, want -1", got)
+	}
+	if got := sanitizePdhCounterValue(-5); got != 0 {
+		t.Fatalf("-5 = %v, want 0", got)
+	}
+	if got := sanitizePdhCounterValue(142.5); got != 100 {
+		t.Fatalf("142.5 = %v, want 100", got)
+	}
+	if got := sanitizePdhCounterValue(42.5); got != 42.5 {
+		t.Fatalf("42.5 = %v, want 42.5", got)
+	}
+}
+
+func TestSystemDriveRootPath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only")
+	}
+	t.Setenv("SystemDrive", "D:")
+	if got := systemDriveRootPath(); got != `D:\` {
+		t.Fatalf("got %q, want D:\\", got)
+	}
+	t.Setenv("SystemDrive", "")
+	if got := systemDriveRootPath(); got != `C:\` {
+		t.Fatalf("got %q, want C:\\", got)
+	}
+}
+
+func TestCollectHeartbeatMetrics_FirstBootSeedSkipsPowerShellFallback(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only")
+	}
+	origNative := collectWindowsCPUPercentNativeFunc
+	origSeeded := isWindowsCPUBaselineSeededFunc
+	origFallback := collectWindowsCPUPercentFunc
+	t.Cleanup(func() {
+		collectWindowsCPUPercentNativeFunc = origNative
+		isWindowsCPUBaselineSeededFunc = origSeeded
+		collectWindowsCPUPercentFunc = origFallback
+	})
+
+	seeded := false
+	isWindowsCPUBaselineSeededFunc = func() bool { return seeded }
+	collectWindowsCPUPercentNativeFunc = func() (float64, bool) {
+		seeded = true
+		return -1, false
+	}
+	fallbackCalled := false
+	collectWindowsCPUPercentFunc = func(context.Context) (float64, bool) {
+		fallbackCalled = true
+		return 55.0, true
+	}
+
+	m := &agentconn.AgentHeartbeatMetrics{CpuPercent: -1}
+	collectHeartbeatMetricsWindows(context.Background(), m)
+	if fallbackCalled {
+		t.Fatal("PowerShell/WMI fallback não deveria ser chamado quando o 1º tick apenas semeou a baseline")
 	}
 }

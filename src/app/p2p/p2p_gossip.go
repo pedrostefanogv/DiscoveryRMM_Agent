@@ -93,6 +93,9 @@ func (c *Coordinator) RefreshPeerArtifactIndex(ctx context.Context, source strin
 	if source == "" {
 		source = "refresh"
 	}
+	if len(peers) == 0 && strings.EqualFold(source, "gossip") {
+		return
+	}
 
 	c.mu.Lock()
 	c.metrics.CatalogRefreshRuns++

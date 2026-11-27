@@ -1232,13 +1232,23 @@ func deriveNativeNATSServerFromHost(rawHost string) string {
 // sendHeartbeatNATS sends a single heartbeat on the NATS connection.
 func (r *Runtime) sendHeartbeatNATS(nc *nats.Conn, subject string, cfg Config, ipAddr string) {
 	hb := r.collectHeartbeat(cfg, ipAddr)
-	hbLog := heartbeatLogPayload(hb)
-	hbFields := heartbeatLogFields(hb)
-	if err := publishJSON(nc, subject, hb); err != nil {
-		r.logf("[heartbeat][nats] falha ao publicar heartbeat (subject=%s): %v payload=%s fields=%s", subject, err, hbLog, hbFields)
+	data, err := json.Marshal(hb)
+	if err != nil {
+		r.logf("[heartbeat][nats] falha ao serializar heartbeat (subject=%s): %v", subject, err)
 		return
 	}
-	r.logf("[heartbeat][nats] heartbeat publicado com sucesso (subject=%s) payload=%s fields=%s", subject, hbLog, hbFields)
+	if err := nc.Publish(subject, data); err != nil {
+		r.logf("[heartbeat][nats] falha ao publicar heartbeat (subject=%s): %v payload=%s", subject, err, string(data))
+		return
+	}
+	r.logf("[heartbeat][nats] heartbeat publicado (subject=%s agentId=%s cpu=%s mem=%s disk=%s p2pPeers=%s)",
+		subject,
+		hb.AgentId,
+		heartbeatOptionalFloatValue(hb.CpuPercent),
+		heartbeatOptionalFloatValue(hb.MemoryPercent),
+		heartbeatOptionalFloatValue(hb.DiskPercent),
+		heartbeatOptionalIntValue(hb.P2pPeers),
+	)
 }
 
 // runNATSSession está definida em runtime_nats.go

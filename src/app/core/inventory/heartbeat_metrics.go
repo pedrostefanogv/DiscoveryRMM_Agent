@@ -123,10 +123,12 @@ func CollectHeartbeatMetrics(ctx context.Context) *agentconn.AgentHeartbeatMetri
 // do Windows (kernel32.dll), sem subprocessos. Zero osquery, zero PowerShell.
 func collectHeartbeatMetricsWindows(ctx context.Context, metrics *agentconn.AgentHeartbeatMetrics) {
 	// CPU: sliding-window GetSystemTimes (instantâneo, sem subprocesso)
+	wasSeeded := isWindowsCPUBaselineSeededFunc()
 	if cpuPercent, ok := collectWindowsCPUPercentNativeFunc(); ok {
 		metrics.CpuPercent = cpuPercent
-	} else {
-		// Fallback: PowerShell/WMI (apenas quando GetSystemTimes falha — raro)
+	} else if wasSeeded || !isWindowsCPUBaselineSeededFunc() {
+		// Fallback: PowerShell/WMI (apenas quando GetSystemTimes falha — não
+		// dispara no 1º tick de boot quando a baseline acabou de ser semeada).
 		if cpuPercent, ok := collectWindowsCPUPercentFunc(ctx); ok {
 			metrics.CpuPercent = cpuPercent
 		}
@@ -373,6 +375,7 @@ type heartbeatLoggedUser struct {
 // Native Windows collectors — mockable for testing.
 var (
 	collectWindowsCPUPercentNativeFunc = collectWindowsCPUPercentNative
+	isWindowsCPUBaselineSeededFunc     = isWindowsCPUBaselineSeeded
 	collectWindowsMemoryNativeFunc     = collectWindowsMemoryNative
 	collectDiskSpaceNativeFunc         = collectDiskSpaceNative
 	collectUptimeSecondsFunc           = collectUptimeSeconds

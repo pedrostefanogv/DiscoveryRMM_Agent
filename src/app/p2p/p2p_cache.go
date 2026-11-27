@@ -216,9 +216,10 @@ func (c *Coordinator) updateManifestCacheAfterDownload(artifactName, path string
 // manifestHealthEntry cacheia o resultado do health-check por mtime+tamanho.
 // Chave do mapa: path do artifact.
 type manifestHealthEntry struct {
-	mtime time.Time
-	size  int64
-	ok    bool
+	mtime  time.Time
+	size   int64
+	ok     bool
+	sha256 string
 }
 
 // manifestHealthOK valida o manifest contra o arquivo, com cache por (path,
@@ -235,12 +236,107 @@ func (c *Coordinator) manifestHealthOK(manifest *P2PChunkManifest, path string, 
 	c.manifestHealthMu.Unlock()
 
 	ok := manifestMatchesFile(manifest, path)
+	sha := ""
+	if ok && manifest != nil {
+		sha = manifest.SHA256
+	}
 
 	c.manifestHealthMu.Lock()
 	if c.manifestHealth == nil {
 		c.manifestHealth = make(map[string]manifestHealthEntry)
 	}
-	c.manifestHealth[key] = manifestHealthEntry{mtime: mtime, size: size, ok: ok}
+	c.manifestHealth[key] = manifestHealthEntry{mtime: mtime, size: size, ok: ok, sha256: sha}
 	c.manifestHealthMu.Unlock()
 	return ok
+}
+
+// cachedManifestChecksum devolve o SHA-256 do manifest validado para o arquivo
+// em disco, usando cache em memória indexado por (path, mtime, size) para
+// evitar reabrir o manifest JSON e re-hashear 5 chunks a cada chunk servido.
+// Retorna (sha256, valid, wasStale).
+func (c *Coordinator) cachedManifestChecksum(manifestDir, artifactName, path string, mtime time.Time, size int64) (string, bool, bool) {
+	if c == nil {
+		return "", false, false
+	}
+	c.manifestHealthMu.Lock()
+	if e, ok := c.manifestHealth[path]; ok && e.mtime.Equal(mtime) && e.size == size && e.ok && e.sha256 != "" {
+		sha := e.sha256
+		c.manifestHealthMu.Unlock()
+		return sha, true, false
+	}
+	c.manifestHealthMu.Unlock()
+
+	cached := loadCachedManifest(manifestDir, artifactName, path)
+	if cached == nil {
+		return "", false, false
+	}
+	if !manifestMatchesFile(cached, path) {
+		c.manifestHealthMu.Lock()
+		delete(c.manifestHealth, path)
+		c.manifestHealthMu.Unlock()
+		_ = os.Remove(cachedManifestPath(manifestDir, artifactName))
+		return "", false, true
+	}
+
+	c.manifestHealthMu.Lock()
+	if c.manifestHealth == nil {
+		c.manifestHealth = make(map[string]manifestHealthEntry)
+	}
+	c.manifestHealth[path] = manifestHealthEntry{
+		mtime:  mtime,
+		size:   size,
+		ok:     true,
+		sha256: cached.SHA256,
+	}
+	c.manifestHealthMu.Unlock()
+	return cached.SHA256, cached.SHA256 != "", false
+}
+
+// cacheVerifiedManifest persiste o manifest já validado após o download em
+// streaming e aquece o cache em memória (manifestHealth + sha256Cache),
+// evitando releitura completa do arquivo no pós-download.
+func (c *Coordinator) cacheVerifiedManifest(artifactName, path string, manifest P2PChunkManifest) {
+	if c == nil || c.transferServer == nil {
+		return
+	}
+	manifestDir := c.transferServer.manifestDir()
+	if manifestDir == "" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	manifest.ArtifactName = SanitizeArtifactName(artifactName)
+	manifest.SourceMTime = info.ModTime().UnixNano()
+	if manifest.TotalSize <= 0 {
+		manifest.TotalSize = info.Size()
+	}
+	if err := saveCachedManifest(manifestDir, artifactName, manifest); err != nil {
+		if c.deps != nil {
+			c.deps.Log(fmt.Sprintf("[p2p] aviso: falha ao salvar manifest verificado para %s: %v", artifactName, err))
+		}
+		return
+	}
+
+	c.manifestHealthMu.Lock()
+	if c.manifestHealth == nil {
+		c.manifestHealth = make(map[string]manifestHealthEntry)
+	}
+	c.manifestHealth[path] = manifestHealthEntry{
+		mtime:  info.ModTime(),
+		size:   info.Size(),
+		ok:     true,
+		sha256: manifest.SHA256,
+	}
+	c.manifestHealthMu.Unlock()
+
+	if manifest.SHA256 != "" {
+		c.sha256CacheMu.Lock()
+		if c.sha256Cache == nil {
+			c.sha256Cache = make(map[string]artifactSHA256CacheEntry)
+		}
+		c.sha256Cache[path] = artifactSHA256CacheEntry{sum: manifest.SHA256, mtime: info.ModTime()}
+		c.sha256CacheMu.Unlock()
+	}
 }

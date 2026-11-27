@@ -28,10 +28,10 @@ package tpmvault
 // chamada pendente (sem goroutine presa).
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"regexp"
 	"strings"
 	"sync"
@@ -75,10 +75,12 @@ type platformVault struct {
 	// newPlatformVault seja chamado direto por um teste ou por outra rota.
 	enabled bool
 
-	mu      sync.Mutex
-	probed  bool
-	state   vaultState
-	lastErr string
+	mu            sync.Mutex
+	probed        bool
+	state         vaultState
+	lastErr       string
+	lastRecord    Record
+	hasLastRecord bool
 }
 
 // vaultState é o retrato em memória do último estado conhecido do índice.
@@ -190,6 +192,7 @@ func (v *platformVault) loadLocked() (Record, bool, error) {
 	if err != nil {
 		return Record{}, false, err
 	}
+	defer clear(auth)
 
 	var (
 		rec Record
@@ -214,6 +217,7 @@ func (v *platformVault) loadLocked() (Record, bool, error) {
 		if err != nil {
 			return fmt.Errorf("desselar registro do índice NV 0x%08X: %w", v.index, err)
 		}
+		defer clear(payload)
 		parsed, err := ParseRecord(payload)
 		if err != nil {
 			return fmt.Errorf("%w: registro selado ilegível: %v", ErrForeign, err)
@@ -237,17 +241,22 @@ func (v *platformVault) Save(rec Record) error {
 	if !v.enabled {
 		return ErrUnavailable
 	}
+	if v.hasLastRecord && v.lastRecord == rec && v.state.present && !v.state.foreign {
+		return nil
+	}
 
 	payload, err := rec.Marshal()
 	if err != nil {
 		v.markErr(err)
 		return err
 	}
+	defer clear(payload)
 	auth, err := v.deriveAuth()
 	if err != nil {
 		v.markErr(err)
 		return err
 	}
+	defer clear(auth)
 
 	var unchanged bool
 	err = withTPM("gravar registro no índice NV", func(t transport.TPM) error {
@@ -262,20 +271,32 @@ func (v *platformVault) Save(rec Record) error {
 			v.logfMsg("tpmvault: envelope do índice NV 0x%08X está corrompido; regravando como dono", v.index)
 		}
 
+		// Adquire o handle da EK uma única vez para a sessão (tenta o handle
+		// persistente padrão do Windows 0x81010001 antes de CreatePrimary).
+		ekHandle, ekName, ekTransient, err := acquireEKHandle(t)
+		if err != nil {
+			return err
+		}
+		if ekTransient {
+			defer flushContext(t, ekHandle)
+		}
+
 		// Idempotência barata: se já existe registro selado e o conteúdo
-		// desselado é estruturalmente igual ao novo, não gastamos CreatePrimary
-		// (RSA-2048) nem NVWrite. Se o unseal/parse falhar (corrupção),
-		// seguimos para a regravação.
+		// desselado é estruturalmente igual ao novo, não gastamos Create
+		// nem NVWrite. Se o unseal/parse falhar (corrupção), seguimos para a
+		// regravação usando o mesmo ekHandle.
 		if info.hasEnv {
-			if existing, err := unsealPayload(t, auth, info.env.Private, info.env.Public); err == nil {
-				if parsed, perr := ParseRecord(existing); perr == nil && parsed == rec {
+			if existing, err := unsealPayloadWithEK(t, ekHandle, ekName, auth, info.env.Private, info.env.Public); err == nil {
+				parsed, perr := ParseRecord(existing)
+				clear(existing)
+				if perr == nil && parsed == rec {
 					unchanged = true
 					return nil
 				}
 			}
 		}
 
-		privateBlob, publicBlob, err := sealPayload(t, auth, payload)
+		privateBlob, publicBlob, err := sealPayloadWithEK(t, ekHandle, ekName, auth, payload)
 		if err != nil {
 			return err
 		}
@@ -309,7 +330,17 @@ func (v *platformVault) Save(rec Record) error {
 			return defineAndWrite(t, v.index, auth, envBytes)
 		}
 
-		if err := nvWriteAll(t, v.index, info.name, auth, envBytes); err != nil {
+		// Zera eventuais bytes residuais de gravações anteriores maiores no índice NV.
+		writeBuf := envBytes
+		targetSize := int(info.pub.DataSize)
+		if targetSize > nvDataSize {
+			targetSize = nvDataSize
+		}
+		if targetSize > len(envBytes) {
+			writeBuf = make([]byte, targetSize)
+			copy(writeBuf, envBytes)
+		}
+		if err := nvWriteAll(t, v.index, info.name, auth, writeBuf); err != nil {
 			return fmt.Errorf("NVWrite(0x%08X): %w", v.index, err)
 		}
 		return nil
@@ -327,8 +358,10 @@ func (v *platformVault) Save(rec Record) error {
 		v.state.present = true
 		v.state.host = rec.Host()
 		v.state.tokenPrefix = TokenPrefix(rec.Token())
-		v.state.allowInsecure = rec.Insecure()
+		v.state.allowInsecure = rec.AllowInsecureTLS
 		v.lastErr = ""
+		v.lastRecord = rec
+		v.hasLastRecord = true
 		v.logfMsg("tpmvault: registro idêntico já presente no índice NV 0x%08X; nada a gravar", v.index)
 		return nil
 	}
@@ -361,6 +394,7 @@ func (v *platformVault) Erase() error {
 		v.markErr(err)
 		return err
 	}
+	defer clear(auth)
 
 	err = withTPM("apagar índice NV", func(t transport.TPM) error {
 		info, err := classifyIndex(t, v.index, auth)
@@ -407,7 +441,12 @@ func (v *platformVault) applyLoad(rec Record, ok bool, err error) {
 	if ok {
 		v.state.host = rec.Host()
 		v.state.tokenPrefix = TokenPrefix(rec.Token())
-		v.state.allowInsecure = rec.Insecure()
+		v.state.allowInsecure = rec.AllowInsecureTLS
+		v.lastRecord = rec
+		v.hasLastRecord = true
+	} else {
+		v.lastRecord = Record{}
+		v.hasLastRecord = false
 	}
 	v.lastErr = ""
 }
@@ -420,14 +459,18 @@ func (v *platformVault) markSaved(rec Record) {
 		host:          rec.Host(),
 		tokenPrefix:   TokenPrefix(rec.Token()),
 		wroteAtUTC:    time.Now().UTC().Format(time.RFC3339),
-		allowInsecure: rec.Insecure(),
+		allowInsecure: rec.AllowInsecureTLS,
 	}
+	v.lastRecord = rec
+	v.hasLastRecord = true
 	v.lastErr = ""
 }
 
 // markErased registra o retrato de uma remoção bem-sucedida.
 func (v *platformVault) markErased() {
 	v.state = vaultState{available: true}
+	v.lastRecord = Record{}
+	v.hasLastRecord = false
 	v.lastErr = ""
 }
 
@@ -435,6 +478,8 @@ func (v *platformVault) markErased() {
 func (v *platformVault) markErr(err error) {
 	v.probed = true
 	v.lastErr = sanitizeMessage(err.Error())
+	v.lastRecord = Record{}
+	v.hasLastRecord = false
 	if errors.Is(err, ErrForeign) {
 		v.state = vaultState{available: true, foreign: true}
 		return
@@ -531,7 +576,7 @@ func sanitizeMessage(msg string) string {
 
 // envelopeFlags monta o byte de flags do envelope.
 func envelopeFlags(rec Record) byte {
-	if rec.Insecure() {
+	if rec.AllowInsecureTLS {
 		return envelopeFlagInsecureTLS
 	}
 	return 0
@@ -541,23 +586,30 @@ func envelopeFlags(rec Record) byte {
 
 // withTPM abre o TPM (TBS), executa fn e fecha o handle. Toda a sessão corre em
 // goroutine com timeout de 10s; ao estourar, o handle é fechado para desbloquear
-// a chamada pendente e a goroutine termina (canal com buffer).
+// a chamada pendente e a goroutine termina (canal com buffer). sync.Once evita
+// Close() concorrente entre o timeout e o retorno normal da goroutine.
 func withTPM(op string, fn func(transport.TPM) error) error {
 	done := make(chan error, 1)
-	ready := make(chan io.Closer, 1)
+	ready := make(chan func(), 1)
 	go func() {
 		rwc, err := windowstpm.Open()
 		if err != nil {
 			done <- fmt.Errorf("abrir TPM via TBS: %w", err)
 			return
 		}
-		ready <- rwc
+		var closeOnce sync.Once
+		safeClose := func() {
+			closeOnce.Do(func() {
+				_ = rwc.Close()
+			})
+		}
+		ready <- safeClose
 		err = fn(rwc)
-		_ = rwc.Close()
+		safeClose()
 		done <- err
 	}()
 
-	var closer io.Closer
+	var closer func()
 	timeout := time.NewTimer(tpmOperationTimeout)
 	defer timeout.Stop()
 	for {
@@ -569,7 +621,7 @@ func withTPM(op string, fn func(transport.TPM) error) error {
 			ready = nil // não reagenda este caso
 		case <-timeout.C:
 			if closer != nil {
-				_ = closer.Close()
+				closer()
 			}
 			return fmt.Errorf("timeout de %s na operação de TPM (%s)", tpmOperationTimeout, op)
 		}
@@ -753,22 +805,48 @@ func defineAndWrite(t transport.TPM, index uint32, auth, data []byte) error {
 	return nil
 }
 
-// sealPayload sela payload sob a EK e devolve os blobs TPM2B já serializados.
-func sealPayload(t transport.TPM, auth, payload []byte) (privateBlob, publicBlob []byte, err error) {
-	prim, err := tpm2.CreatePrimary{
+// windowsPersistentEKHandle é o handle persistente padrão da EK RSA no Windows.
+const windowsPersistentEKHandle = tpm2.TPMHandle(0x81010001)
+
+// acquireEKHandle tenta reutilizar a EK persistente padrão do Windows (0x81010001)
+// via ReadPublic; se não existir, cria via CreatePrimary(RHEndorsement).
+func acquireEKHandle(t transport.TPM) (handle tpm2.TPMHandle, name tpm2.TPM2BName, transient bool, err error) {
+	if rsp, rpErr := (tpm2.ReadPublic{ObjectHandle: windowsPersistentEKHandle}).Execute(t); rpErr == nil {
+		if pub, cErr := rsp.OutPublic.Contents(); cErr == nil &&
+			pub.Type == tpm2.TPMAlgRSA &&
+			pub.NameAlg == tpm2.TPMAlgSHA256 &&
+			bytes.Equal(pub.AuthPolicy.Buffer, tpm2.RSAEKTemplate.AuthPolicy.Buffer) {
+			return windowsPersistentEKHandle, rsp.Name, false, nil
+		}
+	}
+	prim, cpErr := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHEndorsement,
 		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
 	}.Execute(t)
-	if err != nil {
-		return nil, nil, fmt.Errorf("CreatePrimary(EK): %w", err)
+	if cpErr != nil {
+		return 0, tpm2.TPM2BName{}, false, fmt.Errorf("CreatePrimary(EK): %w", cpErr)
 	}
-	defer flushContext(t, prim.ObjectHandle)
+	return prim.ObjectHandle, prim.Name, true, nil
+}
 
+// sealPayload sela payload sob a EK e devolve os blobs TPM2B já serializados.
+func sealPayload(t transport.TPM, auth, payload []byte) (privateBlob, publicBlob []byte, err error) {
+	ekHandle, ekName, ekTransient, err := acquireEKHandle(t)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ekTransient {
+		defer flushContext(t, ekHandle)
+	}
+	return sealPayloadWithEK(t, ekHandle, ekName, auth, payload)
+}
+
+func sealPayloadWithEK(t transport.TPM, ekHandle tpm2.TPMHandle, ekName tpm2.TPM2BName, auth, payload []byte) (privateBlob, publicBlob []byte, err error) {
 	// O EK tem userWithAuth=CLEAR e adminWithPolicy=true: Create/Load exigem uma
 	// policy session que satisfaça PolicySecret(RH_ENDORSEMENT).
 	parent := tpm2.AuthHandle{
-		Handle: prim.ObjectHandle,
-		Name:   prim.Name,
+		Handle: ekHandle,
+		Name:   ekName,
 		Auth:   tpm2.Policy(tpm2.TPMAlgSHA256, 16, endorsementPolicy),
 	}
 
@@ -811,6 +889,17 @@ func sealPayload(t transport.TPM, auth, payload []byte) (privateBlob, publicBlob
 
 // unsealPayload carrega o objeto selado sob a EK e o abre com a auth derivada.
 func unsealPayload(t transport.TPM, auth, privateBlob, publicBlob []byte) ([]byte, error) {
+	ekHandle, ekName, ekTransient, err := acquireEKHandle(t)
+	if err != nil {
+		return nil, err
+	}
+	if ekTransient {
+		defer flushContext(t, ekHandle)
+	}
+	return unsealPayloadWithEK(t, ekHandle, ekName, auth, privateBlob, publicBlob)
+}
+
+func unsealPayloadWithEK(t transport.TPM, ekHandle tpm2.TPMHandle, ekName tpm2.TPM2BName, auth, privateBlob, publicBlob []byte) ([]byte, error) {
 	inPrivate, err := tpm2.Unmarshal[tpm2.TPM2BPrivate, *tpm2.TPM2BPrivate](privateBlob)
 	if err != nil {
 		return nil, fmt.Errorf("decodificar TPM2B_PRIVATE: %w", err)
@@ -820,18 +909,9 @@ func unsealPayload(t transport.TPM, auth, privateBlob, publicBlob []byte) ([]byt
 		return nil, fmt.Errorf("decodificar TPM2B_PUBLIC: %w", err)
 	}
 
-	prim, err := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHEndorsement,
-		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
-	}.Execute(t)
-	if err != nil {
-		return nil, fmt.Errorf("CreatePrimary(EK): %w", err)
-	}
-	defer flushContext(t, prim.ObjectHandle)
-
 	parent := tpm2.AuthHandle{
-		Handle: prim.ObjectHandle,
-		Name:   prim.Name,
+		Handle: ekHandle,
+		Name:   ekName,
 		Auth:   tpm2.Policy(tpm2.TPMAlgSHA256, 16, endorsementPolicy),
 	}
 
@@ -855,7 +935,9 @@ func unsealPayload(t transport.TPM, auth, privateBlob, publicBlob []byte) ([]byt
 	if err != nil {
 		return nil, fmt.Errorf("Unseal: %w", err)
 	}
-	return append([]byte(nil), rsp.OutData.Buffer...), nil
+	out := append([]byte(nil), rsp.OutData.Buffer...)
+	clear(rsp.OutData.Buffer)
+	return out, nil
 }
 
 // endorsementPolicy satisfaz a authPolicy do RSAEKTemplate com

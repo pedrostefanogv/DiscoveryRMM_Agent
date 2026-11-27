@@ -5,12 +5,18 @@ package debug
 // pode aparecer em log/status.
 
 import (
+	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"discovery/app/core/tlsutil"
 	"discovery/app/core/tpmvault"
 )
 
@@ -305,3 +311,119 @@ func TestExtractAgentIdentityRouting(t *testing.T) {
 
 func boolPtrTrue() *bool  { v := true; return &v }
 func boolPtrFalse() *bool { v := false; return &v }
+
+func TestTryBootstrapFromTPMVaultAllowInsecureTLS(t *testing.T) {
+	tlsutil.SetConfigAllowInsecureTLS(false)
+	t.Cleanup(func() { tlsutil.SetConfigAllowInsecureTLS(false) })
+	origHarden := hardenInstallerACL
+	hardenInstallerACL = func(string) error { return nil }
+	t.Cleanup(func() { hardenInstallerACL = origHarden })
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agent-auth/me" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"agentId":"8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7","clientId":"c1","siteId":"s1"}`))
+	}))
+	defer srv.Close()
+
+	host := strings.TrimPrefix(srv.URL, "https://")
+	val, err := tpmvault.FormatValue(testTpmToken, host, false)
+	if err != nil {
+		t.Fatalf("FormatValue: %v", err)
+	}
+
+	origDelay := tpmBootstrapRetryBaseDelay
+	tpmBootstrapRetryBaseDelay = time.Millisecond
+	t.Cleanup(func() { tpmBootstrapRetryBaseDelay = origDelay })
+
+	// AllowInsecureTLS=false deve falhar no certificado self-signed.
+	stubFail := &stubTPMVault{
+		loadOK:  true,
+		loadRec: tpmvault.Record{Schema: tpmvault.Schema, APIURL: val, AllowInsecureTLS: false},
+	}
+	svcFail, _ := tpmService(t, stubFail, true)
+	outPathFail := filepath.Join(t.TempDir(), "config.json")
+	if svcFail.tryBootstrapFromTPMVault(context.Background(), InstallerConfig{}, outPathFail) {
+		t.Fatal("esperava falha com AllowInsecureTLS=false em certificado self-signed")
+	}
+
+	// AllowInsecureTLS=true deve recuperar com sucesso mesmo com tlsutil global false.
+	stubOK := &stubTPMVault{
+		loadOK:  true,
+		loadRec: tpmvault.Record{Schema: tpmvault.Schema, APIURL: val, AllowInsecureTLS: true},
+	}
+	svcOK, _ := tpmService(t, stubOK, true)
+	svcOK.logf = func(m string) { t.Log(m) }
+	outPathOK := filepath.Join(t.TempDir(), "config.json")
+	if !svcOK.tryBootstrapFromTPMVault(context.Background(), InstallerConfig{}, outPathOK) {
+		t.Fatal("esperava sucesso com AllowInsecureTLS=true em certificado self-signed")
+	}
+	if got := svcOK.GetConfig().AgentID; got != "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" {
+		t.Fatalf("agentId recuperado inesperado: %q", got)
+	}
+}
+
+func TestTryBootstrapFromTPMVaultRetriesTransientError(t *testing.T) {
+	origDelay := tpmBootstrapRetryBaseDelay
+	tpmBootstrapRetryBaseDelay = time.Millisecond
+	t.Cleanup(func() { tpmBootstrapRetryBaseDelay = origDelay })
+	origHarden := hardenInstallerACL
+	hardenInstallerACL = func(string) error { return nil }
+	t.Cleanup(func() { hardenInstallerACL = origHarden })
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		if n < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"agentId":"8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7","clientId":"c1","siteId":"s1"}`))
+	}))
+	defer srv.Close()
+
+	host := strings.TrimPrefix(srv.URL, "http://")
+	val, err := tpmvault.FormatValue(testTpmToken, host, true)
+	if err != nil {
+		t.Fatalf("FormatValue: %v", err)
+	}
+	stub := &stubTPMVault{
+		loadOK:  true,
+		loadRec: tpmvault.Record{Schema: tpmvault.Schema, APIURL: val},
+	}
+	svc, _ := tpmService(t, stub, true)
+	svc.logf = func(m string) { t.Log(m) }
+	outPath := filepath.Join(t.TempDir(), "config.json")
+	if !svc.tryBootstrapFromTPMVault(context.Background(), InstallerConfig{}, outPath) {
+		t.Fatal("esperava recuperação após retries de 503")
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("esperava 3 tentativas, got %d", calls.Load())
+	}
+
+	// 401 não pode fazer retry.
+	var authCalls atomic.Int32
+	srv401 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authCalls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv401.Close()
+
+	host401 := strings.TrimPrefix(srv401.URL, "http://")
+	val401, _ := tpmvault.FormatValue(testTpmToken, host401, true)
+	stub401 := &stubTPMVault{
+		loadOK:  true,
+		loadRec: tpmvault.Record{Schema: tpmvault.Schema, APIURL: val401},
+	}
+	svc401, _ := tpmService(t, stub401, true)
+	if svc401.tryBootstrapFromTPMVault(context.Background(), InstallerConfig{}, filepath.Join(t.TempDir(), "config.json")) {
+		t.Fatal("401 não deve recuperar")
+	}
+	if authCalls.Load() != 1 {
+		t.Fatalf("401 não deve fazer retry, got %d chamadas", authCalls.Load())
+	}
+}

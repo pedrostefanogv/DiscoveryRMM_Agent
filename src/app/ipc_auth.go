@@ -405,10 +405,12 @@ var ipcKnownMutatingMethods = map[string]struct{}{
 	// "uninstall"/"upgrade", por isso a tabela explícita é obrigatória (sem ela
 	// um método "store:install" seria tratado como LEITURA e recusado no canal
 	// admin com ipc_wrong_channel).
-	"store:install":     {},
-	"store:uninstall":   {},
-	"store:upgrade":     {},
-	"store:upgrade_all": {},
+	"store:install":       {},
+	"store:uninstall":     {},
+	"store:upgrade":       {},
+	"store:upgrade_all":   {},
+	"p2p:refresh_catalog": {},
+	"p2p:sync_bootstrap":  {},
 }
 
 // isIPCMutatingMethod classifica um método RPC como mutante (exige canal

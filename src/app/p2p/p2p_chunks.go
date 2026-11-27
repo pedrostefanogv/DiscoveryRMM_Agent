@@ -133,10 +133,14 @@ func buildChunkManifest(ctx context.Context, path, artifactID string, chunkSize 
 	}
 
 	fullHash := sha256.New()
+	chunkHash := sha256.New()
 	chunks := make([]P2PChunk, 0, totalChunksEstimate)
 	var offset int64
 
-	buf := make([]byte, chunkSize)
+	// Streaming com buffer fixo de 256 KB em vez de alocar chunkSize (8 MB) contíguo,
+	// reduzindo pressão de RAM em máquinas com poucos recursos.
+	const manifestStreamBufSize = 256 * 1024
+	buf := make([]byte, manifestStreamBufSize)
 	for {
 		// Verificar cancelamento a cada chunk.
 		select {
@@ -145,21 +149,22 @@ func buildChunkManifest(ctx context.Context, path, artifactID string, chunkSize 
 		default:
 		}
 
-		n, readErr := io.ReadFull(f, buf)
+		chunkHash.Reset()
+		n, copyErr := io.CopyBuffer(io.MultiWriter(fullHash, chunkHash), io.LimitReader(f, chunkSize), buf)
+		if copyErr != nil {
+			return P2PChunkManifest{}, copyErr
+		}
 		if n == 0 {
 			break
 		}
-		data := buf[:n]
-		fullHash.Write(data)
 
-		chunkHash := sha256.Sum256(data)
 		chunks = append(chunks, P2PChunk{
 			Index:  len(chunks),
 			Offset: offset,
-			Size:   int64(n),
-			SHA256: hex.EncodeToString(chunkHash[:]),
+			Size:   n,
+			SHA256: hex.EncodeToString(chunkHash.Sum(nil)),
 		})
-		offset += int64(n)
+		offset += n
 
 		// Throttling adaptativo: a cada chunkProcessedThreshold chunks,
 		// yield para não travar a UI e reduzir CPU se necessário.
@@ -178,11 +183,8 @@ func buildChunkManifest(ctx context.Context, path, artifactID string, chunkSize 
 			}
 		}
 
-		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
+		if n < chunkSize {
 			break
-		}
-		if readErr != nil {
-			return P2PChunkManifest{}, readErr
 		}
 	}
 
@@ -278,111 +280,133 @@ func downloadChunkedLibp2p(
 		err   error
 	}
 
+	// Protege conexões ativas de transferência contra poda do ConnManager em malhas grandes.
+	if h != nil && h.ConnManager() != nil {
+		cm := h.ConnManager()
+		for _, lp := range peers {
+			cm.Protect(lp.peerID, "p2p-transfer")
+		}
+		defer func() {
+			for _, lp := range peers {
+				cm.Unprotect(lp.peerID, "p2p-transfer")
+			}
+		}()
+	}
+
 	// earlyAbortOnce garante que o cancelamento seja disparado uma única vez
 	// quando o chunk 0 falhar em todos os peers.
 	var earlyAbortOnce sync.Once
 
-	sem := make(chan struct{}, maxParallel)
+	workerCount := maxParallel
+	if len(manifest.Chunks) < workerCount {
+		workerCount = len(manifest.Chunks)
+	}
+	if workerCount < 1 {
+		workerCount = 1
+	}
+
+	jobs := make(chan int, len(manifest.Chunks))
+	for i := range manifest.Chunks {
+		jobs <- i
+	}
+	close(jobs)
+
 	results := make(chan chunkResult, len(manifest.Chunks))
 	var wg sync.WaitGroup
 
-	for i, chunk := range manifest.Chunks {
+	for w := 0; w < workerCount; w++ {
 		wg.Add(1)
-		go func(i int, chunk P2PChunk) {
+		go func() {
 			defer wg.Done()
-			// Adquire slot — bloqueia se todos ocupados, mas aborta se o contexto
-			// for cancelado enquanto espera (cancelamento imediato).
-			select {
-			case sem <- struct{}{}:
-			case <-abortCtx.Done():
-				results <- chunkResult{index: i, err: abortCtx.Err()}
-				return
-			}
-			defer func() { <-sem }()
+			for i := range jobs {
+				if abortCtx.Err() != nil {
+					results <- chunkResult{index: i, err: abortCtx.Err()}
+					continue
+				}
+				chunk := manifest.Chunks[i]
+				chunkFile := filepath.Join(partsDir, fmt.Sprintf("chunk-%04d", i))
 
-			chunkFile := filepath.Join(partsDir, fmt.Sprintf("chunk-%04d", i))
-
-			// Resume: if chunk file exists and hash matches, skip.
-			// Usa hash em streaming para não carregar o chunk inteiro em memória.
-			if chunkFileHashMatches(chunkFile, chunk.SHA256) {
-				results <- chunkResult{index: i, err: nil}
-				return
-			}
-			// Arquivo existe mas hash não bate (ou não existe) — remove e re-download.
-			_ = os.Remove(chunkFile)
-
-			chunkIdx := i
-			chunkSize := chunk.Size
-			totalChunks := len(manifest.Chunks)
-
-			// Retry loop: tenta o chunk até maxChunkRetries vezes com backoff.
-			var lastErr error
-			// Rastreia peers que já falharam para este chunk específico,
-			// forçando round-robin entre peers disponíveis nos retries.
-			failedPeers := make(map[string]bool)
-			for attempt := 0; attempt < maxChunkRetries; attempt++ {
-				// Pick peer considerando erros acumulados em tentativas anteriores
-				// e excluindo peers que já falharam para este chunk.
-				lp := sched.pickPeerExcluding(i, peers, failedPeers)
-
-				lastErr = libp2pDownloadChunk(abortCtx, h, lp.peerID, artifactName, requesterID, tokenFor(lp), chunk, chunkFile, func(readSoFar, total int64) {
-					if onChunkProgress != nil {
-						onChunkProgress(chunkIdx, readSoFar, chunkSize, totalChunks)
-					}
-				})
-				if lastErr == nil {
-					// Sucesso: verifica hash salvo já foi feito em libp2pDownloadChunk.
+				// Resume: if chunk file exists and hash matches, skip.
+				// Usa hash em streaming para não carregar o chunk inteiro em memória.
+				if chunkFileHashMatches(chunkFile, chunk.SHA256) {
 					results <- chunkResult{index: i, err: nil}
-					return
+					continue
 				}
-				sched.recordError(lp.peerID)
-				failedPeers[lp.peerID.String()] = true
-				// Falha de credencial: descarta o token do peer para que a
-				// próxima tentativa negocie um novo /artifact/access.
-				if isArtifactAccessAuthError(lastErr) {
-					accessTokens.invalidate(lp.peerID)
-				}
-				if logf != nil {
-					peerShort := lp.peerID.String()
-					if len(peerShort) > 12 {
-						peerShort = peerShort[:12]
-					}
-					logf(fmt.Sprintf("[p2p][chunk] chunk %d/%d tentativa %d/%d falhou para artifact=%s peer=%s: %v",
-						chunkIdx, totalChunks, attempt+1, maxChunkRetries, artifactName, peerShort, lastErr))
-				}
+				// Arquivo existe mas hash não bate (ou não existe) — remove e re-download.
+				_ = os.Remove(chunkFile)
 
-				// Early abort: se o chunk 0 falhou em TODOS os peers disponíveis
-				// com checksum divergente (assinatura inequívoca de manifest
-				// stale), todos os outros chunks também falharão. Cancela o
-				// contexto para abortar as demais goroutines imediatamente.
-				// Falhas transitórias (conexão fechada, timeout) NÃO disparam
-				// o abort — elas podem se resolver no retry ou no backoff, e
-				// abortar cedo demais mata downloads que só precisavam de
-				// outra tentativa (com 1 peer, a 1ª falha abortava tudo).
-				isChecksumMismatch := isStaleManifestError(lastErr)
-				if chunkIdx == 0 && isChecksumMismatch && len(failedPeers) >= len(peers) {
-					earlyAbortOnce.Do(func() {
-						if logf != nil {
-							logf(fmt.Sprintf("[p2p][chunk] EARLY ABORT: chunk 0 falhou com checksum divergente em todos os %d peers para artifact=%s — manifest stale, cancelando download",
-								len(peers), artifactName))
+				chunkIdx := i
+				chunkSize := chunk.Size
+				totalChunks := len(manifest.Chunks)
+
+				// Retry loop: tenta o chunk até maxChunkRetries vezes com backoff.
+				var lastErr error
+				// Rastreia peers que já falharam para este chunk específico,
+				// forçando round-robin entre peers disponíveis nos retries.
+				failedPeers := make(map[string]bool)
+				for attempt := 0; attempt < maxChunkRetries; attempt++ {
+					// Pick peer considerando erros acumulados em tentativas anteriores
+					// e excluindo peers que já falharam para este chunk.
+					lp := sched.pickPeerExcluding(i, peers, failedPeers)
+
+					lastErr = libp2pDownloadChunk(abortCtx, h, lp.peerID, artifactName, requesterID, tokenFor(lp), chunk, chunkFile, func(readSoFar, total int64) {
+						if onChunkProgress != nil {
+							onChunkProgress(chunkIdx, readSoFar, chunkSize, totalChunks)
 						}
-						abortCancel()
 					})
-				}
+					if lastErr == nil {
+						// Sucesso: verifica hash salvo já foi feito em libp2pDownloadChunk.
+						break
+					}
+					sched.recordError(lp.peerID)
+					failedPeers[lp.peerID.String()] = true
+					// Falha de credencial: descarta o token do peer para que a
+					// próxima tentativa negocie um novo /artifact/access.
+					if isArtifactAccessAuthError(lastErr) {
+						accessTokens.invalidate(lp.peerID)
+					}
+					if logf != nil {
+						peerShort := lp.peerID.String()
+						if len(peerShort) > 12 {
+							peerShort = peerShort[:12]
+						}
+						logf(fmt.Sprintf("[p2p][chunk] chunk %d/%d tentativa %d/%d falhou para artifact=%s peer=%s: %v",
+							chunkIdx, totalChunks, attempt+1, maxChunkRetries, artifactName, peerShort, lastErr))
+					}
 
-				// Backoff: 1s, 2s, 4s entre tentativas.
-				if attempt < maxChunkRetries-1 {
-					delay := chunkRetryBaseDelay * (1 << attempt)
-					select {
-					case <-abortCtx.Done():
-						results <- chunkResult{index: i, err: abortCtx.Err()}
-						return
-					case <-time.After(delay):
+					// Early abort: se o chunk 0 falhou em TODOS os peers disponíveis
+					// com checksum divergente (assinatura inequívoca de manifest
+					// stale), todos os outros chunks também falharão. Cancela o
+					// contexto para abortar as demais goroutines imediatamente.
+					// Falhas transitórias (conexão fechada, timeout) NÃO disparam
+					// o abort — elas podem se resolver no retry ou no backoff, e
+					// abortar cedo demais mata downloads que só precisavam de
+					// outra tentativa (com 1 peer, a 1ª falha abortava tudo).
+					isChecksumMismatch := isStaleManifestError(lastErr)
+					if chunkIdx == 0 && isChecksumMismatch && len(failedPeers) >= len(peers) {
+						earlyAbortOnce.Do(func() {
+							if logf != nil {
+								logf(fmt.Sprintf("[p2p][chunk] EARLY ABORT: chunk 0 falhou com checksum divergente em todos os %d peers para artifact=%s — manifest stale, cancelando download",
+									len(peers), artifactName))
+							}
+							abortCancel()
+						})
+					}
+
+					// Backoff: 1s, 2s, 4s entre tentativas.
+					if attempt < maxChunkRetries-1 {
+						delay := chunkRetryBaseDelay * (1 << attempt)
+						select {
+						case <-abortCtx.Done():
+							lastErr = abortCtx.Err()
+							attempt = maxChunkRetries // sai do retry loop
+						case <-time.After(delay):
+						}
 					}
 				}
+				results <- chunkResult{index: i, err: lastErr}
 			}
-			results <- chunkResult{index: i, err: lastErr}
-		}(i, chunk)
+		}()
 	}
 
 	go func() {
@@ -421,9 +445,11 @@ func downloadChunkedLibp2p(
 		}
 	}
 	if firstErr != nil {
-		// Limpa o diretório de partes em falha para não acumular lixo
-		// (o GC de 1h só limparia depois).
-		_ = os.RemoveAll(partsDir)
+		// Só descarta chunks já validados quando o manifest está stale (hashes
+		// mudaram); em falhas transitórias preserva partsDir para resume.
+		if isStaleManifestError(firstErr) {
+			_ = os.RemoveAll(partsDir)
+		}
 		// Resumo compacto: chunks cancelados são consequência do erro real
 		// (early abort ou cancelamento do caller), não falhas independentes.
 		if canceledCount > 0 && logf != nil {

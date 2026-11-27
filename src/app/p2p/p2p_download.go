@@ -279,10 +279,9 @@ func (c *Coordinator) downloadArtifactFromPeer(ctx context.Context, artifactName
 		c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", true,
 			fmt.Sprintf("artifact baixado via libp2p em %d chunks", manifest.TotalChunks))
 		c.emitTransferDone(artifactName, sourcePeerID, "pull", nil)
-		// Pipeline pós-download: validar checksum + cachear manifest
-		go c.finalizeDownloadedArtifact(artifactName, path, manifest.SHA256)
-		go c.updateManifestCacheAfterDownload(artifactName, path)
-		return c.buildArtifactView(artifactName, manifest.ArtifactID, path)
+		// Pipeline pós-download: reaproveita manifest/SHA-256 já verificados em streaming.
+		go c.cacheVerifiedManifest(artifactName, path, manifest)
+		return c.buildArtifactViewWithChecksum(artifactName, manifest.ArtifactID, path, manifest.SHA256)
 	}
 
 	err := fmt.Errorf("%w: libp2p indisponível para download do artifact", errNoTransferSource)
@@ -490,10 +489,9 @@ func (c *Coordinator) downloadArtifactSwarm(ctx context.Context, artifactName st
 	c.emitTransferDone(artifactName, fmt.Sprintf("%d peers", len(peerEntries)), "swarm-pull", nil)
 
 	artifactID := CanonicalArtifactID(manifest.ArtifactID, artifactName, "")
-	// Pipeline pós-download: validar checksum + cachear manifest
-	go c.finalizeDownloadedArtifact(artifactName, path, manifest.SHA256)
-	go c.updateManifestCacheAfterDownload(artifactName, path)
-	return c.buildArtifactView(artifactName, artifactID, path)
+	// Pipeline pós-download: reaproveita manifest/SHA-256 já verificados em streaming.
+	go c.cacheVerifiedManifest(artifactName, path, manifest)
+	return c.buildArtifactViewWithChecksum(artifactName, artifactID, path, manifest.SHA256)
 }
 
 // DownloadArtifactByID faz download de um artifact via libp2p usando o artifactID
@@ -572,13 +570,20 @@ func (c *Coordinator) DownloadArtifactByIDSwarm(ctx context.Context, artifactID 
 
 // buildArtifactView reads stat + checksum for a file and returns a P2PArtifactView.
 func (c *Coordinator) buildArtifactView(artifactName, artifactID, path string) (P2PArtifactView, error) {
+	return c.buildArtifactViewWithChecksum(artifactName, artifactID, path, "")
+}
+
+func (c *Coordinator) buildArtifactViewWithChecksum(artifactName, artifactID, path, verifiedSHA256 string) (P2PArtifactView, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return P2PArtifactView{}, err
 	}
-	checksum, err := computeFileSHA256(path)
-	if err != nil {
-		return P2PArtifactView{}, err
+	checksum := strings.TrimSpace(verifiedSHA256)
+	if checksum == "" {
+		checksum, err = computeFileSHA256(path)
+		if err != nil {
+			return P2PArtifactView{}, err
+		}
 	}
 	return P2PArtifactView{
 		ArtifactID:       CanonicalArtifactID(artifactID, artifactName, ""),

@@ -203,7 +203,7 @@ func RegisterOnboardingProtocols(h host.Host, transfer *TransferServer) {
 
 		// Request é opcional (compatibilidade): só serve para auditoria.
 		var req p2pOnboardStreamRequest
-		if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil && err != io.EOF {
+		if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&req); err != nil && err != io.EOF {
 			req = p2pOnboardStreamRequest{}
 		}
 
@@ -335,7 +335,7 @@ func libp2pFetchOnboardingOffer(ctx context.Context, h host.Host, peerID peer.ID
 	}
 
 	var resp p2pOnboardStreamResponse
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&resp); err != nil {
+	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&resp); err != nil {
 		return P2POnboardingRequest{}, fmt.Errorf("decode onboard resp: %w", err)
 	}
 	if strings.TrimSpace(resp.Error) != "" {

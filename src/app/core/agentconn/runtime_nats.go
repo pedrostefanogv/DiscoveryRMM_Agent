@@ -966,6 +966,7 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 	}
 
 	connectedAt := time.Now().UTC()
+	lastIPRefresh := time.Now()
 	var lastGlobalPongAt time.Time
 
 	for {
@@ -980,6 +981,12 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 			}
 			lastGlobalPongAt = receivedAt.UTC()
 		case <-heartbeatTicker.C:
+			if time.Since(lastIPRefresh) >= 5*time.Minute {
+				if fresh := detectLocalIP(); fresh != "" {
+					ipAddr = fresh
+				}
+				lastIPRefresh = time.Now()
+			}
 			r.sendHeartbeatNATS(nc, subjects.Heartbeat, cfg, ipAddr)
 		case forceDone := <-r.forceHeartbeatCh:
 			r.sendHeartbeatNATS(nc, subjects.Heartbeat, cfg, ipAddr)

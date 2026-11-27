@@ -39,8 +39,15 @@ func connectPeerIfNotConnected(ctx context.Context, h host.Host, pi peer.AddrInf
 		return nil
 	}
 	if jitterMax > 0 {
-		// Jitter dessincroniza dials simultâneos dos dois lados da conexão.
-		time.Sleep(time.Duration(rand.Int63n(int64(jitterMax))))
+		// Jitter dessincroniza dials simultâneos dos dois lados da conexão,
+		// respeitando o cancelamento do contexto.
+		timer := time.NewTimer(time.Duration(rand.Int63n(int64(jitterMax))))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 		// Re-checa após o jitter: o outro lado pode ter conectado nesse meio-tempo.
 		if h.Network().Connectedness(pi.ID) == network.Connected {
 			if len(pi.Addrs) > 0 {

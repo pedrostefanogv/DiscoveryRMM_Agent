@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -62,10 +63,43 @@ func heartbeatIntervalFromAgentConfig(agentCfg agentconfig.AgentConfiguration) i
 	return defaultHeartbeatIntervalSeconds
 }
 
+var (
+	hostnameOnce sync.Once
+	hostnameVal  string
+)
+
+func cachedHostname() string {
+	hostnameOnce.Do(func() {
+		hostnameVal, _ = os.Hostname()
+	})
+	return hostnameVal
+}
+
+type cachedHeartbeatEntry struct {
+	metrics agentconn.AgentHeartbeatMetrics
+	at      time.Time
+}
+
+var (
+	heartbeatSnapshotMu sync.Mutex
+	heartbeatSnapshots  = make(map[*App]cachedHeartbeatEntry)
+)
+
+func (a *App) getCachedHeartbeatMetrics(maxAge time.Duration) agentconn.AgentHeartbeatMetrics {
+	if a != nil {
+		heartbeatSnapshotMu.Lock()
+		entry, ok := heartbeatSnapshots[a]
+		heartbeatSnapshotMu.Unlock()
+		if ok && time.Since(entry.at) <= maxAge {
+			return entry.metrics
+		}
+	}
+	return a.getHeartbeatMetrics()
+}
+
 func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
-	hostname, _ := os.Hostname()
 	metrics := agentconn.AgentHeartbeatMetrics{
-		Hostname:              hostname,
+		Hostname:              cachedHostname(),
 		CpuPercent:            -1,
 		MemoryPercent:         -1,
 		DiskPercent:           -1,
@@ -90,7 +124,6 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 	defer cancel()
 	if m := inventory.CollectHeartbeatMetrics(ctx); m != nil {
 		mergeHeartbeatMetrics(&metrics, m)
-		metrics.P2pPeers = a.getKnownP2PPeers()
 	}
 
 	// Enriquecer com dados de endereçamento P2P (libp2p peer ID, addrs, port)
@@ -120,6 +153,12 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 		adminOk := a.ipcServer.AdminChannelActive()
 		metrics.IpcAdminOk = &adminOk
 		metrics.IpcAdminPipe = IPCPipeAdminName
+	}
+
+	if a != nil {
+		heartbeatSnapshotMu.Lock()
+		heartbeatSnapshots[a] = cachedHeartbeatEntry{metrics: metrics, at: time.Now()}
+		heartbeatSnapshotMu.Unlock()
 	}
 
 	return metrics
@@ -203,7 +242,7 @@ func (a *App) getKnownP2PPeers() int {
 	if a.P2PCoord == nil {
 		return 0
 	}
-	return len(a.P2PCoord.GetPeers())
+	return a.P2PCoord.CountKnownPeers()
 }
 
 // onNatsConnected é chamado pelo agentconn após a conexão NATS ser estabelecida.

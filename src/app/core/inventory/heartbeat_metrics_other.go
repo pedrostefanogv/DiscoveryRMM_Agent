@@ -16,6 +16,10 @@ func collectWindowsCPUPercentNative() (float64, bool) {
 	return -1, false
 }
 
+func isWindowsCPUBaselineSeeded() bool {
+	return false
+}
+
 func collectDiskSpaceNative() (float64, float64, float64, bool) {
 	return -1, -1, -1, false
 }
