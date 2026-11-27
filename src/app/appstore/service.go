@@ -315,6 +315,24 @@ func (s *Service) FetchPage(ctx context.Context, installationType InstallationTy
 	return payload, nil
 }
 
+func (s *Service) currentScopeKey() string {
+	cfg := s.getDebugConfig()
+	server := strings.ToLower(strings.TrimSpace(cfg.ApiServer))
+	agent := strings.ToLower(strings.TrimSpace(cfg.AgentID))
+	if server == "" && agent == "" {
+		return ""
+	}
+	return server + "|" + agent
+}
+
+func (s *Service) scopeMatches(cachedScope string) bool {
+	current := s.currentScopeKey()
+	if current == "" || strings.TrimSpace(cachedScope) == "" {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(cachedScope), current)
+}
+
 // LoadEffectivePolicy carrega a política efetiva da app-store.
 func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (EffectivePolicy, error) {
 	if !s.featureEnabled(s.getAgentConfiguration().AppStoreEnabled) {
@@ -327,10 +345,10 @@ func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (E
 	// entrada expirada e tornaria o fallback stale impossível.
 	var expiredPersisted *EffectivePolicy
 	if !forceRefresh {
-		if cached, ok := s.cache.Get(MemoryCacheTTL); ok {
+		if cached, ok := s.cache.Get(MemoryCacheTTL); ok && s.scopeMatches(cached.Scope) {
 			return cached, nil
 		}
-		if persisted, found := s.readPersistedPolicy(); found {
+		if persisted, found := s.readPersistedPolicy(); found && s.scopeMatches(persisted.Scope) {
 			if s.persistedPolicyFresh(persisted) {
 				s.cache.Set(persisted)
 				return persisted, nil
@@ -347,7 +365,7 @@ func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (E
 	defer s.fetchMu.Unlock()
 
 	if !forceRefresh {
-		if cached, ok := s.cache.Get(MemoryCacheTTL); ok {
+		if cached, ok := s.cache.Get(MemoryCacheTTL); ok && s.scopeMatches(cached.Scope) {
 			return cached, nil
 		}
 	}
@@ -360,12 +378,15 @@ func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (E
 		// de quebrar. A entrada stale não é apagada nem estendida; o próximo
 		// fetch bem-sucedido a substitui normalmente.
 		if expiredPersisted != nil {
+			staleCopy := *expiredPersisted
+			staleCopy.Stale = true
 			s.logf(fmt.Sprintf("aviso: fetch da app-store falhou (%v); servindo cache stale do SQLite: %d item(ns), fetchedAt=%s",
-				fetchErr, len(expiredPersisted.Items), expiredPersisted.FetchedAt))
-			s.cache.Set(*expiredPersisted)
-			return *expiredPersisted, nil
+				fetchErr, len(staleCopy.Items), staleCopy.FetchedAt))
+			s.cache.Set(staleCopy)
+			return staleCopy, nil
 		}
-		if stale, found := s.readPersistedPolicy(); found {
+		if stale, found := s.readPersistedPolicy(); found && s.scopeMatches(stale.Scope) {
+			stale.Stale = true
 			s.logf(fmt.Sprintf("aviso: fetch da app-store falhou (%v); servindo cache stale do SQLite: %d item(ns), fetchedAt=%s",
 				fetchErr, len(stale.Items), stale.FetchedAt))
 			s.cache.Set(stale)
@@ -605,6 +626,7 @@ func (s *Service) fetchEffectivePolicy(ctx context.Context) (EffectivePolicy, er
 	policy := EffectivePolicy{
 		Items:     items,
 		FetchedAt: time.Now().UTC().Format(time.RFC3339),
+		Scope:     s.currentScopeKey(),
 	}
 	s.cache.Set(policy)
 	if s.db != nil && s.db() != nil {
@@ -700,6 +722,8 @@ func (s *Service) buildCatalogFromPolicy(ctx context.Context, forceRefresh bool)
 
 	return models.Catalog{
 		Generated:        time.Now().UTC().Format(time.RFC3339),
+		FetchedAt:        policy.FetchedAt,
+		Stale:            policy.Stale,
 		Count:            len(packages),
 		PackagesWithIcon: withIcon,
 		Packages:         packages,

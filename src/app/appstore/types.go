@@ -111,6 +111,8 @@ type Response struct {
 type EffectivePolicy struct {
 	Items     []Item `json:"items"`
 	FetchedAt string `json:"fetchedAt"`
+	Scope     string `json:"scope,omitempty"`
+	Stale     bool   `json:"stale,omitempty"`
 }
 
 type PolicyCache struct {

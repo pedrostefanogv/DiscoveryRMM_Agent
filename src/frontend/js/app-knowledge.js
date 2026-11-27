@@ -133,6 +133,11 @@ function renderKnowledgeArticleDetail(article) {
       kbPagesNavEl.classList.add("hidden");
       kbPagesNavEl.innerHTML = "";
     }
+    var pagerEl = document.getElementById("kbPagePager");
+    if (pagerEl) {
+      pagerEl.classList.add("hidden");
+      pagerEl.innerHTML = "";
+    }
     return;
   }
 

@@ -24,7 +24,7 @@ import (
 const (
 	knowledgeListCacheTTL       = 6 * time.Hour
 	knowledgeDetailCacheTTL     = 6 * time.Hour
-	knowledgeMinRefreshInterval = 5 * time.Minute
+	knowledgeMinRefreshInterval = 30 * time.Second
 	// knowledgeBackupTTL: cópia de segurança usada quando o servidor está
 	// inacessível (stale-if-error) — a página de conhecimento continua
 	// funcionando offline/instável com o último conteúdo conhecido. Alinhado ao
@@ -285,6 +285,19 @@ func isVisibleAgentArticle(a KnowledgeArticle) bool {
 	return status == "" || strings.EqualFold(status, "Published")
 }
 
+func filterVisibleAgentArticles(items []KnowledgeArticle) []KnowledgeArticle {
+	if len(items) == 0 {
+		return []KnowledgeArticle{}
+	}
+	out := make([]KnowledgeArticle, 0, len(items))
+	for _, item := range items {
+		if isVisibleAgentArticle(item) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 // parseKnowledgeListEnvelope aceita os formatos que a API pode devolver:
 //   - array direto (respostas antigas, sem paginação);
 //   - envelope {"items": [...], "nextCursor": "...", "hasMore": true}.
@@ -481,10 +494,7 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 	if useCache && s.db != nil {
 		var cached []KnowledgeArticle
 		if found, err := s.db.CacheGetJSON(cacheKey, &cached); err == nil && found {
-			if cached == nil {
-				return []KnowledgeArticle{}, false, nil
-			}
-			return cached, false, nil
+			return filterVisibleAgentArticles(cached), false, nil
 		}
 	}
 
@@ -532,8 +542,9 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 			if pageIdx == 0 {
 				var backup []KnowledgeArticle
 				if s.readKnowledgeBackup(cacheKey, &backup) {
-					s.supportLogf("servidor inacessivel (%v) — usando backup local da base de conhecimento (%d artigo(s))", err, len(backup))
-					return backup, true, nil
+					visible := filterVisibleAgentArticles(backup)
+					s.supportLogf("servidor inacessivel (%v) — usando backup local da base de conhecimento (%d artigo(s))", err, len(visible))
+					return visible, true, nil
 				}
 				return nil, false, fmt.Errorf("falha ao buscar artigos da base de conhecimento: %w", err)
 			}

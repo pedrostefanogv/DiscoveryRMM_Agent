@@ -2,6 +2,8 @@ package models
 
 type Catalog struct {
 	Generated        string    `json:"generated"`
+	FetchedAt        string    `json:"fetchedAt,omitempty"`
+	Stale            bool      `json:"stale,omitempty"`
 	Count            int       `json:"count"`
 	PackagesWithIcon int       `json:"packagesWithIcon"`
 	Packages         []AppItem `json:"packages"`
