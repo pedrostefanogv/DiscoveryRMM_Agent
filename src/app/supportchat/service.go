@@ -209,6 +209,24 @@ func (s *Service) HandleEnvelope(data []byte) error {
 		s.applySessionDeclined(envelope)
 		return nil
 
+	case EventTyping:
+		isTyping := envelope.IsTyping != nil && *envelope.IsTyping
+		s.deps.Emit("supportchat:typing", map[string]any{
+			"sessionId":  envelope.SessionID,
+			"authorName": envelope.AuthorName,
+			"isTyping":   isTyping,
+		})
+		return nil
+
+	case EventAssistedAction:
+		s.deps.Emit("supportchat:assisted-action", map[string]any{
+			"sessionId":  envelope.SessionID,
+			"actionType": envelope.ActionType,
+			"authorName": envelope.AuthorName,
+			"body":       envelope.Body,
+		})
+		return nil
+
 	default:
 		// Eventos desconhecidos são confirmados (Ack) para não travar o consumer.
 		s.deps.Logf("[supportchat] envelope ignorado eventType=" + envelope.EventType)
@@ -1260,6 +1278,23 @@ func (s *Service) SendMessage(ctx context.Context, body string, attachmentIDs []
 	s.mergeMessages([]Message{sent})
 	s.emitState("message-sent-rest")
 	return nil
+}
+
+// SendTyping envia sinal efêmero de "digitando..." para o suporte via REST.
+func (s *Service) SendTyping(ctx context.Context, isTyping bool) error {
+	s.mu.Lock()
+	sessionID := s.state.SessionID
+	status := s.state.Status
+	s.mu.Unlock()
+
+	if sessionID == "" || status != StatusActive {
+		return nil
+	}
+
+	path := fmt.Sprintf("/sessions/%s/typing", url.PathEscape(sessionID))
+	return s.doJSON(ctx, http.MethodPost, path, map[string]any{
+		"isTyping": isTyping,
+	}, nil)
 }
 
 // RespondInviteForSession responde ao convite de UMA sessão SEM tocar no estado

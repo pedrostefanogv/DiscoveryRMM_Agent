@@ -176,6 +176,7 @@ type AgentConfiguration struct {
 	// ausente em todos os níveis = true (habilitada). O servidor SEMPRE envia o
 	// valor resolvido — o default existe só para payload antigo/incompleto.
 	UpdatesTabEnabled             *bool                           `json:"updatesTabEnabled"`
+	FilesTabEnabled               *bool                           `json:"filesTabEnabled"`
 	AgentHomeTab                  string                          `json:"agentHomeTab"`
 	InventoryIntervalHours        *int                            `json:"inventoryIntervalHours"`
 	AgentHeartbeatIntervalSeconds *int                            `json:"agentHeartbeatIntervalSeconds"`
@@ -236,6 +237,7 @@ type ServerConfiguration struct {
 	AutomationP2PWingetInstallEnabled *bool  `json:"automationP2pWingetInstallEnabled"`
 	// Kill switch da aba "Atualizações". nil = habilitada (default true).
 	UpdatesTabEnabled             *bool  `json:"updatesTabEnabled"`
+	FilesTabEnabled               *bool  `json:"filesTabEnabled"`
 	AgentHomeTab                  string `json:"agentHomeTab"`
 	InventoryIntervalHours        int    `json:"inventoryIntervalHours"`
 	AgentUpdatePolicyJSON         string `json:"agentUpdatePolicyJson"`
@@ -285,6 +287,7 @@ type ClientConfiguration struct {
 	AutomationP2PWingetInstallEnabled *bool   `json:"automationP2pWingetInstallEnabled"`
 	// Kill switch da aba "Atualizações". nil = herda o nível superior.
 	UpdatesTabEnabled                *bool                    `json:"updatesTabEnabled"`
+	FilesTabEnabled                  *bool                    `json:"filesTabEnabled"`
 	AgentHomeTab                     *string                  `json:"agentHomeTab"`
 	AIIntegrationSettingsJSON        *string                  `json:"aiIntegrationSettingsJson"`
 	InventoryIntervalHours           *int                     `json:"inventoryIntervalHours"`
@@ -322,6 +325,7 @@ type SiteConfiguration struct {
 	AutomationP2PWingetInstallEnabled *bool   `json:"automationP2pWingetInstallEnabled"`
 	// Kill switch da aba "Atualizações". nil = herda o nível superior.
 	UpdatesTabEnabled                *bool                    `json:"updatesTabEnabled"`
+	FilesTabEnabled                  *bool                    `json:"filesTabEnabled"`
 	AgentHomeTab                     *string                  `json:"agentHomeTab"`
 	AIIntegrationSettingsJSON        *string                  `json:"aiIntegrationSettingsJson"`
 	InventoryIntervalHours           *int                     `json:"inventoryIntervalHours"`

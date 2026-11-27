@@ -113,6 +113,8 @@
     els.messages = byId("scMessages");
     els.empty = byId("scEmpty");
     els.pending = byId("scPending");
+    els.assistedAction = byId("scAssistedAction");
+    els.typingIndicator = byId("scTypingIndicator");
     els.comments = byId("scComments");
     els.commentsToggle = byId("scCommentsToggle");
     els.commentsCount = byId("scCommentsCount");
@@ -267,6 +269,21 @@
     // Enquanto o link está "live" isto é no-op.
     if (!over && state.link !== "live") {
       recomputeLink();
+    }
+
+    if (state.status !== "active") {
+      if (els.typingIndicator) {
+        els.typingIndicator.hidden = true;
+        els.typingIndicator.textContent = "";
+      }
+      if (els.assistedAction) {
+        els.assistedAction.hidden = true;
+        els.assistedAction.innerHTML = "";
+      }
+      if (supportTypingTimer) {
+        clearTimeout(supportTypingTimer);
+        supportTypingTimer = null;
+      }
     }
 
     // O técnico aparece UMA vez, no elemento próprio da statusbar
@@ -1272,6 +1289,7 @@
     if (state.status !== "active" || state.sending) return;
 
     state.sending = true;
+    clearLocalTyping();
     render();
 
     call("SupportChatSendMessage", text, attachmentIDs)
@@ -1982,6 +2000,10 @@
       }
     });
 
+    on(els.input, "input", function () {
+      notifyTypingActivity();
+    });
+
     on(els.commentsToggle, "click", toggleComments);
     on(els.shot, "click", requestScreenshot);
     on(els.attach, "click", function () { if (els.fileInput) els.fileInput.click(); });
@@ -2165,6 +2187,115 @@
       clearCapturePending();
       showBanner("Não foi possível capturar a tela." + (reason ? " " + reason : ""));
     });
+
+    window.wails.on("supportchat:typing", function (payload) {
+      if (!payload || !state.chatSessionId) return;
+      if (payload.sessionId && payload.sessionId !== state.chatSessionId) return;
+      showSupportTyping(payload.authorName, !!payload.isTyping);
+    });
+
+    window.wails.on("supportchat:assisted-action", function (payload) {
+      if (!payload || !state.chatSessionId) return;
+      if (payload.sessionId && payload.sessionId !== state.chatSessionId) return;
+      showAssistedActionCard(payload);
+    });
+  }
+
+  var supportTypingTimer = null;
+  var localTypingTimer = null;
+  var lastLocalTypingSentAt = 0;
+
+  function showSupportTyping(authorName, isTyping) {
+    if (!els.typingIndicator) return;
+    if (supportTypingTimer) {
+      clearTimeout(supportTypingTimer);
+      supportTypingTimer = null;
+    }
+    if (!isTyping || state.status !== "active") {
+      els.typingIndicator.hidden = true;
+      els.typingIndicator.textContent = "";
+      return;
+    }
+    var name = String(authorName || "Suporte").trim() || "Suporte";
+    els.typingIndicator.textContent = name + " está digitando…";
+    els.typingIndicator.hidden = false;
+    supportTypingTimer = setTimeout(function () {
+      if (els.typingIndicator) {
+        els.typingIndicator.hidden = true;
+        els.typingIndicator.textContent = "";
+      }
+      supportTypingTimer = null;
+    }, 4500);
+  }
+
+  function notifyTypingActivity() {
+    if (state.status !== "active") return;
+    var now = Date.now();
+    if (now - lastLocalTypingSentAt >= 2500) {
+      lastLocalTypingSentAt = now;
+      call("SupportChatSendTyping", true).catch(function () { /* efêmero */ });
+    }
+    if (localTypingTimer) clearTimeout(localTypingTimer);
+    localTypingTimer = setTimeout(function () {
+      localTypingTimer = null;
+      lastLocalTypingSentAt = 0;
+      if (state.status === "active") {
+        call("SupportChatSendTyping", false).catch(function () { /* efêmero */ });
+      }
+    }, 3000);
+  }
+
+  function clearLocalTyping() {
+    if (localTypingTimer) {
+      clearTimeout(localTypingTimer);
+      localTypingTimer = null;
+    }
+    if (lastLocalTypingSentAt > 0) {
+      lastLocalTypingSentAt = 0;
+      call("SupportChatSendTyping", false).catch(function () { /* efêmero */ });
+    }
+  }
+
+  function showAssistedActionCard(payload) {
+    if (!els.assistedAction) return;
+    var actionType = String(payload.actionType || "").trim();
+    var bodyText = String(payload.body || "").trim();
+    els.assistedAction.innerHTML = "";
+
+    var label = document.createElement("span");
+    label.textContent = bodyText || (actionType === "request_screenshot"
+      ? "O suporte solicitou uma captura de tela."
+      : "O suporte solicitou uma ação assistida.");
+
+    var actionsWrap = document.createElement("div");
+    actionsWrap.className = "sc-assisted-action-actions";
+
+    if (actionType === "request_screenshot") {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn primary";
+      btn.textContent = "Capturar e enviar print";
+      btn.addEventListener("click", function () {
+        els.assistedAction.hidden = true;
+        els.assistedAction.innerHTML = "";
+        requestScreenshot();
+      });
+      actionsWrap.appendChild(btn);
+    }
+
+    var dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "btn subtle";
+    dismiss.textContent = "Dispensar";
+    dismiss.addEventListener("click", function () {
+      els.assistedAction.hidden = true;
+      els.assistedAction.innerHTML = "";
+    });
+    actionsWrap.appendChild(dismiss);
+
+    els.assistedAction.appendChild(label);
+    els.assistedAction.appendChild(actionsWrap);
+    els.assistedAction.hidden = false;
   }
 
   // ── Abertura da janela ───────────────────────────────────────────────────

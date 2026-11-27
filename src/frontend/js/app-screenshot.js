@@ -73,6 +73,42 @@ function screenshotT(key, vars) {
   return key;
 }
 
+// Ícones vetoriais padronizados (Material Symbols 960×960 + geométricos 16×16).
+// Evita emojis/Unicode crus que renderizam de forma inconsistente entre WebViews.
+var SCREENSHOT_ICONS = {
+  drag: { vb: "0 -960 960 960", body: '<path d="M360-160q-33 0-56.5-23.5T280-240q0-33 23.5-56.5T360-320q33 0 56.5 23.5T440-240q0 33-23.5 56.5T360-160Zm240 0q-33 0-56.5-23.5T520-240q0-33 23.5-56.5T600-320q33 0 56.5 23.5T680-240q0 33-23.5 56.5T600-160ZM360-400q-33 0-56.5-23.5T280-480q0-33 23.5-56.5T360-560q33 0 56.5 23.5T440-480q0 33-23.5 56.5T360-400Zm240 0q-33 0-56.5-23.5T520-480q0-33 23.5-56.5T600-560q33 0 56.5 23.5T680-480q0 33-23.5 56.5T600-400ZM360-640q-33 0-56.5-23.5T280-720q0-33 23.5-56.5T360-800q33 0 56.5 23.5T440-720q0 33-23.5 56.5T360-640Zm240 0q-33 0-56.5-23.5T520-720q0-33 23.5-56.5T600-800q33 0 56.5 23.5T680-720q0 33-23.5 56.5T600-640Z" fill="currentColor" />' },
+  arrow: { vb: "0 -960 960 960", body: '<path d="M256-214 214-256l384-384H240v-60h460v460h-60v-358L256-214Z" fill="currentColor" />' },
+  pen: { vb: "0 -960 960 960", body: '<path d="M200-200h57l391-391-57-57-391 391v57Zm-80 80v-170l528-527q12-11 26.5-17t30.5-6q16 0 31 6t26 18l55 56q12 11 17.5 26t5.5 30q0 16-5.5 30.5T817-647L290-120H120Zm640-584-56-56 56 56Zm-141 85-28-29 57 57-29-28Z" fill="currentColor" />' },
+  marker: { vb: "0 -960 960 960", body: '<path d="m140-140 160-40 440-440-120-120-440 440-40 160Zm520-520 80-80q17-17 40.5-17t40.5 17l40 40q17 17 17 40.5T861-620l-80 80-121-120ZM160-80h640v60H160v-60Z" fill="currentColor" />' },
+  text: { vb: "0 -960 960 960", body: '<path d="M440-160v-520H200v-120h560v120H520v520h-80Z" fill="currentColor" />' },
+  save: { vb: "0 -960 960 960", body: '<path d="M840-680v480q0 33-23.5 56.5T760-120H200q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h480l160 160Zm-80 34L646-760H200v560h560v-446ZM480-240q50 0 85-35t35-85q0-50-35-85t-85-35q-50 0-85 35t-35 85q0 50 35 85t85 35ZM240-560h360v-160H240v160Zm-40-86v446-560 114Z" fill="currentColor" />' },
+  link: { vb: "0 -960 960 960", body: '<path d="M440-280H280q-83 0-141.5-58.5T80-480q0-83 58.5-141.5T280-680h160v80H280q-50 0-85 35t-35 85q0 50 35 85t85 35h160v80ZM320-440v-80h320v80H320Zm200 160v-80h160q50 0 85-35t35-85q0-50-35-85t-85-35H520v-80h160q83 0 141.5 58.5T880-480q0 83-58.5 141.5T680-280H520Z" fill="currentColor" />' },
+  evidence: { vb: "0 -960 960 960", body: '<path d="m438-338 226-226-57-57-169 169-84-84-57 57 141 141Zm42 258q-139-35-229.5-159.5T160-516v-244l320-120 320 120v244q0 152-90.5 276.5T480-80Zm0-84q104-33 172-132t68-220v-189l-240-90-240 90v189q0 121 68 220t172 132Zm0-316Z" fill="currentColor" />' },
+  undo: { vb: "0 -960 960 960", body: '<path d="M280-200v-80h284q63 0 109.5-40T720-420q0-60-46.5-100T564-560H312l104 104-56 56-200-200 200-200 56 56-104 104h252q97 0 166.5 63T800-420q0 94-69.5 157T564-200H280Z" fill="currentColor" />' },
+  redo: { vb: "0 -960 960 960", body: '<path d="M396-200q-97 0-166.5-63T160-420q0-94 69.5-157T396-640h252L544-744l56-56 200 200-200 200-56-56 104-104H396q-63 0-109.5 40T240-420q0 60 46.5 100T396-280h284v80H396Z" fill="currentColor" />' },
+  clear: { vb: "0 -960 960 960", body: '<path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z" fill="currentColor" />' },
+  reselect: { vb: "0 -960 960 960", body: '<path d="M680-40v-160H280q-33 0-56.5-23.5T200-280v-400H40v-80h160v-160h80v640h640v80H760v160h-80Zm0-320v-320H360v-80h320q33 0 56.5 23.5T760-680v320h-80Z" fill="currentColor" />' },
+  cancel: { vb: "0 -960 960 960", body: '<path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z" fill="currentColor" />' },
+  confirm: { vb: "0 -960 960 960", body: '<path d="M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z" fill="currentColor" />' },
+  zoomIn: { vb: "0 -960 960 960", body: '<path d="M440-440H200v-80h240v-240h80v240h240v80H520v240h-80v-240Z" fill="currentColor" />' },
+  zoomOut: { vb: "0 -960 960 960", body: '<path d="M200-440v-80h560v80H200Z" fill="currentColor" />' },
+  zoomFit: { vb: "0 -960 960 960", body: '<path d="M120-120v-240h80v104l124-124 56 56-124 124h104v80H120Zm480 0v-80h104L580-324l56-56 124 124v-104h80v240H600ZM324-580 200-704v104h-80v-240h240v80H256l124 124-56 56Zm312 0-56-56 124-124H600v-80h240v240h-80v-104L636-580Z" fill="currentColor" />' },
+  image: { vb: "0 -960 960 960", body: '<path d="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm40-80h480L570-480 450-320l-90-120-120 160Zm-40 80v-560 560Z" fill="currentColor" />' },
+  ocr: { vb: "0 -960 960 960", body: '<path d="M280-280h400v-80H280v80Zm0-160h400v-80H280v80Zm0-160h240v-80H280v80ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm0-560v560-560Z" fill="currentColor" />' },
+  rect: { vb: "0 0 16 16", body: '<rect x="2.2" y="3.2" width="11.6" height="9.6" rx="1.4" stroke="currentColor" stroke-width="1.65" />' },
+  circle: { vb: "0 0 16 16", body: '<ellipse cx="8" cy="8" rx="5.6" ry="4.6" stroke="currentColor" stroke-width="1.65" />' },
+  line: { vb: "0 0 16 16", body: '<line x1="2.8" y1="13.2" x2="13.2" y2="2.8" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" />' },
+  blur: { vb: "0 0 16 16", body: '<rect x="2" y="2" width="3.2" height="3.2" rx="0.5" fill="currentColor" opacity="0.9" /><rect x="6.4" y="2" width="3.2" height="3.2" rx="0.5" fill="currentColor" opacity="0.45" /><rect x="10.8" y="2" width="3.2" height="3.2" rx="0.5" fill="currentColor" opacity="0.85" /><rect x="2" y="6.4" width="3.2" height="3.2" rx="0.5" fill="currentColor" opacity="0.45" /><rect x="6.4" y="6.4" width="3.2" height="3.2" rx="0.5" fill="currentColor" opacity="0.95" /><rect x="10.8" y="6.4" width="3.2" height="3.2" rx="0.5" fill="currentColor" opacity="0.45" /><rect x="2" y="10.8" width="3.2" height="3.2" rx="0.5" fill="currentColor" opacity="0.85" /><rect x="6.4" y="10.8" width="3.2" height="3.2" rx="0.5" fill="currentColor" opacity="0.45" /><rect x="10.8" y="10.8" width="3.2" height="3.2" rx="0.5" fill="currentColor" opacity="0.9" />' },
+  step: { vb: "0 0 16 16", body: '<circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" /><text x="8" y="8.6" text-anchor="middle" dominant-baseline="central" font-size="8.5" font-weight="700" font-family="sans-serif" fill="currentColor">1</text>' },
+};
+
+function screenshotIconSvg(name, size) {
+  var icon = SCREENSHOT_ICONS[name];
+  if (!icon) return "";
+  var px = Number(size) || 15;
+  return '<svg viewBox="' + icon.vb + '" width="' + px + '" height="' + px + '" fill="none" aria-hidden="true" focusable="false">' + icon.body + "</svg>";
+}
+
 // ── Anexos do composer ───────────────────────────────────────────────────
 
 function screenshotRenderAttachments() {
@@ -106,7 +142,7 @@ function screenshotRenderAttachments() {
     var saveBtn = document.createElement("button");
     saveBtn.type = "button";
     saveBtn.className = "chat-attachment-tool";
-    saveBtn.textContent = "💾";
+    saveBtn.innerHTML = screenshotIconSvg("save", 12);
     saveBtn.title = screenshotT("screenshot.saveFile");
     saveBtn.setAttribute("aria-label", screenshotT("screenshot.saveFile"));
     saveBtn.addEventListener("click", function () {
@@ -117,7 +153,7 @@ function screenshotRenderAttachments() {
     var pathBtn = document.createElement("button");
     pathBtn.type = "button";
     pathBtn.className = "chat-attachment-tool";
-    pathBtn.textContent = "🔗";
+    pathBtn.innerHTML = screenshotIconSvg("link", 12);
     pathBtn.title = att.savedPath ? screenshotT("screenshot.copyPath") : screenshotT("screenshot.copyPathEmpty");
     pathBtn.setAttribute("aria-label", screenshotT("screenshot.copyPath"));
     pathBtn.disabled = !att.savedPath;
@@ -129,7 +165,7 @@ function screenshotRenderAttachments() {
     var ocrBtn = document.createElement("button");
     ocrBtn.type = "button";
     ocrBtn.className = "chat-attachment-tool";
-    ocrBtn.textContent = "T";
+    ocrBtn.innerHTML = screenshotIconSvg("ocr", 12);
     ocrBtn.title = screenshotT("screenshot.ocrAction");
     ocrBtn.setAttribute("aria-label", screenshotT("screenshot.ocrAction"));
     ocrBtn.addEventListener("click", function () {
@@ -141,7 +177,8 @@ function screenshotRenderAttachments() {
     remove.type = "button";
     remove.className = "chat-attachment-remove";
     remove.title = screenshotT("chat.screenshotRemove");
-    remove.textContent = "\u00d7";
+    remove.setAttribute("aria-label", screenshotT("chat.screenshotRemove"));
+    remove.innerHTML = screenshotIconSvg("cancel", 11);
     remove.addEventListener("click", function () {
       screenshotAttachments.splice(idx, 1);
       screenshotRenderAttachments();
@@ -573,7 +610,7 @@ function screenshotEnsureOverlayEls() {
     '<div id="screenshotOverlayToolbar" class="screenshot-overlay-toolbar">',
     // Alça de arraste: a barra nasce centralizada no topo, mas pode ser movida
     // quando ela cobre justamente a área que o usuário quer selecionar.
-    '  <span id="screenshotOverlayDrag" class="screenshot-overlay-drag" data-i18n-title="screenshot.annotDrag">⣿</span>',
+    '  <span id="screenshotOverlayDrag" class="screenshot-overlay-drag" data-i18n-title="screenshot.annotDrag">' + screenshotIconSvg("drag", 14) + '</span>',
     '  <span id="screenshotOverlayHint" class="screenshot-overlay-hint"></span>',
     '  <span id="screenshotOverlaySize" class="screenshot-overlay-size"></span>',
     '  <button id="screenshotModeFull" type="button" class="btn subtle"></button>',
@@ -596,33 +633,33 @@ function screenshotEnsureOverlayEls() {
     // Controle de zoom/pan do print. Fica FORA da barra do topo (que some quando a
     // área é escolhida), então acompanha as duas fases da captura.
     '<div id="screenshotZoomBar" class="screenshot-zoom-bar hidden">',
-    '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomOut" data-i18n-title="screenshot.zoomOut">−</button>',
+    '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomOut" data-i18n-title="screenshot.zoomOut">' + screenshotIconSvg("zoomOut", 15) + '</button>',
     '  <span id="screenshotZoomLabel" class="screenshot-zoom-label" data-i18n-title="screenshot.zoomHint">100%</span>',
-    '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomIn" data-i18n-title="screenshot.zoomIn">+</button>',
+    '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomIn" data-i18n-title="screenshot.zoomIn">' + screenshotIconSvg("zoomIn", 15) + '</button>',
     // Ampliar a área selecionada: ação explícita (aparece só com a seleção
     // travada). Sem ela, travar uma região pequena a exibia ampliada na tela toda.
     '  <button type="button" class="screenshot-zoom-btn hidden" id="screenshotZoomArea" data-i18n-title="screenshot.zoomArea"><svg viewBox="0 -960 960 960" width="15" height="15" fill="none" aria-hidden="true" focusable="false"><path d="M200-120q-33 0-56.5-23.5T120-200v-120q0-17 11.5-28.5T160-360q17 0 28.5 11.5T200-320v120h120q17 0 28.5 11.5T360-160q0 17-11.5 28.5T320-120H200Zm560 0H640q-17 0-28.5-11.5T600-160q0-17 11.5-28.5T640-200h120v-120q0-17 11.5-28.5T800-360q17 0 28.5 11.5T840-320v120q0 33-23.5 56.5T760-120ZM120-640v-120q0-33 23.5-56.5T200-840h120q17 0 28.5 11.5T360-800q0 17-11.5 28.5T320-760H200v120q0 17-11.5 28.5T160-600q-17 0-28.5-11.5T120-640Zm640 0v-120H640q-17 0-28.5-11.5T600-800q0-17 11.5-28.5T640-840h120q33 0 56.5 23.5T840-760v120q0 17-11.5 28.5T800-600q-17 0-28.5-11.5T760-640ZM480-320q-66 0-113-47t-47-113q0-66 47-113t113-47q66 0 113 47t47 113q0 66-47 113t-113 47Zm0-80q33 0 56.5-23.5T560-480q0-33-23.5-56.5T480-560q-33 0-56.5 23.5T400-480q0 33 23.5 56.5T480-400Zm0-80Z" fill="currentColor" /></svg></button>',
-    '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomFit" data-i18n-title="screenshot.zoomFit">⤢</button>',
+    '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomFit" data-i18n-title="screenshot.zoomFit">' + screenshotIconSvg("zoomFit", 14) + '</button>',
     '</div>',
     // Mensagem exibida enquanto o backend congela a tela: a janela já cobre o
     // desktop com fundo preto nesse intervalo, e sem isto o usuário via uma
     // "tela toda preta" sem nenhuma pista do que estava acontecendo.
     '<div id="screenshotOverlayLoading" class="screenshot-overlay-loading hidden"></div>',
     '<div id="screenshotAnnotToolbar" class="screenshot-annot-toolbar hidden">',
-    '  <span id="screenshotAnnotDrag" class="screenshot-annot-drag" data-i18n-title="screenshot.annotDrag">⣿</span>',
-    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="rect" data-i18n-title="screenshot.annotRect">▭</button>',
-    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="circle" data-i18n-title="screenshot.annotCircle">◯</button>',
+    '  <span id="screenshotAnnotDrag" class="screenshot-annot-drag" data-i18n-title="screenshot.annotDrag">' + screenshotIconSvg("drag", 14) + '</span>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="rect" data-i18n-title="screenshot.annotRect">' + screenshotIconSvg("rect", 15) + '</button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="circle" data-i18n-title="screenshot.annotCircle">' + screenshotIconSvg("circle", 15) + '</button>',
     // Realce/spotlight: escurece o entorno e deixa a região arrastada em destaque.
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="spotlight" data-i18n-title="screenshot.annotSpotlight"><svg viewBox="0 -960 960 960" width="15" height="15" fill="none" aria-hidden="true" focusable="false"><path d="m198-667-30-29q-12-11-11.5-27.5T168-752q12-12 28.5-12.5T225-753l29 29q11 11 11.5 27.5T254-668q-11 11-27.5 11.5T198-667Zm242-133v-40q0-17 11.5-28.5T480-880q17 0 28.5 11.5T520-840v40q0 17-11.5 28.5T480-760q-17 0-28.5-11.5T440-800Zm268 75 28-28q11-11 27.5-11t28.5 12q11 11 11 28t-11 28l-28 28q-11 11-27.5 11.5T708-667q-12-12-12-29t12-29ZM360-160v-120l-97-97q-11-11-17-25.5t-6-30.5v-87q0-33 23.5-56.5T320-600h320q33 0 56.5 23.5T720-520v87q0 16-6 30.5T697-377l-97 97v120q0 33-23.5 56.5T520-80h-80q-33 0-56.5-23.5T360-160Zm80 0h80v-153l120-120v-87H320v87l120 120v153Zm40-180Z" fill="currentColor" /></svg></button>',
-    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="arrow" data-i18n-title="screenshot.annotArrow">↗</button>',
-    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="line" data-i18n-title="screenshot.annotLine">╱</button>',
-    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="pen" data-i18n-title="screenshot.annotPen">✎</button>',
-    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="marker" data-i18n-title="screenshot.annotMarker">🖍</button>',
-    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="blur" data-i18n-title="screenshot.annotBlur">▦</button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="arrow" data-i18n-title="screenshot.annotArrow">' + screenshotIconSvg("arrow", 15) + '</button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="line" data-i18n-title="screenshot.annotLine">' + screenshotIconSvg("line", 15) + '</button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="pen" data-i18n-title="screenshot.annotPen">' + screenshotIconSvg("pen", 15) + '</button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="marker" data-i18n-title="screenshot.annotMarker">' + screenshotIconSvg("marker", 15) + '</button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="blur" data-i18n-title="screenshot.annotBlur">' + screenshotIconSvg("blur", 15) + '</button>',
     // Lupa: arraste sobre a área pequena e o recorte aparece ampliado ao lado.
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="magnify" data-i18n-title="screenshot.annotMagnify"><svg viewBox="0 -960 960 960" width="15" height="15" fill="none" aria-hidden="true" focusable="false"><path d="M340-540h-40q-17 0-28.5-11.5T260-580q0-17 11.5-28.5T300-620h40v-40q0-17 11.5-28.5T380-700q17 0 28.5 11.5T420-660v40h40q17 0 28.5 11.5T500-580q0 17-11.5 28.5T460-540h-40v40q0 17-11.5 28.5T380-460q-17 0-28.5-11.5T340-500v-40Zm40 220q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l224 224q11 11 11 28t-11 28q-11 11-28 11t-28-11L532-372q-30 24-69 38t-83 14Zm0-80q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z" fill="currentColor" /></svg></button>',
-    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="step" data-i18n-title="screenshot.annotStep">①</button>',
-    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="text" data-i18n-title="screenshot.annotText">T</button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="step" data-i18n-title="screenshot.annotStep">' + screenshotIconSvg("step", 15) + '</button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="text" data-i18n-title="screenshot.annotText">' + screenshotIconSvg("text", 15) + '</button>',
     // Ícone em SVG (não emoji): o 🧽 renderizava como um borrão laranja em alguns
     // WebViews e destoava dos demais glifos.
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="eraser" data-i18n-title="screenshot.annotEraser"><svg viewBox="0 -960 960 960" width="15" height="15" fill="none" aria-hidden="true" focusable="false"><path d="M690-240h150q17 0 28.5 11.5T880-200q0 17-11.5 28.5T840-160H610l80-80Zm-483 80q-8 0-15.5-3t-13.5-9l-73-73q-23-23-23.5-57t22.5-58l440-456q23-24 56.5-24t56.5 23l199 199q23 23 23 57t-23 57L532-172q-6 6-13.5 9t-15.5 3H207Zm279-80 314-322-198-198-442 456 64 64h262Zm-6-240Z" fill="currentColor" /></svg></button>',
@@ -644,15 +681,16 @@ function screenshotEnsureOverlayEls() {
     '  <button type="button" class="screenshot-annot-btn" data-annot-width="10" data-i18n-title="screenshot.widthThick"><span class="screenshot-width-mark" style="height:7px"></span></button>',
     '  <span class="screenshot-annot-sep"></span>',
     // Salvar em arquivo e copiar o caminho do último arquivo salvo.
-    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotSave" data-i18n-title="screenshot.saveFile">💾</button>',
-    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotCopyPath" data-i18n-title="screenshot.copyPath">🔗</button>',
+    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotSave" data-i18n-title="screenshot.saveFile">' + screenshotIconSvg("save", 15) + '</button>',
+    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotCopyPath" data-i18n-title="screenshot.copyPath">' + screenshotIconSvg("link", 15) + '</button>',
     // Modo evidência: marca d'água (data/hora UTC, hostname, SHA-256) no print.
-    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotEvidence" aria-pressed="false" data-i18n-title="screenshot.evidenceMode">🛡</button>',
-    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotUndo" data-i18n-title="screenshot.annotUndo">↺</button>',
-    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotClear" data-i18n-title="screenshot.annotClear">🧹</button>',
-    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotReselect" data-i18n-title="screenshot.annotReselect">⟲</button>',
-    '  <button type="button" class="screenshot-annot-btn danger" id="screenshotAnnotCancel" data-i18n-title="screenshot.annotCancel">✕</button>',
-    '  <button type="button" class="screenshot-annot-confirm" id="screenshotAnnotConfirm" data-i18n-title="screenshot.annotConfirm">✓</button>',
+    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotEvidence" aria-pressed="false" data-i18n-title="screenshot.evidenceMode">' + screenshotIconSvg("evidence", 15) + '</button>',
+    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotUndo" data-i18n-title="screenshot.annotUndo">' + screenshotIconSvg("undo", 15) + '</button>',
+    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotRedo" data-i18n-title="screenshot.annotRedo">' + screenshotIconSvg("redo", 15) + '</button>',
+    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotClear" data-i18n-title="screenshot.annotClear">' + screenshotIconSvg("clear", 15) + '</button>',
+    '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotReselect" data-i18n-title="screenshot.annotReselect">' + screenshotIconSvg("reselect", 15) + '</button>',
+    '  <button type="button" class="screenshot-annot-btn danger" id="screenshotAnnotCancel" data-i18n-title="screenshot.annotCancel">' + screenshotIconSvg("cancel", 15) + '</button>',
+    '  <button type="button" class="screenshot-annot-confirm" id="screenshotAnnotConfirm" data-i18n-title="screenshot.annotConfirm">' + screenshotIconSvg("confirm", 16) + '</button>',
     '</div>',
     // Barra de dicas de atalho (aparece só com a seleção travada).
     '<div id="screenshotShortcutBar" class="screenshot-shortcut-bar hidden"></div>',
@@ -660,7 +698,7 @@ function screenshotEnsureOverlayEls() {
     '<div id="screenshotWindowPicker" class="screenshot-window-picker hidden" role="dialog" aria-modal="false">',
     '  <div class="screenshot-window-picker-head">',
     '    <input id="screenshotWindowSearch" type="search" class="screenshot-window-search" autocomplete="off" spellcheck="false" />',
-    '    <button id="screenshotWindowPickerClose" type="button" class="screenshot-annot-btn danger" data-i18n-title="action.close">✕</button>',
+    '    <button id="screenshotWindowPickerClose" type="button" class="screenshot-annot-btn danger" data-i18n-title="action.close">' + screenshotIconSvg("cancel", 15) + '</button>',
     '  </div>',
     '  <div id="screenshotWindowList" class="screenshot-window-list" role="listbox"></div>',
     '</div>',
@@ -694,6 +732,13 @@ function screenshotEnsureOverlayEls() {
   img.addEventListener("mouseleave", function () {
     var highlight = document.getElementById("screenshotOverlayWindow");
     if (highlight) highlight.classList.add("hidden");
+  });
+  // Se o usuário soltar o botão esquerdo fora da imagem (ex.: sobre a barra ou borda),
+  // encerra o arraste em vez de deixá-lo preso até o próximo clique.
+  document.addEventListener("mouseup", function (event) {
+    if (screenshotOverlayState && screenshotOverlayState.dragging) {
+      screenshotOnMouseUp(event);
+    }
   });
 
   // Anotações (canvas sobre a tela congelada).
@@ -764,6 +809,8 @@ function screenshotEnsureOverlayEls() {
 
   var undoBtn = document.getElementById("screenshotAnnotUndo");
   if (undoBtn) undoBtn.addEventListener("click", screenshotAnnotUndo);
+  var redoBtn = document.getElementById("screenshotAnnotRedo");
+  if (redoBtn) redoBtn.addEventListener("click", screenshotAnnotRedo);
   var clearBtn = document.getElementById("screenshotAnnotClear");
   if (clearBtn) clearBtn.addEventListener("click", screenshotAnnotClear);
   var reselectBtn = document.getElementById("screenshotAnnotReselect");
@@ -866,12 +913,14 @@ function screenshotShowOverlay(payload) {
   screenshotOverlayState = {
     payload: payload,
     dragging: false,
+    erasing: false,
     startX: 0,
     startY: 0,
     hover: null,
     ready: false,
     selection: null,
     annotations: [],
+    redoStack: [],
     draft: null,
     tool: "rect",
     color: "#ff3b30",
@@ -1373,7 +1422,7 @@ function screenshotOnMouseMove(event) {
 
 function screenshotOnMouseUp(event) {
   var state = screenshotOverlayState;
-  if (!state || !state.ready) return;
+  if (!state || !state.ready || !state.dragging) return;
   var metrics = screenshotMetrics();
   var physical = screenshotPhysicalScale(metrics);
   var moved = Math.abs(event.clientX - state.startX) + Math.abs(event.clientY - state.startY);
@@ -1463,6 +1512,8 @@ function screenshotLockSelection(selection) {
   if (!state) return;
   state.selection = selection;
   state.annotations = [];
+  state.redoStack = [];
+  state.erasing = false;
   state.draft = null;
   // A seleção está travada, mas a caixa de visualização CONTINUA sendo a tela
   // congelada inteira: a região permanece na mesma posição e escala em que foi
@@ -1495,6 +1546,8 @@ function screenshotAnnotReselect() {
   if (!state) return;
   state.selection = null;
   state.annotations = [];
+  state.redoStack = [];
+  state.erasing = false;
   state.draft = null;
   var box = document.getElementById("screenshotOverlaySelection");
   if (box) {
@@ -1727,10 +1780,39 @@ function screenshotSetAnnotWidth(width) {
   });
 }
 
+function screenshotUpdateHistoryButtons() {
+  var state = screenshotOverlayState;
+  var hasAnnots = !!(state && state.annotations && state.annotations.length > 0);
+  var hasRedo = !!(state && state.redoStack && state.redoStack.length > 0);
+  var undoBtn = document.getElementById("screenshotAnnotUndo");
+  if (undoBtn) {
+    undoBtn.disabled = !hasAnnots;
+    undoBtn.setAttribute("aria-disabled", hasAnnots ? "false" : "true");
+  }
+  var redoBtn = document.getElementById("screenshotAnnotRedo");
+  if (redoBtn) {
+    redoBtn.disabled = !hasRedo;
+    redoBtn.setAttribute("aria-disabled", hasRedo ? "false" : "true");
+  }
+  var clearBtn = document.getElementById("screenshotAnnotClear");
+  if (clearBtn) {
+    clearBtn.disabled = !hasAnnots;
+    clearBtn.setAttribute("aria-disabled", hasAnnots ? "false" : "true");
+  }
+}
+
 function screenshotAnnotUndo() {
   var state = screenshotOverlayState;
   if (!state || !state.annotations.length) return;
-  state.annotations.pop();
+  if (!state.redoStack) state.redoStack = [];
+  state.redoStack.push(state.annotations.pop());
+  screenshotAnnotRedraw();
+}
+
+function screenshotAnnotRedo() {
+  var state = screenshotOverlayState;
+  if (!state || !state.redoStack || !state.redoStack.length) return;
+  state.annotations.push(state.redoStack.pop());
   screenshotAnnotRedraw();
 }
 
@@ -1738,6 +1820,7 @@ function screenshotAnnotClear() {
   var state = screenshotOverlayState;
   if (!state) return;
   state.annotations = [];
+  state.redoStack = [];
   state.draft = null;
   screenshotAnnotRedraw();
 }
@@ -1769,6 +1852,30 @@ function screenshotAnnotHoverCursor(event) {
   canvas.classList.toggle("outside", !inside);
 }
 
+function screenshotApplyShiftConstraint(shape, point, shiftKey) {
+  if (!shiftKey || !shape || !point) return point;
+  var dx = point.x - shape.x1;
+  var dy = point.y - shape.y1;
+  if (shape.type === "rect" || shape.type === "circle") {
+    var side = Math.max(Math.abs(dx), Math.abs(dy));
+    return {
+      x: shape.x1 + (dx < 0 ? -side : side),
+      y: shape.y1 + (dy < 0 ? -side : side),
+    };
+  }
+  if (shape.type === "line" || shape.type === "arrow") {
+    var dist = Math.hypot(dx, dy);
+    if (dist < 1) return point;
+    var angle = Math.atan2(dy, dx);
+    var snapped = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4);
+    return {
+      x: shape.x1 + Math.cos(snapped) * dist,
+      y: shape.y1 + Math.sin(snapped) * dist,
+    };
+  }
+  return point;
+}
+
 function screenshotAnnotDown(event) {
   var state = screenshotOverlayState;
   if (!state || !state.selection) return;
@@ -1787,10 +1894,12 @@ function screenshotAnnotDown(event) {
   if (state.tool === "step") {
     // Numeração: um clique por passo (o número é recalculado no redraw).
     state.annotations.push({ type: "step", color: state.color, width: state.lineWidth, x: point.x, y: point.y });
+    state.redoStack = [];
     screenshotAnnotRedraw();
     return;
   }
   if (state.tool === "eraser") {
+    state.erasing = true;
     screenshotEraseAt(point);
     return;
   }
@@ -1807,10 +1916,17 @@ function screenshotAnnotDown(event) {
 
 function screenshotAnnotMove(event) {
   var state = screenshotOverlayState;
-  if (!state || !state.draft) return;
+  if (!state) return;
+  if (state.erasing) {
+    event.preventDefault();
+    screenshotEraseAt(screenshotAnnotPoint(event));
+    return;
+  }
+  if (!state.draft) return;
   event.preventDefault();
   var point = screenshotAnnotPoint(event);
   if (screenshotIsDragTool(state.draft.type)) {
+    point = screenshotApplyShiftConstraint(state.draft, point, !!event.shiftKey);
     state.draft.x2 = point.x;
     state.draft.y2 = point.y;
   } else {
@@ -1821,7 +1937,12 @@ function screenshotAnnotMove(event) {
 
 function screenshotAnnotUp() {
   var state = screenshotOverlayState;
-  if (!state || !state.draft) return;
+  if (!state) return;
+  if (state.erasing) {
+    state.erasing = false;
+    return;
+  }
+  if (!state.draft) return;
   var draft = state.draft;
   state.draft = null;
   var keep = false;
@@ -1830,7 +1951,10 @@ function screenshotAnnotUp() {
   } else {
     keep = draft.points.length > 1;
   }
-  if (keep) state.annotations.push(draft);
+  if (keep) {
+    state.annotations.push(draft);
+    state.redoStack = [];
+  }
   screenshotAnnotRedraw();
 }
 
@@ -2026,6 +2150,7 @@ function screenshotCommitText() {
     x: Number(input.dataset.imageX) || 0,
     y: Number(input.dataset.imageY) || 0,
   });
+  state.redoStack = [];
   screenshotAnnotRedraw();
 }
 
@@ -2073,6 +2198,7 @@ function screenshotAnnotRedraw() {
     screenshotDrawEvidenceWatermark(ctx, Math.max(1, clip.w), Math.max(1, clip.h), state.evidence);
     ctx.restore();
   }
+  screenshotUpdateHistoryButtons();
 }
 
 // screenshotDrawShape desenha uma marca em pixels da IMAGEM. `source` é a tela
@@ -2258,12 +2384,29 @@ function screenshotDrawMagnifier(ctx, shape, source) {
   var radius = Math.max(6, (shape.width || 6) * 1.5);
   ctx.save();
   ctx.strokeStyle = color;
-  // Linha conectora: da origem até a lente.
-  ctx.lineWidth = Math.max(1.5, (shape.width || 6) * 0.35);
-  ctx.beginPath();
-  ctx.moveTo(s.x + s.w, s.y + s.h / 2);
-  ctx.lineTo(d.x, d.y + d.h / 2);
-  ctx.stroke();
+  // Linha conectora: ancora na borda voltada para a lente (direita/esquerda/baixo/cima).
+  var connFrom = null;
+  var connTo = null;
+  if (d.x >= s.x + s.w) {
+    connFrom = { x: s.x + s.w, y: s.y + s.h / 2 };
+    connTo = { x: d.x, y: d.y + d.h / 2 };
+  } else if (d.x + d.w <= s.x) {
+    connFrom = { x: s.x, y: s.y + s.h / 2 };
+    connTo = { x: d.x + d.w, y: d.y + d.h / 2 };
+  } else if (d.y >= s.y + s.h) {
+    connFrom = { x: s.x + s.w / 2, y: s.y + s.h };
+    connTo = { x: d.x + d.w / 2, y: d.y };
+  } else if (d.y + d.h <= s.y) {
+    connFrom = { x: s.x + s.w / 2, y: s.y };
+    connTo = { x: d.x + d.w / 2, y: d.y + d.h };
+  }
+  if (connFrom && connTo) {
+    ctx.lineWidth = Math.max(1.5, (shape.width || 6) * 0.35);
+    ctx.beginPath();
+    ctx.moveTo(connFrom.x, connFrom.y);
+    ctx.lineTo(connTo.x, connTo.y);
+    ctx.stroke();
+  }
   // Conteúdo ampliado, recortado pelo contorno da lente.
   ctx.save();
   screenshotRoundedRectPath(ctx, d.x, d.y, d.w, d.h, radius);
@@ -2427,11 +2570,16 @@ function screenshotDrawStep(ctx, shape, index) {
 }
 
 function screenshotDrawArrow(ctx, x1, y1, x2, y2) {
+  var dist = Math.hypot(x2 - x1, y2 - y1);
+  if (dist < 1) return;
   var head = Math.max(12, (ctx.lineWidth || 6) * 4);
   var angle = Math.atan2(y2 - y1, x2 - x1);
+  var pullBack = Math.min(dist, head * 0.65);
+  var shaftEndX = x2 - pullBack * Math.cos(angle);
+  var shaftEndY = y2 - pullBack * Math.sin(angle);
   ctx.beginPath();
   ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
+  ctx.lineTo(shaftEndX, shaftEndY);
   ctx.stroke();
   ctx.beginPath();
   ctx.moveTo(x2, y2);
@@ -2477,6 +2625,7 @@ function screenshotBuildAnnotatedDataUrl() {
 }
 
 function screenshotConfirmSelection() {
+  screenshotCommitText();
   var state = screenshotOverlayState;
   if (!state || !state.selection) return;
   var selection = {
@@ -2557,6 +2706,9 @@ function screenshotFinishSelection(selection) {
   var api = screenshotApi();
   var payload = state.payload;
   var byLLM = !!payload.requestedByLlm;
+  var destination = (payload && payload.destination)
+    || screenshotOverlayDestination
+    || screenshotDestinationDefault();
   // Guardado ANTES de esconder: screenshotHideOverlay zera o estado global.
   var evidence = state.evidence && state.evidence.enabled ? state.evidence : null;
   if (!api || typeof api.FinishScreenshotOverlay !== "function") {
@@ -2572,17 +2724,9 @@ function screenshotFinishSelection(selection) {
     if (!result || !result.ok) {
       screenshotFeedback(screenshotT("screenshot.failed"), true);
       screenshotCancelBackendSession(payload.session);
-      supportChatNotifyCaptureFailed("captura recusada pelo agent");
+      supportChatNotifyCaptureFailed("captura recusada pelo agent", destination);
       return;
     }
-    // O destino vem no PAYLOAD da sessão (o Go o define ao abrir o overlay
-    // para o chat de suporte/comentário). A variável local só cobre capturas
-    // pedidas pelo próprio frontend. Sem considerar o payload, uma captura
-    // pedida PELO GO para o chat de suporte voltava com destino "aiChat" e o
-    // print nunca chegava ao atendente — ficava "enviando" para sempre.
-    var destination = (state.payload && state.payload.destination)
-      || screenshotOverlayDestination
-      || screenshotDestinationDefault();
     // Consome o destino: cada captura define o seu.
     screenshotOverlayDestination = "";
     // Política: copiar a imagem automaticamente ao confirmar (cache com TTL).
@@ -2603,7 +2747,7 @@ function screenshotFinishSelection(selection) {
     // devolve a janela aos bounds normais — sem isto ela continuava frameless e
     // sempre-no-topo cobrindo o desktop inteiro (a "tela toda preta").
     screenshotCancelBackendSession(payload.session);
-    supportChatNotifyCaptureFailed(err);
+    supportChatNotifyCaptureFailed(err, destination);
   });
 }
 
@@ -2623,16 +2767,20 @@ function screenshotCancelBackendSession(session) {
 // captura pedida por ela não produziu print: lá o botão fica desabilitado
 // esperando o evento "supportchat:screenshot" e, sem este aviso, só voltaria
 // pelo watchdog.
-function supportChatNotifyCaptureFailed(reason) {
-  if (screenshotOverlayDestination !== "supportChat") return;
+function supportChatNotifyCaptureFailed(reason, destination) {
+  var dest = destination
+    || (screenshotOverlayState && screenshotOverlayState.payload && screenshotOverlayState.payload.destination)
+    || screenshotOverlayDestination;
+  if (dest !== "supportChat") return;
   screenshotOverlayDestination = "";
   if (!window.wails || typeof window.wails.emit !== "function") return;
   window.wails.emit("supportchat:screenshot_failed", { error: String(reason || "") });
 }
 
 function screenshotCancelOverlay() {
-  supportChatNotifyCaptureFailed("captura cancelada");
   var state = screenshotOverlayState;
+  var dest = (state && state.payload && state.payload.destination) || screenshotOverlayDestination;
+  supportChatNotifyCaptureFailed("captura cancelada", dest);
   if (!state) {
     // Cancelamento durante o "preparando": não há sessão ainda. Marca para
     // cancelar/descartar assim que o payload chegar e devolve o chrome agora.
@@ -3059,7 +3207,7 @@ function screenshotEnsureLightbox() {
     '    <span id="screenshotLightboxCaption" class="screenshot-lightbox-caption"></span>',
     '    <span class="screenshot-lightbox-buttons">',
     '      <span id="screenshotLightboxZoom" class="screenshot-lightbox-zoom">100%</span>',
-    '      <button id="screenshotLightboxZoomFit" class="btn subtle" type="button" data-i18n-title="screenshot.zoomFit">⤢</button>',
+    '      <button id="screenshotLightboxZoomFit" class="btn subtle" type="button" data-i18n-title="screenshot.zoomFit">' + screenshotIconSvg("zoomFit", 14) + '</button>',
     '      <button id="screenshotLightboxOcr" class="btn subtle" type="button"></button>',
     '      <button id="screenshotLightboxCopy" class="btn subtle" type="button"></button>',
     '      <button id="screenshotLightboxClose" class="btn danger" type="button"></button>',
@@ -4054,7 +4202,7 @@ function screenshotRenderGallery() {
     thumbBtn.setAttribute("aria-label", screenshotT("screenshot.viewLarger"));
     var ph = document.createElement("span");
     ph.className = "screenshot-gallery-thumb-placeholder";
-    ph.textContent = "🖼";
+    ph.innerHTML = screenshotIconSvg("image", 20);
     thumbBtn.appendChild(ph);
     thumbBtn.addEventListener("click", function () {
       screenshotGalleryReadImage(item.path, 8 << 20).then(function (dataUrl) {
@@ -4475,6 +4623,7 @@ function screenshotUpdateCopyPathButton() {
 }
 
 function screenshotOverlaySave() {
+  screenshotCommitText();
   if (!screenshotOverlayState || !screenshotOverlayState.selection) return;
   var dataUrl = screenshotOutputDataUrl();
   if (!dataUrl) {
@@ -4689,11 +4838,15 @@ function screenshotDrawEvidenceWatermark(ctx, outW, outH, evidence) {
 
 var SCREENSHOT_TOOL_KEYS = {
   r: "rect",
+  c: "circle",
   s: "spotlight",
   a: "arrow",
+  l: "line",
   p: "pen",
+  m: "marker",
   t: "text",
   b: "blur",
+  z: "magnify",
   e: "eraser",
   n: "step",
 };
@@ -4708,6 +4861,7 @@ function screenshotIsEditableTarget(target) {
 }
 
 function screenshotOverlayCopyImage() {
+  screenshotCommitText();
   var dataUrl = screenshotOutputDataUrl();
   if (!dataUrl) {
     screenshotOverlayFlash(screenshotT("screenshot.copyFailed"), true);
@@ -4768,7 +4922,16 @@ function screenshotOverlayKeydown(event) {
   }
   if (mod && lower === "z") {
     event.preventDefault();
-    screenshotAnnotUndo();
+    if (event.shiftKey) {
+      screenshotAnnotRedo();
+    } else {
+      screenshotAnnotUndo();
+    }
+    return;
+  }
+  if (mod && lower === "y") {
+    event.preventDefault();
+    screenshotAnnotRedo();
     return;
   }
   if (mod && lower === "c") {

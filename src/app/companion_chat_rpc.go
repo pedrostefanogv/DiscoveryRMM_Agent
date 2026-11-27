@@ -206,6 +206,16 @@ func (a *App) ipcRPCSupportChatSend(payload map[string]any) map[string]any {
 	return map[string]any{"ok": true}
 }
 
+func (a *App) ipcRPCSupportChatTyping(payload map[string]any) map[string]any {
+	isTyping, _ := payload["isTyping"].(bool)
+	ctx, cancel := context.WithTimeout(a.supportChatContext(), 5*time.Second)
+	defer cancel()
+	if err := a.supportChatService().SendTyping(ctx, isTyping); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	return map[string]any{"ok": true}
+}
+
 func (a *App) ipcRPCSupportChatUpload(payload map[string]any) map[string]any {
 	fileName, _ := payload["fileName"].(string)
 	contentType, _ := payload["contentType"].(string)

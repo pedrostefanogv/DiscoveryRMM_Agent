@@ -588,7 +588,7 @@ func drawAnnotationShapeGDIPlus(canvas *winui.PARGBCanvas, w, h int, sh Annotati
 		}
 		canvas.FillPolygons(buildEllipseRingPolygons(x0, y0, x1, y1, stroke), mainARGB, false)
 
-	case AnnotationToolFreehand, AnnotationToolLaser:
+	case AnnotationToolFreehand:
 		pts := make([]winui.PointF, len(sh.Points))
 		for i, pt := range sh.Points {
 			pts[i] = winui.PointF{
@@ -600,6 +600,29 @@ func drawAnnotationShapeGDIPlus(canvas *winui.PARGBCanvas, w, h int, sh Annotati
 			canvas.FillPolygons(buildPolylinePolygons(pts, stroke+3), haloARGB, true)
 		}
 		canvas.FillPolygons(buildPolylinePolygons(pts, stroke), mainARGB, true)
+
+	case AnnotationToolLaser:
+		pts := make([]winui.PointF, len(sh.Points))
+		for i, pt := range sh.Points {
+			pts[i] = winui.PointF{
+				X: float32(pt.X * float64(w)),
+				Y: float32(pt.Y * float64(h)),
+			}
+		}
+		glowAlpha := uint32(math.Round(clamp01(sh.Alpha) * 72))
+		if glowAlpha > 0 {
+			glowARGB := (glowAlpha << 24) | (sh.ColorRGB & 0x00FFFFFF)
+			canvas.FillPolygons(buildPolylinePolygons(pts, stroke+10), glowARGB, true)
+		}
+		if haloAlpha > 0 {
+			canvas.FillPolygons(buildPolylinePolygons(pts, stroke+3), haloARGB, true)
+		}
+		canvas.FillPolygons(buildPolylinePolygons(pts, stroke), mainARGB, true)
+		coreAlpha := uint32(math.Round(clamp01(sh.Alpha) * 215))
+		if coreAlpha > 0 {
+			coreARGB := (coreAlpha << 24) | 0x00FFFFFF
+			canvas.FillPolygons(buildPolylinePolygons(pts, math.Max(1.5, stroke*0.42)), coreARGB, true)
+		}
 	}
 }
 

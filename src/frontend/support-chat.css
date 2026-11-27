@@ -734,3 +734,47 @@
 .sc-banner-close:hover {
   opacity: 1;
 }
+
+@keyframes scTypingPulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+.sc-typing-indicator[hidden],
+.sc-assisted-action[hidden] {
+  display: none;
+}
+
+.sc-typing-indicator {
+  padding: 4px 14px 6px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--muted);
+  animation: scTypingPulse 1.6s ease-in-out infinite;
+}
+
+.sc-assisted-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 12px 6px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border) 60%);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-2) 88%);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.sc-assisted-action-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.sc-assisted-action-actions .btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}

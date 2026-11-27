@@ -206,9 +206,10 @@ func flattenSVGPath(d string) []iconSubpath {
 			start = pen
 			current = iconSubpath{pen}
 			// Depois do primeiro m, pares seguintes viram linhas: troca o cmd.
-			cmd = 'L'
-			if d[i-1] == 'm' {
+			if cmd == 'm' {
 				cmd = 'l'
+			} else {
+				cmd = 'L'
 			}
 			lastWasCurve = false
 		case 'L', 'l':

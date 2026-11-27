@@ -4,7 +4,6 @@ package notifyui
 
 import (
 	_ "embed"
-	"math"
 
 	"discovery/app/core/winui"
 )
@@ -35,17 +34,16 @@ func DrawGlyph(hdc uintptr, rect winui.Rect, name string, color winui.Color) {
 	}
 	// Material Symbols exporta em unidades de 24px × 40 (viewBox 0 -960 960).
 	scale := float64(rect.W) / iconViewBoxSize
-	round := func(v float64) int { return int(math.Round(v)) }
-	polys := make([][]winui.Point, 0, len(subpaths))
+	polys := make([][]winui.PointF, 0, len(subpaths))
 	for _, sp := range subpaths {
 		if len(sp) < 3 {
 			continue
 		}
-		pts := make([]winui.Point, 0, len(sp))
+		pts := make([]winui.PointF, 0, len(sp))
 		for _, pt := range sp {
-			pts = append(pts, winui.Point{
-				X: rect.X + round((pt.X-iconViewBoxMinX)*scale),
-				Y: rect.Y + round((pt.Y-iconViewBoxMinY)*scale),
+			pts = append(pts, winui.PointF{
+				X: float32(float64(rect.X) + (pt.X-iconViewBoxMinX)*scale),
+				Y: float32(float64(rect.Y) + (pt.Y-iconViewBoxMinY)*scale),
 			})
 		}
 		polys = append(polys, pts)
@@ -53,7 +51,7 @@ func DrawGlyph(hdc uintptr, rect winui.Rect, name string, color winui.Color) {
 	if len(polys) == 0 {
 		return
 	}
-	winui.FillPolygonsAA(hdc, polys, color)
+	winui.FillPolygonsAAf(hdc, polys, color)
 }
 
 // DrawAgentLogo desenha o logo do agente ("D", PNG embedado) preenchendo o

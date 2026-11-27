@@ -21,23 +21,46 @@ func TestNormalizeIconKind(t *testing.T) {
 }
 
 // Todos os glifos do Material Symbols flatten em subpaths fechados plausíveis
-// (o primeiro subpath dos ícones circulares/triângulo contorna o corpo).
+// dentro do viewBox (0 -960 960 960), incluindo os glifos extras (chat, desktop).
 func TestParseIconSubpaths(t *testing.T) {
-	for _, kind := range []string{IconInfo, IconWarning, IconError, IconQuestion} {
-		sps := parseIconSubpaths(kind)
+	for _, kind := range []string{IconInfo, IconWarning, IconError, IconQuestion, GlyphChat, GlyphDesktop} {
+		sps := parseGlyph(kind)
 		if len(sps) == 0 {
-			t.Fatalf("kind %q não flattenou nenhum subpath", kind)
+			t.Fatalf("glifo %q não flattenou nenhum subpath", kind)
 		}
 		for i, sp := range sps {
 			if len(sp) < 3 {
-				t.Fatalf("kind %q subpath %d com %d pontos", kind, i, len(sp))
+				t.Fatalf("glifo %q subpath %d com %d pontos", kind, i, len(sp))
 			}
 			for _, p := range sp {
 				// viewBox do Material Symbols (0 -960 960 960).
 				if p.X < -5 || p.X > iconViewBoxSize+5 || p.Y < iconViewBoxMinY-5 || p.Y > 5 {
-					t.Fatalf("kind %q ponto fora do viewBox: %+v", kind, p)
+					t.Fatalf("glifo %q ponto fora do viewBox: %+v", kind, p)
 				}
 			}
+		}
+	}
+}
+
+// Regressão: 'm' relativo seguido de pares de coordenadas implícitos deve
+// continuar relativo ('l'), não virar 'L' absoluto.
+func TestFlattenSVGPathRelativeMoveToLine(t *testing.T) {
+	sps := flattenSVGPath("m240-240-92 92 100 0z")
+	if len(sps) != 1 {
+		t.Fatalf("subpaths = %d, want 1", len(sps))
+	}
+	want := []iconPoint{
+		{240, -240},
+		{148, -148},
+		{248, -148},
+		{240, -240},
+	}
+	if len(sps[0]) != len(want) {
+		t.Fatalf("pontos = %v, want %v", sps[0], want)
+	}
+	for i := range want {
+		if sps[0][i] != want[i] {
+			t.Fatalf("ponto[%d] = %v, want %v", i, sps[0][i], want[i])
 		}
 	}
 }

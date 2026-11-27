@@ -375,6 +375,7 @@ var ipcKnownMutatingMethods = map[string]struct{}{
 	"supportchat:refresh":                 {},
 	"supportchat:refresh_keeping_invite":  {},
 	"supportchat:send":                    {},
+	"supportchat:typing":                  {},
 	"supportchat:upload":                  {},
 	"supportchat:end":                     {},
 	"supportchat:respond_invite":          {},

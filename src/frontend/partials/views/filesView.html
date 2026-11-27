@@ -1,0 +1,28 @@
+<section id="filesView" class="tab-view" role="tabpanel" aria-labelledby="tabFiles" hidden>
+  <header class="view-header">
+    <div>
+      <h1 data-i18n="files.title">Arquivos</h1>
+      <p class="view-subtitle" data-i18n="files.subtitle">
+        Arquivos e instaladores disponibilizados para este equipamento (Global → Cliente → Site).
+      </p>
+    </div>
+    <div class="view-actions">
+      <button id="filesRefreshBtn" class="btn btn-secondary" type="button">
+        <span data-i18n="action.refresh">Atualizar</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="toolbar-row" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+    <input id="filesSearchInput" class="input" type="search" placeholder="Buscar arquivo..." style="flex:1;min-width:180px;" />
+    <select id="filesScopeFilter" class="input" style="width:auto;">
+      <option value="">Todos os escopos</option>
+      <option value="0">Global</option>
+      <option value="1">Cliente</option>
+      <option value="2">Site</option>
+    </select>
+  </div>
+
+  <div id="filesStatusBanner" class="meta" style="margin-bottom:10px;"></div>
+  <div id="filesListContainer" class="files-list"></div>
+</section>

@@ -115,6 +115,16 @@ func TestAnnotationOverlay_PARGBPixelsAndWinding(t *testing.T) {
 				{X: 0.6, Y: 0.8},
 			},
 		},
+		{
+			Tool:     AnnotationToolLaser,
+			ColorRGB: 0xFF3B30,
+			Width:    6,
+			Alpha:    0.85,
+			Points: []AnnotationPoint{
+				{X: 0.2, Y: 0.35},
+				{X: 0.45, Y: 0.35},
+			},
+		},
 	}
 
 	for _, sh := range shapes {

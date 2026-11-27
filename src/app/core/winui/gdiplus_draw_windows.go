@@ -20,7 +20,6 @@ type Point struct {
 }
 
 var (
-	procGdipAddLine2I           = gdiplusDLL.NewProc("GdipAddPathLine2I")
 	procGdipLoadImageFromStream = gdiplusDLL.NewProc("GdipLoadImageFromStream")
 	procGdipDrawImageRectI      = gdiplusDLL.NewProc("GdipDrawImageRectI")
 	procGdipDisposeImage        = gdiplusDLL.NewProc("GdipDisposeImage")
@@ -57,7 +56,48 @@ func FillPolygonsAA(hdc uintptr, polygons [][]Point, color Color) {
 		for i, p := range poly {
 			points[i] = gdiplusPoint{X: int32(p.X), Y: int32(p.Y)}
 		}
-		if status, _, _ := procGdipAddLine2I.Call(path,
+		if status, _, _ := procGdipAddPolygonI.Call(path,
+			uintptr(unsafe.Pointer(&points[0])), uintptr(len(points))); status != 0 {
+			continue
+		}
+	}
+
+	var brush uintptr
+	if status, _, _ := procGdipCreateSolidFill.Call(uintptr(argb(color)), uintptr(unsafe.Pointer(&brush))); status != 0 || brush == 0 {
+		return
+	}
+	defer procGdipDeleteBrush.Call(brush)
+	procGdipFillPath.Call(graphics, brush, path)
+}
+
+// FillPolygonsAAf preenche vários polígonos com coordenadas fracionárias
+// (subpaths independentes; um polígono dentro de outro vira furo pelo
+// FillModeAlternate) com antialiasing sub-pixel.
+func FillPolygonsAAf(hdc uintptr, polygons [][]PointF, color Color) {
+	if len(polygons) == 0 {
+		return
+	}
+	graphics := gdiplusGraphics(hdc)
+	if graphics == 0 {
+		return
+	}
+	defer procGdipDeleteGraphics.Call(graphics)
+
+	var path uintptr
+	if status, _, _ := procGdipCreatePath.Call(uintptr(0), uintptr(unsafe.Pointer(&path))); status != 0 || path == 0 {
+		return
+	}
+	defer procGdipDeletePath.Call(path)
+
+	for _, poly := range polygons {
+		if len(poly) < 3 {
+			continue
+		}
+		points := make([]gdiplusPointF, len(poly))
+		for i, p := range poly {
+			points[i] = gdiplusPointF{X: p.X, Y: p.Y}
+		}
+		if status, _, _ := procGdipAddPathPolygon.Call(path,
 			uintptr(unsafe.Pointer(&points[0])), uintptr(len(points))); status != 0 {
 			continue
 		}

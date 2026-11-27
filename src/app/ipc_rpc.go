@@ -93,6 +93,8 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCSupportChatRefresh(true)
 	case "supportchat:send":
 		return a.ipcRPCSupportChatSend(payload)
+	case "supportchat:typing":
+		return a.ipcRPCSupportChatTyping(payload)
 	case "supportchat:upload":
 		return a.ipcRPCSupportChatUpload(payload)
 	case "supportchat:download":
@@ -222,6 +224,10 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCKnowledgeRefresh()
 	case "diag:runtime":
 		return a.ipcRPCRuntimeDiag()
+	case "files:list":
+		return a.ipcRPCFilesList(ctx)
+	case "files:download_url":
+		return a.ipcRPCFilesDownloadURL(ctx, payload)
 	default:
 		return map[string]any{"ok": false, "error": "método desconhecido: " + method}
 	}

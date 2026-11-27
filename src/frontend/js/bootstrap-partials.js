@@ -8,6 +8,7 @@
     { mountId: "statusViewMount", path: "partials/views/statusView.html" },
     { mountId: "storeViewMount", path: "partials/views/storeView.html" },
     { mountId: "updatesViewMount", path: "partials/views/updatesView.html" },
+    { mountId: "filesViewMount", path: "partials/views/filesView.html" },
     {
       mountId: "inventoryViewMount",
       path: "partials/views/inventoryView.html",
@@ -49,6 +50,7 @@
     // app-knowledge, que consomem o modo nas telas de espera.
     "js/server-authorization.js",
     "js/app-store-updates.js",
+    "js/app-files.js",
     "js/app-inventory.js",
     // Bundle A2UI (renderer de interfaces geradas por IA). Deve carregar
     // ANTES de app-chat.js, que consome window.A2uiChat.

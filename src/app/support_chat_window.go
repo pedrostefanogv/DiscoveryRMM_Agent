@@ -1516,6 +1516,20 @@ func (a *App) SupportChatSendMessage(body string, attachmentIDs []string) error 
 	return a.supportChatService().SendMessage(ctx, body, attachmentIDs)
 }
 
+// SupportChatSendTyping envia indicador efêmero de "digitando..." ao suporte.
+func (a *App) SupportChatSendTyping(isTyping bool) error {
+	if a.ipcClient != nil {
+		_, err := a.ipcCallError("supportchat:typing", map[string]any{
+			"isTyping": isTyping,
+		}, 5*time.Second)
+		return err
+	}
+	ctx, cancel := context.WithTimeout(a.supportChatContext(), 5*time.Second)
+	defer cancel()
+
+	return a.supportChatService().SendTyping(ctx, isTyping)
+}
+
 // SupportChatUploadAttachment sobe um anexo (prepare -> PUT -> complete).
 func (a *App) SupportChatUploadAttachment(fileName, contentType, base64Data string) (string, error) {
 	fileName = strings.TrimSpace(fileName)

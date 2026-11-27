@@ -211,6 +211,8 @@ type Envelope struct {
 	EndReason       string   `json:"endReason,omitempty"`
 	Accepted        *bool    `json:"accepted,omitempty"`
 	Reason          string   `json:"reason,omitempty"`
+	IsTyping        *bool    `json:"isTyping,omitempty"`
+	ActionType      string   `json:"actionType,omitempty"`
 	TimestampUTC    string   `json:"timestampUtc,omitempty"`
 }
 
@@ -229,4 +231,6 @@ const (
 	// exatamente o "precisei clicar em Agora não e o console continuou
 	// aguardando".
 	EventSessionDeclined = "SessionDeclined"
+	EventTyping          = "Typing"
+	EventAssistedAction  = "AssistedAction"
 )

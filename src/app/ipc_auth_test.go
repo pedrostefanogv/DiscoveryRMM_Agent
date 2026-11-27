@@ -42,7 +42,7 @@ func TestIPCMethodClassification(t *testing.T) {
 		"logs:tail", "store:catalog", "inventory:snapshot", "automation:state",
 		"support:tickets", "support:ticket", "support:comments", "support:options",
 		"support:ticket_attachment_download", "support:comment_attachment_download",
-		"knowledge:list", "knowledge:article", "p2p:peers", "metodo:desconhecido",
+		"knowledge:list", "knowledge:article", "p2p:peers", "files:list", "files:download_url", "metodo:desconhecido",
 	}
 	for _, method := range reads {
 		if isIPCMutatingMethod(method) {

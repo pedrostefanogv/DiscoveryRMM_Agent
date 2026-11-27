@@ -116,6 +116,14 @@ function initAppBindings() {
       setActiveTab("updates");
     });
   }
+  if (tabFilesBtn) {
+    tabFilesBtn.addEventListener("click", function () {
+      setActiveTab("files");
+      if (typeof window.loadAgentFiles === "function") {
+        window.loadAgentFiles(false);
+      }
+    });
+  }
   if (tabInventoryBtn) {
     tabInventoryBtn.addEventListener("click", function () {
       setActiveTab("inventory");
@@ -806,6 +814,11 @@ function applyAgentFeatureVisibility() {
     updatesViewEl,
     !debugMode && cfg.updatesTabEnabled === false,
   );
+  setTabVisibility(
+    tabFilesBtn,
+    filesViewEl,
+    !debugMode && cfg.filesTabEnabled === false,
+  );
 
   // P2P exige um caminho de descoberta (Descoberta de Rede na LAN ou Bootstrap
   // P2P via Nuvem). Sem nenhum dos dois os agents não se encontram.
@@ -842,6 +855,7 @@ var AGENT_HOME_TAB_BUTTONS = {
   status: tabStatusBtn,
   store: tabStoreBtn,
   updates: tabUpdatesBtn,
+  files: tabFilesBtn,
   chat: tabChatBtn,
   support: tabSupportBtn,
   knowledge: tabKnowledgeBtn,

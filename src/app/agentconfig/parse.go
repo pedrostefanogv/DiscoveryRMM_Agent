@@ -41,6 +41,10 @@ func ParseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		updatesTab := true
 		cfg.UpdatesTabEnabled = &updatesTab
 	}
+	if cfg.FilesTabEnabled == nil {
+		filesTab := true
+		cfg.FilesTabEnabled = &filesTab
+	}
 	// agentHomeTab é sempre normalizado (ausente/vazio/inválido → "status").
 	cfg.AgentHomeTab = NormalizeAgentHomeTab(cfg.AgentHomeTab)
 	return cfg, nil
@@ -112,6 +116,7 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		CloudBootstrapEnabled:             getBoolPtr("cloudBootstrapEnabled"),
 		AppStoreEnabled:                   getBoolPtr("appStoreEnabled"),
 		UpdatesTabEnabled:                 getBoolPtr("updatesTabEnabled"),
+		FilesTabEnabled:                   getBoolPtr("filesTabEnabled"),
 		AutomationP2PWingetInstallEnabled: getBoolPtr("automationP2pWingetInstallEnabled"),
 		AgentHomeTab:                      NormalizeAgentHomeTab(getString("agentHomeTab")),
 		InventoryIntervalHours:            getIntPtr("inventoryIntervalHours"),
@@ -412,6 +417,16 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 		boolFromPtr(site, func(s *SiteConfiguration) *bool { return s.UpdatesTabEnabled }),
 		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.UpdatesTabEnabled }),
 		serverUpdatesTab,
+	))
+
+	serverFilesTab := true
+	if srv.FilesTabEnabled != nil {
+		serverFilesTab = *srv.FilesTabEnabled
+	}
+	cfg.FilesTabEnabled = boolPtr(resolveBool(
+		boolFromPtr(site, func(s *SiteConfiguration) *bool { return s.FilesTabEnabled }),
+		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.FilesTabEnabled }),
+		serverFilesTab,
 	))
 
 	// Int fields

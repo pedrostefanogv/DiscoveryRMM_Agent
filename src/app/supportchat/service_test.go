@@ -672,3 +672,28 @@ func servicePointingAt(rawURL string) *Service {
 		Emit: func(string, ...any) {},
 	})
 }
+
+func TestHandleEnvelope_TypingAndAssistedActionEmitEvents(t *testing.T) {
+	var emitted []string
+	svc := New(Deps{
+		Logf:           func(string) {},
+		GetDebugConfig: func() DebugConfig { return DebugConfig{} },
+		Emit: func(name string, _ ...any) {
+			emitted = append(emitted, name)
+		},
+	})
+
+	typingJSON := `{"eventType":"Typing","sessionId":"` + testSessionID + `","authorName":"Pedro","isTyping":true}`
+	if err := svc.HandleEnvelope([]byte(typingJSON)); err != nil {
+		t.Fatalf("HandleEnvelope(Typing) erro inesperado: %v", err)
+	}
+
+	actionJSON := `{"eventType":"AssistedAction","sessionId":"` + testSessionID + `","actionType":"request_screenshot","body":"Tire um print"}`
+	if err := svc.HandleEnvelope([]byte(actionJSON)); err != nil {
+		t.Fatalf("HandleEnvelope(AssistedAction) erro inesperado: %v", err)
+	}
+
+	if len(emitted) != 2 || emitted[0] != "supportchat:typing" || emitted[1] != "supportchat:assisted-action" {
+		t.Fatalf("eventos esperados [supportchat:typing, supportchat:assisted-action], obteve %v", emitted)
+	}
+}

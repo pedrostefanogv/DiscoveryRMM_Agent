@@ -184,3 +184,53 @@ func TestBackBufferReuseAndBlit(t *testing.T) {
 		t.Fatal("Release deveria limpar o buffer")
 	}
 }
+
+// TestFillPolygonsSubpathsIsolated garante que FillPolygonsAA e FillPolygonsAAf
+// mantêm cada polígono como figura isolada (sem ligar um ao outro) e preservam
+// furos internos pelo FillModeAlternate.
+func TestFillPolygonsSubpathsIsolated(t *testing.T) {
+	bg := RGB(10, 10, 10)
+	fg := RGB(240, 80, 40)
+
+	// Dois quadrados separados + furo no primeiro: o vão entre (16..24) não
+	// pode receber pintura ligando os dois polígonos, e o miolo (8,8) fica bg.
+	dc := testFloatDC(t, 44, 24)
+	FillRect(dc, Rect{W: 44, H: 24}, bg)
+	FillPolygonsAA(dc, [][]Point{
+		{{2, 2}, {16, 2}, {16, 16}, {2, 16}},
+		{{6, 6}, {12, 6}, {12, 12}, {6, 12}},
+		{{26, 2}, {38, 2}, {38, 16}, {26, 16}},
+	}, fg)
+	if got := testPixelColor(t, dc, 4, 4); got != fg {
+		t.Fatalf("FillPolygonsAA quadrado 1 = %#x, esperado %#x", got, fg)
+	}
+	if got := testPixelColor(t, dc, 9, 9); got != bg {
+		t.Fatalf("FillPolygonsAA furo interno = %#x, esperado %#x (fundo)", got, bg)
+	}
+	if got := testPixelColor(t, dc, 21, 9); got != bg {
+		t.Fatalf("FillPolygonsAA vão entre polígonos = %#x, esperado %#x (sem linha ligando subpaths)", got, bg)
+	}
+	if got := testPixelColor(t, dc, 32, 9); got != fg {
+		t.Fatalf("FillPolygonsAA quadrado 2 = %#x, esperado %#x", got, fg)
+	}
+
+	dcF := testFloatDC(t, 44, 24)
+	FillRect(dcF, Rect{W: 44, H: 24}, bg)
+	FillPolygonsAAf(dcF, [][]PointF{
+		{{2, 2}, {16, 2}, {16, 16}, {2, 16}},
+		{{6, 6}, {12, 6}, {12, 12}, {6, 12}},
+		{{26, 2}, {38, 2}, {38, 16}, {26, 16}},
+	}, fg)
+	if got := testPixelColor(t, dcF, 4, 4); got != fg {
+		t.Fatalf("FillPolygonsAAf quadrado 1 = %#x, esperado %#x", got, fg)
+	}
+	if got := testPixelColor(t, dcF, 9, 9); got != bg {
+		t.Fatalf("FillPolygonsAAf furo interno = %#x, esperado %#x (fundo)", got, bg)
+	}
+	if got := testPixelColor(t, dcF, 21, 9); got != bg {
+		t.Fatalf("FillPolygonsAAf vão entre polígonos = %#x, esperado %#x (sem linha ligando subpaths)", got, bg)
+	}
+	if got := testPixelColor(t, dcF, 32, 9); got != fg {
+		t.Fatalf("FillPolygonsAAf quadrado 2 = %#x, esperado %#x", got, fg)
+	}
+}
