@@ -50,6 +50,7 @@
               '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
                 '<strong style="font-size:14px;">' + escapeHtml(f.name || f.fileName) + '</strong>' +
                 '<span class="badge">' + escapeHtml(scopeText) + '</span>' +
+                (f.folderPath && f.folderPath !== '/' ? '<span class="badge">' + escapeHtml(f.folderPath) + '</span>' : '') +
                 (f.category ? '<span class="badge">' + escapeHtml(f.category) + '</span>' : '') +
               '</div>' +
               '<div class="meta" style="font-size:12px;margin-top:2px;">' +

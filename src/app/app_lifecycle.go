@@ -374,6 +374,10 @@ func (a *App) runStagedStartup(ctx context.Context) {
 		if a.P2PCoord != nil {
 			// Inicializa o ciclo de vida do p2p.Coordinator antes de iniciar o loop.
 			_ = a.P2PCoord.Startup(ctx)
+			a.LoadCachedAgentMtlsIdentity()
+			a.safeGo(func() {
+				a.StartMtlsEnrollmentLoop(ctx)
+			})
 			if !isAgentConfigured() && a.zeroTouchConfigRegistrationAllowed() {
 				a.safeGo(func() {
 					a.RunOnboardingLoop(ctx)

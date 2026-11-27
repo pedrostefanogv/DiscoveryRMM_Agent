@@ -78,6 +78,7 @@ func (c *Coordinator) HandlePeerOnlineEvent(event agentconn.PeerEventMessage) {
 	} else if !ok {
 		return
 	}
+	c.triggerLibp2pHandshake(addrInfo)
 
 	c.deps.Log(fmt.Sprintf("[p2p][events] conectado via peer.online: agentId=%s peerId=%s",
 		strings.TrimSpace(event.AgentID), strings.TrimSpace(event.PeerID)))
@@ -108,6 +109,8 @@ func (c *Coordinator) HandlePeerOnlineEvent(event agentconn.PeerEventMessage) {
 		Host:         address,
 		Address:      address,
 		Port:         port,
+		LibP2PPeerID: strings.TrimSpace(event.PeerID),
+		LibP2PPort:   event.Port,
 		Source:       "nats-event",
 		ConnectedVia: "nats-event",
 		TTLSeconds:   int(p2pPeerTTLFloor.Seconds()),
@@ -167,6 +170,8 @@ func (c *Coordinator) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDiscoveryS
 			Host:         address,
 			Address:      address,
 			Port:         peer.Port,
+			LibP2PPeerID: strings.TrimSpace(peer.PeerID),
+			LibP2PPort:   peer.Port,
 			Source:       "nats-discovery",
 			KnownPeers:   knownPeers,
 			ConnectedVia: "nats-discovery",
@@ -243,5 +248,6 @@ func (c *Coordinator) connectP2PDiscoveryPeer(peer agentconn.P2PDiscoveryPeer) {
 	} else if !ok {
 		return
 	}
+	c.triggerLibp2pHandshake(addrInfo)
 	c.deps.Log(fmt.Sprintf("[p2p][nats-discovery] peer conectado via libp2p: agentId=%s peerId=%s", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.PeerID)))
 }

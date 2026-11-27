@@ -180,6 +180,7 @@ func (c *Coordinator) RunCloudBootstrap(ctx context.Context) (int, error) {
 				continue
 			}
 		}
+		c.triggerLibp2pHandshake(addrInfo)
 
 		c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] conectado peerId=%s addrs=%v", rp.PeerID, rp.Addrs))
 		cachedPeers = upsertP2PPeerCacheEntry(cachedPeers, p2pCachedPeer{
@@ -210,6 +211,8 @@ func (c *Coordinator) RunCloudBootstrap(ctx context.Context) (int, error) {
 			Host:         address,
 			Address:      address,
 			Port:         port,
+			LibP2PPeerID: rp.PeerID,
+			LibP2PPort:   rp.Port,
 			Source:       "cloud-bootstrap",
 			ConnectedVia: "cloud-bootstrap",
 			TTLSeconds:   int(p2pPeerTTLFloor.Seconds()),

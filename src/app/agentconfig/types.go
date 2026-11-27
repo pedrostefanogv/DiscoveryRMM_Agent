@@ -169,6 +169,7 @@ type AgentConfiguration struct {
 	KnowledgeBaseEnabled              *bool  `json:"knowledgeBaseEnabled"`
 	ZeroTouchEnabled                  *bool  `json:"zeroTouchEnabled"`
 	CloudBootstrapEnabled             *bool  `json:"cloudBootstrapEnabled"`
+	P2PMdnsEnabled                    *bool  `json:"p2pMdnsEnabled"`
 	AppStoreEnabled                   *bool  `json:"appStoreEnabled"`
 	AutomationP2PWingetInstallEnabled *bool  `json:"automationP2pWingetInstallEnabled"`
 	// UpdatesTabEnabled é o kill switch da aba "Atualizações" do painel do
@@ -229,6 +230,7 @@ type ServerConfiguration struct {
 	// ser distinguivel de false, porque false APAGA o cofre no TPM.
 	TpmRecoveryEnabled                *bool  `json:"tpmRecoveryEnabled"`
 	CloudBootstrapEnabled             bool   `json:"cloudBootstrapEnabled"`
+	P2PMdnsEnabled                    *bool  `json:"p2pMdnsEnabled"`
 	SupportEnabled                    bool   `json:"supportEnabled"`
 	ChatAIEnabled                     bool   `json:"chatAIEnabled"`
 	KnowledgeBaseEnabled              bool   `json:"knowledgeBaseEnabled"`
@@ -279,6 +281,7 @@ type ClientConfiguration struct {
 	P2PFilesEnabled                   *bool   `json:"p2PFilesEnabled"`
 	TpmRecoveryEnabled                *bool   `json:"tpmRecoveryEnabled"`
 	CloudBootstrapEnabled             *bool   `json:"cloudBootstrapEnabled"`
+	P2PMdnsEnabled                    *bool   `json:"p2pMdnsEnabled"`
 	SupportEnabled                    *bool   `json:"supportEnabled"`
 	ChatAIEnabled                     *bool   `json:"chatAIEnabled"`
 	KnowledgeBaseEnabled              *bool   `json:"knowledgeBaseEnabled"`
@@ -317,6 +320,7 @@ type SiteConfiguration struct {
 	DiscoveryEnabled                  *bool   `json:"discoveryEnabled"`
 	P2PFilesEnabled                   *bool   `json:"p2PFilesEnabled"`
 	TpmRecoveryEnabled                *bool   `json:"tpmRecoveryEnabled"`
+	P2PMdnsEnabled                    *bool   `json:"p2pMdnsEnabled"`
 	SupportEnabled                    *bool   `json:"supportEnabled"`
 	ChatAIEnabled                     *bool   `json:"chatAIEnabled"`
 	KnowledgeBaseEnabled              *bool   `json:"knowledgeBaseEnabled"`

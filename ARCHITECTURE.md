@@ -153,8 +153,7 @@ Discovery/
 │   │   ├── partials/           # Fragmentos HTML (shell, sidebar, views)
 │   │   └── styles/             # Folhas de estilo modulares
 │   ├── e2e/                    # Testes E2E Tiers 1–2 (boundaries, F14 decoupling, F18 CLI/go.mod)
-│   ├── build/                  # Configuração Wails v3 (config.yml, windows/project.nsi, Taskfile.yml)
-│   └── third_party/go-libp2p/  # Fork local de go-libp2p sem transporte WebRTC (pion/webrtc removido)
+│   └── build/                  # Configuração Wails v3 (config.yml, windows/project.nsi, Taskfile.yml)
 ├── AGENTS.md                   # Regras obrigatórias de build Wails v3
 ├── BRANCHING.md                # Fluxo de branches (dev → beta → release → lts)
 ├── SECURITY.md                 # Política de segurança
@@ -341,7 +340,7 @@ Os arquivos em `src/frontend/bindings/` (incluindo `src/frontend/bindings/discov
 | Dependência | Uso |
 | --- | --- |
 | `github.com/wailsapp/wails/v3` (`v3.1.0`) | Framework GUI desktop para `discovery-agent.exe` (bindings, runtime, janelas, tray nativo) |
-| `github.com/libp2p/go-libp2p` (fork `./third_party/go-libp2p`) | Stack P2P (DHT, mDNS, TCP/QUIC; transporte `pion/webrtc` removido) |
+| `github.com/libp2p/go-libp2p` | Stack P2P oficial (mDNS, TCP/QUIC, Hole Punching/Relay v2 opcionais) |
 | `github.com/nats-io/nats.go` | Comunicação com servidor central via NATS / WebSocket e JetStream |
 | `modernc.org/sqlite` | Driver SQLite pure Go (cache local, outboxes duráveis, logs) |
 | `github.com/robfig/cron/v3` | Agendamento cron para automação |

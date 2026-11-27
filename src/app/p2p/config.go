@@ -95,6 +95,44 @@ func NormalizeConfig(cfg Config) Config {
 		out.P2PMode = p2pmeta.ModeLibp2pOnly
 	}
 
+	if env := strings.TrimSpace(os.Getenv("DISCOVERY_P2P_TCP_ONLY")); env != "" {
+		switch strings.ToLower(env) {
+		case "0", "false", "no":
+			v := false
+			out.TCPOnly = &v
+		case "1", "true", "yes":
+			v := true
+			out.TCPOnly = &v
+		}
+	}
+	if env := strings.TrimSpace(os.Getenv("DISCOVERY_P2P_HOLE_PUNCHING")); env != "" {
+		switch strings.ToLower(env) {
+		case "1", "true", "yes":
+			out.BootstrapConfig.EnableHolePunching = true
+		case "0", "false", "no":
+			out.BootstrapConfig.EnableHolePunching = false
+		}
+	}
+	if env := strings.TrimSpace(os.Getenv("DISCOVERY_P2P_STATIC_RELAYS")); env != "" {
+		var relays []string
+		for _, part := range strings.Split(env, ",") {
+			if trimmed := strings.TrimSpace(part); trimmed != "" {
+				relays = append(relays, trimmed)
+			}
+		}
+		out.BootstrapConfig.StaticRelays = relays
+	}
+	if env := strings.TrimSpace(os.Getenv("DISCOVERY_P2P_MDNS_ENABLED")); env != "" {
+		switch strings.ToLower(env) {
+		case "0", "false", "no":
+			v := false
+			out.MDNSEnabled = &v
+		case "1", "true", "yes":
+			v := true
+			out.MDNSEnabled = &v
+		}
+	}
+
 	return out
 }
 

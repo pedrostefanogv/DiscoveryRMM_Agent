@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"discovery/app/core/platform"
+	"discovery/app/core/tlsutil"
 	"discovery/app/p2pmeta"
 )
 
@@ -112,6 +113,11 @@ type Coordinator struct {
 	// manual da UI): dois ciclos concorrentes atrapalhariam o cache de peers
 	// (load/save de arquivo + connectCachedPeers sem coordenação).
 	cloudBootstrapRunMu sync.Mutex
+
+	// mtlsIdentity armazena o certificado mTLS e a CA interna para validação
+	// estrita de tenant no handshake libp2p e /artifact/access.
+	mtlsMu       sync.RWMutex
+	mtlsIdentity *tlsutil.AgentMtlsIdentity
 
 	// ── Lifecycle (Fase 4.1) ──
 	// ctx é o contexto de ciclo de vida, cancelado no Shutdown.
@@ -214,6 +220,26 @@ func NewCoordinator(deps AppDeps) *Coordinator {
 	}
 	c.transferServer = NewTransferServer(deps, c)
 	return c
+}
+
+// SetMtlsIdentity registra a identidade mTLS (certificado + CA) no Coordinator.
+func (c *Coordinator) SetMtlsIdentity(id *tlsutil.AgentMtlsIdentity) {
+	if c == nil {
+		return
+	}
+	c.mtlsMu.Lock()
+	c.mtlsIdentity = id
+	c.mtlsMu.Unlock()
+}
+
+func (c *Coordinator) getMtlsIdentity() *tlsutil.AgentMtlsIdentity {
+	if c == nil {
+		return nil
+	}
+	c.mtlsMu.RLock()
+	id := c.mtlsIdentity
+	c.mtlsMu.RUnlock()
+	return id
 }
 
 // Startup prepara o contexto de ciclo de vida do Coordinator P2P.
@@ -767,6 +793,14 @@ func (c *Coordinator) upsertPeer(peer p2pDiscoveredPeer) bool {
 
 	c.mu.Lock()
 	previous, existed := c.peers[key]
+	if existed {
+		if strings.TrimSpace(peer.LibP2PPeerID) == "" {
+			peer.LibP2PPeerID = previous.Peer.LibP2PPeerID
+		}
+		if peer.LibP2PPort <= 0 {
+			peer.LibP2PPort = previous.Peer.LibP2PPort
+		}
+	}
 	c.peers[key] = p2pPeerState{Peer: peer, LastSeenUTC: time.Now().UTC()}
 	c.knownPeers = len(c.peers)
 	c.mu.Unlock()

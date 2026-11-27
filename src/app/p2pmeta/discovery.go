@@ -16,6 +16,8 @@ type DiscoveredPeer struct {
 	Host         string
 	Address      string
 	Port         int
+	LibP2PPeerID string
+	LibP2PPort   int
 	Source       string
 	KnownPeers   int
 	ConnectedVia string

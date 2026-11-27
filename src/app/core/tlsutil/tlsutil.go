@@ -61,8 +61,12 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 	client := &http.Client{Timeout: timeout}
 	tlsCfg := InsecureTLSConfig()
 	if tlsCfg == nil {
-		return client
+		if GetAgentClientCertificate() == nil {
+			return client
+		}
+		tlsCfg = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
+	attachAgentClientCert(tlsCfg)
 
 	if transport, ok := http.DefaultTransport.(*http.Transport); ok && transport != nil {
 		clone := transport.Clone()
@@ -78,6 +82,11 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 func NewWebSocketDialer(handshakeTimeout time.Duration) websocket.Dialer {
 	dialer := websocket.Dialer{HandshakeTimeout: handshakeTimeout}
 	if tlsCfg := InsecureTLSConfig(); tlsCfg != nil {
+		attachAgentClientCert(tlsCfg)
+		dialer.TLSClientConfig = tlsCfg
+	} else if GetAgentClientCertificate() != nil {
+		tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+		attachAgentClientCert(tlsCfg)
 		dialer.TLSClientConfig = tlsCfg
 	}
 	return dialer
@@ -100,6 +109,7 @@ func PinnedTLSConfig(expectedHash string, enforce bool) *tls.Config {
 	if insecure := InsecureTLSConfig(); insecure != nil {
 		cfg.InsecureSkipVerify = true
 	}
+	attachAgentClientCert(cfg)
 
 	expectedHash = normalizePinHash(expectedHash)
 	if !enforce {

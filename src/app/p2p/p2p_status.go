@@ -42,16 +42,25 @@ func (c *Coordinator) GetStatus() P2PDebugStatus {
 }
 
 func (c *Coordinator) GetPeers() []P2PPeerView {
+	_, registry := c.libp2pHostAndRegistry()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	out := make([]P2PPeerView, 0, len(c.peers))
 	for _, peer := range c.peers {
+		libp2pPeerID := strings.TrimSpace(peer.Peer.LibP2PPeerID)
+		if libp2pPeerID == "" && registry != nil {
+			if id, ok := registry.Lookup(peer.Peer.AgentID); ok {
+				libp2pPeerID = id.String()
+			}
+		}
 		out = append(out, P2PPeerView{
 			AgentID:      peer.Peer.AgentID,
 			ClientID:     peer.Peer.ClientID,
 			Host:         peer.Peer.Host,
 			Address:      peer.Peer.Address,
 			Port:         peer.Peer.Port,
+			LibP2PPeerID: libp2pPeerID,
+			LibP2PPort:   peer.Peer.LibP2PPort,
 			Source:       peer.Peer.Source,
 			LastSeenUTC:  formatTimeRFC3339(peer.LastSeenUTC),
 			KnownPeers:   peer.Peer.KnownPeers,

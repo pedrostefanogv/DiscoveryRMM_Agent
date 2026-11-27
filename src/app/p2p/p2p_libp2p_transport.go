@@ -561,6 +561,16 @@ func handleStreamArtifactAccess(s network.Stream, transfer *TransferServer) {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
 		return
 	}
+	if transfer != nil && transfer.coord != nil && transfer.coord.getMtlsIdentity() != nil {
+		_, reg := transfer.coord.libp2pHostAndRegistry()
+		if reg == nil || !reg.IsMtlsVerified(s.Conn().RemotePeer()) {
+			_ = json.NewEncoder(s).Encode(libp2pErrorResponse{
+				Error: "peer sem certificado mTLS valido da CA",
+				Code:  p2pErrCodeAuth,
+			})
+			return
+		}
+	}
 	if req.RequesterID == "" {
 		req.RequesterID = "peer-anon"
 	}
@@ -598,6 +608,16 @@ func handleStreamArtifactManifest(s network.Stream, transfer *TransferServer) {
 	if req.ArtifactName == "" {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
 		return
+	}
+	if transfer != nil && transfer.coord != nil && transfer.coord.getMtlsIdentity() != nil {
+		_, reg := transfer.coord.libp2pHostAndRegistry()
+		if reg == nil || !reg.IsMtlsVerified(s.Conn().RemotePeer()) {
+			_ = json.NewEncoder(s).Encode(libp2pErrorResponse{
+				Error: "peer sem certificado mTLS valido da CA",
+				Code:  p2pErrCodeAuth,
+			})
+			return
+		}
 	}
 	if err := validateArtifactAccessToken(transfer, req.ArtifactName, req.RequesterID, req.Token); err != nil {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error(), Code: p2pErrCodeAuth})
@@ -710,6 +730,16 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 	if req.ArtifactName == "" {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
 		return
+	}
+	if transfer != nil && transfer.coord != nil && transfer.coord.getMtlsIdentity() != nil {
+		_, reg := transfer.coord.libp2pHostAndRegistry()
+		if reg == nil || !reg.IsMtlsVerified(s.Conn().RemotePeer()) {
+			_ = json.NewEncoder(s).Encode(libp2pErrorResponse{
+				Error: "peer sem certificado mTLS valido da CA",
+				Code:  p2pErrCodeAuth,
+			})
+			return
+		}
 	}
 	if err := validateArtifactAccessToken(transfer, req.ArtifactName, req.RequesterID, req.Token); err != nil {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error(), Code: p2pErrCodeAuth})

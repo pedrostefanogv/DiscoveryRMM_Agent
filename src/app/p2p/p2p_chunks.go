@@ -18,6 +18,7 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/protocol/ping"
 )
 
 const (
@@ -35,15 +36,64 @@ type libp2pPeer struct {
 	peerID  peer.ID
 }
 
-// p2pChunkScheduler tracks per-peer error counts for scored peer selection.
+// p2pChunkScheduler tracks per-peer error counts and RTT EMA for scored peer selection.
 type p2pChunkScheduler struct {
 	mu          sync.Mutex
 	errorCounts map[string]int
+	rttEMA      map[string]time.Duration
 }
 
 // newP2PChunkScheduler creates a scheduler.
 func newP2PChunkScheduler() *p2pChunkScheduler {
-	return &p2pChunkScheduler{errorCounts: make(map[string]int)}
+	return &p2pChunkScheduler{
+		errorCounts: make(map[string]int),
+		rttEMA:      make(map[string]time.Duration),
+	}
+}
+
+// recordRTT atualiza a média móvel exponencial (70/30) do RTT de um peer.
+func (s *p2pChunkScheduler) recordRTT(peerID peer.ID, rtt time.Duration) {
+	if s == nil || rtt <= 0 {
+		return
+	}
+	key := peerID.String()
+	s.mu.Lock()
+	if s.rttEMA == nil {
+		s.rttEMA = make(map[string]time.Duration)
+	}
+	if prev, ok := s.rttEMA[key]; ok && prev > 0 {
+		s.rttEMA[key] = (prev*7 + rtt*3) / 10
+	} else {
+		s.rttEMA[key] = rtt
+	}
+	s.mu.Unlock()
+}
+
+// probePeerRTTs mede o RTT de múltiplos peers em paralelo via /ipfs/ping/1.0.0
+// antes do download para desempatar seeds pela menor latência.
+func (s *p2pChunkScheduler) probePeerRTTs(ctx context.Context, h host.Host, peers []libp2pPeer) {
+	if s == nil || h == nil || len(peers) <= 1 {
+		return
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	for _, lp := range peers {
+		wg.Add(1)
+		go func(pid peer.ID) {
+			defer wg.Done()
+			ch := ping.Ping(probeCtx, h, pid)
+			select {
+			case res, ok := <-ch:
+				if ok && res.Error == nil && res.RTT > 0 {
+					s.recordRTT(pid, res.RTT)
+				}
+			case <-probeCtx.Done():
+			}
+		}(lp.peerID)
+	}
+	wg.Wait()
 }
 
 // pickPeer selects the peer with the fewest recorded errors.
@@ -53,9 +103,8 @@ func (s *p2pChunkScheduler) pickPeer(chunkIdx int, peers []libp2pPeer) libp2pPee
 }
 
 // pickPeerExcluding selects the peer with the fewest recorded errors,
-// excluding peers whose peerID is in the exclude set. This ensures retries
-// try a different peer instead of repeating against the same failing peer.
-// If all peers are excluded, falls back to the original pickPeer behavior.
+// breaking error ties by lower RTT (when difference > 5ms), and excluding
+// peers whose peerID is in the exclude set.
 func (s *p2pChunkScheduler) pickPeerExcluding(chunkIdx int, peers []libp2pPeer, exclude map[string]bool) libp2pPeer {
 	if len(peers) == 1 {
 		return peers[0]
@@ -79,11 +128,26 @@ func (s *p2pChunkScheduler) pickPeerExcluding(chunkIdx int, peers []libp2pPeer, 
 	}
 
 	best := candidates[chunkIdx%len(candidates)]
-	bestErr := s.errorCounts[best.peerID.String()]
+	bestKey := best.peerID.String()
+	bestErr := s.errorCounts[bestKey]
+	bestRTT := s.rttEMA[bestKey]
 	for _, p := range candidates {
-		if e := s.errorCounts[p.peerID.String()]; e < bestErr {
+		pKey := p.peerID.String()
+		e := s.errorCounts[pKey]
+		if e < bestErr {
 			bestErr = e
 			best = p
+			bestKey = pKey
+			bestRTT = s.rttEMA[pKey]
+			continue
+		}
+		if e == bestErr {
+			pRTT := s.rttEMA[pKey]
+			if pRTT > 0 && (bestRTT == 0 || bestRTT-pRTT > 5*time.Millisecond) {
+				best = p
+				bestKey = pKey
+				bestRTT = pRTT
+			}
 		}
 	}
 	return best
@@ -296,6 +360,10 @@ func downloadChunkedLibp2p(
 	// earlyAbortOnce garante que o cancelamento seja disparado uma única vez
 	// quando o chunk 0 falhar em todos os peers.
 	var earlyAbortOnce sync.Once
+
+	if len(peers) > 1 {
+		sched.probePeerRTTs(abortCtx, h, peers)
+	}
 
 	workerCount := maxParallel
 	if len(manifest.Chunks) < workerCount {

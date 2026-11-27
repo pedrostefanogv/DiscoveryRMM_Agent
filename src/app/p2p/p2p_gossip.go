@@ -3,6 +3,7 @@ package p2p
 import (
 	"context"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"time"
@@ -64,26 +65,114 @@ func (c *Coordinator) refreshSinglePeer(ctx context.Context, peer p2pDiscoveredP
 // Ignora peers com clientId divergente quando o clientId local está definido.
 func (c *Coordinator) applyGossipResponse(sourceAgentID string, knownPeers []P2PPeerView, artifacts []P2PArtifactView, source string) {
 	localClientID := normalizeClientID(strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID))
+	selfAgentID := strings.TrimSpace(c.deps.GetDebugConfig().AgentID)
+	_, registry := c.libp2pHostAndRegistry()
 	for _, p := range knownPeers {
+		agentID := strings.TrimSpace(p.AgentID)
+		if agentID == "" || (selfAgentID != "" && strings.EqualFold(agentID, selfAgentID)) {
+			continue
+		}
 		// Se o peer gossip trouxe clientId e ele diverge do local, ignora.
 		if localClientID != "" && strings.TrimSpace(p.ClientID) != "" &&
 			!strings.EqualFold(normalizeClientID(strings.TrimSpace(p.ClientID)), localClientID) {
 			continue
 		}
+		libp2pPeerID := strings.TrimSpace(p.LibP2PPeerID)
+		address := strings.TrimSpace(p.Address)
 		c.upsertPeer(p2pDiscoveredPeer{
-			AgentID:      strings.TrimSpace(p.AgentID),
+			AgentID:      agentID,
 			Host:         strings.TrimSpace(p.Host),
-			Address:      strings.TrimSpace(p.Address),
+			Address:      address,
 			Port:         p.Port,
+			LibP2PPeerID: libp2pPeerID,
+			LibP2PPort:   p.LibP2PPort,
 			Source:       "gossip",
 			KnownPeers:   p.KnownPeers,
 			ConnectedVia: "gossip",
 		})
+		if libp2pPeerID != "" && address != "" && p.LibP2PPort > 0 && registry != nil {
+			if _, known := registry.Lookup(agentID); !known {
+				dedupeKey := "gossip-connect:" + strings.ToLower(agentID)
+				c.mu.Lock()
+				lastAttempt, attempted := c.peerLastAttempt[dedupeKey]
+				shouldDial := !attempted || time.Since(lastAttempt) >= 30*time.Second
+				if shouldDial {
+					c.peerLastAttempt[dedupeKey] = time.Now()
+				}
+				c.mu.Unlock()
+				if shouldDial {
+					go c.connectTransitiveGossipPeer(agentID, libp2pPeerID, address, p.LibP2PPort)
+				}
+			}
+		}
 	}
 	if len(artifacts) > 0 {
 		c.upsertPeerArtifacts(sourceAgentID, artifacts, source)
 		c.deps.Log(fmt.Sprintf("[p2p][gossip] peer=%s artifacts=%d transitivos=%d",
 			strings.TrimSpace(sourceAgentID), len(artifacts), len(knownPeers)))
+	}
+}
+
+// allowLoopbackGossipDialForTest permite testes em processo com 127.0.0.1.
+var allowLoopbackGossipDialForTest bool
+
+// isAllowedTransitiveGossipAddr restringe conexões transitivas aprendidas via
+// gossip a IPs privados RFC1918 / CGNAT quando NAT traversal está desligado,
+// evitando port-scan/conexões de saída para IPs públicos ou loopback.
+func isAllowedTransitiveGossipAddr(rawIP string, natTraversal bool) bool {
+	ip := net.ParseIP(strings.TrimSpace(rawIP))
+	if ip == nil || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return false
+	}
+	if ip.IsLoopback() {
+		return allowLoopbackGossipDialForTest
+	}
+	if natTraversal {
+		return true
+	}
+	if ip.IsPrivate() {
+		return true
+	}
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+		return true
+	}
+	return false
+}
+
+func (c *Coordinator) connectTransitiveGossipPeer(agentID, peerIDStr, address string, libp2pPort int) {
+	h, registry := c.libp2pHostAndRegistry()
+	if h == nil || registry == nil {
+		return
+	}
+	tcpOnly := true
+	natTraversal := false
+	if c != nil && c.deps != nil {
+		cfg := c.deps.GetP2PConfig()
+		tcpOnly = cfg.TCPOnlyEnabled()
+		natTraversal = cfg.BootstrapConfig.EnableHolePunching || len(cfg.BootstrapConfig.StaticRelays) > 0
+	}
+	if !isAllowedTransitiveGossipAddr(address, natTraversal) {
+		return
+	}
+	addrInfo, err := buildAddrInfo(peerIDStr, []string{address}, libp2pPort, tcpOnly)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Ctx(), p2pLibP2PHandshakeTimeout+discoveryDialJitter)
+	err = connectPeerIfNotConnected(ctx, h, addrInfo, discoveryDialJitter)
+	cancel()
+	if err != nil {
+		return
+	}
+	if ok, _, conflict := registry.RegisterStrict(agentID, addrInfo.ID); conflict {
+		_ = h.Network().ClosePeer(addrInfo.ID)
+		return
+	} else if !ok {
+		return
+	}
+	c.triggerLibp2pHandshake(addrInfo)
+	if c.deps != nil {
+		c.deps.Log(fmt.Sprintf("[p2p][gossip] peer transitivo conectado via libp2p: agentId=%s peerId=%s", agentID, peerIDStr))
 	}
 }
 

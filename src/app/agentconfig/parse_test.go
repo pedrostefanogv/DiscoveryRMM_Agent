@@ -414,6 +414,43 @@ func TestParseAgentConfiguration_CloudBootstrapServerOnly(t *testing.T) {
 	}
 }
 
+func TestParseAgentConfiguration_P2PMdnsHierarchy(t *testing.T) {
+	// Default quando ausente em todos os niveis = true.
+	cfgDefault, err := ParseAgentConfiguration([]byte(`{"server":{},"client":{},"site":{}}`))
+	if err != nil {
+		t.Fatalf("parse default: %v", err)
+	}
+	if cfgDefault.P2PMdnsEnabled == nil || !*cfgDefault.P2PMdnsEnabled {
+		t.Fatal("expected p2pMdnsEnabled default true")
+	}
+
+	// Client sobrescreve server, site sobrescreve client.
+	cfgOverride, err := ParseAgentConfiguration([]byte(`{
+		"server": {"p2pMdnsEnabled": true},
+		"client": {"p2pMdnsEnabled": false},
+		"site":   {"p2pMdnsEnabled": true}
+	}`))
+	if err != nil {
+		t.Fatalf("parse override: %v", err)
+	}
+	if cfgOverride.P2PMdnsEnabled == nil || !*cfgOverride.P2PMdnsEnabled {
+		t.Fatal("expected site override to win (true)")
+	}
+
+	// Client=false sem site=true -> herda false do client.
+	cfgClient, err := ParseAgentConfiguration([]byte(`{
+		"server": {"p2pMdnsEnabled": true},
+		"client": {"p2pMdnsEnabled": false},
+		"site":   {}
+	}`))
+	if err != nil {
+		t.Fatalf("parse client override: %v", err)
+	}
+	if cfgClient.P2PMdnsEnabled == nil || *cfgClient.P2PMdnsEnabled {
+		t.Fatal("expected client override false to be inherited")
+	}
+}
+
 func TestParseAgentConfiguration_AgentHomeTabDefaultStatus(t *testing.T) {
 	cfg, err := ParseAgentConfiguration([]byte(`{"siteId":"s1"}`))
 	if err != nil {

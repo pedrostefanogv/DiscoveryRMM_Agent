@@ -44,16 +44,42 @@ const registryStalePrune = 24 * time.Hour
 // stale são substituídos sem conflito — reinício do agente remoto (identidade
 // efêmera legada ou chave regenerada) não deve mais bloquear a malha.
 type libp2pPeerRegistry struct {
-	mu    sync.RWMutex
-	peers map[string]peer.ID
-	seen  map[string]time.Time // último contato/registro por agentID
+	mu       sync.RWMutex
+	peers    map[string]peer.ID
+	seen     map[string]time.Time // último contato/registro por agentID
+	verified map[peer.ID]bool     // peers validados via certificado mTLS da CA
 }
 
 func newLibp2pPeerRegistry() *libp2pPeerRegistry {
 	return &libp2pPeerRegistry{
-		peers: make(map[string]peer.ID),
-		seen:  make(map[string]time.Time),
+		peers:    make(map[string]peer.ID),
+		seen:     make(map[string]time.Time),
+		verified: make(map[peer.ID]bool),
 	}
+}
+
+// MarkMtlsVerified registra que o peer apresentou certificado mTLS válido da CA.
+func (r *libp2pPeerRegistry) MarkMtlsVerified(id peer.ID) {
+	if r == nil || id == "" {
+		return
+	}
+	r.mu.Lock()
+	if r.verified == nil {
+		r.verified = make(map[peer.ID]bool)
+	}
+	r.verified[id] = true
+	r.mu.Unlock()
+}
+
+// IsMtlsVerified informa se o peer já foi autenticado com certificado mTLS da CA.
+func (r *libp2pPeerRegistry) IsMtlsVerified(id peer.ID) bool {
+	if r == nil || id == "" {
+		return false
+	}
+	r.mu.RLock()
+	ok := r.verified[id]
+	r.mu.RUnlock()
+	return ok
 }
 
 // Register associa um agentID a um peer.ID libp2p. Seguro para uso concorrente.

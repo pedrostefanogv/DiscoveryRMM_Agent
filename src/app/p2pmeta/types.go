@@ -16,6 +16,8 @@ type BootstrapConfig struct {
 	BootstrapPeers        []string `json:"bootstrapPeers,omitempty"`
 	PreferLAN             bool     `json:"preferLan"`
 	CloudBootstrapEnabled bool     `json:"cloudBootstrapEnabled,omitempty"`
+	EnableHolePunching    bool     `json:"enableHolePunching,omitempty"`
+	StaticRelays          []string `json:"staticRelays,omitempty"`
 }
 
 type Config struct {
@@ -48,6 +50,15 @@ type Config struct {
 	//   "legacy":            aceita peers sem token (agentes antigos).
 	// Pode ser forçado pela variável DISCOVERY_P2P_ARTIFACT_SERVE_MODE.
 	ArtifactServeMode string `json:"artifactServeMode,omitempty"`
+	// MDNSEnabled controla o anúncio/descoberta mDNS (UDP 5353). Nil = habilitado
+	// por padrão (mantendo compatibilidade com configs antigos), salvo quando o
+	// perfil de rede Windows ativo for exclusivamente Público.
+	MDNSEnabled *bool `json:"mdnsEnabled,omitempty"`
+}
+
+// MDNSEnabledEffective retorna true quando o mDNS está habilitado por política.
+func (c Config) MDNSEnabledEffective() bool {
+	return c.MDNSEnabled == nil || *c.MDNSEnabled
 }
 
 // ArtifactServeModes lista os valores aceitos em ArtifactServeMode.
@@ -145,6 +156,8 @@ type PeerView struct {
 	Host         string `json:"host"`
 	Address      string `json:"address"`
 	Port         int    `json:"port"`
+	LibP2PPeerID string `json:"libp2pPeerId,omitempty"`
+	LibP2PPort   int    `json:"libp2pPort,omitempty"`
 	Source       string `json:"source"`
 	LastSeenUTC  string `json:"lastSeenUtc"`
 	KnownPeers   int    `json:"knownPeers"`

@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"discovery/app/core/tlsutil"
+
 	libp2p "github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/control"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -20,7 +22,9 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	noise "github.com/libp2p/go-libp2p/p2p/security/noise"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
@@ -38,10 +42,13 @@ const (
 
 // p2pLibP2PPeerInfo is exchanged over the /discovery-p2p/1.0.0 stream.
 type p2pLibP2PPeerInfo struct {
-	AgentID  string `json:"agentId"`
-	Host     string `json:"host,omitempty"`
-	ClientID string `json:"clientId"`
-	HTTPPort int    `json:"httpPort"`
+	AgentID    string `json:"agentId"`
+	Host       string `json:"host,omitempty"`
+	ClientID   string `json:"clientId"`
+	HTTPPort   int    `json:"httpPort"`
+	LibP2PPort int    `json:"libp2pPort,omitempty"`
+	CertPEM    string `json:"certPem,omitempty"`
+	CertSig    string `json:"certSig,omitempty"`
 }
 
 // p2pLibP2PProvider implements p2pDiscoveryProvider using go-libp2p mDNS.
@@ -55,11 +62,20 @@ type p2pLibP2PProvider struct {
 	// to connect to at startup, enabling discovery in non-multicast networks.
 	bootstrapPeers []string
 
-	// tcpOnly restringe o host ao transporte TCP (desativa QUIC). QUIC/UDP no
+	// tcpOnly restringe o transporte ao TCP (desativa QUIC). QUIC/UDP no
 	// Windows é suspeito recorrente de quedas de conexão durante transferências
 	// ("Application error 0x0"); com TCP-only eliminamos o par TCP+QUIC que
 	// amplia corridas de dial/dedup. Default: true (via TCPOnlyEnabled()).
 	tcpOnly bool
+
+	// enableHolePunching e staticRelays habilitam NAT traversal (DCUtR +
+	// Circuit Relay v2) quando configurados, mantendo DisableRelay() por padrão.
+	enableHolePunching bool
+	staticRelays       []string
+
+	// mdnsDisabled desativa o anúncio/descoberta mDNS quando false na política
+	// herdada do servidor.
+	mdnsDisabled bool
 
 	// coord and transfer are injected by startDiscovery so the host can serve
 	// the libp2p transport protocols (peers/access/manifest/get/replicate).
@@ -79,7 +95,8 @@ type p2pLibP2PProvider struct {
 	clientID string
 
 	// svc é o serviço mDNS, guardado para cleanup síncrono no Close.
-	svc mdns.Service
+	svc     mdns.Service
+	notifee *libp2pMDNSNotifee
 
 	// closeMu protege Close contra chamadas concorrentes.
 	closeMu sync.Mutex
@@ -87,6 +104,27 @@ type p2pLibP2PProvider struct {
 }
 
 func (p *p2pLibP2PProvider) Name() string { return p2pDiscoveryLibP2P }
+
+// TriggerHandshake dispara o handshake /discovery-p2p/1.0.0 (incluindo troca de
+// certificado mTLS) para um peer recém-conectado fora do mDNS.
+func (p *p2pLibP2PProvider) TriggerHandshake(pi peer.AddrInfo) {
+	if p == nil || p.notifee == nil || pi.ID == "" {
+		return
+	}
+	go p.notifee.exchangeWithPeer(pi)
+}
+
+func (c *Coordinator) triggerLibp2pHandshake(pi peer.AddrInfo) {
+	if c == nil {
+		return
+	}
+	c.mu.RLock()
+	p := c.discoveryProvider
+	c.mu.RUnlock()
+	if lp, ok := p.(*p2pLibP2PProvider); ok {
+		lp.TriggerHandshake(pi)
+	}
+}
 
 // Close desliga o provider libp2p de forma síncrona: fecha o mDNS service e o
 // host libp2p. É idempotente. Se Start não foi chamado, é no-op.
@@ -156,6 +194,16 @@ func (p *p2pLibP2PProvider) Start(
 			onTrace(fmt.Sprintf("identidade libp2p persistente indisponivel (gerando efemera): %v", idErr))
 		}
 	}
+	userAgent := resolveLibP2PUserAgent(p.coord)
+	var rm network.ResourceManager
+	if builtRM, rmErr := buildP2PResourceManager(); rmErr == nil {
+		rm = builtRM
+	} else if onTrace != nil {
+		onTrace(fmt.Sprintf("libp2p resource manager custom indisponivel (usando default): %v", rmErr))
+	}
+	staticRelays := parseStaticRelayAddrs(p.staticRelays, onTrace)
+	natTraversal := p.enableHolePunching || len(staticRelays) > 0
+
 	buildOpts := func(port int) []libp2p.Option {
 		listenAddrs := []string{fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port)}
 		if !p.tcpOnly {
@@ -163,13 +211,25 @@ func (p *p2pLibP2PProvider) Start(
 		}
 		opts := []libp2p.Option{
 			libp2p.ListenAddrStrings(listenAddrs...),
+			libp2p.AddrsFactory(filterP2PAdvertiseAddrs),
+			libp2p.UserAgent(userAgent),
 			libp2p.Transport(tcp.NewTCPTransport),
-			libp2p.Security(noise.ID, noise.New),
 			libp2p.Security(libp2ptls.ID, libp2ptls.New),
+			libp2p.Security(noise.ID, noise.New),
 			libp2p.ConnectionManager(cm),
 			libp2p.ConnectionGater(gater),
 			libp2p.DisableMetrics(),
-			libp2p.DisableRelay(),
+		}
+		if natTraversal {
+			opts = append(opts, libp2p.EnableRelay(), libp2p.EnableHolePunching())
+			if len(staticRelays) > 0 {
+				opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(staticRelays))
+			}
+		} else {
+			opts = append(opts, libp2p.DisableRelay())
+		}
+		if rm != nil {
+			opts = append(opts, libp2p.ResourceManager(rm))
 		}
 		if !p.tcpOnly {
 			opts = append(opts, libp2p.Transport(quic.NewTransport))
@@ -209,6 +269,9 @@ func (p *p2pLibP2PProvider) Start(
 		h, hostErr = libp2p.New(buildOpts(0)...)
 	}
 	if hostErr != nil {
+		if rm != nil {
+			_ = rm.Close()
+		}
 		return fmt.Errorf("libp2p host: %w", hostErr)
 	}
 
@@ -221,7 +284,7 @@ func (p *p2pLibP2PProvider) Start(
 	// Stream handler (responder side): when a peer opens a stream to us,
 	// read their info, respond with ours, validate clientId, then emit onPeer.
 	h.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
-		handleLibP2PHandshakeStream(s, self, p.clientID, p.registry, p.gater, onPeer, onTrace)
+		handleLibP2PHandshakeStream(s, self, p.clientID, p.registry, p.gater, p.coord.getMtlsIdentity(), onPeer, onTrace)
 	})
 	// (handler extraído para handleLibP2PHandshakeStream — testável)
 
@@ -237,14 +300,28 @@ func (p *p2pLibP2PProvider) Start(
 	}
 	p.h = h
 
-	notifee := &libp2pMDNSNotifee{h: h, self: self, onPeer: onPeer, onTrace: onTrace, registry: p.registry, clientID: p.clientID}
-	svc := mdns.NewMdnsService(h, p2pLibP2PRendezvous, notifee)
-	if err := svc.Start(); err != nil {
+	notifee := &libp2pMDNSNotifee{h: h, self: self, onPeer: onPeer, onTrace: onTrace, registry: p.registry, clientID: p.clientID, coord: p.coord}
+	p.notifee = notifee
+	switch {
+	case p.mdnsDisabled:
 		if onTrace != nil {
-			onTrace(fmt.Sprintf("libp2p mDNS start falhou (descoberta LAN via multicast desativada): %v", err))
+			onTrace("libp2p mDNS desabilitado por politica (p2pMdnsEnabled=false)")
 		}
-	} else {
-		p.svc = svc
+	default:
+		if isPublic, reason := isPublicNetworkProfileFn(); isPublic {
+			if onTrace != nil {
+				onTrace(fmt.Sprintf("libp2p mDNS desabilitado (%s)", reason))
+			}
+		} else {
+			svc := mdns.NewMdnsService(h, p2pLibP2PRendezvous, notifee)
+			if err := svc.Start(); err != nil {
+				if onTrace != nil {
+					onTrace(fmt.Sprintf("libp2p mDNS start falhou (descoberta LAN via multicast desativada): %v", err))
+				}
+			} else {
+				p.svc = svc
+			}
+		}
 	}
 
 	// Connect to static bootstrap peers, if configured.
@@ -288,7 +365,12 @@ func (p *p2pLibP2PProvider) Start(
 	}()
 
 	if onTrace != nil {
-		onTrace(fmt.Sprintf("libp2p host iniciado: peerID=%s", h.ID()))
+		transportMode := "tcp-only"
+		if !p.tcpOnly {
+			transportMode = "tcp+quic-v1"
+		}
+		onTrace(fmt.Sprintf("libp2p host iniciado: peerID=%s transporte=%s holePunching=%v relays=%d",
+			h.ID(), transportMode, natTraversal, len(staticRelays)))
 	}
 	return nil
 }
@@ -351,6 +433,7 @@ type libp2pMDNSNotifee struct {
 	onTrace  func(string)
 	registry *libp2pPeerRegistry
 	clientID string
+	coord    *Coordinator
 }
 
 func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
@@ -419,7 +502,20 @@ func (n *libp2pMDNSNotifee) exchangeWithPeer(pi peer.AddrInfo) {
 
 	// Initiator sends first (with clientId), then reads response.
 	clientID := normalizeClientID(n.self.ClientID)
-	mine := p2pLibP2PPeerInfo{AgentID: n.self.AgentID, Host: n.self.Host, ClientID: clientID, HTTPPort: n.self.Port}
+	mtlsID := n.coord.getMtlsIdentity()
+	mine := p2pLibP2PPeerInfo{
+		AgentID:    n.self.AgentID,
+		Host:       n.self.Host,
+		ClientID:   clientID,
+		HTTPPort:   n.self.Port,
+		LibP2PPort: libp2pHostListenPort(n.h),
+	}
+	if mtlsID != nil {
+		if sig, sigErr := tlsutil.SignPeerBinding(mtlsID.PrivateKey, n.h.ID().String()); sigErr == nil {
+			mine.CertPEM = mtlsID.CertPEM
+			mine.CertSig = sig
+		}
+	}
 	if err := json.NewEncoder(s).Encode(mine); err != nil {
 		return
 	}
@@ -430,6 +526,18 @@ func (n *libp2pMDNSNotifee) exchangeWithPeer(pi peer.AddrInfo) {
 
 	if strings.TrimSpace(remote.AgentID) == "" || remote.HTTPPort <= 0 {
 		return
+	}
+
+	if mtlsID != nil && mtlsID.CAPool != nil {
+		certAgentID, _, verErr := tlsutil.VerifyPeerCertAndBinding(
+			remote.CertPEM, remote.CertSig, pi.ID.String(), mtlsID.CAPool, clientID)
+		if verErr != nil || !strings.EqualFold(certAgentID, strings.TrimSpace(remote.AgentID)) {
+			if n.onTrace != nil {
+				n.onTrace(fmt.Sprintf("peer rejeitado por mTLS estrito: peer=%s err=%v", remote.AgentID, verErr))
+			}
+			_ = n.h.Network().ClosePeer(pi.ID)
+			return
+		}
 	}
 
 	// Validação de clientId: rejeita peers de malhas diferentes, mas aceita peer
@@ -446,21 +554,29 @@ func (n *libp2pMDNSNotifee) exchangeWithPeer(pi peer.AddrInfo) {
 
 	// Prefer a non-loopback address from the peer's advertised addrs.
 	remoteAddr := ""
+	remoteLibP2PPort := 0
 	for _, addr := range pi.Addrs {
 		ip := extractIPFromMultiaddr(addr.String())
 		if ip != "" && ip != "127.0.0.1" && ip != "::1" {
 			remoteAddr = ip
+			if remoteLibP2PPort == 0 {
+				remoteLibP2PPort = extractPortFromMultiaddr(addr.String())
+			}
 			break
 		}
 	}
 	if remoteAddr == "" && len(pi.Addrs) > 0 {
 		remoteAddr = extractIPFromMultiaddr(pi.Addrs[0].String())
+		remoteLibP2PPort = extractPortFromMultiaddr(pi.Addrs[0].String())
 	}
 	if remoteAddr == "" {
 		if n.onTrace != nil {
 			n.onTrace(fmt.Sprintf("libp2p peer sem endereço IP: peerID=%s", pi.ID))
 		}
 		return
+	}
+	if remote.LibP2PPort > 0 {
+		remoteLibP2PPort = remote.LibP2PPort
 	}
 
 	if n.onTrace != nil {
@@ -479,6 +595,9 @@ func (n *libp2pMDNSNotifee) exchangeWithPeer(pi peer.AddrInfo) {
 		} else if !ok {
 			return
 		}
+		if mtlsID != nil {
+			n.registry.MarkMtlsVerified(pi.ID)
+		}
 	}
 	peerHost := strings.TrimSpace(remote.Host)
 	if peerHost == "" {
@@ -490,6 +609,8 @@ func (n *libp2pMDNSNotifee) exchangeWithPeer(pi peer.AddrInfo) {
 		Host:         peerHost,
 		Address:      remoteAddr,
 		Port:         remote.HTTPPort,
+		LibP2PPeerID: pi.ID.String(),
+		LibP2PPort:   remoteLibP2PPort,
 		Source:       p2pDiscoveryLibP2P,
 		ConnectedVia: p2pDiscoveryLibP2P,
 	})
@@ -507,6 +628,7 @@ func handleLibP2PHandshakeStream(
 	clientID string,
 	registry *libp2pPeerRegistry,
 	gater *p2pConnectionGater,
+	mtlsID *tlsutil.AgentMtlsIdentity,
 	onPeer func(p2pDiscoveredPeer),
 	onTrace func(string),
 ) {
@@ -517,13 +639,38 @@ func handleLibP2PHandshakeStream(
 	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&remote); err != nil {
 		return
 	}
-	mine := p2pLibP2PPeerInfo{AgentID: self.AgentID, Host: self.Host, ClientID: clientID, HTTPPort: self.Port}
+	selfLibP2PPort := extractPortFromMultiaddr(s.Conn().LocalMultiaddr().String())
+	mine := p2pLibP2PPeerInfo{
+		AgentID:    self.AgentID,
+		Host:       self.Host,
+		ClientID:   clientID,
+		HTTPPort:   self.Port,
+		LibP2PPort: selfLibP2PPort,
+	}
+	if mtlsID != nil {
+		if sig, sigErr := tlsutil.SignPeerBinding(mtlsID.PrivateKey, s.Conn().LocalPeer().String()); sigErr == nil {
+			mine.CertPEM = mtlsID.CertPEM
+			mine.CertSig = sig
+		}
+	}
 	if err := json.NewEncoder(s).Encode(mine); err != nil {
 		return
 	}
 
 	if strings.TrimSpace(remote.AgentID) == "" || remote.HTTPPort <= 0 {
 		return
+	}
+
+	if mtlsID != nil && mtlsID.CAPool != nil {
+		certAgentID, _, verErr := tlsutil.VerifyPeerCertAndBinding(
+			remote.CertPEM, remote.CertSig, s.Conn().RemotePeer().String(), mtlsID.CAPool, clientID)
+		if verErr != nil || !strings.EqualFold(certAgentID, strings.TrimSpace(remote.AgentID)) {
+			if onTrace != nil {
+				onTrace(fmt.Sprintf("peer inbound rejeitado por mTLS estrito: peer=%s err=%v", remote.AgentID, verErr))
+			}
+			_ = s.Reset()
+			return
+		}
 	}
 
 	// Validação de clientId: rejeita peers de malhas diferentes, mas ACEITA
@@ -539,7 +686,12 @@ func handleLibP2PHandshakeStream(
 		return
 	}
 
-	remoteAddr := extractIPFromMultiaddr(s.Conn().RemoteMultiaddr().String())
+	remoteMultiaddr := s.Conn().RemoteMultiaddr().String()
+	remoteAddr := extractIPFromMultiaddr(remoteMultiaddr)
+	// No lado inbound, s.Conn().RemoteMultiaddr() traz a porta efêmera de saída
+	// do peer remoto, não a porta de escuta dele. Usamos remote.LibP2PPort
+	// anunciado no handshake (0 se peer legado).
+	remoteLibP2PPort := remote.LibP2PPort
 	if remoteAddr == "" {
 		return
 	}
@@ -562,6 +714,9 @@ func handleLibP2PHandshakeStream(
 		} else if !ok {
 			return
 		}
+		if mtlsID != nil {
+			registry.MarkMtlsVerified(s.Conn().RemotePeer())
+		}
 	}
 	peerHost := strings.TrimSpace(remote.Host)
 	if peerHost == "" {
@@ -574,6 +729,8 @@ func handleLibP2PHandshakeStream(
 			Host:         peerHost,
 			Address:      remoteAddr,
 			Port:         remote.HTTPPort,
+			LibP2PPeerID: s.Conn().RemotePeer().String(),
+			LibP2PPort:   remoteLibP2PPort,
 			Source:       p2pDiscoveryLibP2P,
 			ConnectedVia: p2pDiscoveryLibP2P,
 		})
@@ -585,12 +742,43 @@ func handleLibP2PHandshakeStream(
 func pickDiscoveryProvider(cfg P2PConfig, coord *Coordinator, transfer *TransferServer) p2pDiscoveryProvider {
 	registry := newLibp2pPeerRegistry()
 	return &p2pLibP2PProvider{
-		bootstrapPeers: cfg.BootstrapConfig.BootstrapPeers,
-		tcpOnly:        cfg.TCPOnlyEnabled(),
-		coord:          coord,
-		transfer:       transfer,
-		registry:       registry,
+		bootstrapPeers:     cfg.BootstrapConfig.BootstrapPeers,
+		tcpOnly:            cfg.TCPOnlyEnabled(),
+		enableHolePunching: cfg.BootstrapConfig.EnableHolePunching,
+		staticRelays:       cfg.BootstrapConfig.StaticRelays,
+		mdnsDisabled:       !cfg.MDNSEnabledEffective(),
+		coord:              coord,
+		transfer:           transfer,
+		registry:           registry,
 	}
+}
+
+// parseStaticRelayAddrs converte multiaddrs "/.../p2p/<peerID>" em []peer.AddrInfo
+// para EnableAutoRelayWithStaticRelays, ignorando entradas inválidas.
+func parseStaticRelayAddrs(raw []string, onTrace func(string)) []peer.AddrInfo {
+	out := make([]peer.AddrInfo, 0, len(raw))
+	for _, entry := range raw {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		ma, err := multiaddr.NewMultiaddr(entry)
+		if err != nil {
+			if onTrace != nil {
+				onTrace(fmt.Sprintf("libp2p static relay multiaddr inválido %q: %v", entry, err))
+			}
+			continue
+		}
+		pi, err := peer.AddrInfoFromP2pAddr(ma)
+		if err != nil {
+			if onTrace != nil {
+				onTrace(fmt.Sprintf("libp2p static relay peer info inválido %q: %v", entry, err))
+			}
+			continue
+		}
+		out = append(out, *pi)
+	}
+	return out
 }
 
 // ── ConnectionGater ─────────────────────────────────────────────────────────
@@ -692,6 +880,101 @@ func extractIPFromMultiaddr(ma string) string {
 		}
 	}
 	return ""
+}
+
+// libp2pHostListenPort retorna a primeira porta TCP/UDP de escuta do host.
+func libp2pHostListenPort(h host.Host) int {
+	if h == nil {
+		return 0
+	}
+	for _, addr := range h.Addrs() {
+		if port := extractPortFromMultiaddr(addr.String()); port > 0 {
+			return port
+		}
+	}
+	return 0
+}
+
+// extractPortFromMultiaddr extrai a porta TCP/UDP de um multiaddr string.
+func extractPortFromMultiaddr(ma string) int {
+	parts := strings.Split(ma, "/")
+	for i, part := range parts {
+		if (part == "tcp" || part == "udp") && i+1 < len(parts) {
+			if port, err := strconv.Atoi(parts[i+1]); err == nil && port > 0 {
+				return port
+			}
+		}
+	}
+	return 0
+}
+
+// filterP2PAdvertiseAddrs remove endereços link-local (APIPA 169.254.x.x,
+// fe80::) sempre, e remove loopback quando existir ao menos um endereço
+// roteável. Mantém loopback como fallback se for o único endereço disponível
+// (ex.: testes em processo sem interface LAN).
+func filterP2PAdvertiseAddrs(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+	nonLinkLocal := make([]multiaddr.Multiaddr, 0, len(addrs))
+	routable := make([]multiaddr.Multiaddr, 0, len(addrs))
+	for _, addr := range addrs {
+		ipStr := extractIPFromMultiaddr(addr.String())
+		if ipStr == "" {
+			continue
+		}
+		ip := net.ParseIP(ipStr)
+		if ip == nil || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			continue
+		}
+		nonLinkLocal = append(nonLinkLocal, addr)
+		if !ip.IsLoopback() {
+			routable = append(routable, addr)
+		}
+	}
+	if len(routable) > 0 {
+		return routable
+	}
+	return nonLinkLocal
+}
+
+// resolveLibP2PUserAgent retorna a string de UserAgent para o protocolo Identify
+// sem expor identificadores sensíveis (ex.: AgentID) antes da autenticação.
+func resolveLibP2PUserAgent(_ *Coordinator) string {
+	return "discovery-agent"
+}
+
+// buildP2PResourceManager cria um ResourceManager com limites explícitos por
+// protocolo e por peer para proteger contra exaustão de streams/memória.
+func buildP2PResourceManager() (network.ResourceManager, error) {
+	limits := rcmgr.DefaultLimits
+	libp2p.SetDefaultServiceLimits(&limits)
+
+	transferLimit := rcmgr.BaseLimit{
+		Streams:         64,
+		StreamsInbound:  32,
+		StreamsOutbound: 32,
+		Memory:          64 << 20,
+	}
+	controlLimit := rcmgr.BaseLimit{
+		Streams:         16,
+		StreamsInbound:  8,
+		StreamsOutbound: 8,
+		Memory:          8 << 20,
+	}
+
+	limits.AddProtocolPeerLimit(protocol.ID(protoArtifactGet), transferLimit, rcmgr.BaseLimitIncrease{})
+	for _, proto := range []protocol.ID{
+		protocol.ID(protoArtifactManifest),
+		protocol.ID(protoArtifactAccess),
+		protocol.ID(protoDiscoveryPeers),
+		protocol.ID(p2pLibP2PProtocolID),
+		p2pOnboardStreamProtocol,
+		protocol.ID(protoFetchCandidacy),
+		protocol.ID(protoFetchHeartbeat),
+		protocol.ID(protoArtifactReplicate),
+	} {
+		limits.AddProtocolPeerLimit(proto, controlLimit, rcmgr.BaseLimitIncrease{})
+	}
+
+	return rcmgr.NewResourceManager(rcmgr.NewFixedLimiter(limits.AutoScale()))
 }
 
 // cleanPeerstoreAddrs remove do peerstore do host todos os endereços

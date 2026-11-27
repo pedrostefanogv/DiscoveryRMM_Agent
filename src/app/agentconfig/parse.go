@@ -114,6 +114,7 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		KnowledgeBaseEnabled:              getBoolPtr("knowledgeBaseEnabled"),
 		ZeroTouchEnabled:                  getBoolPtr("zeroTouchEnabled"),
 		CloudBootstrapEnabled:             getBoolPtr("cloudBootstrapEnabled"),
+		P2PMdnsEnabled:                    getBoolPtr("p2pMdnsEnabled"),
 		AppStoreEnabled:                   getBoolPtr("appStoreEnabled"),
 		UpdatesTabEnabled:                 getBoolPtr("updatesTabEnabled"),
 		FilesTabEnabled:                   getBoolPtr("filesTabEnabled"),
@@ -349,6 +350,16 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 		nil,
 		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.CloudBootstrapEnabled }),
 		srv.CloudBootstrapEnabled,
+	))
+	// mDNS P2P na LAN: herdável Server -> Client -> Site (default true).
+	serverP2PMdns := true
+	if srv.P2PMdnsEnabled != nil {
+		serverP2PMdns = *srv.P2PMdnsEnabled
+	}
+	cfg.P2PMdnsEnabled = boolPtr(resolveBool(
+		boolFromPtr(site, func(s *SiteConfiguration) *bool { return s.P2PMdnsEnabled }),
+		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.P2PMdnsEnabled }),
+		serverP2PMdns,
 	))
 	// Windows Update (patches): habilitado por padrão; site/cliente podem
 	// desligar. Ausência do campo no payload NÃO desliga o módulo.

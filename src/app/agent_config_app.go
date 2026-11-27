@@ -71,6 +71,19 @@ func (a *App) applyAgentConfiguration(cfg agentconfig.AgentConfiguration) {
 			a.Logs.Append(fmt.Sprintf("[config] cloudBootstrapEnabled=%t aplicado ao P2P", *cfg.CloudBootstrapEnabled))
 		}
 	}
+	// mDNS P2P: política herdável Server -> Client -> Site.
+	if cfg.P2PMdnsEnabled != nil {
+		p2pCfg := a.GetP2PConfig()
+		if p2pCfg.MDNSEnabledEffective() != *cfg.P2PMdnsEnabled {
+			v := *cfg.P2PMdnsEnabled
+			p2pCfg.MDNSEnabled = &v
+			a.applyP2PConfig(p2pCfg)
+			a.Logs.Append(fmt.Sprintf("[config] p2pMdnsEnabled=%t aplicado ao P2P", v))
+			if a.P2PCoord != nil {
+				a.P2PCoord.RestartProvider()
+			}
+		}
+	}
 
 	// P2P files toggle.
 	// P2P só funciona se os agents conseguirem se descobrir: Descoberta de Rede
