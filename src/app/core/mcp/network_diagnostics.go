@@ -88,7 +88,7 @@ func registerNetworkDiagnosticsTool(reg *Registry) {
 				if err != nil {
 					return nil, err
 				}
-				addresses, err := net.LookupHost(host)
+				addresses, err := net.DefaultResolver.LookupHost(ctx, host)
 				if err != nil {
 					return nil, fmt.Errorf("falha ao resolver %q: %w", host, err)
 				}

@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"discovery/app/core/tlsutil"
 	"discovery/app/netutil"
 )
 
@@ -163,10 +162,8 @@ func (s *Service) callAgentChatStream(
 	requestBody := s.buildAgentChatRequest(message, sessionID, cfg.MaxTokens)
 	// M7: tools só vão nos fluxos de stream (function calling).
 	s.mu.RLock()
-	if s.registry != nil {
-		if tools := s.registry.OpenAIFunctions(); len(tools) > 0 {
-			requestBody.Tools = tools
-		}
+	if tools := s.openAIFunctionsLocked(); len(tools) > 0 {
+		requestBody.Tools = tools
 	}
 	s.mu.RUnlock()
 	payload, err := json.Marshal(requestBody)
@@ -210,7 +207,7 @@ func (s *Service) callAgentChatStream(
 		return "", "", false, err
 	}
 
-	resp, err := tlsutil.NewHTTPClient(130 * time.Second).Do(req)
+	resp, err := s.httpClient(130 * time.Second).Do(req)
 	if err != nil {
 		elapsed := time.Since(startTime)
 		s.logChatEntry(ChatLogEntry{
@@ -375,6 +372,11 @@ func (s *Service) parseSSEStream(body io.Reader, onToken func(string)) (string, 
 // SendStream is like Send but streams the final text response token-by-token via onToken.
 // Tool-call intermediate rounds are executed silently; onStatus receives progress updates.
 func (s *Service) SendStream(ctx context.Context, userMessage string, onToken func(string), onStatus func(string)) (string, error) {
+	if !s.turnMu.TryLock() {
+		return "", fmt.Errorf("já existe uma conversa em andamento; aguarde ou cancele antes de enviar")
+	}
+	defer s.turnMu.Unlock()
+
 	streamCtx, streamCancel := context.WithCancel(ctx)
 	streamID := s.registerStreamCancel(streamCancel)
 	defer func() {

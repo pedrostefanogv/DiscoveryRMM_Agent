@@ -14,17 +14,30 @@ import (
 
 // ToolParam describes a single parameter of a tool.
 type ToolParam struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Description string `json:"description"`
-	Required    bool   `json:"required"`
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	Description string   `json:"description"`
+	Required    bool     `json:"required"`
+	Enum        []string `json:"enum,omitempty"`
+	Default     any      `json:"default,omitempty"`
+	Minimum     *float64 `json:"minimum,omitempty"`
+	Maximum     *float64 `json:"maximum,omitempty"`
+}
+
+// ToolAnnotations conveys MCP behavioral hints for clients and LLMs.
+type ToolAnnotations struct {
+	ReadOnlyHint    *bool `json:"readOnlyHint,omitempty"`
+	DestructiveHint *bool `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool `json:"idempotentHint,omitempty"`
+	OpenWorldHint   *bool `json:"openWorldHint,omitempty"`
 }
 
 // Tool describes a single MCP tool.
 type Tool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Params      []ToolParam `json:"params,omitempty"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	Params      []ToolParam      `json:"params,omitempty"`
+	Annotations *ToolAnnotations `json:"annotations,omitempty"`
 	// Handler is called when the tool is invoked. args is the JSON object of params.
 	// ctx permite cancelamento/timeout (StopStream, timeouts por tool).
 	Handler func(ctx context.Context, args map[string]any) (any, error) `json:"-"`
@@ -36,10 +49,23 @@ func (t Tool) InputSchema() map[string]any {
 	props := make(map[string]any, len(t.Params))
 	required := make([]string, 0, len(t.Params))
 	for _, p := range t.Params {
-		props[p.Name] = map[string]any{
+		prop := map[string]any{
 			"type":        p.Type,
 			"description": p.Description,
 		}
+		if len(p.Enum) > 0 {
+			prop["enum"] = p.Enum
+		}
+		if p.Default != nil {
+			prop["default"] = p.Default
+		}
+		if p.Minimum != nil {
+			prop["minimum"] = *p.Minimum
+		}
+		if p.Maximum != nil {
+			prop["maximum"] = *p.Maximum
+		}
+		props[p.Name] = prop
 		if p.Required {
 			required = append(required, p.Name)
 		}
@@ -69,11 +95,15 @@ func (t Tool) OpenAIFunction() map[string]any {
 
 // MCPToolEntry returns the tool in the MCP tools/list response format.
 func (t Tool) MCPToolEntry() map[string]any {
-	return map[string]any{
+	entry := map[string]any{
 		"name":        t.Name,
 		"description": t.Description,
 		"inputSchema": t.InputSchema(),
 	}
+	if t.Annotations != nil {
+		entry["annotations"] = t.Annotations
+	}
+	return entry
 }
 
 // Registry holds all registered tools. Thread-safe: Register/Tools/Find/Call

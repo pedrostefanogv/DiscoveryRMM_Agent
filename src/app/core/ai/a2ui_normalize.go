@@ -82,8 +82,7 @@ func NormalizeA2uiMessage(raw string) string {
 	}
 
 	// Filtra children: remove os ids que já são child de outro componente, os
-	// repetidos e a auto-referência.
-	seenChild := make(map[string]bool, len(components))
+	// repetidos dentro do mesmo container e a auto-referência.
 	for _, c := range components {
 		comp, ok := c.(map[string]any)
 		if !ok {
@@ -93,6 +92,7 @@ func NormalizeA2uiMessage(raw string) string {
 		if !ok {
 			continue
 		}
+		seenChild := make(map[string]bool, len(rawChildren))
 		selfID, _ := comp["id"].(string)
 		filtered := make([]any, 0, len(rawChildren))
 		removed := false

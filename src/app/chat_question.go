@@ -16,6 +16,9 @@ type ChatQuestion struct {
 	Question  string   `json:"question"`
 	Options   []string `json:"options,omitempty"`
 	AllowText bool     `json:"allowText"`
+	Kind      string   `json:"kind,omitempty"`      // "" | "consent"
+	RiskLevel string   `json:"riskLevel,omitempty"` // "" | "medium" | "high"
+	Target    string   `json:"target,omitempty"`
 }
 
 // ChatQuestionAnswer is the user's response to a ChatQuestion.
@@ -151,10 +154,13 @@ func (a *App) AskUserContext(ctx context.Context, question, optionsJSON, allowTe
 // AnswerChatQuestion is the Wails binding called by the frontend when the user clicks an option.
 func (a *App) AnswerChatQuestion(questionID, answer string) {
 	if a.ipcClient != nil {
-		_, _ = a.ipcRequest("chat:answer_question", map[string]any{
+		if _, ok := a.ipcRequest("chat:answer_question", map[string]any{
 			"questionID": questionID,
 			"answer":     answer,
-		})
+		}); !ok {
+			a.Logs.Append("[chat] AnswerChatQuestion: falha na comunicação IPC")
+			a.emitChatIPCError("Falha ao enviar resposta ao serviço do agente.")
+		}
 		return
 	}
 	ch := takeQuestionChannel(questionID)
@@ -185,9 +191,12 @@ type A2uiActionPayload struct {
 // Se não houver stream ativo, a ação é descartada silenciosamente.
 func (a *App) AnswerA2uiAction(payloadJSON string) {
 	if a.ipcClient != nil {
-		_, _ = a.ipcRequest("chat:answer_a2ui_action", map[string]any{
+		if _, ok := a.ipcRequest("chat:answer_a2ui_action", map[string]any{
 			"payloadJSON": payloadJSON,
-		})
+		}); !ok {
+			a.Logs.Append("[chat] AnswerA2uiAction: falha na comunicação IPC")
+			a.emitChatIPCError("Falha ao enviar ação interativa ao serviço do agente.")
+		}
 		return
 	}
 	if a.chatSvc == nil {

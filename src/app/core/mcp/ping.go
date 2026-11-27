@@ -88,19 +88,20 @@ func ValidateLocalHostOrIP(host string) error {
 		return errors.New("host nao pode conter porta")
 	}
 
-	ips, err := net.LookupIP(host)
+	ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
 	if err != nil {
 		return fmt.Errorf("falha ao resolver host: %w", err)
 	}
 	if len(ips) == 0 {
 		return errors.New("nao foi possivel resolver nenhum IP")
 	}
+	// Todos os IPs resolvidos devem pertencer a rede privada/local (evita DNS rebinding / dual-record bypass).
 	for _, ip := range ips {
-		if isAllowedIP(ip) {
-			return nil
+		if !isAllowedIP(ip.IP) {
+			return fmt.Errorf("host resolve para IP publico nao permitido (%s)", ip.IP.String())
 		}
 	}
-	return fmt.Errorf("nenhum IP resolvido pertence a rede privada")
+	return nil
 }
 
 func buildPingCommand(host string, count int, timeoutSeconds int) (*exec.Cmd, error) {

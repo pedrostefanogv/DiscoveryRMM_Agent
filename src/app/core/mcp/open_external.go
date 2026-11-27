@@ -29,6 +29,9 @@ func registerOpenExternalTools(reg *Registry, app AppBridge) {
 			{Name: "reason", Type: "string", Description: "Frase curta (mostrada ao usuario) explicando por que abrir a pasta."},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			if err := requireConfirm(args); err != nil {
+				return nil, err
+			}
 			if ctx != nil && ctx.Err() != nil {
 				return nil, fmt.Errorf("abertura cancelada antes de executar")
 			}
@@ -49,6 +52,9 @@ func registerOpenExternalTools(reg *Registry, app AppBridge) {
 			{Name: "reason", Type: "string", Description: "Frase curta (mostrada ao usuario) explicando por que abrir o app."},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			if err := requireConfirm(args); err != nil {
+				return nil, err
+			}
 			if ctx != nil && ctx.Err() != nil {
 				return nil, fmt.Errorf("abertura cancelada antes de executar")
 			}

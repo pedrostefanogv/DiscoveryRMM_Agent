@@ -137,7 +137,10 @@ func (a *App) SendChatMessage(message string) (string, error) {
 // StartChatStream sends a chat message and streams the response via Wails events.
 func (a *App) StartChatStream(message string) {
 	if a.ipcClient != nil {
-		_, _ = a.ipcRequest("chat:stream", map[string]any{"message": message})
+		if _, ok := a.ipcRequest("chat:stream", map[string]any{"message": message}); !ok {
+			a.Logs.Append("[chat] StartChatStream: falha na comunicação IPC")
+			a.emitChatIPCError("Falha de comunicação com o serviço do agente.")
+		}
 		return
 	}
 	a.chatSvc.StartStream(message)
@@ -149,7 +152,10 @@ func (a *App) StartChatStream(message string) {
 // e viram conteúdo multimodal para o LLM.
 func (a *App) StartChatStreamWithImages(message string, imagesJSON string) {
 	if a.ipcClient != nil {
-		_, _ = a.ipcRequest("chat:stream_images", map[string]any{"message": message, "imagesJSON": imagesJSON})
+		if _, ok := a.ipcRequest("chat:stream_images", map[string]any{"message": message, "imagesJSON": imagesJSON}); !ok {
+			a.Logs.Append("[chat] StartChatStreamWithImages: falha na comunicação IPC")
+			a.emitChatIPCError("Falha de comunicação com o serviço do agente.")
+		}
 		return
 	}
 	a.chatSvc.StartStreamWithImages(message, imagesJSON)
@@ -186,10 +192,16 @@ func (a *App) HasActiveChatStream() bool {
 // ClearChatHistory resets the conversation.
 func (a *App) ClearChatHistory() {
 	if a.ipcClient != nil {
-		_, _ = a.ipcRequest("chat:clear", nil)
+		if _, ok := a.ipcRequest("chat:clear", nil); !ok {
+			a.Logs.Append("[chat] ClearChatHistory: falha na comunicação IPC")
+		}
 		return
 	}
 	a.chatSvc.ClearHistory()
+}
+
+func (a *App) emitChatIPCError(msg string) {
+	a.EmitEvent("chat:error", msg)
 }
 
 // GetChatHistory returns the conversation for display.

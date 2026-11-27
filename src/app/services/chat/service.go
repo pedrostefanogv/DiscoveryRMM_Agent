@@ -340,7 +340,7 @@ func (s *Service) SetConfig(cfg Config) error {
 		return fmt.Errorf("maxTokens invalido: use 0 ou um valor positivo")
 	}
 	if key := strings.TrimSpace(cfg.APIKey); key == "" || key == maskedAPIKey {
-		cfg.APIKey = s.chatSvc.GetConfig().APIKey
+		cfg.APIKey = s.chatSvc.GetRawAPIKey()
 	}
 	if cfg.NotifyPreview == nil {
 		// UI antiga (sem o campo) ou save parcial: preserva a preferência atual
@@ -364,7 +364,7 @@ func (s *Service) SetConfig(cfg Config) error {
 func (s *Service) TestConfig(cfg Config) (string, error) {
 	// B2: teste com o sentinel usa a chave real armazenada.
 	if strings.TrimSpace(cfg.APIKey) == maskedAPIKey {
-		cfg.APIKey = s.chatSvc.GetConfig().APIKey
+		cfg.APIKey = s.chatSvc.GetRawAPIKey()
 	}
 	runtimeCfg, err := s.resolveRuntimeConfig(cfg)
 	if err != nil {
@@ -401,6 +401,7 @@ func (s *Service) SendMessage(message string) (string, error) {
 	current := s.chatSvc.GetConfig()
 	runtimeCfg, err := s.resolveRuntimeConfig(Config{
 		Endpoint:     current.Endpoint,
+		APIKey:       s.chatSvc.GetRawAPIKey(),
 		Model:        current.Model,
 		SystemPrompt: current.SystemPrompt,
 		MaxTokens:    current.MaxTokens,
@@ -422,6 +423,7 @@ func (s *Service) StartStream(message string) {
 	done := s.beginActivity("chat IA")
 
 	if cfg := s.getAgentConfig(); cfg.ChatAIEnabled != nil && !*cfg.ChatAIEnabled {
+		s.chatSvc.SetPendingImages(nil)
 		s.emitEvent("chat:error", "Chat AI desabilitado pela configuração do servidor")
 		s.publishChatEvent("chat:error", "Chat AI desabilitado pela configuração do servidor")
 		done()
@@ -434,6 +436,7 @@ func (s *Service) StartStream(message string) {
 		current := s.chatSvc.GetConfig()
 		runtimeCfg, cfgErr := s.resolveRuntimeConfig(Config{
 			Endpoint:     current.Endpoint,
+			APIKey:       s.chatSvc.GetRawAPIKey(),
 			Model:        current.Model,
 			SystemPrompt: current.SystemPrompt,
 			MaxTokens:    current.MaxTokens,

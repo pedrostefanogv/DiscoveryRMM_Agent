@@ -14,7 +14,7 @@ func registerSoftwareTool(reg *Registry, app AppBridge) {
 			"search (query) | list_installed | list_start_menu (query, limit) | pending_updates | actions | " +
 			"install (id; destrutiva) | upgrade (id; destrutiva) | upgrade_all (destrutiva) | uninstall (id; destrutiva).",
 		Params: []ToolParam{
-			{Name: "action", Type: "string", Description: "Acao: search, list_installed, list_start_menu, pending_updates, actions, install, upgrade, upgrade_all, uninstall", Required: true},
+			{Name: "action", Type: "string", Description: "Acao a executar", Required: true, Enum: []string{"search", "list_installed", "list_start_menu", "pending_updates", "actions", "install", "upgrade", "upgrade_all", "uninstall"}},
 			{Name: "id", Type: "string", Description: "ID do pacote winget (install, upgrade, uninstall)", Required: false},
 			{Name: "query", Type: "string", Description: "Termo de busca (search, list_start_menu)", Required: false},
 			{Name: "limit", Type: "integer", Description: "Limite de resultados em list_start_menu", Required: false},
@@ -91,9 +91,9 @@ func registerEventLogTool(reg *Registry) {
 			"query (logName: System|Application|Setup, level, source, maxEvents, lastHours) | " +
 			"recent_errors (lastHours, padrao 24) | recent_crashes (lastHours, padrao 168).",
 		Params: []ToolParam{
-			{Name: "action", Type: "string", Description: "Acao: query, recent_errors, recent_crashes", Required: true},
-			{Name: "logName", Type: "string", Description: "Nome do log (query): System, Application ou Setup", Required: false},
-			{Name: "level", Type: "string", Description: "Nivel (query): Critical, Error, Warning, Information", Required: false},
+			{Name: "action", Type: "string", Description: "Acao a executar", Required: true, Enum: []string{"query", "recent_errors", "recent_crashes"}},
+			{Name: "logName", Type: "string", Description: "Nome do log (query)", Required: false, Enum: []string{"System", "Application", "Setup"}, Default: "System"},
+			{Name: "level", Type: "string", Description: "Nivel do evento (query)", Required: false, Enum: []string{"Critical", "Error", "Warning", "Information"}},
 			{Name: "source", Type: "string", Description: "Fonte/Provider (query)", Required: false},
 			{Name: "maxEvents", Type: "integer", Description: "Maximo de eventos (query, padrao 50, max 100)", Required: false},
 			{Name: "lastHours", Type: "integer", Description: "Janela de tempo em horas (max 168)", Required: false},

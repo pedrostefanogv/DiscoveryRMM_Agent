@@ -101,6 +101,7 @@ function createSurface(containerEl, surfaceId) {
       }
     },
     destroy() {
+      userActionHandlers.length = 0;
       try {
         processor.processMessages([
           { version: "v0.9", deleteSurface: { surfaceId: surfaceIdFinal } },

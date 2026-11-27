@@ -121,7 +121,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	// ========== INVENTARIO ==========
 	reg.Register(Tool{
 		Name:        "get_inventory",
-		Description: "Retorna o inventario completo do computador: hardware, SO, discos, rede, usuarios logados, bateria, CPU, GPU, memoria, BitLocker, software instalado, startup items.",
+		Description: "Retorna o inventario COMPLETO e pesado do computador (hardware, SO, discos, rede, usuarios, bateria, CPU, GPU, memoria, BitLocker, software instalado, startup items). Use APENAS quando precisar do inventario completo; para checagens rapidas de SO/CPU/RAM/disco use system_info ou get_performance_snapshot.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.GetInventoryJSON()
 		},
@@ -133,6 +133,9 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			"A GRAVACAO do arquivo exige AUTORIZACAO do usuario (pergunta exibida no chat ANTES da tool rodar); " +
 			"se o usuario negar, o resultado vem com approved=false e a chamada NAO deve ser repetida.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			if err := requireConfirm(args); err != nil {
+				return nil, err
+			}
 			path, err := app.ExportMarkdown()
 			return map[string]string{"path": path}, err
 		},
@@ -144,6 +147,9 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			"A GRAVACAO do arquivo exige AUTORIZACAO do usuario (pergunta exibida no chat ANTES da tool rodar); " +
 			"se o usuario negar, o resultado vem com approved=false e a chamada NAO deve ser repetida.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			if err := requireConfirm(args); err != nil {
+				return nil, err
+			}
 			path, err := app.ExportPDF()
 			return map[string]string{"path": path}, err
 		},
@@ -210,9 +216,9 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			"Use SOMENTE quando o usuario pedir ou confirmar explicitamente que quer anexar a imagem ao chamado; " +
 			"a acao ENVIA a imagem do usuario ao servidor e exige autorizacao dele no chat. " +
 			"imageRefs aceita uma string separada por virgula ou array JSON. Refs: turn:N = N-esima imagem que o usuario " +
-			"mandou no chat no ultimo turno (1-based); shot:last = ultima captura de tela feita por capture_screenshot; " +
-			"shot:<sha256> = captura especifica (o capture_screenshot devolve image_ref). " +
-			"Formatos: png, jpeg, webp, gif; maximo 6 MiB por imagem e 32 MiB no total.",
+			"mandou no chat no ultimo turno (1-based); shot:last = ultima captura de tela feita por screen(action=\"capture\"); " +
+			"shot:<sha256> = captura especifica (o screen(action=\"capture\") devolve image_ref). " +
+			"Formatos: png, jpeg, webp, gif; maximo 10 MB binarios por imagem.",
 		Params: []ToolParam{
 			{Name: "ticketId", Type: "string", Description: "GUID do chamado", Required: true},
 			{Name: "imageRefs", Type: "string", Description: "Refs das imagens: turn:1; turn:1,turn:2; shot:last; ou array JSON com essas refs", Required: true},
@@ -225,9 +231,9 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			if err != nil {
 				return nil, err
 			}
-			refs, err := requiredStringArg(args, "imageRefs")
-			if err != nil {
-				return nil, err
+			refs := stringOrArrayArg(args, "imageRefs")
+			if refs == "" {
+				return nil, fmt.Errorf("parametro obrigatorio 'imageRefs' nao pode ser vazio")
 			}
 			images, err := resolveImageRefs(refs, app)
 			if err != nil {
@@ -277,9 +283,9 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			if err != nil {
 				return nil, err
 			}
-			refs, err := requiredStringArg(args, "imageRefs")
-			if err != nil {
-				return nil, err
+			refs := stringOrArrayArg(args, "imageRefs")
+			if refs == "" {
+				return nil, fmt.Errorf("parametro obrigatorio 'imageRefs' nao pode ser vazio")
 			}
 			images, err := resolveImageRefs(refs, app)
 			if err != nil {
@@ -370,7 +376,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 				return nil, fmt.Errorf("content nao pode ser vazio")
 			}
 			// Opção de produto (a): o agente nunca cria nota interna.
-			attachRefs := optionalStringArg(args, "attachImageRefs")
+			attachRefs := stringOrArrayArg(args, "attachImageRefs")
 			if attachRefs == "" {
 				return app.AddAgentTicketComment(ticketID, content)
 			}
@@ -517,7 +523,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 				}
 			}
 
-			attachRefs := optionalStringArg(args, "attachImageRefs")
+			attachRefs := stringOrArrayArg(args, "attachImageRefs")
 			if attachRefs == "" {
 				return app.CreateAgentTicket(title, description, priority, category, templateID, departmentID, customFieldsJSON, answersJSON)
 			}
@@ -584,19 +590,22 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 			var rating *int
 			if raw, ok := args["rating"]; ok && raw != nil {
-				value := 0
+				var value int
 				switch v := raw.(type) {
 				case float64:
+					if float64(int(v)) != v {
+						return nil, fmt.Errorf("rating invalido: informe inteiro entre 1 e 5")
+					}
 					value = int(v)
 				case int:
 					value = v
+				default:
+					return nil, fmt.Errorf("rating invalido: informe inteiro entre 1 e 5")
 				}
-				if value != 0 {
-					if value < 1 || value > 5 {
-						return nil, fmt.Errorf("rating invalido: informe valor entre 1 e 5")
-					}
-					rating = &value
+				if value < 1 || value > 5 {
+					return nil, fmt.Errorf("rating invalido: informe valor entre 1 e 5")
 				}
+				rating = &value
 			}
 			return app.CloseAgentTicket(ticketID, rating, comment, workflowStateID)
 		},
@@ -655,7 +664,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	// ========== DESEMPENHO ==========
 	reg.Register(Tool{
 		Name:        "get_performance_snapshot",
-		Description: "Retorna um snapshot instantaneo de desempenho: uso de CPU (%), memoria (total/usada/livre em GB e %) e uso de disco por volume logico.",
+		Description: "Retorna um snapshot leve e instantaneo de desempenho: uso de CPU (%), memoria (total/usada/livre em GB e %) e uso de disco por volume logico. Prefira em vez de get_inventory para checagens rapidas.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return GetPerformanceSnapshot(ctx)
 		},
@@ -738,6 +747,8 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	registerRegistryReadTool(reg)
 	// Diagnostico corporativo: AD, certificados locais, BitLocker e sessoes.
 	registerAdGpoCertsTool(reg)
+	// Diagnostico L1 RMM: VPN/Wi-Fi, inicializacao/browser, probe HTTP, Office e perifericos.
+	registerRmmDiagnosticsTools(reg)
 }
 
 // attachmentMetadata monta a lista de metadados dos anexos devolvida à IA,
@@ -815,6 +826,31 @@ func requiredIntArg(args map[string]any, name string) (int, error) {
 // (services/chat.mcpExecuteForChat) injeta confirm=true SOMENTE depois de o
 // usuário aprovar a ação. Mantê-lo fora do schema evita que o modelo se
 // autoconfirme e reduz o custo de tokens do tools/list.
+func stringOrArrayArg(args map[string]any, name string) string {
+	raw, ok := args[name]
+	if !ok || raw == nil {
+		return ""
+	}
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []any:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	case []string:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	default:
+		return ""
+	}
+}
+
 func requireConfirm(args map[string]any) error {
 	if v, ok := args["confirm"].(bool); ok && v {
 		return nil

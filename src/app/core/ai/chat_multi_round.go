@@ -14,7 +14,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"discovery/app/core/tlsutil"
 	"discovery/app/netutil"
 )
 
@@ -860,6 +859,10 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				Round:     round,
 				Error:     "loop encerrado: canal admin local indisponível (retryable=false)",
 			})
+			// Sessão não recebeu os tool_results: limpa sessionID para evitar HTTP 400 no próximo turno.
+			s.mu.Lock()
+			s.sessionID = ""
+			s.mu.Unlock()
 			break
 		}
 
@@ -885,10 +888,12 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	totalElapsed := time.Since(startTime)
 	assistant := s.lastAssistantContentSince(historyBeforeLen)
 	if assistant == "" {
-		// Se o LLM nao produziu resposta textual (ex.: tool calls sem texto,
-		// ou stream vazio), informa o usuario de forma util em vez de mostrar
-		// "(sem resposta)".
-		if totalToolCalls > 0 {
+		if stopAfterLocalWriteFailure {
+			assistant = "Não foi possível concluir a ação porque o serviço do agente está sem permissão de gravação local. Reinicie o serviço do Discovery e tente novamente."
+			if onToken != nil {
+				onToken(assistant)
+			}
+		} else if totalToolCalls > 0 {
 			assistant = "Ações executadas. Se precisar de mais alguma coisa, é só pedir!"
 		} else {
 			assistant = "Não consegui processar sua solicitação. Pode reformular a pergunta?"
@@ -1039,7 +1044,18 @@ func toolProgressHint(args string) string {
 func (s *Service) lastAssistantContentSince(historySince int) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for i := len(s.history) - 1; i >= historySince; i-- {
+	start := historySince
+	if start > len(s.history) {
+		// Histórico foi podado no meio do turno: recua até a última mensagem do usuário
+		start = 0
+		for i := len(s.history) - 1; i >= 0; i-- {
+			if s.history[i].Role == "user" {
+				start = i + 1
+				break
+			}
+		}
+	}
+	for i := len(s.history) - 1; i >= start; i-- {
 		if s.history[i].Role == "assistant" && s.history[i].Content != "" {
 			return s.history[i].Content
 		}
@@ -1114,7 +1130,7 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 		return "", fmt.Errorf("headers de autenticacao: %w", err)
 	}
 
-	resp, err := tlsutil.NewHTTPClient(timeout).Do(httpReq)
+	resp, err := s.httpClient(timeout).Do(httpReq)
 	if err != nil {
 		s.logChatEntry(ChatLogEntry{
 			Type:      "round_http_error",
@@ -1478,8 +1494,10 @@ func toolDeadlineCause(execErr error, execCtx context.Context, budgetLeft time.D
 	}
 	// Algumas tools embrulham a causa em texto (MCP remoto/stdio) em vez de
 	// devolver o erro do contexto — checa o sentinela e o texto.
-	if err := execCtx.Err(); err != nil && errors.Is(err, context.DeadlineExceeded) {
-		return "deadline"
+	if execCtx != nil {
+		if err := execCtx.Err(); err != nil && errors.Is(err, context.DeadlineExceeded) {
+			return "deadline"
+		}
 	}
 	if budgetLeft <= 0 {
 		msg := strings.ToLower(execErr.Error())

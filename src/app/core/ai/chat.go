@@ -94,6 +94,10 @@ type Service struct {
 	// não devem compartilhar history/sessionID em loops paralelos.
 	turnMu sync.Mutex
 
+	// Transport HTTP compartilhado para reuso de conexões TCP/TLS entre turnos.
+	httpTransportOnce sync.Once
+	httpTransport     http.RoundTripper
+
 	// pendingImagesMu protege as imagens (data URLs) que o usuário anexou ao
 	// chat (ex.: print da tela). São consumidas pelo próximo turno multi-round
 	// e enviadas ao servidor no campo "images" — o servidor as converte em
@@ -228,6 +232,16 @@ func NewService(registry *mcp.Registry) *Service {
 	}
 }
 
+func (s *Service) httpClient(timeout time.Duration) *http.Client {
+	s.httpTransportOnce.Do(func() {
+		s.httpTransport = tlsutil.NewHTTPClient(0).Transport
+	})
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: s.httpTransport,
+	}
+}
+
 // SubmitA2uiAction registra uma ação do usuário em uma surface A2UI. A ação é
 // consumida no INÍCIO do próximo turno disparado pela sentinela
 // __a2ui_action__ (resolveA2uiTurn) e enviada ao LLM como tool result,
@@ -354,6 +368,13 @@ func (s *Service) SetConfig(cfg Config) {
 // caracteres reais do segredo para quem consultasse a config.
 const maskedAPISentinel = "********"
 
+// GetRawAPIKey returns the unmasked API key for internal service-to-service preservation.
+func (s *Service) GetRawAPIKey() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg.APIKey
+}
+
 // GetConfig returns the current configuration (API key masked).
 func (s *Service) GetConfig() Config {
 	s.mu.RLock()
@@ -451,6 +472,10 @@ func (s *Service) ClearHistory() {
 	s.pendingImages = nil
 	s.lastTurnImages = nil
 	s.pendingImagesMu.Unlock()
+	s.a2uiSurfaceMu.Lock()
+	s.a2uiSurface = nil
+	s.a2uiSurfaceOrder = nil
+	s.a2uiSurfaceMu.Unlock()
 }
 
 func (s *Service) registerStreamCancel(cancel context.CancelFunc) uint64 {
@@ -693,6 +718,11 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 // SendWithA2ui é o Send com callback das mensagens A2UI devolvidas pelo
 // endpoint síncrono. onA2ui pode ser nil.
 func (s *Service) SendWithA2ui(ctx context.Context, userMessage string, onA2ui func(string)) (string, error) {
+	if !s.turnMu.TryLock() {
+		return "", fmt.Errorf("já existe uma conversa em andamento; aguarde ou cancele antes de enviar")
+	}
+	defer s.turnMu.Unlock()
+
 	s.mu.Lock()
 	cfg := s.cfg
 	sessionID := s.sessionID
@@ -828,10 +858,8 @@ func (s *Service) buildAgentChatRequest(message, sessionID string, maxTokens int
 // nos fluxos de stream, que suportam function calling).
 func (s *Service) addAgentTools(req *agentStreamRequest) {
 	s.mu.RLock()
-	if s.registry != nil {
-		if tools := s.registry.OpenAIFunctions(); len(tools) > 0 {
-			req.Tools = tools
-		}
+	if tools := s.openAIFunctionsLocked(); len(tools) > 0 {
+		req.Tools = tools
 	}
 	s.mu.RUnlock()
 }
@@ -921,7 +949,7 @@ func (s *Service) callAgentChatSync(ctx context.Context, cfg Config, message, se
 		return nil, err
 	}
 
-	resp, err := tlsutil.NewHTTPClient(120 * time.Second).Do(req)
+	resp, err := s.httpClient(120 * time.Second).Do(req)
 	elapsed := time.Since(startTime)
 	if err != nil {
 		s.logChatEntry(ChatLogEntry{
@@ -1009,7 +1037,7 @@ var blockedMessagePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)eval\s*\(`),
 	// M1: exige limite de palavra antes de "on..." e conteudo apos "=" —
 	// a versão antiga (on[a-z]+\s*=) bloqueava textos como "configuracao=".
-	regexp.MustCompile(`(?i)\bon[a-z]+\s*=\s*["'\w]`),
+	regexp.MustCompile(`(?i)\bon(?:click|dblclick|mousedown|mouseup|mouseover|mouseout|mousemove|mouseenter|mouseleave|focus|blur|change|input|submit|reset|keydown|keyup|keypress|load|unload|error|resize|scroll|contextmenu|drag|drop)\s*=\s*["'\w]`),
 	regexp.MustCompile(`(?i)<iframe[^>]*>`),
 	regexp.MustCompile(`(?i)<object[^>]*>`),
 	regexp.MustCompile(`(?i)<embed[^>]*>`),

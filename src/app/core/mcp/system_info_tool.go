@@ -31,8 +31,8 @@ $boot = $os.LastBootUpTime
 func registerSystemInfoTool(reg *Registry) {
 	reg.Register(Tool{
 		Name: "system_info",
-		Description: "Resumo do sistema: uptime, boot time, hostname, dominio/workgroup, " +
-			"versao e arquitetura do SO, fabricante/modelo e uso de RAM/CPU.",
+		Description: "Resumo leve do sistema: uptime, boot time, hostname, dominio/workgroup, " +
+			"versao e arquitetura do SO, fabricante/modelo e uso de RAM/CPU. Prefira esta tool em vez de get_inventory para checagens rapidas.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			info := map[string]any{}
 			raw := runPowerShell(ctx, systemInfoScript, 60*time.Second)

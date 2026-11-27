@@ -149,8 +149,18 @@ function filterA2uiTokens(token) {
       // Dentro de bloco ```json: retém o corpo até o fechamento para decidir.
       var closeJ = f.buffer.indexOf(LEAK_OPEN_FENCE);
       if (closeJ === -1) {
-        f.jsonBody += f.buffer;
-        f.buffer = "";
+        // Preserva 1-2 crases finais no buffer caso o fechamento ``` venha quebrado entre tokens.
+        var tailTicks = 0;
+        while (tailTicks < 2 && tailTicks < f.buffer.length && f.buffer.charAt(f.buffer.length - 1 - tailTicks) === "`") {
+          tailTicks++;
+        }
+        if (tailTicks > 0) {
+          f.jsonBody += f.buffer.slice(0, f.buffer.length - tailTicks);
+          f.buffer = f.buffer.slice(f.buffer.length - tailTicks);
+        } else {
+          f.jsonBody += f.buffer;
+          f.buffer = "";
+        }
         break;
       }
       f.jsonBody += f.buffer.slice(0, closeJ);
@@ -476,9 +486,9 @@ var CHAT_MESSAGE_QUEUE_MAX = 10;
 function autoGrowChatInput() {
   if (!chatInputEl) return;
   chatInputEl.style.height = "auto";
-  // Base de 3 linhas (60px) com cap de 6 linhas (120px) — espelhado no
+  // Base de 3 linhas (60px) com cap de 200px — espelhado no
   // min/max-height de .chat-input.
-  chatInputEl.style.height = Math.max(Math.min(chatInputEl.scrollHeight, 120), 60) + "px";
+  chatInputEl.style.height = Math.max(Math.min(chatInputEl.scrollHeight, 200), 60) + "px";
 }
 
 // Devolve false quando a mensagem NÃO entrou na fila (sem espaço): quem chamou
@@ -658,6 +668,26 @@ var CHAT_TOOL_LABELS = {
   "software": "Gerenciando aplicativos",
   "event_log": "Consultando Event Log",
   "local_memory": "Consultando memórias locais",
+  "disk": "Verificando discos",
+  "printer": "Gerenciando impressoras",
+  "network_diagnostics": "Diagnosticando rede",
+  "process_control": "Analisando processos",
+  "service_control": "Gerenciando serviços",
+  "windows_update": "Verificando Windows Update",
+  "security_status": "Verificando segurança",
+  "scheduled_task": "Consultando tarefas agendadas",
+  "shares": "Verificando compartilhamentos",
+  "power_action": "Executando ação de energia",
+  "osquery": "Executando consulta osquery",
+  "screen": "Capturando tela",
+  "open_folder": "Abrindo pasta",
+  "open_app": "Abrindo aplicativo",
+  "read_file": "Lendo arquivo",
+  "vpn_and_wifi": "Verificando Wi-Fi e VPN",
+  "startup_and_browser_health": "Analisando inicialização e navegadores",
+  "network_http_probe": "Testando conectividade HTTP/TLS",
+  "office_diagnostics": "Diagnosticando Microsoft Office/Teams",
+  "hardware_peripherals": "Verificando periféricos e bateria",
   "screen": "Verificando tela e janelas",
   "request_human_support": "Encaminhando ao suporte humano",
   "get_recent_errors": "Buscando erros recentes",
@@ -1133,9 +1163,30 @@ function finaliseStreamingBubble() {
   streamingRafPending = false;
   flushStreamingContent();
 
-  // Remove streaming indicators.
+  // Preserva um resumo colapsável das ferramentas executadas no turno antes de remover o indicador de atividade.
   var thinkingEl = streamingBubble.querySelector(".stream-thinking");
-  if (thinkingEl) thinkingEl.remove();
+  if (thinkingEl) {
+    var trailItems = thinkingEl.querySelectorAll(".chat-activity-step, li, span[data-tool]");
+    if (trailItems && trailItems.length > 0) {
+      var details = document.createElement("details");
+      details.className = "chat-tools-summary";
+      details.style.cssText = "margin-bottom:6px;font-size:12px;opacity:0.82;";
+      var summary = document.createElement("summary");
+      summary.style.cursor = "pointer";
+      summary.textContent = "✓ " + trailItems.length + (trailItems.length === 1 ? " ferramenta executada" : " ferramentas executadas");
+      details.appendChild(summary);
+      var list = document.createElement("ul");
+      list.style.cssText = "margin:4px 0 0 16px;padding:0;";
+      for (var ti = 0; ti < trailItems.length; ti++) {
+        var li = document.createElement("li");
+        li.textContent = trailItems[ti].textContent || "";
+        list.appendChild(li);
+      }
+      details.appendChild(list);
+      streamingBubble.insertBefore(details, streamingBubble.firstChild);
+    }
+    thinkingEl.remove();
+  }
   var cursor = streamingBubble.querySelector(".stream-cursor");
   if (cursor) cursor.remove();
   streamingBubble.classList.remove("streaming");
@@ -1247,11 +1298,14 @@ function onStreamError(errMsg) {
   }
 
   if (streamingBubble) {
-    // Show whatever content arrived; fallback to error text if nothing came.
+    var formattedErr = translate("chat.errorUnknown", {
+      error: String(errMsg || translate("common.unknown")),
+    });
+    // Show whatever content arrived; append error notice if partial text already exists.
     if (!streamingRawContent) {
-      streamingRawContent = translate("chat.errorUnknown", {
-        error: String(errMsg || translate("common.unknown")),
-      });
+      streamingRawContent = formattedErr;
+    } else {
+      streamingRawContent += "\n\n> **Erro:** " + String(errMsg || translate("common.unknown"));
     }
     ensureStreamingBubbleAtEnd();
     safeFinaliseStreamingBubble();
@@ -1326,6 +1380,7 @@ function onChatQuestion(data) {
   try {
     var q = typeof data === "string" ? JSON.parse(data) : data;
     if (!q || !q.id) return;
+    if (isDuplicateChatQuestion(q.id)) return;
     chatPendingQuestionCount += 1;
     // Pausa o timeout de segurança: a espera pela resposta não tem prazo.
     clearChatStreamTimeout();
@@ -1461,7 +1516,22 @@ function renderChatQuestionDock() {
   }
   var question = chatQuestionQueue[0];
 
-  chatQuestionDockText.innerHTML = renderAssistantMarkdown(question.question);
+  var badgeEl = chatQuestionDock.querySelector(".chat-question-dock-badge");
+  if (question.kind === "consent") {
+    chatQuestionDock.classList.add("chat-consent-card");
+    if (badgeEl) {
+      badgeEl.textContent = question.riskLevel === "high"
+        ? "🛡️ Autorização de Segurança (Ação Crítica)"
+        : "🛡️ Autorização Necessária";
+    }
+  } else {
+    chatQuestionDock.classList.remove("chat-consent-card");
+    if (badgeEl) badgeEl.textContent = translate("chat.questionDockBadge");
+  }
+
+  chatQuestionDockText.innerHTML = renderAssistantMarkdown(
+    question.target ? question.question + "\n\n**Alvo:** `" + question.target + "`" : question.question
+  );
   chatQuestionDockOptions.innerHTML = "";
 
   // Opções como botões de resposta rápida (sempre normalizadas antes).
@@ -1507,18 +1577,25 @@ function renderChatQuestionDock() {
   }
 }
 
+function isDuplicateChatQuestion(questionId) {
+  if (chatMessagesEl) {
+    var existingQuestions = chatMessagesEl.querySelectorAll(".chat-question");
+    for (var qi = 0; qi < existingQuestions.length; qi += 1) {
+      if (existingQuestions[qi].dataset.questionId === questionId) return true;
+    }
+  }
+  for (var qq = 0; qq < chatQuestionQueue.length; qq += 1) {
+    if (chatQuestionQueue[qq].id === questionId) return true;
+  }
+  return false;
+}
+
 function showChatQuestion(question) {
   if (!chatMessagesEl) return;
 
   // Dedupe: reemissão do mesmo id (retry/retransmissão do backend) não cria
   // uma segunda bolha nem reenfileira a pergunta no dock.
-  var existingQuestions = chatMessagesEl.querySelectorAll(".chat-question");
-  for (var qi = 0; qi < existingQuestions.length; qi += 1) {
-    if (existingQuestions[qi].dataset.questionId === question.id) return;
-  }
-  for (var qq = 0; qq < chatQuestionQueue.length; qq += 1) {
-    if (chatQuestionQueue[qq].id === question.id) return;
-  }
+  if (isDuplicateChatQuestion(question.id)) return;
 
   // Bolha na conversa: mantém a pergunta no histórico, SEM controles — a
   // interação acontece no dock que substitui a área de digitação.
@@ -1587,6 +1664,12 @@ function splitStreamingBubbleAfterQuestion() {
     if (!hadContent) streamingBubble.remove();
     streamingBubble = null;
   }
+  // Flush/reset do filtro de tokens A2UI antes de abrir a nova bolha pós-pergunta.
+  var preTail = flushA2uiTokenFilter();
+  if (preTail && streamingBubble) {
+    streamingRawContent += preTail;
+  }
+  resetA2uiTokenFilter();
   streamingRawContent = "";
   streamingRafPending = false;
   if (!chatMessagesEl) return;
@@ -2317,6 +2400,10 @@ function a2uiArchiveSurface(surfaceId) {
     existing.bubble.classList.add("a2ui-superseded");
   }
   a2uiArchivedSurfaces.push(existing);
+  while (a2uiArchivedSurfaces.length > 10) {
+    var oldest = a2uiArchivedSurfaces.shift();
+    if (oldest) a2uiDestroyEntry(oldest);
+  }
 }
 
 // a2uiIndexComponentLabels indexa os textos legíveis de botões/campos por id
@@ -2940,8 +3027,11 @@ function clearA2uiSurface() {
   // ── Polling via bindings Wails (transporte IPC confiável) ──
   // Alternativa ao EventSource quando o WebView2 bloqueia SSE por mixed-content.
   // PollChatEvents() retorna um array JSON de eventos pendentes no backend.
+  var pollActive = false;
+  var pollInFlight = false;
   startPollingLoop = function () {
-    if (pollTimerId) return; // já rodando
+    if (pollActive || pollTimerId) return; // já rodando (inclusive com IPC em voo)
+    pollActive = true;
     console.log("[chat] polling via PollChatEvents iniciado (intervalo=" + POLL_INTERVAL_MS + "ms)");
 
     // routePollResult processa o lote retornado por PollChatEvents e informa
@@ -2975,6 +3065,8 @@ function clearA2uiSurface() {
     }
 
     function poll() {
+      if (!pollActive || pollInFlight) return;
+      pollInFlight = true;
       if (!chatSending) {
         // Drenagem final ANTES de parar: eventos ainda no buffer do broker
         // (inclusive o terminal) não podem ficar órfãos — chatSending pode
@@ -2982,10 +3074,12 @@ function clearA2uiSurface() {
         appApi()
           .PollChatEvents()
           .then(function (result) {
+            pollInFlight = false;
             routePollResult(result);
             stopPollingLoop();
           })
           .catch(function () {
+            pollInFlight = false;
             stopPollingLoop();
           });
         return;
@@ -2994,7 +3088,8 @@ function clearA2uiSurface() {
       appApi()
         .PollChatEvents()
         .then(function (result) {
-          if (routePollResult(result)) {
+          pollInFlight = false;
+          if (!pollActive || routePollResult(result)) {
             stopPollingLoop();
             return;
           }
@@ -3003,7 +3098,9 @@ function clearA2uiSurface() {
           pollTimerId = setTimeout(poll, POLL_INTERVAL_MS);
         })
         .catch(function (err) {
+          pollInFlight = false;
           console.warn("[chat] PollChatEvents falhou:", err);
+          if (!pollActive) return;
           // Agenda próxima iteração mesmo com erro (pode ser transitório)
           pollTimerId = setTimeout(poll, POLL_INTERVAL_MS);
         });
@@ -3013,6 +3110,7 @@ function clearA2uiSurface() {
   }
 
   stopPollingLoop = function () {
+    pollActive = false;
     if (pollTimerId) {
       clearTimeout(pollTimerId);
       pollTimerId = null;
@@ -3266,6 +3364,7 @@ function formatInlineChatMarkdown(text) {
     function (_, label, url) {
       var safeLabel = String(label || "").trim();
       if (/^(?:discovery|app):\/\//i.test(url)) {
+        var rawUrl = url.replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"');
         var parts = safeLabel
           .split("|")
           .map(function (p) {
@@ -3278,7 +3377,7 @@ function formatInlineChatMarkdown(text) {
           var meta = parts.slice(2).join(" - ");
           return (
             '<a href="#" class="chat-internal-link chat-internal-card" data-internal-url="' +
-            escapeHtmlAttr(url) +
+            escapeHtmlAttr(rawUrl) +
             '">' +
             '<span class="chat-internal-card-title">' +
             title +
@@ -3294,7 +3393,7 @@ function formatInlineChatMarkdown(text) {
         }
         return (
           '<a href="#" class="chat-internal-link" data-internal-url="' +
-          escapeHtmlAttr(url) +
+          escapeHtmlAttr(rawUrl) +
           '">' +
           safeLabel +
           "</a>"
@@ -3886,8 +3985,49 @@ function ensureStreamingBubbleAtEnd() {
   }
 }
 
-function addChatMessage(role, content) {
+function removeChatEmptyState() {
   if (!chatMessagesEl) return;
+  var el = chatMessagesEl.querySelector(".chat-empty-state");
+  if (el && el.parentNode) el.parentNode.removeChild(el);
+}
+
+function renderChatEmptyState() {
+  if (!chatMessagesEl) return;
+  if (chatMessagesEl.querySelector(".chat-msg, .chat-empty-state")) return;
+  var box = document.createElement("div");
+  box.className = "chat-empty-state";
+  var title = document.createElement("div");
+  title.className = "chat-empty-title";
+  title.textContent = "Como posso ajudar neste dispositivo?";
+  box.appendChild(title);
+
+  var chips = [
+    { label: "Diagnóstico geral", prompt: "Faça um diagnóstico rápido de CPU, memória, disco e serviços críticos deste computador." },
+    { label: "Verificar rede e VPN", prompt: "Verifique conectividade de internet, DNS, Wi-Fi e status de VPN." },
+    { label: "Logs de erro recentes", prompt: "Analise os erros críticos recentes no Event Viewer do Windows." },
+    { label: "Lentidão / processos", prompt: "Quais processos e programas na inicialização estão consumindo mais recursos agora?" },
+    { label: "Abrir chamado de suporte", prompt: "Quero abrir um chamado técnico para a equipe de suporte." }
+  ];
+  var wrap = document.createElement("div");
+  wrap.className = "chat-starter-chips";
+  chips.forEach(function (c) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chat-starter-chip";
+    btn.textContent = c.label;
+    btn.addEventListener("click", function () {
+      if (!chatInputEl) return;
+      chatInputEl.value = c.prompt;
+      autoGrowChatInput();
+      sendChatMessage();
+    });
+    wrap.appendChild(btn);
+  });
+  box.appendChild(wrap);
+  chatMessagesEl.appendChild(box);
+}
+
+function buildChatMessageElement(role, content) {
   var div = document.createElement("div");
   div.className = "chat-msg " + role;
 
@@ -3906,7 +4046,13 @@ function addChatMessage(role, content) {
   if (role === "assistant" && actionSplit.options.length > 0) {
     appendChatQuickActions(div, actionSplit.options);
   }
+  return div;
+}
 
+function addChatMessage(role, content) {
+  if (!chatMessagesEl) return;
+  removeChatEmptyState();
+  var div = buildChatMessageElement(role, content);
   chatMessagesEl.appendChild(div);
   scheduleChatScrollToBottom();
   return div;
@@ -4532,19 +4678,37 @@ function initChatInfoListener() {
 }
 
 async function restoreChatHistory() {
-  if (!chatMessagesEl || chatMessagesEl.children.length > 0) return;
-  if (typeof appApi !== "function" || typeof appApi().GetChatHistory !== "function") return;
+  if (!chatMessagesEl) return;
+  if (chatMessagesEl.querySelector(".chat-msg")) return;
+  if (typeof appApi !== "function" || typeof appApi().GetChatHistory !== "function") {
+    renderChatEmptyState();
+    return;
+  }
   try {
     var hist = await appApi().GetChatHistory();
-    if (!Array.isArray(hist) || hist.length === 0) return;
+    if (!Array.isArray(hist) || hist.length === 0) {
+      renderChatEmptyState();
+      return;
+    }
+    removeChatEmptyState();
+    var frag = document.createDocumentFragment();
+    var added = 0;
     hist.forEach(function (m) {
       if (!m || !m.content) return;
       var role = String(m.role || "").toLowerCase();
       if (role !== "user" && role !== "assistant") return;
-      addChatMessage(role, m.content);
+      frag.appendChild(buildChatMessageElement(role, m.content));
+      added++;
     });
+    if (added > 0) {
+      chatMessagesEl.appendChild(frag);
+      scheduleChatScrollToBottom(true);
+    } else {
+      renderChatEmptyState();
+    }
   } catch (e) {
     console.warn("[chat] falha ao restaurar histórico:", e);
+    renderChatEmptyState();
   }
 }
 
@@ -4558,6 +4722,48 @@ function initChat() {
   if (typeof initScreenshotCapture === "function") {
     initScreenshotCapture();
   }
+  var attachBtn = document.getElementById("chatAttachBtn");
+  var fileInput = document.getElementById("chatFileInput");
+  if (attachBtn && fileInput) {
+    attachBtn.addEventListener("click", function () {
+      fileInput.click();
+    });
+    fileInput.addEventListener("change", function () {
+      if (fileInput.files && fileInput.files.length > 0 && typeof screenshotPasteImages === "function") {
+        screenshotPasteImages(fileInput.files);
+      }
+      fileInput.value = "";
+    });
+  }
+  if (chatInputWrapEl) {
+    chatInputWrapEl.addEventListener("dragover", function (e) {
+      e.preventDefault();
+      chatInputWrapEl.classList.add("drag-over");
+    });
+    chatInputWrapEl.addEventListener("dragleave", function () {
+      chatInputWrapEl.classList.remove("drag-over");
+    });
+    chatInputWrapEl.addEventListener("drop", function (e) {
+      e.preventDefault();
+      chatInputWrapEl.classList.remove("drag-over");
+      var files = e.dataTransfer && e.dataTransfer.files;
+      if (files && files.length > 0 && typeof screenshotPasteImages === "function") {
+        screenshotPasteImages(files);
+      }
+    });
+  }
+  var scrollBottomBtn = document.getElementById("chatScrollBottomBtn");
+  if (scrollBottomBtn && chatMessagesEl) {
+    var updateScrollBtn = function () {
+      var dist = chatMessagesEl.scrollHeight - chatMessagesEl.scrollTop - chatMessagesEl.clientHeight;
+      scrollBottomBtn.classList.toggle("hidden", dist < 120);
+    };
+    chatMessagesEl.addEventListener("scroll", updateScrollBtn, { passive: true });
+    scrollBottomBtn.addEventListener("click", function () {
+      scheduleChatScrollToBottom(true);
+      scrollBottomBtn.classList.add("hidden");
+    });
+  }
   if (chatStopBtn) {
     chatStopBtn.addEventListener("click", requestStopChatStream);
   }
@@ -4566,6 +4772,17 @@ function initChat() {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         sendChatMessage();
+        return;
+      }
+      if (e.key === "Escape" && chatSending) {
+        e.preventDefault();
+        requestStopChatStream();
+        return;
+      }
+      if (e.key === "ArrowUp" && !chatInputEl.value && lastDispatchedChatText) {
+        e.preventDefault();
+        chatInputEl.value = lastDispatchedChatText;
+        autoGrowChatInput();
       }
     });
     // Auto-grow do composer (cap 200px via CSS; depois rola internamente).
@@ -4656,7 +4873,10 @@ function initChat() {
         streamingRawContent = "";
         streamingRafPending = false;
         resetA2uiTokenFilter();
-        if (chatMessagesEl) chatMessagesEl.innerHTML = "";
+        if (chatMessagesEl) {
+          chatMessagesEl.innerHTML = "";
+          renderChatEmptyState();
+        }
         if (typeof screenshotClearAttachments === "function") {
           screenshotClearAttachments();
         }

@@ -49,12 +49,12 @@ func ToolConsentFor(toolName string, args map[string]any) *consent.Request {
 		// Envia ao servidor imagens do usuário (turno do chat) ou capturas da
 		// tela: consentimento por ação, com o alvo descritivo.
 		return destructive("attach_ticket_images",
-			fmt.Sprintf("anexar %s ao chamado %s", imageCountLabel(optionalStringArg(args, "imageRefs")), optionalStringArg(args, "ticketId")),
+			fmt.Sprintf("anexar %s ao chamado %s", imageCountLabel(stringOrArrayArg(args, "imageRefs")), optionalStringArg(args, "ticketId")),
 			imageConsentExtra()...)
 	case "attach_images_to_ticket_comment":
 		return destructive("attach_ticket_comment_images",
 			fmt.Sprintf("anexar %s ao comentario %s do chamado %s",
-				imageCountLabel(optionalStringArg(args, "imageRefs")),
+				imageCountLabel(stringOrArrayArg(args, "imageRefs")),
 				optionalStringArg(args, "commentId"),
 				optionalStringArg(args, "ticketId")),
 			imageConsentExtra()...)
@@ -68,13 +68,13 @@ func ToolConsentFor(toolName string, args map[string]any) *consent.Request {
 			"A imagem do anexo sera baixada do servidor e enviada ao modelo de IA para analise.")
 	case "create_ticket":
 		// Só pede consentimento quando o chamado nasce com imagens anexadas.
-		if refs := optionalStringArg(args, "attachImageRefs"); refs != "" {
+		if refs := stringOrArrayArg(args, "attachImageRefs"); refs != "" {
 			return destructive("create_ticket_with_images",
 				fmt.Sprintf("abrir chamado com %s anexada(s)", imageCountLabel(refs)),
 				imageConsentExtra()...)
 		}
 	case "add_ticket_comment":
-		if refs := optionalStringArg(args, "attachImageRefs"); refs != "" {
+		if refs := stringOrArrayArg(args, "attachImageRefs"); refs != "" {
 			return destructive("comment_ticket_with_images",
 				fmt.Sprintf("comentar o chamado %s com %s anexada(s)", optionalStringArg(args, "ticketId"), imageCountLabel(refs)),
 				imageConsentExtra()...)

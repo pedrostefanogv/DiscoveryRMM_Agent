@@ -221,8 +221,13 @@ function screenshotParseAttachmentPolicy(raw) {
 
 // screenshotEnsureAttachmentPolicy busca a política uma vez (falha/rota ausente
 // cai no default local; o servidor continua sendo a autoridade).
+var screenshotAttachmentPolicyFetchedAt = 0;
+var screenshotAttachmentPolicyTtlMs = 5 * 60 * 1000;
+
 function screenshotEnsureAttachmentPolicy() {
-  if (screenshotAttachmentPolicyLoaded) return Promise.resolve(screenshotAttachmentPolicy);
+  if (screenshotAttachmentPolicyLoaded && (Date.now() - screenshotAttachmentPolicyFetchedAt) < screenshotAttachmentPolicyTtlMs) {
+    return Promise.resolve(screenshotAttachmentPolicy);
+  }
   if (screenshotAttachmentPolicyPending) return screenshotAttachmentPolicyPending;
   screenshotAttachmentPolicyPending = Promise.resolve()
     .then(function () {
@@ -232,13 +237,14 @@ function screenshotEnsureAttachmentPolicy() {
     })
     .then(function (raw) {
       screenshotAttachmentPolicy = screenshotParseAttachmentPolicy(raw);
-      screenshotAttachmentPolicyLoaded = true;
+      screenshotAttachmentPolicyLoaded = !!raw;
+      screenshotAttachmentPolicyFetchedAt = Date.now();
       screenshotAttachmentPolicyPending = null;
       return screenshotAttachmentPolicy;
     })
     .catch(function () {
       screenshotAttachmentPolicy = screenshotDefaultAttachmentPolicy();
-      screenshotAttachmentPolicyLoaded = true;
+      screenshotAttachmentPolicyLoaded = false;
       screenshotAttachmentPolicyPending = null;
       return screenshotAttachmentPolicy;
     });
@@ -388,9 +394,18 @@ function screenshotEncodeCanvasWithinBudget(canvas) {
     } catch (_) {
       dataUrl = "";
     }
-    if (dataUrl && dataUrl.length <= screenshotPastedImageBudget) return dataUrl;
+    if (dataUrl && dataUrl.length <= screenshotGetPastedBudget()) return dataUrl;
   }
   return dataUrl; // último recurso: o backend decide se aceita
+}
+
+function screenshotGetPastedBudget() {
+  var pol = screenshotEffectiveAttachmentPolicy();
+  if (pol && pol.maxFileSizeBytes > 0) {
+    // base64 data URL overhead (~1.37x)
+    return Math.floor(pol.maxFileSizeBytes * 1.33);
+  }
+  return screenshotPastedImageBudget;
 }
 
 // screenshotPrepareClipboardImage converte o arquivo colado em data URL
@@ -441,8 +456,10 @@ async function screenshotPasteImages(files) {
   for (var i = 0; i < files.length; i += 1) {
     (function (file) {
       var declaredType = String(file.type || "").toLowerCase();
+      // Valida apenas habilitação e MIME antes de redimensionar; o tamanho final
+      // é verificado depois da compressão para não rejeitar prints 4K brutos.
       var earlyReason = declaredType
-        ? screenshotAttachmentCheck(declaredType, Number(file.size) || 0)
+        ? screenshotAttachmentCheck(declaredType, 0)
         : "";
       if (earlyReason) {
         screenshotFeedback(screenshotAttachmentBlockedMessage(earlyReason, Number(file.size) || 0), true);

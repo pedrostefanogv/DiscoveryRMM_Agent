@@ -54,7 +54,10 @@ func registerRegistryReadTool(reg *Registry) {
 				if !hasVal {
 					return nil, fmt.Errorf("parametro obrigatorio 'valueName' ausente para get_value")
 				}
-				nameStr, _ := valueName.(string)
+				nameStr, ok := valueName.(string)
+				if !ok {
+					return nil, fmt.Errorf("parametro 'valueName' deve ser string")
+				}
 				return winregistry.GetValue(hive, keyPath, nameStr)
 			}
 			return nil, fmt.Errorf("action nao suportada: %s", action)

@@ -147,8 +147,13 @@ func optionalBoolArg(args map[string]any, name string) bool {
 	switch v := args[name].(type) {
 	case bool:
 		return v
+	case float64:
+		return v != 0
+	case int:
+		return v != 0
 	case string:
-		return strings.EqualFold(strings.TrimSpace(v), "true")
+		s := strings.ToLower(strings.TrimSpace(v))
+		return s == "true" || s == "1" || s == "yes" || s == "sim"
 	default:
 		return false
 	}

@@ -110,19 +110,23 @@ func (s *Server) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 
 		var req jsonrpcRequest
 		if err := json.Unmarshal(line, &req); err != nil {
-			s.writeError(w, nil, -32700, "parse error")
+			respCh <- &jsonrpcResponse{
+				JSONRPC: "2.0",
+				ID:      nil,
+				Error:   &rpcError{Code: -32700, Message: "parse error"},
+			}
 			continue
 		}
 
-		// Notificações não têm resposta — processa inline (baratas).
-		if req.ID == nil {
+		// Notificações leves (exceto tools/call) rodam inline; tools/call sempre passa pelo semáforo.
+		if req.ID == nil && req.Method != "tools/call" {
 			if resp := s.handle(runCtx, req); resp != nil {
 				respCh <- resp
 			}
 			continue
 		}
 
-		// Request real: executa em goroutine para não bloquear o loop de leitura.
+		// Request real (ou tools/call): executa em goroutine com semáforo para não bloquear o loop de leitura.
 		wg.Add(1)
 		go func(req jsonrpcRequest) {
 			defer wg.Done()
@@ -136,7 +140,7 @@ func (s *Server) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 			}
 			defer func() { <-sem }()
 			resp := s.handle(runCtx, req)
-			if resp == nil {
+			if resp == nil || req.ID == nil {
 				return // notification — no response
 			}
 			select {
@@ -191,6 +195,9 @@ func (s *Server) handleInitialize(req jsonrpcRequest) *jsonrpcResponse {
 				"tools": map[string]any{},
 			},
 			"serverInfo": s.info,
+			"instructions": "Discovery RMM MCP server (Windows agent). " +
+				"Prefer lightweight read-only tools (system_info, get_performance_snapshot, get_agent_info) before heavy full inventory (get_inventory). " +
+				"Destructive/state-changing actions require interactive user consent and are blocked on headless stdio calls.",
 		},
 	}
 }
@@ -220,7 +227,32 @@ func (s *Server) handleToolsCall(ctx context.Context, req jsonrpcRequest) *jsonr
 		}
 	}
 
-	result, err := s.registry.Call(ctx, params.Name, params.Arguments)
+	// Segurança stdio: remove qualquer "confirm" forjado pelo cliente nos argumentos
+	// e bloqueia ações que exigem consentimento interativo do usuário.
+	var parsedArgs map[string]any
+	cleanArgs := params.Arguments
+	if len(params.Arguments) > 0 && json.Unmarshal(params.Arguments, &parsedArgs) == nil && parsedArgs != nil {
+		if _, hasConfirm := parsedArgs["confirm"]; hasConfirm {
+			delete(parsedArgs, "confirm")
+			if reEncoded, mErr := json.Marshal(parsedArgs); mErr == nil {
+				cleanArgs = reEncoded
+			}
+		}
+	}
+	if consentReq := ToolConsentFor(params.Name, parsedArgs); consentReq != nil {
+		return &jsonrpcResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: map[string]any{
+				"content": []map[string]any{
+					{"type": "text", "text": fmt.Sprintf("Error: acao destrutiva (%s) requer autorizacao interativa do usuario e nao pode ser executada via stdio", consentReq.Action)},
+				},
+				"isError": true,
+			},
+		}
+	}
+
+	result, err := s.registry.Call(ctx, params.Name, cleanArgs)
 	if err != nil {
 		return &jsonrpcResponse{
 			JSONRPC: "2.0",

@@ -137,16 +137,18 @@ $events = @(Get-WinEvent -FilterHashtable $filter -MaxEvents %d -ErrorAction Sil
     $msg = ''
     try { $msg = $_.FormatDescription() } catch { $msg = $_.Message }
     if (-not $msg) { $msg = '' }
+    $cleanMsg = ($msg -replace '\r?\n', ' ').Trim()
+    if ($cleanMsg.Length -gt 600) { $cleanMsg = $cleanMsg.Substring(0, 600) + '...' }
     [PSCustomObject]@{
       timeCreated  = $_.TimeCreated.ToString('o')
       eventId      = [int64]$_.Id
       level        = $_.LevelDisplayName
       providerName = $_.ProviderName
       logName      = $_.LogName
-      message      = ($msg -replace '\r?\n', ' ').Trim()
+      message      = $cleanMsg
     }
   })
-$events | ConvertTo-Json -Depth 4 -Compress`, filterHashtable, maxEvents, maxEvents)
+ConvertTo-Json -InputObject $events -Depth 4 -Compress`, filterHashtable, maxEvents, maxEvents)
 
 	return runEventLogScript(ctx, script, eventLogTimeout)
 }

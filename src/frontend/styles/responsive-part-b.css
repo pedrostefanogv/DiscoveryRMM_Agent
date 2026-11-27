@@ -1179,7 +1179,7 @@
      0.9rem ≈ 20px por linha → 60px base, 120px no cap, espelhados em
      autoGrowChatInput). Textos maiores rolam internamente (overflow-y). */
   min-height: 60px;
-  max-height: 120px;
+  max-height: 200px;
   overflow-y: auto;
 }
 
@@ -1977,4 +1977,104 @@
   border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
   background: color-mix(in srgb, var(--danger) 10%, transparent);
   color: var(--danger);
+}
+
+.chat-empty-state {
+  margin: auto;
+  max-width: 560px;
+  padding: 24px 16px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.chat-empty-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.chat-starter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.chat-starter-chip {
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface, rgba(255, 255, 255, 0.04));
+  color: var(--text);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.chat-starter-chip:hover {
+  border-color: var(--accent, #3b82f6);
+  background: color-mix(in srgb, var(--accent, #3b82f6) 12%, transparent);
+}
+
+.chat-tools-summary {
+  margin-bottom: 8px;
+  font-size: 0.78rem;
+  color: var(--muted, var(--text-muted));
+}
+
+.chat-tools-summary > summary {
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.85;
+}
+
+.chat-tools-summary-list {
+  margin: 4px 0 0 14px;
+  padding: 0;
+  list-style: disc;
+}
+
+.chat-scroll-bottom {
+  position: sticky;
+  bottom: 12px;
+  margin-left: auto;
+  margin-right: 12px;
+  z-index: 5;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated, #1e293b);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.chat-scroll-bottom.hidden {
+  display: none;
+}
+
+.chat-input-wrap.drag-over {
+  border-color: var(--accent, #3b82f6);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #3b82f6) 25%, transparent);
+}
+
+.chat-question-card.risk-high {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+}
+
+.chat-question-card.risk-medium {
+  border-color: color-mix(in srgb, #f59e0b 55%, var(--border));
+}
+
+.chat-question-risk {
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-bottom: 4px;
 }

@@ -11,18 +11,9 @@ import (
 // --- Windows Update -------------------------------------------------------
 
 const windowsUpdateInstalledScript = `$ErrorActionPreference = 'Stop'
-@(Get-CimInstance Win32_QuickFixEngineering |
-  Select-Object HotFixID, Description, InstalledBy, InstalledOn, Caption) |
-  ConvertTo-Json -Compress -Depth 4`
-
-const pendingRebootScript = `$ErrorActionPreference = 'SilentlyContinue'
-$cbs = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
-$wu  = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
-[PSCustomObject]@{
-  cbsRebootPending            = [bool]$cbs
-  windowsUpdateRebootRequired = [bool]$wu
-  pendingReboot               = [bool]($cbs -or $wu)
-} | ConvertTo-Json -Compress -Depth 4`
+$items = @(Get-CimInstance Win32_QuickFixEngineering |
+  Select-Object HotFixID, Description, InstalledBy, InstalledOn, Caption)
+ConvertTo-Json -InputObject $items -Compress -Depth 4`
 
 const windowsUpdateHistoryScript = `$ErrorActionPreference = 'SilentlyContinue'
 $events = @(Get-WinEvent -LogName Setup -MaxEvents 50 | ForEach-Object {

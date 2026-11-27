@@ -44,7 +44,14 @@ export const SelectApi = {
     .describe("A dropdown that lets the user pick a single option from a list."),
 };
 
+let nextSelectId = 0;
+
 export class A2uiSelectElement extends A2uiLitElement {
+  constructor() {
+    super();
+    this._inputId = `a2ui-select-input-${++nextSelectId}`;
+  }
+
   createController() {
     return new A2uiController(this, SelectApi);
   }
@@ -61,12 +68,15 @@ export class A2uiSelectElement extends A2uiLitElement {
         ? raw
         : "";
     const options = Array.isArray(props.options) ? props.options : [];
+    const ariaLabel = props.accessibility?.label || props.label || "Seleção";
     return html`
       <div class="a2ui-select">
-        ${props.label ? html`<label for="a2ui-select-input">${props.label}</label>` : nothing}
+        ${props.label ? html`<label for=${this._inputId}>${props.label}</label>` : nothing}
         <select
-          id="a2ui-select-input"
+          id=${this._inputId}
           class="a2ui-select-input"
+          aria-label=${ariaLabel}
+          ?disabled=${Boolean(props.disabled)}
           .value=${current}
           @change=${(e) => props.setValue && props.setValue(e.target.value)}
         >

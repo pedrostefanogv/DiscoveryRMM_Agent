@@ -21,6 +21,10 @@ func IsUserSessionTool(toolName string, args map[string]any) bool {
 		return action == "lock"
 	case "shares":
 		return action == "mapped_drives"
+	case "network_diagnostics":
+		return action == "proxy"
+	case "disk":
+		return action == "temp" || action == "cleanup_temp"
 	default:
 		return false
 	}
