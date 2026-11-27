@@ -54,7 +54,7 @@ func (c *Coordinator) HandlePeerOnlineEvent(event agentconn.PeerEventMessage) {
 		return
 	}
 
-	addrInfo, err := buildAddrInfo(strings.TrimSpace(event.PeerID), event.Addrs, event.Port)
+	addrInfo, err := buildAddrInfo(strings.TrimSpace(event.PeerID), event.Addrs, event.Port, c.deps.GetP2PConfig().TCPOnlyEnabled())
 	if err != nil {
 		c.deps.Log(fmt.Sprintf("[p2p][events] peer.online ignorado (addr inválido) agentId=%s: %v",
 			strings.TrimSpace(event.AgentID), err))
@@ -67,6 +67,15 @@ func (c *Coordinator) HandlePeerOnlineEvent(event agentconn.PeerEventMessage) {
 	if err != nil {
 		c.deps.Log(fmt.Sprintf("[p2p][events] connect falhou agentId=%s peerId=%s: %v",
 			strings.TrimSpace(event.AgentID), strings.TrimSpace(event.PeerID), err))
+		return
+	}
+
+	if ok, existing, conflict := registry.RegisterStrict(strings.TrimSpace(event.AgentID), addrInfo.ID); conflict {
+		_ = h.Network().ClosePeer(addrInfo.ID)
+		c.deps.Log(fmt.Sprintf("[p2p][events] conflito de identidade agentId=%s peerAtual=%s peerRegistrado=%s",
+			strings.TrimSpace(event.AgentID), addrInfo.ID, existing))
+		return
+	} else if !ok {
 		return
 	}
 
@@ -211,7 +220,11 @@ func (c *Coordinator) connectP2PDiscoveryPeer(peer agentconn.P2PDiscoveryPeer) {
 	if h == nil || registry == nil {
 		return
 	}
-	addrInfo, err := buildAddrInfo(strings.TrimSpace(peer.PeerID), peer.Addrs, peer.Port)
+	tcpOnly := true
+	if c != nil && c.deps != nil {
+		tcpOnly = c.deps.GetP2PConfig().TCPOnlyEnabled()
+	}
+	addrInfo, err := buildAddrInfo(strings.TrimSpace(peer.PeerID), peer.Addrs, peer.Port, tcpOnly)
 	if err != nil {
 		c.deps.Log(fmt.Sprintf("[p2p][nats-discovery] peer ignorado (addr inválido) agentId=%s: %v", strings.TrimSpace(peer.AgentID), err))
 		return

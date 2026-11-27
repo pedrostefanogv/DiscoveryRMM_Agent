@@ -916,6 +916,9 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 	}
 
 	written, copyErr := io.Copy(s, reader)
+	if copyErr != nil {
+		_ = s.Reset()
+	}
 	if coord != nil && written > 0 {
 		coord.recordBytesServed(written)
 	}
@@ -1002,8 +1005,10 @@ func libp2pFetchPeers(ctx context.Context, h host.Host, peerID peer.ID, requeste
 		Token:       strings.TrimSpace(token),
 	}
 	if err := json.NewEncoder(s).Encode(req); err != nil {
+		_ = s.Reset()
 		return libp2pPeersResponse{}, fmt.Errorf("encode peers req: %w", err)
 	}
+	_ = s.CloseWrite()
 
 	// O servidor pode responder libp2pErrorResponse (token ausente/inválido,
 	// modo require). Lê tudo e diferencia erro de resposta — sem isso o JSON de
@@ -1161,8 +1166,10 @@ func libp2pRequestAccess(ctx context.Context, h host.Host, peerID peer.ID, artif
 
 	req := libp2pAccessRequest{ArtifactName: artifactName, RequesterID: requesterID}
 	if err := json.NewEncoder(s).Encode(req); err != nil {
+		_ = s.Reset()
 		return P2PArtifactAccess{}, fmt.Errorf("encode access req: %w", err)
 	}
+	_ = s.CloseWrite()
 	// Lê resposta: pode ser P2PArtifactAccess ou libp2pErrorResponse.
 	raw, err := io.ReadAll(io.LimitReader(s, maxLibp2pControlFrameBytes))
 	if err != nil {
@@ -1191,8 +1198,10 @@ func libp2pRequestDiscoveryAccess(ctx context.Context, h host.Host, peerID peer.
 
 	req := libp2pAccessRequest{ArtifactName: p2pDiscoveryTokenArtifact, RequesterID: requesterID}
 	if err := json.NewEncoder(s).Encode(req); err != nil {
+		_ = s.Reset()
 		return libp2pDiscoveryAccess{}, fmt.Errorf("encode access req: %w", err)
 	}
+	_ = s.CloseWrite()
 	raw, err := io.ReadAll(io.LimitReader(s, maxLibp2pControlFrameBytes))
 	if err != nil {
 		return libp2pDiscoveryAccess{}, fmt.Errorf("read access resp: %w", err)
@@ -1227,8 +1236,10 @@ func libp2pFetchManifest(ctx context.Context, h host.Host, peerID peer.ID, artif
 		Token:        strings.TrimSpace(accessToken),
 	}
 	if err := json.NewEncoder(s).Encode(req); err != nil {
+		_ = s.Reset()
 		return P2PChunkManifest{}, fmt.Errorf("encode manifest req: %w", err)
 	}
+	_ = s.CloseWrite()
 	raw, err := io.ReadAll(io.LimitReader(s, maxLibp2pCatalogFrameBytes))
 	if err != nil {
 		return P2PChunkManifest{}, fmt.Errorf("read manifest resp: %w", err)
@@ -1373,25 +1384,31 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 		Token:        accessToken,
 	}
 	if err := json.NewEncoder(s).Encode(req); err != nil {
+		_ = s.Reset()
 		return fmt.Errorf("encode get req: %w", err)
 	}
+	_ = s.CloseWrite()
 
 	hdr, payloadReader, err := decodeLibp2pGetHeaderAndPayload(s)
 	if err != nil {
+		_ = s.Reset()
 		return err
 	}
 	if !strings.EqualFold(strings.TrimSpace(hdr.ArtifactName), strings.TrimSpace(artifactName)) {
+		_ = s.Reset()
 		return fmt.Errorf("chunk %d: artifact inesperado no payload", chunk.Index)
 	}
 	expectedStart := chunk.Offset
 	expectedEnd := chunk.Offset + chunk.Size - 1
 	if hdr.RangeStart != expectedStart || hdr.RangeEnd != expectedEnd {
+		_ = s.Reset()
 		return fmt.Errorf("chunk %d: range inesperado no payload (esperado=%d-%d recebido=%d-%d)",
 			chunk.Index, expectedStart, expectedEnd, hdr.RangeStart, hdr.RangeEnd)
 	}
 
 	chunkLen := hdr.RangeEnd - hdr.RangeStart + 1
 	if chunkLen != chunk.Size {
+		_ = s.Reset()
 		return fmt.Errorf("chunk %d: tamanho divergente (esperado=%d recebido=%d)", chunk.Index, chunk.Size, chunkLen)
 	}
 	// Pipeline de leitura do payload do chunk (ver newChunkPayloadReader).
@@ -1403,12 +1420,14 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 	tmpFile := destFile + ".tmp"
 	f, err := os.Create(tmpFile)
 	if err != nil {
+		_ = s.Reset()
 		return fmt.Errorf("criar arquivo temporario do chunk: %w", err)
 	}
 	hasher := sha256.New()
 	written, copyErr := io.CopyN(io.MultiWriter(f, hasher), dataReader, chunkLen)
 	closeErr := f.Close()
 	if copyErr != nil {
+		_ = s.Reset()
 		_ = os.Remove(tmpFile)
 		return fmt.Errorf("leitura do chunk: %w", copyErr)
 	}
@@ -1466,17 +1485,22 @@ func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, ac
 		Token:        tokenFromAccessURL(access.URL),
 	}
 	if err := json.NewEncoder(s).Encode(req); err != nil {
+		_ = s.Reset()
 		return "", 0, fmt.Errorf("encode get req: %w", err)
 	}
+	_ = s.CloseWrite()
 
 	hdr, payloadReader, err := decodeLibp2pGetHeaderAndPayload(s)
 	if err != nil {
+		_ = s.Reset()
 		return "", 0, err
 	}
 	if !strings.EqualFold(strings.TrimSpace(hdr.ArtifactName), strings.TrimSpace(access.ArtifactName)) {
+		_ = s.Reset()
 		return "", 0, fmt.Errorf("artifact inesperado no payload")
 	}
 	if hdr.RangeStart != 0 {
+		_ = s.Reset()
 		return "", 0, fmt.Errorf("range inicial inesperado no payload")
 	}
 	expectedBytes := hdr.RangeEnd - hdr.RangeStart + 1
@@ -1485,12 +1509,14 @@ func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, ac
 	_ = s.SetDeadline(computeTransferDeadline(expectedBytes))
 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		_ = s.Reset()
 		return "", 0, err
 	}
 	targetPath := filepath.Join(destDir, access.ArtifactName)
 	tmpPath := targetPath + ".partial"
 	f, err := os.Create(tmpPath)
 	if err != nil {
+		_ = s.Reset()
 		return "", 0, err
 	}
 
@@ -1503,6 +1529,7 @@ func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, ac
 	size, copyErr := io.CopyN(f, reader, expectedBytes)
 	closeErr := f.Close()
 	if copyErr != nil {
+		_ = s.Reset()
 		_ = os.Remove(tmpPath)
 		return "", 0, fmt.Errorf("leitura incompleta do artifact: esperado=%d recebido=%d: %w", expectedBytes, size, copyErr)
 	}

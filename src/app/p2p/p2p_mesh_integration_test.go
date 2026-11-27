@@ -254,6 +254,10 @@ func TestPeerOnlineEventRegistersPeer(t *testing.T) {
 			if p.Source != "nats-event" {
 				t.Fatalf("source = %q, want nats-event", p.Source)
 			}
+			gotPeerID, found := nodeB.registry.Lookup("agent-online-A")
+			if !found || gotPeerID != nodeA.host.ID() {
+				t.Fatalf("registry.Lookup(agent-online-A) = (%s, %v), want (%s, true)", gotPeerID, found, nodeA.host.ID())
+			}
 			return
 		}
 		if time.Now().After(deadline) {

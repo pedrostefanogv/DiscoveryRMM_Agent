@@ -24,6 +24,8 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	noise "github.com/libp2p/go-libp2p/p2p/security/noise"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
+	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"
+	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -161,12 +163,16 @@ func (p *p2pLibP2PProvider) Start(
 		}
 		opts := []libp2p.Option{
 			libp2p.ListenAddrStrings(listenAddrs...),
+			libp2p.Transport(tcp.NewTCPTransport),
 			libp2p.Security(noise.ID, noise.New),
 			libp2p.Security(libp2ptls.ID, libp2ptls.New),
 			libp2p.ConnectionManager(cm),
 			libp2p.ConnectionGater(gater),
 			libp2p.DisableMetrics(),
 			libp2p.DisableRelay(),
+		}
+		if !p.tcpOnly {
+			opts = append(opts, libp2p.Transport(quic.NewTransport))
 		}
 		if identity != nil {
 			opts = append(opts, libp2p.Identity(identity))
@@ -233,7 +239,13 @@ func (p *p2pLibP2PProvider) Start(
 
 	notifee := &libp2pMDNSNotifee{h: h, self: self, onPeer: onPeer, onTrace: onTrace, registry: p.registry, clientID: p.clientID}
 	svc := mdns.NewMdnsService(h, p2pLibP2PRendezvous, notifee)
-	p.svc = svc
+	if err := svc.Start(); err != nil {
+		if onTrace != nil {
+			onTrace(fmt.Sprintf("libp2p mDNS start falhou (descoberta LAN via multicast desativada): %v", err))
+		}
+	} else {
+		p.svc = svc
+	}
 
 	// Connect to static bootstrap peers, if configured.
 	// These are used in corporate/VPN networks where mDNS multicast is blocked.
@@ -260,8 +272,11 @@ func (p *p2pLibP2PProvider) Start(
 			if onTrace != nil {
 				onTrace(fmt.Sprintf("libp2p bootstrap connect falhou %s: %v", addrStr, err))
 			}
-		} else if onTrace != nil {
-			onTrace(fmt.Sprintf("libp2p bootstrap peer conectado: %s", addrStr))
+		} else {
+			if onTrace != nil {
+				onTrace(fmt.Sprintf("libp2p bootstrap peer conectado: %s", addrStr))
+			}
+			go notifee.exchangeWithPeer(*pi)
 		}
 	}
 

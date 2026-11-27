@@ -101,12 +101,14 @@ func (c *Coordinator) RunCloudBootstrap(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	h, _ := c.libp2pHostAndRegistry()
+	h, registry := c.libp2pHostAndRegistry()
 	if h == nil {
 		err := fmt.Errorf("host libp2p não disponível")
 		c.deps.Log("[p2p][cloud-bootstrap] " + err.Error())
 		return 0, err
 	}
+
+	tcpOnly := cfg.TCPOnlyEnabled()
 
 	// Carregar cache local e tentar conexões imediatas (antes de chamar a API).
 	cachedPeers, _ := c.loadP2PPeerCache()
@@ -147,20 +149,36 @@ func (c *Coordinator) RunCloudBootstrap(ctx context.Context) (int, error) {
 			continue
 		}
 
-		addrInfo, err := buildAddrInfo(rp.PeerID, rp.Addrs, rp.Port)
+		addrInfo, err := buildAddrInfo(rp.PeerID, rp.Addrs, rp.Port, tcpOnly)
 		if err != nil {
 			c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] peer ignorado (addr inválido) peerId=%s: %v", rp.PeerID, err))
 			continue
 		}
 
-		connCtx, cancel := context.WithTimeout(ctx, p2pCloudBootstrapConnectTO)
-		err = h.Connect(connCtx, addrInfo)
+		connCtx, cancel := context.WithTimeout(ctx, p2pCloudBootstrapConnectTO+discoveryDialJitter)
+		err = connectPeerIfNotConnected(connCtx, h, addrInfo, discoveryDialJitter)
 		cancel()
 
 		if err != nil {
 			c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] connect falhou peerId=%s: %v", rp.PeerID, err))
 			cachedPeers = removeP2PPeerCacheEntry(cachedPeers, rp.PeerID)
 			continue
+		}
+
+		peerKey := strings.ToLower(strings.TrimSpace(rp.AgentID))
+		if peerKey == "" {
+			// Servidor antigo sem agentId na resposta: usa o peerId como chave.
+			peerKey = strings.ToLower(rp.PeerID)
+		}
+		if registry != nil {
+			if ok, existing, conflict := registry.RegisterStrict(peerKey, addrInfo.ID); conflict {
+				_ = h.Network().ClosePeer(addrInfo.ID)
+				c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] conflito de identidade agentId=%s peerAtual=%s peerRegistrado=%s",
+					peerKey, addrInfo.ID, existing))
+				continue
+			} else if !ok {
+				continue
+			}
 		}
 
 		c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] conectado peerId=%s addrs=%v", rp.PeerID, rp.Addrs))
@@ -179,11 +197,6 @@ func (c *Coordinator) RunCloudBootstrap(ctx context.Context) (int, error) {
 		address := firstUsableSnapshotAddr(rp.Addrs)
 		if address == "" {
 			continue
-		}
-		peerKey := strings.ToLower(strings.TrimSpace(rp.AgentID))
-		if peerKey == "" {
-			// Servidor antigo sem agentId na resposta: usa o peerId como chave.
-			peerKey = strings.ToLower(rp.PeerID)
 		}
 		port := rp.Port
 		c.mu.RLock()
@@ -293,12 +306,16 @@ func (c *Coordinator) connectCachedPeers(ctx context.Context, h interface {
 	if len(cached) == 0 {
 		return cached
 	}
+	tcpOnly := true
+	if c != nil && c.deps != nil {
+		tcpOnly = c.deps.GetP2PConfig().TCPOnlyEnabled()
+	}
 	valid := cached[:0]
 	for _, cp := range cached {
 		if cp.PeerID == "" || cp.Port <= 0 || len(cp.Addrs) == 0 {
 			continue
 		}
-		addrInfo, err := buildAddrInfo(cp.PeerID, cp.Addrs, cp.Port)
+		addrInfo, err := buildAddrInfo(cp.PeerID, cp.Addrs, cp.Port, tcpOnly)
 		if err != nil {
 			continue
 		}
@@ -362,8 +379,8 @@ func (c *Coordinator) callCloudBootstrapAPI(ctx context.Context, scheme, server,
 }
 
 // buildAddrInfo constrói um peer.AddrInfo a partir de IPs, porta e peerID string.
-// Gera entradas TCP e QUIC/v1 para cada IP válido.
-func buildAddrInfo(peerIDStr string, addrs []string, port int) (peer.AddrInfo, error) {
+// Gera entradas TCP e (quando !tcpOnly) QUIC/v1 para cada IP válido.
+func buildAddrInfo(peerIDStr string, addrs []string, port int, tcpOnly bool) (peer.AddrInfo, error) {
 	pid, err := peer.Decode(peerIDStr)
 	if err != nil {
 		return peer.AddrInfo{}, fmt.Errorf("peerID invalido: %w", err)
@@ -384,8 +401,10 @@ func buildAddrInfo(peerIDStr string, addrs []string, port int) (peer.AddrInfo, e
 			mas = append(mas, maTCP)
 		}
 		// QUIC/v1
-		if maQUIC, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip.To4().String(), port)); err == nil {
-			mas = append(mas, maQUIC)
+		if !tcpOnly {
+			if maQUIC, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip.To4().String(), port)); err == nil {
+				mas = append(mas, maQUIC)
+			}
 		}
 	}
 
