@@ -277,6 +277,14 @@ type knowledgeListPage struct {
 	HasMore    bool
 }
 
+// isVisibleAgentArticle garante defesa em profundidade: apenas artigos
+// publicados (ou legados sem status) podem ser exibidos no app do agente,
+// descartando Draft, Internal e AiOnly mesmo vindos de cache/backup antigo.
+func isVisibleAgentArticle(a KnowledgeArticle) bool {
+	status := strings.TrimSpace(a.Status)
+	return status == "" || strings.EqualFold(status, "Published")
+}
+
 // parseKnowledgeListEnvelope aceita os formatos que a API pode devolver:
 //   - array direto (respostas antigas, sem paginação);
 //   - envelope {"items": [...], "nextCursor": "...", "hasMore": true}.
@@ -285,7 +293,10 @@ func parseKnowledgeListEnvelope(body []byte) (knowledgeListPage, error) {
 	if err := json.Unmarshal(body, &direct); err == nil {
 		out := make([]KnowledgeArticle, 0, len(direct))
 		for _, item := range direct {
-			out = append(out, parseKnowledgeArticle(item))
+			parsed := parseKnowledgeArticle(item)
+			if isVisibleAgentArticle(parsed) {
+				out = append(out, parsed)
+			}
 		}
 		return knowledgeListPage{Articles: out}, nil
 	}
@@ -304,7 +315,10 @@ func parseKnowledgeListEnvelope(body []byte) (knowledgeListPage, error) {
 		out := make([]KnowledgeArticle, 0, len(arr))
 		for _, entry := range arr {
 			if m, ok := entry.(map[string]any); ok {
-				out = append(out, parseKnowledgeArticle(m))
+				parsed := parseKnowledgeArticle(m)
+				if isVisibleAgentArticle(parsed) {
+					out = append(out, parsed)
+				}
 			}
 		}
 		page.Articles = out

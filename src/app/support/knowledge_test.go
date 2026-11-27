@@ -173,3 +173,23 @@ func TestParseKnowledgeListEnvelope_Pagination(t *testing.T) {
 		t.Fatalf("última página falhou: %v %+v", err, page3)
 	}
 }
+
+func TestParseKnowledgeListEnvelope_FiltersNonPublished(t *testing.T) {
+	body := []byte(`{"items":[
+		{"id":"1","title":"Público","status":"Published"},
+		{"id":"2","title":"Interno","status":"Internal"},
+		{"id":"3","title":"Somente IA","status":"AiOnly"},
+		{"id":"4","title":"Rascunho","status":"Draft"},
+		{"id":"5","title":"Legado"}
+	]}`)
+	page, err := parseKnowledgeListEnvelope(body)
+	if err != nil {
+		t.Fatalf("falha ao parsear lista: %v", err)
+	}
+	if len(page.Articles) != 2 {
+		t.Fatalf("esperava apenas 2 artigos visíveis (Published + legado), obteve %d", len(page.Articles))
+	}
+	if page.Articles[0].ID != "1" || page.Articles[1].ID != "5" {
+		t.Fatalf("IDs inesperados: %+v", page.Articles)
+	}
+}

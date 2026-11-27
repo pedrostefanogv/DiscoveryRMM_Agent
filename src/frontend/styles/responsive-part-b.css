@@ -1718,6 +1718,53 @@
   background: var(--surface);
 }
 
+.kb-category-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.kb-category-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+
+.kb-category-chip:hover {
+  color: var(--text);
+  border-color: var(--primary, #3b82f6);
+}
+
+.kb-category-chip.active {
+  background: var(--primary-soft, rgba(59, 130, 246, .14));
+  border-color: var(--primary, #3b82f6);
+  color: var(--primary, #3b82f6);
+}
+
+.kb-page-pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.kb-pager-btn {
+  max-width: 48%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .kb-pages-title {
   font-size: .72rem;
   font-weight: 600;

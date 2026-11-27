@@ -3,6 +3,7 @@
 // Estado das páginas do artigo ativo (árvore Notion-style)
 var kbActivePages = [];
 var kbActivePageId = null; // null = home (artigo principal)
+var kbSelectedCategory = "";
 
 // Token incrementado a cada render do detalhe: descarta respostas atrasadas da
 // hidratação de imagens quando o usuário troca de artigo/página.
@@ -150,10 +151,80 @@ function renderKnowledgeArticleDetail(article) {
   }
 
   renderKbPagesNav(article.title);
+  renderKbPagePager(article);
   syncColorMode();
   // As imagens privadas ([alt](kbimage:<id>)) precisam dos bytes vindos do Go:
   // o <img> é renderizado sem src e hidratado aqui.
   hydrateKnowledgeImages(kbDetailContentEl);
+}
+
+function flattenKbPages(articleTitle, pages) {
+  var list = [{ id: "__home__", title: articleTitle || "Início" }];
+  function walk(nodes) {
+    for (var i = 0; i < (nodes || []).length; i++) {
+      var n = nodes[i];
+      list.push({ id: n.id, title: n.title || "-" });
+      if (n.children && n.children.length) walk(n.children);
+    }
+  }
+  walk(pages);
+  return list;
+}
+
+function renderKbPagePager(article) {
+  var pagerEl = document.getElementById("kbPagePager");
+  if (!pagerEl) return;
+  if (!article || !kbActivePages || !kbActivePages.length) {
+    pagerEl.classList.add("hidden");
+    pagerEl.innerHTML = "";
+    return;
+  }
+  var ordered = flattenKbPages(article.title, kbActivePages);
+  var currentId = kbActivePageId === null ? "__home__" : kbActivePageId;
+  var idx = -1;
+  for (var i = 0; i < ordered.length; i++) {
+    if (ordered[i].id === currentId) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx === -1 || ordered.length <= 1) {
+    pagerEl.classList.add("hidden");
+    pagerEl.innerHTML = "";
+    return;
+  }
+  var prev = idx > 0 ? ordered[idx - 1] : null;
+  var next = idx < ordered.length - 1 ? ordered[idx + 1] : null;
+  var html = [];
+  html.push(
+    prev
+      ? '<button type="button" class="btn subtle kb-pager-btn" data-kb-page="' +
+          escapeHtmlAttr(prev.id) +
+          '">&#x2190; ' +
+          escapeHtml(prev.title) +
+          "</button>"
+      : "<span></span>",
+  );
+  html.push(
+    next
+      ? '<button type="button" class="btn subtle kb-pager-btn" data-kb-page="' +
+          escapeHtmlAttr(next.id) +
+          '">' +
+          escapeHtml(next.title) +
+          " &#x2192;</button>"
+      : "<span></span>",
+  );
+  pagerEl.innerHTML = html.join("");
+  pagerEl.classList.remove("hidden");
+}
+
+function scrollKbDetailToTop() {
+  var view = document.getElementById("knowledgeView");
+  var detail = document.getElementById("kbDetailView");
+  var articleEl = document.getElementById("kbArticleDetail");
+  if (view) view.scrollTop = 0;
+  if (detail) detail.scrollTop = 0;
+  if (articleEl) articleEl.scrollTop = 0;
 }
 
 // hydrateKnowledgeImages busca a data URL das imagens privadas da KB via binding
@@ -845,26 +916,6 @@ function renderKnowledgeArticles(items) {
     return;
   }
 
-  // Calcula o nível de profundidade de cada artigo (0 = raiz) a partir de parentId
-  var depthMap = {};
-  var byId = {};
-  list.forEach(function (a) {
-    byId[a.id] = a;
-  });
-  function depthOf(a) {
-    if (depthMap[a.id] !== undefined) return depthMap[a.id];
-    var d = 0;
-    var cur = a;
-    var guard = 0;
-    while (cur && cur.parentId && byId[cur.parentId] && guard < 4) {
-      d++;
-      cur = byId[cur.parentId];
-      guard++;
-    }
-    depthMap[a.id] = d;
-    return d;
-  }
-
   kbArticlesListEl.innerHTML = list
     .map(function (a) {
       var tags = Array.isArray(a.tags) ? a.tags : [];
@@ -889,20 +940,10 @@ function renderKnowledgeArticles(items) {
           return "<em>#" + escapeHtml(t) + "</em>";
         })
         .join(" ");
-      var depth = depthOf(a);
-      var indent = depth > 0 ? ' style="margin-left:' + depth * 16 + 'px"' : "";
-      var icon = a.isPage
-        ? '<span class="kb-tree-icon">&#128193;</span>'
-        : depth > 0
-          ? '<span class="kb-tree-icon">&#128196;</span>'
-          : "";
       return (
         '<button class="kb-article-card" data-kb-id="' +
         escapeHtmlAttr(a.id) +
-        '"' +
-        indent +
-        ">" +
-        icon +
+        '">' +
         '<span class="kb-article-title">' +
         escapeHtml(a.title || "-") +
         "</span>" +
@@ -923,6 +964,57 @@ function renderKnowledgeArticles(items) {
     .join("");
 }
 
+function renderKbCategoryBar() {
+  var bar = document.getElementById("kbCategoryBar");
+  if (!bar) return;
+  var seen = {};
+  var categories = [];
+  (knowledgeArticles || []).forEach(function (a) {
+    var cat = String(a.category || "").trim();
+    if (!cat || cat === "-") return;
+    var key = cat.toLowerCase();
+    if (!seen[key]) {
+      seen[key] = true;
+      categories.push(cat);
+    }
+  });
+  categories.sort(function (a, b) {
+    return a.localeCompare(b, "pt-BR");
+  });
+  if (!categories.length) {
+    kbSelectedCategory = "";
+    bar.classList.add("hidden");
+    bar.innerHTML = "";
+    return;
+  }
+  if (
+    kbSelectedCategory &&
+    !seen[kbSelectedCategory.toLowerCase()]
+  ) {
+    kbSelectedCategory = "";
+  }
+  var html = [
+    '<button type="button" class="kb-category-chip' +
+      (kbSelectedCategory === "" ? " active" : "") +
+      '" data-kb-category="">Todas</button>',
+  ];
+  for (var i = 0; i < categories.length; i++) {
+    var c = categories[i];
+    var isActive = kbSelectedCategory.toLowerCase() === c.toLowerCase();
+    html.push(
+      '<button type="button" class="kb-category-chip' +
+        (isActive ? " active" : "") +
+        '" data-kb-category="' +
+        escapeHtmlAttr(c) +
+        '">' +
+        escapeHtml(c) +
+        "</button>",
+    );
+  }
+  bar.innerHTML = html.join("");
+  bar.classList.remove("hidden");
+}
+
 function selectKnowledgeArticle(id) {
   if (!id) return;
   selectedKnowledgeArticleID = id;
@@ -933,6 +1025,7 @@ function selectKnowledgeArticle(id) {
   kbActivePageId = null;
   renderKnowledgeArticleDetail(article || null);
   showKBDetail();
+  scrollKbDetailToTop();
 
   // Busca as sub-páginas do artigo (árvore Notion-style)
   if (article && article.id) {
@@ -1015,15 +1108,24 @@ function selectKbPage(pageId) {
     return a.id === selectedKnowledgeArticleID;
   });
   renderKnowledgeArticleDetail(article || null);
+  scrollKbDetailToTop();
 }
 
 function filterKnowledgeArticles(query) {
   var q = String(query || "")
     .trim()
     .toLowerCase();
+  var selectedCat = String(kbSelectedCategory || "")
+    .trim()
+    .toLowerCase();
   var filtered = knowledgeArticles;
+  if (selectedCat) {
+    filtered = filtered.filter(function (a) {
+      return String(a.category || "").trim().toLowerCase() === selectedCat;
+    });
+  }
   if (q) {
-    filtered = knowledgeArticles.filter(function (a) {
+    filtered = filtered.filter(function (a) {
       var tags = Array.isArray(a.tags) ? a.tags.join(" ") : "";
       return (
         String(a.title || "")
@@ -1101,6 +1203,7 @@ async function loadKnowledgeBase() {
       ? knowledgeArticles
       : [];
     showKBList();
+    renderKbCategoryBar();
     filterKnowledgeArticles(kbSearchInputEl ? kbSearchInputEl.value : "");
   } catch (err) {
     if (staleBanner) staleBanner.classList.add("hidden");
@@ -1156,6 +1259,8 @@ function initKnowledge() {
       kbRefreshBtn.disabled = true;
       kbRefreshBtn.classList.add("is-loading");
       try {
+        kbImageDataUrlCache.clear();
+        kbImageInflight.clear();
         try {
           await appApi().RefreshKnowledgeBase();
         } catch (_) {
@@ -1166,6 +1271,27 @@ function initKnowledge() {
         kbRefreshBtn.disabled = false;
         kbRefreshBtn.classList.remove("is-loading");
       }
+    });
+  }
+
+  var kbCategoryBarEl = document.getElementById("kbCategoryBar");
+  if (kbCategoryBarEl) {
+    kbCategoryBarEl.addEventListener("click", function (e) {
+      var btn = e.target.closest(".kb-category-chip");
+      if (!btn) return;
+      kbSelectedCategory = btn.getAttribute("data-kb-category") || "";
+      renderKbCategoryBar();
+      filterKnowledgeArticles(kbSearchInputEl ? kbSearchInputEl.value : "");
+    });
+  }
+
+  var kbPagePagerEl = document.getElementById("kbPagePager");
+  if (kbPagePagerEl) {
+    kbPagePagerEl.addEventListener("click", function (e) {
+      var btn = e.target.closest(".kb-pager-btn");
+      if (!btn) return;
+      var targetPage = btn.getAttribute("data-kb-page");
+      if (targetPage) selectKbPage(targetPage);
     });
   }
 
