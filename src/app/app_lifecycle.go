@@ -374,6 +374,11 @@ func (a *App) runStagedStartup(ctx context.Context) {
 		if a.P2PCoord != nil {
 			// Inicializa o ciclo de vida do p2p.Coordinator antes de iniciar o loop.
 			_ = a.P2PCoord.Startup(ctx)
+			// Modo efetivo da verificação mTLS de PEERS: default "compat" (aceita
+			// peer ainda sem certificado, sem marcá-lo como verificado). Logar aqui
+			// evita um fallback silencioso — um DISCOVERY_P2P_MTLS_MODE inválido
+			// (ex.: "true"/"1") cai em compat sem aviso.
+			a.Logs.Append(fmt.Sprintf("[p2p] verificacao mTLS de peers=%s", a.GetP2PConfig().MtlsModeEffective()))
 			a.LoadCachedAgentMtlsIdentity()
 			a.safeGo(func() {
 				a.StartMtlsEnrollmentLoop(ctx)

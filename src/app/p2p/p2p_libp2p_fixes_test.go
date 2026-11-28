@@ -740,8 +740,6 @@ func TestP2PCompatMtlsModeAcceptsLegacyPeerWithoutCertificate(t *testing.T) {
 		t.Fatalf("connect B->A: %v", err)
 	}
 	if _, err := libp2pRequestDiscoveryAccess(ctx, nodeB.host, nodeA.host.ID(), "agent-compat-B"); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "mtls") {
-			t.Fatalf("modo compat NAO deve recusar peer legado por mTLS: %v", err)
-		}
+		t.Fatalf("modo compat deve ATENDER o peer legado (sem mTLS), obtido: %v", err)
 	}
 }
