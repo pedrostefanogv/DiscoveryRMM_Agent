@@ -122,6 +122,14 @@ func NormalizeConfig(cfg Config) Config {
 		}
 		out.BootstrapConfig.StaticRelays = relays
 	}
+	// mTLS de peers (ENTRE AGENTES): normaliza o modo e permite override por
+	// ambiente. Default "compat" (aceita peer sem certificado, sem marcá-lo como
+	// verificado) — "enforce" só depois de a frota ter cobertura de certificados.
+	out.MtlsMode = out.MtlsModeEffective()
+	if env := strings.TrimSpace(os.Getenv("DISCOVERY_P2P_MTLS_MODE")); env != "" {
+		out.MtlsMode = Config{MtlsMode: env}.MtlsModeEffective()
+	}
+
 	if env := strings.TrimSpace(os.Getenv("DISCOVERY_P2P_MDNS_ENABLED")); env != "" {
 		switch strings.ToLower(env) {
 		case "0", "false", "no":

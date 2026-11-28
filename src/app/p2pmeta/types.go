@@ -54,6 +54,15 @@ type Config struct {
 	// por padrão (mantendo compatibilidade com configs antigos), salvo quando o
 	// perfil de rede Windows ativo for exclusivamente Público.
 	MDNSEnabled *bool `json:"mdnsEnabled,omitempty"`
+	// MtlsMode controla a verificação do certificado mTLS dos PEERS no handshake
+	// libp2p e nos gates de artefato (mTLS é ENTRE AGENTES, não no HTTP da API):
+	//   "off":     não verifica nem exige certificado.
+	//   "compat" (default): tenta verificar; peer sem certificado é ACEITO, mas
+	//              NÃO é marcado como verificado. É o modo de rollout — a frota
+	//              ainda está recebendo certificados pelo enrollment.
+	//   "enforce": exige certificado válido da CA interna; rejeita o peer sem ele.
+	// Pode ser forçado pela variável DISCOVERY_P2P_MTLS_MODE.
+	MtlsMode string `json:"mtlsMode,omitempty"`
 }
 
 // MDNSEnabledEffective retorna true quando o mDNS está habilitado por política.
@@ -66,6 +75,33 @@ const (
 	ArtifactServeModeRequire = "require"
 	ArtifactServeModeLegacy  = "legacy"
 )
+
+// MtlsModes lista os valores aceitos em MtlsMode.
+const (
+	MtlsModeOff     = "off"
+	MtlsModeCompat  = "compat"
+	MtlsModeEnforce = "enforce"
+)
+
+// MtlsModeEffective normaliza MtlsMode. Valor ausente/desconhecido cai em
+// "compat": ligar "enforce" sem que a frota tenha certificado isola o próprio
+// agente da malha (peers legados são recusados) — ver incidente de rollout
+// 27/11/2026, quando o mTLS passou a ser exigido sem cobertura da frota.
+func (c Config) MtlsModeEffective() string {
+	switch strings.ToLower(strings.TrimSpace(c.MtlsMode)) {
+	case MtlsModeOff:
+		return MtlsModeOff
+	case MtlsModeEnforce:
+		return MtlsModeEnforce
+	default:
+		return MtlsModeCompat
+	}
+}
+
+// MtlsEnforced indica se peer sem certificado válido deve ser REJEITADO.
+func (c Config) MtlsEnforced() bool {
+	return c.MtlsModeEffective() == MtlsModeEnforce
+}
 
 // TCPOnlyEnabled retorna true quando o transporte deve ser restrito ao TCP.
 // Default true quando o campo está ausente (nil) — configs antigos sem o

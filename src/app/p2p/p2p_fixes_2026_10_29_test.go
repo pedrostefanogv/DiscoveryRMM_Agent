@@ -44,7 +44,7 @@ func TestLibP2PHandshakeDeliversPeer(t *testing.T) {
 	self1 := p2pSelfEndpoint{AgentID: "agent-1", Host: "host-1", Port: 41080, ClientID: "client-A"}
 	registry1 := newLibp2pPeerRegistry()
 	h1.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
-		handleLibP2PHandshakeStream(s, self1, "client-A", registry1, nil, nil, func(p2pDiscoveredPeer) {}, nil)
+		handleLibP2PHandshakeStream(s, self1, "client-A", registry1, nil, nil, false, func(p2pDiscoveredPeer) {}, nil)
 	})
 
 	got := make(chan p2pDiscoveredPeer, 1)
@@ -92,7 +92,7 @@ func TestLibP2PHandshakeAcceptsUnprovisionedPeer(t *testing.T) {
 	h1.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
 		handleLibP2PHandshakeStream(s,
 			p2pSelfEndpoint{AgentID: "agent-provisioned", Host: "host-1", Port: 41080},
-			"client-A", newLibp2pPeerRegistry(), nil, nil, func(p2pDiscoveredPeer) {}, nil)
+			"client-A", newLibp2pPeerRegistry(), nil, nil, false, func(p2pDiscoveredPeer) {}, nil)
 	})
 
 	got := make(chan p2pDiscoveredPeer, 1)

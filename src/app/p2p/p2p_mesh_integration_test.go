@@ -68,7 +68,7 @@ func newTestMeshNode(t *testing.T, agentID, clientID string) *testMeshNode {
 	self := p2pSelfEndpoint{AgentID: agentID, Host: "host-" + agentID, Port: 41080, ClientID: clientID}
 	registry := newLibp2pPeerRegistry()
 	h.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
-		handleLibP2PHandshakeStream(s, self, clientID, registry, nil, nil, func(p p2pDiscoveredPeer) {
+		handleLibP2PHandshakeStream(s, self, clientID, registry, nil, nil, coord.mtlsEnforced(), func(p p2pDiscoveredPeer) {
 			coord.upsertPeer(p)
 		}, nil)
 	})

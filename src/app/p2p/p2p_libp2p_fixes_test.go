@@ -593,7 +593,9 @@ func makeTestP2PMtlsIdentity(t *testing.T, caCert *x509.Certificate, caKey *ecds
 	return id
 }
 
-func TestP2PStrictMtlsHandshakeAndAccessEnforcement(t *testing.T) {
+// newTestMtlsCA gera uma CA interna efêmera para os testes de mTLS de peer.
+func newTestMtlsCA(t *testing.T) (*ecdsa.PrivateKey, *x509.Certificate, string) {
+	t.Helper()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("caKey: %v", err)
@@ -613,6 +615,21 @@ func TestP2PStrictMtlsHandshakeAndAccessEnforcement(t *testing.T) {
 	}
 	caCert, _ := x509.ParseCertificate(caDER)
 	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
+	return caKey, caCert, caPEM
+}
+
+// setTestMtlsMode força o modo de verificação mTLS de peer do nó de teste.
+func setTestMtlsMode(t *testing.T, n *testMeshNode, mode string) {
+	t.Helper()
+	md, ok := n.coord.deps.(*mockDeps)
+	if !ok {
+		t.Fatalf("deps inesperado no nó de teste: %T", n.coord.deps)
+	}
+	md.cfg.MtlsMode = mode
+}
+
+func TestP2PStrictMtlsHandshakeAndAccessEnforcement(t *testing.T) {
+	caKey, caCert, caPEM := newTestMtlsCA(t)
 
 	idA := makeTestP2PMtlsIdentity(t, caCert, caKey, caPEM, "agent-mtls-A", "client-1", 10)
 	idB := makeTestP2PMtlsIdentity(t, caCert, caKey, caPEM, "agent-mtls-B", "client-1", 11)
@@ -625,11 +642,15 @@ func TestP2PStrictMtlsHandshakeAndAccessEnforcement(t *testing.T) {
 	nodeA.coord.SetMtlsIdentity(idA)
 	nodeB.coord.SetMtlsIdentity(idB)
 	nodeC.coord.SetMtlsIdentity(idOtherTenant)
+	// O default é "compat" (rollout). Este teste cobre o modo estrito.
+	setTestMtlsMode(t, nodeA, "enforce")
+	setTestMtlsMode(t, nodeB, "enforce")
+	setTestMtlsMode(t, nodeC, "enforce")
 
 	// Re-registrar handler com mtlsIdentity atualizado
 	nodeA.host.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
 		handleLibP2PHandshakeStream(s, p2pSelfEndpoint{AgentID: "agent-mtls-A", ClientID: "client-1", Port: 41080},
-			"client-1", nodeA.registry, nil, nodeA.coord.getMtlsIdentity(), func(p2pDiscoveredPeer) {}, nil)
+			"client-1", nodeA.registry, nil, nodeA.coord.getMtlsIdentity(), nodeA.coord.mtlsEnforced(), func(p2pDiscoveredPeer) {}, nil)
 	})
 
 	// 1. Mesmo tenant com cert valido -> sucesso e MarkMtlsVerified
@@ -666,8 +687,61 @@ func TestP2PStrictMtlsHandshakeAndAccessEnforcement(t *testing.T) {
 	if err := nodeC.host.Connect(ctx, peer.AddrInfo{ID: nodeA.host.ID(), Addrs: nodeA.host.Addrs()}); err != nil {
 		t.Fatalf("connect C->A: %v", err)
 	}
-	_, err = libp2pRequestDiscoveryAccess(ctx, nodeC.host, nodeA.host.ID(), "agent-mtls-C")
-	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "mtls") {
-		t.Fatalf("esperava rejeicao mTLS em /artifact/access, obtido: %v", err)
+	_, reqErr := libp2pRequestDiscoveryAccess(ctx, nodeC.host, nodeA.host.ID(), "agent-mtls-C")
+	if reqErr == nil || !strings.Contains(strings.ToLower(reqErr.Error()), "mtls") {
+		t.Fatalf("esperava rejeicao mTLS em /artifact/access, obtido: %v", reqErr)
+	}
+}
+
+// TestP2PCompatMtlsModeAcceptsLegacyPeerWithoutCertificate cobre o default do
+// rollout: com o mTLS de peer em "compat", um agente que AINDA nao tem
+// certificado (frota antiga) entra na malha e continua acessando artefatos, mas
+// NAO e marcado como verificado. Em "enforce" o mesmo peer e recusado (teste
+// anterior) — exigir sem cobertura da frota foi o incidente de rollout de
+// 27/11/2026.
+func TestP2PCompatMtlsModeAcceptsLegacyPeerWithoutCertificate(t *testing.T) {
+	caKey, caCert, caPEM := newTestMtlsCA(t)
+	idA := makeTestP2PMtlsIdentity(t, caCert, caKey, caPEM, "agent-compat-A", "client-1", 20)
+
+	nodeA := newTestMeshNode(t, "agent-compat-A", "client-1")
+	nodeB := newTestMeshNode(t, "agent-compat-B", "client-1") // legado: sem identidade mTLS
+	nodeA.coord.SetMtlsIdentity(idA)
+
+	if nodeA.coord.mtlsEnforced() {
+		t.Fatal("default do rollout deve ser compat (nao exigir certificado de peer)")
+	}
+
+	nodeA.host.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
+		handleLibP2PHandshakeStream(s, p2pSelfEndpoint{AgentID: "agent-compat-A", ClientID: "client-1", Port: 41080},
+			"client-1", nodeA.registry, nil, nodeA.coord.getMtlsIdentity(), nodeA.coord.mtlsEnforced(), func(p2pDiscoveredPeer) {}, nil)
+	})
+
+	notifB := &libp2pMDNSNotifee{
+		h:        nodeB.host,
+		self:     p2pSelfEndpoint{AgentID: "agent-compat-B", ClientID: "client-1", Port: 41080},
+		onPeer:   func(p2pDiscoveredPeer) {},
+		registry: nodeB.registry,
+		clientID: "client-1",
+		coord:    nodeB.coord,
+	}
+	notifB.exchangeWithPeer(peer.AddrInfo{ID: nodeA.host.ID(), Addrs: nodeA.host.Addrs()})
+
+	if id, ok := nodeA.registry.Lookup("agent-compat-B"); !ok || id != nodeB.host.ID() {
+		t.Fatal("handshake em modo compat deveria registrar o peer legado")
+	}
+	if nodeA.registry.IsMtlsVerified(nodeB.host.ID()) {
+		t.Fatal("peer legado NAO pode ser marcado como mTLS verificado no modo compat")
+	}
+
+	// Gate de artefato: em compat o peer sem certificado continua sendo atendido.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := nodeB.host.Connect(ctx, peer.AddrInfo{ID: nodeA.host.ID(), Addrs: nodeA.host.Addrs()}); err != nil {
+		t.Fatalf("connect B->A: %v", err)
+	}
+	if _, err := libp2pRequestDiscoveryAccess(ctx, nodeB.host, nodeA.host.ID(), "agent-compat-B"); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "mtls") {
+			t.Fatalf("modo compat NAO deve recusar peer legado por mTLS: %v", err)
+		}
 	}
 }

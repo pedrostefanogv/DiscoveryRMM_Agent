@@ -561,7 +561,9 @@ func handleStreamArtifactAccess(s network.Stream, transfer *TransferServer) {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
 		return
 	}
-	if transfer != nil && transfer.coord != nil && transfer.coord.getMtlsIdentity() != nil {
+	// Exigir peer verificado só no modo "enforce": em "compat" (default do
+	// rollout) o peer legado, sem certificado, continua servindo/obtendo artefatos.
+	if transfer != nil && transfer.coord != nil && transfer.coord.getMtlsIdentity() != nil && transfer.coord.mtlsEnforced() {
 		_, reg := transfer.coord.libp2pHostAndRegistry()
 		if reg == nil || !reg.IsMtlsVerified(s.Conn().RemotePeer()) {
 			_ = json.NewEncoder(s).Encode(libp2pErrorResponse{
@@ -609,7 +611,9 @@ func handleStreamArtifactManifest(s network.Stream, transfer *TransferServer) {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
 		return
 	}
-	if transfer != nil && transfer.coord != nil && transfer.coord.getMtlsIdentity() != nil {
+	// Exigir peer verificado só no modo "enforce": em "compat" (default do
+	// rollout) o peer legado, sem certificado, continua servindo/obtendo artefatos.
+	if transfer != nil && transfer.coord != nil && transfer.coord.getMtlsIdentity() != nil && transfer.coord.mtlsEnforced() {
 		_, reg := transfer.coord.libp2pHostAndRegistry()
 		if reg == nil || !reg.IsMtlsVerified(s.Conn().RemotePeer()) {
 			_ = json.NewEncoder(s).Encode(libp2pErrorResponse{
@@ -731,7 +735,9 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
 		return
 	}
-	if transfer != nil && transfer.coord != nil && transfer.coord.getMtlsIdentity() != nil {
+	// Exigir peer verificado só no modo "enforce": em "compat" (default do
+	// rollout) o peer legado, sem certificado, continua servindo/obtendo artefatos.
+	if transfer != nil && transfer.coord != nil && transfer.coord.getMtlsIdentity() != nil && transfer.coord.mtlsEnforced() {
 		_, reg := transfer.coord.libp2pHostAndRegistry()
 		if reg == nil || !reg.IsMtlsVerified(s.Conn().RemotePeer()) {
 			_ = json.NewEncoder(s).Encode(libp2pErrorResponse{
