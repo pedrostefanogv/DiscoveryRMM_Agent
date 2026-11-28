@@ -4,7 +4,11 @@
   var allFiles = [];
   var loadedOnce = false;
   var downloadingIds = {};
-  var scopeLabels = { 0: "Global", 1: "Cliente", 2: "Site" };
+  var scopeLabels = {
+    0: "Global", 1: "Cliente", 2: "Site",
+    "0": "Global", "1": "Cliente", "2": "Site",
+    "Global": "Global", "Client": "Cliente", "Site": "Site"
+  };
 
   function formatFileSize(bytes) {
     if (!bytes || bytes <= 0) return "0 B";
