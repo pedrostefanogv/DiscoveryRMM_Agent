@@ -84,6 +84,18 @@ func (a *App) applyAgentConfiguration(cfg agentconfig.AgentConfiguration) {
 			}
 		}
 	}
+	// Modo de verificação mTLS entre agentes (off/compat/enforce).
+	if remoteMode := strings.TrimSpace(cfg.P2PMtlsMode); remoteMode != "" {
+		p2pCfg := a.GetP2PConfig()
+		prevMode := p2pCfg.MtlsModeEffective()
+		if !strings.EqualFold(prevMode, remoteMode) {
+			p2pCfg.MtlsMode = remoteMode
+			a.applyP2PConfig(p2pCfg)
+			if effective := a.GetP2PConfig().MtlsModeEffective(); effective != prevMode {
+				a.Logs.Append(fmt.Sprintf("[config] p2pMtlsMode=%s aplicado ao P2P", effective))
+			}
+		}
+	}
 
 	// P2P files toggle.
 	// P2P só funciona se os agents conseguirem se descobrir: Descoberta de Rede

@@ -10,6 +10,8 @@ export {
 export {
     APITicket,
     APIWorkflowState,
+    AgentFileDownloadResult,
+    AgentFileItem,
     AgentInfo,
     AgentStatus,
     AutomationStateView,

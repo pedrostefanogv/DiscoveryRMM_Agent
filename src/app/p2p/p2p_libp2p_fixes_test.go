@@ -650,7 +650,7 @@ func TestP2PStrictMtlsHandshakeAndAccessEnforcement(t *testing.T) {
 	// Re-registrar handler com mtlsIdentity atualizado
 	nodeA.host.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
 		handleLibP2PHandshakeStream(s, p2pSelfEndpoint{AgentID: "agent-mtls-A", ClientID: "client-1", Port: 41080},
-			"client-1", nodeA.registry, nil, nodeA.coord.getMtlsIdentity(), nodeA.coord.mtlsEnforced(), func(p2pDiscoveredPeer) {}, nil)
+			"client-1", nodeA.registry, nil, nodeA.coord.getMtlsIdentity(), nodeA.coord.mtlsMode(), func(p2pDiscoveredPeer) {}, nil)
 	})
 
 	// 1. Mesmo tenant com cert valido -> sucesso e MarkMtlsVerified
@@ -713,7 +713,7 @@ func TestP2PCompatMtlsModeAcceptsLegacyPeerWithoutCertificate(t *testing.T) {
 
 	nodeA.host.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
 		handleLibP2PHandshakeStream(s, p2pSelfEndpoint{AgentID: "agent-compat-A", ClientID: "client-1", Port: 41080},
-			"client-1", nodeA.registry, nil, nodeA.coord.getMtlsIdentity(), nodeA.coord.mtlsEnforced(), func(p2pDiscoveredPeer) {}, nil)
+			"client-1", nodeA.registry, nil, nodeA.coord.getMtlsIdentity(), nodeA.coord.mtlsMode(), func(p2pDiscoveredPeer) {}, nil)
 	})
 
 	notifB := &libp2pMDNSNotifee{
@@ -741,5 +741,107 @@ func TestP2PCompatMtlsModeAcceptsLegacyPeerWithoutCertificate(t *testing.T) {
 	}
 	if _, err := libp2pRequestDiscoveryAccess(ctx, nodeB.host, nodeA.host.ID(), "agent-compat-B"); err != nil {
 		t.Fatalf("modo compat deve ATENDER o peer legado (sem mTLS), obtido: %v", err)
+	}
+}
+
+func TestP2POffMtlsModeSkipsVerificationAndAcceptsPeer(t *testing.T) {
+	caKey, caCert, caPEM := newTestMtlsCA(t)
+	idA := makeTestP2PMtlsIdentity(t, caCert, caKey, caPEM, "agent-off-A", "client-1", 30)
+	idOtherTenant := makeTestP2PMtlsIdentity(t, caCert, caKey, caPEM, "agent-off-B", "client-2", 31)
+
+	nodeA := newTestMeshNode(t, "agent-off-A", "client-1")
+	nodeB := newTestMeshNode(t, "agent-off-B", "client-1")
+	nodeA.coord.SetMtlsIdentity(idA)
+	nodeB.coord.SetMtlsIdentity(idOtherTenant)
+	setTestMtlsMode(t, nodeA, "off")
+	setTestMtlsMode(t, nodeB, "off")
+
+	nodeA.host.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
+		handleLibP2PHandshakeStream(s, p2pSelfEndpoint{AgentID: "agent-off-A", ClientID: "client-1", Port: 41080},
+			"client-1", nodeA.registry, nil, nodeA.coord.getMtlsIdentity(), nodeA.coord.mtlsMode(), func(p2pDiscoveredPeer) {}, nil)
+	})
+
+	notifB := &libp2pMDNSNotifee{
+		h:        nodeB.host,
+		self:     p2pSelfEndpoint{AgentID: "agent-off-B", ClientID: "client-1", Port: 41080},
+		onPeer:   func(p2pDiscoveredPeer) {},
+		registry: nodeB.registry,
+		clientID: "client-1",
+		coord:    nodeB.coord,
+	}
+	notifB.exchangeWithPeer(peer.AddrInfo{ID: nodeA.host.ID(), Addrs: nodeA.host.Addrs()})
+
+	if id, ok := nodeA.registry.Lookup("agent-off-B"); !ok || id != nodeB.host.ID() {
+		t.Fatal("modo off deveria aceitar o peer no handshake")
+	}
+	if nodeA.registry.IsMtlsVerified(nodeB.host.ID()) || nodeB.registry.IsMtlsVerified(nodeA.host.ID()) {
+		t.Fatal("modo off NAO deve marcar peers como mTLS verificados")
+	}
+}
+
+func TestP2PEnforceMtlsModeFailsClosedWithoutLocalIdentity(t *testing.T) {
+	nodeA := newTestMeshNode(t, "agent-fc-A", "client-1")
+	nodeB := newTestMeshNode(t, "agent-fc-B", "client-1")
+	setTestMtlsMode(t, nodeA, "enforce")
+	setTestMtlsMode(t, nodeB, "enforce")
+
+	nodeA.host.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
+		handleLibP2PHandshakeStream(s, p2pSelfEndpoint{AgentID: "agent-fc-A", ClientID: "client-1", Port: 41080},
+			"client-1", nodeA.registry, nil, nil, nodeA.coord.mtlsMode(), func(p2pDiscoveredPeer) {}, nil)
+	})
+
+	notifB := &libp2pMDNSNotifee{
+		h:        nodeB.host,
+		self:     p2pSelfEndpoint{AgentID: "agent-fc-B", ClientID: "client-1", Port: 41080},
+		onPeer:   func(p2pDiscoveredPeer) {},
+		registry: nodeB.registry,
+		clientID: "client-1",
+		coord:    nodeB.coord,
+	}
+	notifB.exchangeWithPeer(peer.AddrInfo{ID: nodeA.host.ID(), Addrs: nodeA.host.Addrs()})
+
+	if _, ok := nodeA.registry.Lookup("agent-fc-B"); ok {
+		t.Fatal("modo enforce sem identidade local deve falhar fechado no handshake")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := nodeB.host.Connect(ctx, peer.AddrInfo{ID: nodeA.host.ID(), Addrs: nodeA.host.Addrs()}); err != nil {
+		t.Fatalf("connect B->A: %v", err)
+	}
+	if _, err := libp2pRequestDiscoveryAccess(ctx, nodeB.host, nodeA.host.ID(), "agent-fc-B"); err == nil {
+		t.Fatal("modo enforce sem identidade local deve rejeitar /artifact/access")
+	}
+	if _, err := libp2pFetchPeers(ctx, nodeB.host, nodeA.host.ID(), "agent-fc-B", ""); err == nil {
+		t.Fatal("modo enforce sem identidade local deve rejeitar /discovery/peers")
+	}
+	if accepted, err := libp2pBroadcastCandidacy(ctx, nodeB.host, nodeA.host.ID(), ArtifactFetchCandidate{
+		ArtifactID: "art-1", AgentID: "agent-fc-B",
+	}); err == nil && accepted {
+		t.Fatal("modo enforce sem identidade local deve rejeitar /fetch/candidacy")
+	}
+}
+
+func TestLibp2pPeerRegistryMtlsExpirationAndClear(t *testing.T) {
+	reg := newLibp2pPeerRegistry()
+	p1 := peer.ID("peer-1")
+	p2 := peer.ID("peer-2")
+
+	reg.MarkMtlsVerified(p1, time.Now().Add(time.Hour))
+	reg.MarkMtlsVerified(p2, time.Now().Add(-time.Minute))
+
+	if !reg.IsMtlsVerified(p1) {
+		t.Fatal("esperava p1 verificado")
+	}
+	if reg.IsMtlsVerified(p2) {
+		t.Fatal("certificado expirado nao pode permanecer verificado")
+	}
+	if reg.VerifiedPeerCount() != 1 {
+		t.Fatalf("esperava 1 peer verificado, obtido %d", reg.VerifiedPeerCount())
+	}
+
+	reg.ClearMtlsVerified(p1)
+	if reg.IsMtlsVerified(p1) {
+		t.Fatal("ClearMtlsVerified deveria remover p1")
 	}
 }

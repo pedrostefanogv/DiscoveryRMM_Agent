@@ -29,6 +29,20 @@ export class EffectivePolicy {
              */
             this["fetchedAt"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["scope"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["stale"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }

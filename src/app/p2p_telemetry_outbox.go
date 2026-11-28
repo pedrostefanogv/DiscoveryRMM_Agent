@@ -25,8 +25,10 @@ func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
 		CollectedAtUTC:  time.Now().UTC().Format(time.RFC3339),
 		Metrics:         status.Metrics,
 		CurrentSeedPlan: status.CurrentSeedPlan,
-		KnownPeers:      a.P2PCoord.CountKnownPeers(),
-		ConnectedPeers:  a.P2PCoord.CountConnectedLibp2pPeers(),
+		KnownPeers:        a.P2PCoord.CountKnownPeers(),
+		ConnectedPeers:    a.P2PCoord.CountConnectedLibp2pPeers(),
+		MtlsMode:          status.MtlsMode,
+		MtlsVerifiedPeers: status.MtlsVerifiedPeers,
 	}
 	if info, err := a.GetAgentInfo(); err == nil {
 		payload.SiteID = strings.TrimSpace(info.SiteID)

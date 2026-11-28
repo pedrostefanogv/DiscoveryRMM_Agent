@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -39,39 +38,6 @@ type AgentMtlsIdentity struct {
 	PrivateKey *ecdsa.PrivateKey
 	AgentID    string
 	ClientID   string
-}
-
-var (
-	agentClientCertMu sync.RWMutex
-	agentClientCert   *tls.Certificate
-)
-
-// SetAgentClientCertificate registra o certificado cliente mTLS ativo no
-// processo para uso automático por NewHTTPClient, NewWebSocketDialer e PinnedTLSConfig.
-func SetAgentClientCertificate(cert *tls.Certificate) {
-	agentClientCertMu.Lock()
-	agentClientCert = cert
-	agentClientCertMu.Unlock()
-}
-
-// GetAgentClientCertificate retorna o certificado cliente mTLS ativo, se houver.
-func GetAgentClientCertificate() *tls.Certificate {
-	agentClientCertMu.RLock()
-	cert := agentClientCert
-	agentClientCertMu.RUnlock()
-	return cert
-}
-
-func attachAgentClientCert(cfg *tls.Config) {
-	if cfg == nil {
-		return
-	}
-	cfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-		if cert := GetAgentClientCertificate(); cert != nil {
-			return cert, nil
-		}
-		return &tls.Certificate{}, nil
-	}
 }
 
 // LoadOrCreateMtlsKey carrega ou gera a chave ECDSA P-256 em <dir>/agent.key.
@@ -228,20 +194,21 @@ func SignPeerBinding(key *ecdsa.PrivateKey, peerID string) (string, error) {
 
 // VerifyPeerCertAndBinding valida o certificado X.509 contra a CA interna,
 // verifica a prova de posse do PeerID e compara o tenant (ClientID).
-func VerifyPeerCertAndBinding(certPEM, sigB64, peerID string, caPool *x509.CertPool, expectedClientID string) (string, string, error) {
+// Retorna agentID, clientID e a data de expiração (NotAfter) do certificado.
+func VerifyPeerCertAndBinding(certPEM, sigB64, peerID string, caPool *x509.CertPool, expectedClientID string) (string, string, time.Time, error) {
 	if caPool == nil {
-		return "", "", errors.New("CA pool indisponivel")
+		return "", "", time.Time{}, errors.New("CA pool indisponivel")
 	}
 	if strings.TrimSpace(certPEM) == "" {
-		return "", "", errors.New("certificado mTLS ausente")
+		return "", "", time.Time{}, errors.New("certificado mTLS ausente")
 	}
 	block, _ := pem.Decode([]byte(certPEM))
 	if block == nil {
-		return "", "", errors.New("certificado PEM invalido")
+		return "", "", time.Time{}, errors.New("certificado PEM invalido")
 	}
 	leaf, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return "", "", fmt.Errorf("parse certificado: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("parse certificado: %w", err)
 	}
 
 	opts := x509.VerifyOptions{
@@ -250,30 +217,30 @@ func VerifyPeerCertAndBinding(certPEM, sigB64, peerID string, caPool *x509.CertP
 		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
 	if _, err := leaf.Verify(opts); err != nil {
-		return "", "", fmt.Errorf("cadeia mTLS invalida: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("cadeia mTLS invalida: %w", err)
 	}
 
 	agentID, clientID := extractCertIdentities(leaf)
 	if agentID == "" {
-		return "", "", errors.New("certificado sem AgentId")
+		return "", "", time.Time{}, errors.New("certificado sem AgentId")
 	}
 	if exp := strings.TrimSpace(expectedClientID); exp != "" && !strings.EqualFold(clientID, exp) {
-		return "", "", fmt.Errorf("tenant divergente no certificado: cert=%s esperado=%s", clientID, exp)
+		return "", "", time.Time{}, fmt.Errorf("tenant divergente no certificado: cert=%s esperado=%s", clientID, exp)
 	}
 
 	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sigB64))
 	if err != nil || len(sig) == 0 {
-		return "", "", errors.New("assinatura de posse mTLS invalida")
+		return "", "", time.Time{}, errors.New("assinatura de posse mTLS invalida")
 	}
 	pub, ok := leaf.PublicKey.(*ecdsa.PublicKey)
 	if !ok {
-		return "", "", errors.New("chave publica do certificado nao eh ECDSA")
+		return "", "", time.Time{}, errors.New("chave publica do certificado nao eh ECDSA")
 	}
 	digest := sha256.Sum256([]byte(peerBindingPrefix + strings.TrimSpace(peerID)))
 	if !ecdsa.VerifyASN1(pub, digest[:], sig) {
-		return "", "", errors.New("prova de posse mTLS falhou")
+		return "", "", time.Time{}, errors.New("prova de posse mTLS falhou")
 	}
-	return agentID, clientID, nil
+	return agentID, clientID, leaf.NotAfter, nil
 }
 
 func extractCertIdentities(cert *x509.Certificate) (string, string) {

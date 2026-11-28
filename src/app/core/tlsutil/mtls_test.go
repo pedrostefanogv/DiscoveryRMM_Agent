@@ -107,34 +107,23 @@ func TestMtlsIdentityLifecycleAndPeerBinding(t *testing.T) {
 		t.Fatalf("SignPeerBinding: %v", err)
 	}
 
-	gotAgent, gotClient, err := VerifyPeerCertAndBinding(id.CertPEM, sig, peerID, id.CAPool, "22222222-2222-4222-8222-222222222222")
+	gotAgent, gotClient, expAt, err := VerifyPeerCertAndBinding(id.CertPEM, sig, peerID, id.CAPool, "22222222-2222-4222-8222-222222222222")
 	if err != nil {
 		t.Fatalf("VerifyPeerCertAndBinding valido falhou: %v", err)
 	}
 	if gotAgent != "11111111-1111-4111-8111-111111111111" || gotClient != "22222222-2222-4222-8222-222222222222" {
 		t.Fatalf("identidades inesperadas: agent=%s client=%s", gotAgent, gotClient)
 	}
+	if expAt.IsZero() || !expAt.After(time.Now()) {
+		t.Fatalf("esperava expiracao futura valida, obtido %v", expAt)
+	}
 
 	// Tenant divergente deve falhar
-	if _, _, err := VerifyPeerCertAndBinding(id.CertPEM, sig, peerID, id.CAPool, "99999999-9999-4999-8999-999999999999"); err == nil {
+	if _, _, _, err := VerifyPeerCertAndBinding(id.CertPEM, sig, peerID, id.CAPool, "99999999-9999-4999-8999-999999999999"); err == nil {
 		t.Fatal("esperava falha com tenant divergente")
 	}
 	// PeerID diferente (replay de assinatura) deve falhar
-	if _, _, err := VerifyPeerCertAndBinding(id.CertPEM, sig, "12D3KooWOutroPeer", id.CAPool, "22222222-2222-4222-8222-222222222222"); err == nil {
+	if _, _, _, err := VerifyPeerCertAndBinding(id.CertPEM, sig, "12D3KooWOutroPeer", id.CAPool, "22222222-2222-4222-8222-222222222222"); err == nil {
 		t.Fatal("esperava falha com peerID divergente")
-	}
-
-	// SetAgentClientCertificate anexa GetClientCertificate no PinnedTLSConfig
-	cert := id.TLSCert
-	SetAgentClientCertificate(&cert)
-	t.Cleanup(func() { SetAgentClientCertificate(nil) })
-
-	tlsCfg := PinnedTLSConfig("", false)
-	if tlsCfg.GetClientCertificate == nil {
-		t.Fatal("esperava GetClientCertificate preenchido")
-	}
-	gotCert, err := tlsCfg.GetClientCertificate(nil)
-	if err != nil || len(gotCert.Certificate) == 0 {
-		t.Fatalf("GetClientCertificate falhou: %v", err)
 	}
 }

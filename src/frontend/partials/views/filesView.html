@@ -4,31 +4,59 @@
      display:none !important), alternada por setActiveTab; o ATRIBUTO hidden
      (regra [hidden] da UA) venceria para sempre e a aba nunca aparecia. -->
 <section id="filesView" class="page-content hidden" role="tabpanel" aria-labelledby="tabFiles">
-  <header class="view-header">
+  <header class="files-header">
     <div>
-      <h1 data-i18n="files.title">Arquivos</h1>
+      <div class="files-title-row">
+        <h1 data-i18n="files.title">Arquivos</h1>
+        <span id="filesCountPill" class="files-count-pill hidden"></span>
+      </div>
       <p class="view-subtitle" data-i18n="files.subtitle">
         Arquivos e instaladores disponibilizados para este equipamento (Global → Cliente → Site).
       </p>
     </div>
     <div class="view-actions">
-      <button id="filesRefreshBtn" class="btn btn-secondary" type="button">
+      <button id="filesRefreshBtn" class="btn subtle" type="button">
+        <svg viewBox="0 -960 960 960" width="15" height="15" fill="currentColor" aria-hidden="true" focusable="false">
+          <path d="M480-160q-134 0-227-93t-93-227q0-134 93-227t227-93q69 0 132 28.5T720-690v-70q0-17 11.5-28.5T760-800q17 0 28.5 11.5T800-760v200q0 17-11.5 28.5T760-520H560q-17 0-28.5-11.5T520-560q0-17 11.5-28.5T560-600h128q-32-56-87.5-88T480-720q-100 0-170 70t-70 170q0 100 70 170t170 70q68 0 124.5-34.5T692-367q8-14 22.5-19.5t29.5-.5q16 5 23 21t-1 30q-41 80-117 128t-169 48Z"/>
+        </svg>
         <span data-i18n="action.refresh">Atualizar</span>
       </button>
     </div>
   </header>
 
-  <div class="toolbar-row" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
-    <input id="filesSearchInput" class="input" type="search" placeholder="Buscar arquivo..."
-      data-i18n-placeholder="files.searchPlaceholder" style="flex:1;min-width:180px;" />
-    <select id="filesScopeFilter" class="input" style="width:auto;">
+  <div class="files-toolbar">
+    <div class="files-search-wrap">
+      <label class="visually-hidden" for="filesSearchInput">Buscar arquivo</label>
+      <svg class="files-search-icon" viewBox="0 -960 960 960" width="16" height="16" fill="currentColor" aria-hidden="true" focusable="false">
+        <path d="M784-120 532-372q-30 24-69 38t-83 14q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l252 252-56 56ZM380-400q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z"/>
+      </svg>
+      <input id="filesSearchInput" class="input files-search-input" type="search"
+        placeholder="Buscar por nome, arquivo, pasta ou descrição..."
+        data-i18n-placeholder="files.searchPlaceholder" />
+    </div>
+
+    <label class="visually-hidden" for="filesScopeFilter">Filtrar por escopo</label>
+    <select id="filesScopeFilter" class="input files-filter-select">
       <option value="" data-i18n="files.scopeAll">Todos os escopos</option>
       <option value="0" data-i18n="files.scopeGlobal">Global</option>
       <option value="1" data-i18n="files.scopeClient">Cliente</option>
       <option value="2" data-i18n="files.scopeSite">Site</option>
     </select>
+
+    <label class="visually-hidden" for="filesFolderFilter">Filtrar por pasta</label>
+    <select id="filesFolderFilter" class="input files-filter-select hidden">
+      <option value="">Todas as pastas</option>
+    </select>
+
+    <label class="visually-hidden" for="filesSortSelect">Ordenar arquivos</label>
+    <select id="filesSortSelect" class="input files-filter-select">
+      <option value="name_asc">Nome (A–Z)</option>
+      <option value="size_desc">Maior tamanho</option>
+      <option value="size_asc">Menor tamanho</option>
+    </select>
   </div>
 
-  <div id="filesStatusBanner" class="meta" style="margin-bottom:10px;"></div>
-  <div id="filesListContainer" class="files-list"></div>
+  <div id="filesStatusBanner" class="files-status-bar" role="status" aria-live="polite"></div>
+  <div id="filesErrorBanner" class="files-error-banner hidden" role="alert"></div>
+  <ul id="filesListContainer" class="files-list" role="list"></ul>
 </section>

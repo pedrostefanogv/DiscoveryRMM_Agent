@@ -115,6 +115,7 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		ZeroTouchEnabled:                  getBoolPtr("zeroTouchEnabled"),
 		CloudBootstrapEnabled:             getBoolPtr("cloudBootstrapEnabled"),
 		P2PMdnsEnabled:                    getBoolPtr("p2pMdnsEnabled"),
+		P2PMtlsMode:                       getString("p2pMtlsMode"),
 		AppStoreEnabled:                   getBoolPtr("appStoreEnabled"),
 		UpdatesTabEnabled:                 getBoolPtr("updatesTabEnabled"),
 		FilesTabEnabled:                   getBoolPtr("filesTabEnabled"),
@@ -361,6 +362,7 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.P2PMdnsEnabled }),
 		serverP2PMdns,
 	))
+	cfg.P2PMtlsMode = strings.TrimSpace(srv.P2PMtlsMode)
 	// Windows Update (patches): habilitado por padrão; site/cliente podem
 	// desligar. Ausência do campo no payload NÃO desliga o módulo.
 	serverWindowsUpdate := true

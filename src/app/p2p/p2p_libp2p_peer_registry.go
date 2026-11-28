@@ -47,39 +47,67 @@ type libp2pPeerRegistry struct {
 	mu       sync.RWMutex
 	peers    map[string]peer.ID
 	seen     map[string]time.Time // último contato/registro por agentID
-	verified map[peer.ID]bool     // peers validados via certificado mTLS da CA
+	verified map[peer.ID]time.Time // peers validados via certificado mTLS da CA → NotAfter
 }
 
 func newLibp2pPeerRegistry() *libp2pPeerRegistry {
 	return &libp2pPeerRegistry{
 		peers:    make(map[string]peer.ID),
 		seen:     make(map[string]time.Time),
-		verified: make(map[peer.ID]bool),
+		verified: make(map[peer.ID]time.Time),
 	}
 }
 
-// MarkMtlsVerified registra que o peer apresentou certificado mTLS válido da CA.
-func (r *libp2pPeerRegistry) MarkMtlsVerified(id peer.ID) {
-	if r == nil || id == "" {
+// MarkMtlsVerified registra que o peer apresentou certificado mTLS válido da CA
+// até a data de expiração informada.
+func (r *libp2pPeerRegistry) MarkMtlsVerified(id peer.ID, expiresAt time.Time) {
+	if r == nil || id == "" || expiresAt.IsZero() {
 		return
 	}
 	r.mu.Lock()
 	if r.verified == nil {
-		r.verified = make(map[peer.ID]bool)
+		r.verified = make(map[peer.ID]time.Time)
 	}
-	r.verified[id] = true
+	r.verified[id] = expiresAt
 	r.mu.Unlock()
 }
 
-// IsMtlsVerified informa se o peer já foi autenticado com certificado mTLS da CA.
+// ClearMtlsVerified remove a marcação de verificação mTLS de um peer.
+func (r *libp2pPeerRegistry) ClearMtlsVerified(id peer.ID) {
+	if r == nil || id == "" {
+		return
+	}
+	r.mu.Lock()
+	delete(r.verified, id)
+	r.mu.Unlock()
+}
+
+// IsMtlsVerified informa se o peer possui autenticação mTLS válida e não expirada.
 func (r *libp2pPeerRegistry) IsMtlsVerified(id peer.ID) bool {
 	if r == nil || id == "" {
 		return false
 	}
 	r.mu.RLock()
-	ok := r.verified[id]
+	exp, ok := r.verified[id]
 	r.mu.RUnlock()
-	return ok
+	return ok && !exp.IsZero() && time.Now().Before(exp)
+}
+
+// VerifiedPeerCount retorna quantos peers possuem certificado mTLS válido e ativo.
+func (r *libp2pPeerRegistry) VerifiedPeerCount() int {
+	if r == nil {
+		return 0
+	}
+	now := time.Now()
+	r.mu.RLock()
+	count := 0
+	for _, exp := range r.verified {
+		if !exp.IsZero() && now.Before(exp) {
+			count++
+		}
+	}
+	r.mu.RUnlock()
+	return count
 }
 
 // Register associa um agentID a um peer.ID libp2p. Seguro para uso concorrente.
@@ -135,13 +163,21 @@ func (r *libp2pPeerRegistry) RegisterStrict(agentID string, id peer.ID) (accepte
 	return true, "", false
 }
 
-// pruneStaleLocked remove entradas sem contato recente. Caller segura r.mu.
+// pruneStaleLocked remove entradas sem contato recente e certificados expirados. Caller segura r.mu.
 func (r *libp2pPeerRegistry) pruneStaleLocked() {
 	now := time.Now()
 	for key, last := range r.seen {
 		if now.Sub(last) > registryStalePrune {
+			if pid, ok := r.peers[key]; ok {
+				delete(r.verified, pid)
+			}
 			delete(r.seen, key)
 			delete(r.peers, key)
+		}
+	}
+	for pid, exp := range r.verified {
+		if exp.IsZero() || !now.Before(exp) {
+			delete(r.verified, pid)
 		}
 	}
 }

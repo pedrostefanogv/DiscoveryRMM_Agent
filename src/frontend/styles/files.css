@@ -1,0 +1,387 @@
+/* ================================================================
+   ABA ARQUIVOS (#filesView)
+   ================================================================ */
+
+.visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important;
+  clip-path: inset(50%) !important;
+  overflow: hidden !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  white-space: nowrap !important;
+}
+
+.files-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.files-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.files-title-row h1 {
+  margin: 0;
+}
+
+.files-count-pill {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.files-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.files-search-wrap {
+  position: relative;
+  flex: 1 1 220px;
+  min-width: 180px;
+  display: flex;
+  align-items: center;
+}
+
+.files-search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.files-search-input {
+  width: 100%;
+  padding-left: 32px;
+}
+
+.files-filter-select {
+  width: auto;
+  min-width: 140px;
+}
+
+.files-status-bar {
+  min-height: 20px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.files-error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: var(--radius);
+  background: var(--context-error-bg);
+  border: 1px solid var(--context-error-border);
+  color: var(--context-error-text);
+  font-size: 0.84rem;
+}
+
+.files-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.file-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 13px 15px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.file-card:hover {
+  border-color: var(--interactive-card-border-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+.file-card-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.file-card-icon {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.file-card-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.file-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.file-card-title {
+  font-size: 0.94rem;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.file-scope-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.file-scope-global {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.file-scope-client {
+  background: color-mix(in srgb, var(--accent-2) 18%, transparent);
+  color: var(--warning-strong);
+}
+
+.file-scope-site {
+  background: rgba(45, 122, 68, 0.14);
+  color: var(--success);
+}
+
+.file-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.file-card-filename {
+  font-family: var(--font-mono);
+  color: var(--text);
+  opacity: 0.86;
+  word-break: break-all;
+}
+
+.file-hash-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.73rem;
+  cursor: pointer;
+  min-block-size: 24px;
+  transition: border-color var(--transition), color var(--transition);
+}
+
+.file-hash-btn:hover {
+  border-color: var(--interactive-border-hover);
+  color: var(--text);
+}
+
+.file-hash-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.file-card-desc {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-top: 6px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.file-card-progress {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.file-card-progress:empty {
+  display: none;
+}
+
+.file-progress-text {
+  font-size: 0.78rem;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.file-progress-error {
+  color: var(--danger);
+}
+
+.file-progress-success {
+  color: var(--success);
+  font-weight: 600;
+}
+
+/* Barra de progresso nativa estilizada (modern-web-guidance: progress) */
+progress.file-progress-bar {
+  appearance: none;
+  border: 0 solid;
+  overflow: clip;
+  container-type: inline-size;
+  --progress-bar-radius: 1e5px;
+  --progress-bar-indeterminate-size: 32%;
+  --progress-bar-indeterminate-animation-duration: 1.4s;
+  inline-size: 100%;
+  block-size: 6px;
+  border-radius: var(--progress-bar-radius);
+  background: var(--surface-2);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  progress.file-progress-bar {
+    --progress-bar-indeterminate-animation-duration: 10s;
+  }
+}
+
+progress.file-progress-bar:indeterminate {
+  --progress-bar-animation: var(
+    --progress-bar-indeterminate-animation,
+    file-progress-indeterminate var(--progress-bar-indeterminate-animation-duration) infinite linear
+  );
+}
+
+progress.file-progress-bar::-webkit-progress-bar {
+  background: transparent;
+}
+
+progress.file-progress-bar::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: var(--progress-bar-radius);
+  transition: inline-size 0.25s ease;
+  animation: var(--progress-bar-animation, revert-rule);
+}
+
+progress.file-progress-bar::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: var(--progress-bar-radius);
+  transition: inline-size 0.25s ease;
+  animation: var(--progress-bar-animation, revert-rule);
+}
+
+@keyframes file-progress-indeterminate {
+  from, to {
+    inline-size: var(--progress-bar-indeterminate-size);
+    margin-right: auto;
+  }
+  from {
+    translate: -100%;
+  }
+  to {
+    translate: 100cqi;
+  }
+}
+
+.file-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.file-card-actions .btn {
+  min-block-size: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.files-empty-state {
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 28px 18px;
+  text-align: center;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.files-skeleton-card {
+  height: 76px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%);
+  background-size: 200% 100%;
+  animation: files-skeleton-pulse 1.3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .files-skeleton-card {
+    animation: none;
+  }
+}
+
+@keyframes files-skeleton-pulse {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (max-width: 680px) {
+  .file-card {
+    flex-direction: column;
+  }
+  .file-card-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}

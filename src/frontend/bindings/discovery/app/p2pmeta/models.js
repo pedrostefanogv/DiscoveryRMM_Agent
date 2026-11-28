@@ -412,6 +412,20 @@ export class BootstrapConfig {
              */
             this["cloudBootstrapEnabled"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["enableHolePunching"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string[] | undefined}
+             */
+            this["staticRelays"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -423,9 +437,13 @@ export class BootstrapConfig {
      */
     static createFrom($$source = {}) {
         const $$createField0_0 = $$createType0;
+        const $$createField4_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("bootstrapPeers" in $$parsedSource) {
             $$parsedSource["bootstrapPeers"] = $$createField0_0($$parsedSource["bootstrapPeers"]);
+        }
+        if ("staticRelays" in $$parsedSource) {
+            $$parsedSource["staticRelays"] = $$createField4_0($$parsedSource["staticRelays"]);
         }
         return new BootstrapConfig(/** @type {Partial<BootstrapConfig>} */($$parsedSource));
     }
@@ -562,6 +580,31 @@ export class Config {
              */
             this["artifactServeMode"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * MDNSEnabled controla o anúncio/descoberta mDNS (UDP 5353). Nil = habilitado
+             * por padrão (mantendo compatibilidade com configs antigos), salvo quando o
+             * perfil de rede Windows ativo for exclusivamente Público.
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["mdnsEnabled"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * MtlsMode controla a verificação do certificado mTLS dos PEERS no handshake
+             * libp2p e nos gates de artefato (mTLS é ENTRE AGENTES, não no HTTP da API):
+             *   "off":     não verifica nem exige certificado.
+             *   "compat" (default): tenta verificar; peer sem certificado é ACEITO, mas
+             *              NÃO é marcado como verificado. É o modo de rollout — a frota
+             *              ainda está recebendo certificados pelo enrollment.
+             *   "enforce": exige certificado válido da CA interna; rejeita o peer sem ele.
+             * Pode ser forçado pela variável DISCOVERY_P2P_MTLS_MODE.
+             * @member
+             * @type {string | undefined}
+             */
+            this["mtlsMode"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -664,6 +707,20 @@ export class DebugStatus {
              */
             this["metrics"] = (new Metrics());
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["mtlsMode"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | undefined}
+             */
+            this["mtlsVerifiedPeers"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -723,6 +780,20 @@ export class DiscoveredPeer {
              * @type {number}
              */
             this["Port"] = 0;
+        }
+        if (!("LibP2PPeerID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["LibP2PPeerID"] = "";
+        }
+        if (!("LibP2PPort" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["LibP2PPort"] = 0;
         }
         if (!("Source" in $$source)) {
             /**
@@ -1284,6 +1355,20 @@ export class PeerView {
              */
             this["port"] = 0;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["libp2pPeerId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | undefined}
+             */
+            this["libp2pPort"] = undefined;
+        }
         if (!("source" in $$source)) {
             /**
              * @member
@@ -1490,6 +1575,20 @@ export class TelemetryPayload {
              * @type {number}
              */
             this["connectedPeers"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["mtlsMode"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | undefined}
+             */
+            this["mtlsVerifiedPeers"] = undefined;
         }
 
         Object.assign(this, $$source);

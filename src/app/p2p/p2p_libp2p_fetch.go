@@ -22,6 +22,11 @@ func handleStreamFetchCandidacy(s network.Stream, coord *Coordinator) {
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(libp2pCandidacyTimeout))
 
+	if err := requireMtlsVerifiedPeer(coord, s.Conn().RemotePeer()); err != nil {
+		_ = json.NewEncoder(s).Encode(libp2pCandidacyResponse{Accepted: false, Message: err.Error()})
+		return
+	}
+
 	var req libp2pCandidacyRequest
 	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&req); err != nil {
 		_ = json.NewEncoder(s).Encode(libp2pCandidacyResponse{Accepted: false, Message: "payload inválido"})
@@ -48,6 +53,11 @@ func handleStreamFetchCandidacy(s network.Stream, coord *Coordinator) {
 func handleStreamFetchHeartbeat(s network.Stream, coord *Coordinator) {
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
+
+	if err := requireMtlsVerifiedPeer(coord, s.Conn().RemotePeer()); err != nil {
+		_ = s.Reset()
+		return
+	}
 
 	var hb ArtifactFetchHeartbeat
 	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(s, maxLibp2pControlFrameBytes))).Decode(&hb); err != nil {

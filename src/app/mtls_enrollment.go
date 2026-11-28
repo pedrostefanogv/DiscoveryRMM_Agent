@@ -60,8 +60,10 @@ func (a *App) LoadCachedAgentMtlsIdentity() {
 	if !strings.EqualFold(id.AgentID, agentID) {
 		return
 	}
-	cert := id.TLSCert
-	tlsutil.SetAgentClientCertificate(&cert)
+	now := time.Now()
+	if id.Leaf == nil || now.After(id.Leaf.NotAfter) || now.Before(id.Leaf.NotBefore) {
+		return
+	}
 	if a.P2PCoord != nil {
 		a.P2PCoord.SetMtlsIdentity(id)
 	}
@@ -140,8 +142,6 @@ func (a *App) EnsureAgentMtlsIdentity(ctx context.Context) error {
 	mtlsDir := filepath.Join(a.GetDataDir(), "mtls")
 	if id, err := tlsutil.LoadMtlsIdentity(mtlsDir); err == nil {
 		if !tlsutil.NeedsMtlsRenewal(id.Leaf, time.Now()) && strings.EqualFold(id.AgentID, agentID) {
-			cert := id.TLSCert
-			tlsutil.SetAgentClientCertificate(&cert)
 			if a.P2PCoord != nil {
 				a.P2PCoord.SetMtlsIdentity(id)
 			}
@@ -198,8 +198,6 @@ func (a *App) EnsureAgentMtlsIdentity(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	cert := id.TLSCert
-	tlsutil.SetAgentClientCertificate(&cert)
 	if a.P2PCoord != nil {
 		a.P2PCoord.SetMtlsIdentity(id)
 	}

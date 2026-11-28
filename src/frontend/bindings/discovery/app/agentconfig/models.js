@@ -132,6 +132,20 @@ export class AgentConfiguration {
              */
             this["cloudBootstrapEnabled"] = null;
         }
+        if (!("p2pMdnsEnabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean | null}
+             */
+            this["p2pMdnsEnabled"] = null;
+        }
+        if (!("p2pMtlsMode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["p2pMtlsMode"] = "";
+        }
         if (!("appStoreEnabled" in $$source)) {
             /**
              * @member
@@ -156,6 +170,13 @@ export class AgentConfiguration {
              * @type {boolean | null}
              */
             this["updatesTabEnabled"] = null;
+        }
+        if (!("filesTabEnabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean | null}
+             */
+            this["filesTabEnabled"] = null;
         }
         if (!("agentHomeTab" in $$source)) {
             /**
@@ -333,42 +354,42 @@ export class AgentConfiguration {
      * @returns {AgentConfiguration}
      */
     static createFrom($$source = {}) {
-        const $$createField25_0 = $$createType0;
-        const $$createField26_0 = $$createType1;
-        const $$createField27_0 = $$createType2;
-        const $$createField28_0 = $$createType3;
-        const $$createField29_0 = $$createType5;
-        const $$createField30_0 = $$createType6;
-        const $$createField31_0 = $$createType7;
-        const $$createField38_0 = $$createType9;
-        const $$createField39_0 = $$createType11;
+        const $$createField28_0 = $$createType0;
+        const $$createField29_0 = $$createType1;
+        const $$createField30_0 = $$createType2;
+        const $$createField31_0 = $$createType3;
+        const $$createField32_0 = $$createType5;
+        const $$createField33_0 = $$createType6;
+        const $$createField34_0 = $$createType7;
+        const $$createField41_0 = $$createType9;
+        const $$createField42_0 = $$createType11;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("agentUpdate" in $$parsedSource) {
-            $$parsedSource["agentUpdate"] = $$createField25_0($$parsedSource["agentUpdate"]);
+            $$parsedSource["agentUpdate"] = $$createField28_0($$parsedSource["agentUpdate"]);
         }
         if ("psadt" in $$parsedSource) {
-            $$parsedSource["psadt"] = $$createField26_0($$parsedSource["psadt"]);
+            $$parsedSource["psadt"] = $$createField29_0($$parsedSource["psadt"]);
         }
         if ("notifications" in $$parsedSource) {
-            $$parsedSource["notifications"] = $$createField27_0($$parsedSource["notifications"]);
+            $$parsedSource["notifications"] = $$createField30_0($$parsedSource["notifications"]);
         }
         if ("notificationBranding" in $$parsedSource) {
-            $$parsedSource["notificationBranding"] = $$createField28_0($$parsedSource["notificationBranding"]);
+            $$parsedSource["notificationBranding"] = $$createField31_0($$parsedSource["notificationBranding"]);
         }
         if ("notificationPolicies" in $$parsedSource) {
-            $$parsedSource["notificationPolicies"] = $$createField29_0($$parsedSource["notificationPolicies"]);
+            $$parsedSource["notificationPolicies"] = $$createField32_0($$parsedSource["notificationPolicies"]);
         }
         if ("consolidation" in $$parsedSource) {
-            $$parsedSource["consolidation"] = $$createField30_0($$parsedSource["consolidation"]);
+            $$parsedSource["consolidation"] = $$createField33_0($$parsedSource["consolidation"]);
         }
         if ("rollout" in $$parsedSource) {
-            $$parsedSource["rollout"] = $$createField31_0($$parsedSource["rollout"]);
+            $$parsedSource["rollout"] = $$createField34_0($$parsedSource["rollout"]);
         }
         if ("maintenanceWindow" in $$parsedSource) {
-            $$parsedSource["maintenanceWindow"] = $$createField38_0($$parsedSource["maintenanceWindow"]);
+            $$parsedSource["maintenanceWindow"] = $$createField41_0($$parsedSource["maintenanceWindow"]);
         }
         if ("mcpToolPolicy" in $$parsedSource) {
-            $$parsedSource["mcpToolPolicy"] = $$createField39_0($$parsedSource["mcpToolPolicy"]);
+            $$parsedSource["mcpToolPolicy"] = $$createField42_0($$parsedSource["mcpToolPolicy"]);
         }
         return new AgentConfiguration(/** @type {Partial<AgentConfiguration>} */($$parsedSource));
     }

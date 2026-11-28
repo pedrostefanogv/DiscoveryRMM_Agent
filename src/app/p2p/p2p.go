@@ -232,14 +232,19 @@ func (c *Coordinator) SetMtlsIdentity(id *tlsutil.AgentMtlsIdentity) {
 	c.mtlsMu.Unlock()
 }
 
+// mtlsMode retorna o modo efetivo de verificação mTLS de peers ("off", "compat" ou "enforce").
+func (c *Coordinator) mtlsMode() string {
+	if c == nil || c.deps == nil {
+		return p2pmeta.MtlsModeCompat
+	}
+	return c.deps.GetP2PConfig().MtlsModeEffective()
+}
+
 // mtlsEnforced indica se a verificação mTLS de peers deve REJEITAR peer sem
 // certificado válido da CA interna. Default false (modo "compat"): durante o
 // rollout o peer legado é aceito, apenas não é marcado como verificado.
 func (c *Coordinator) mtlsEnforced() bool {
-	if c == nil || c.deps == nil {
-		return false
-	}
-	return c.deps.GetP2PConfig().MtlsEnforced()
+	return c.mtlsMode() == p2pmeta.MtlsModeEnforce
 }
 
 func (c *Coordinator) getMtlsIdentity() *tlsutil.AgentMtlsIdentity {

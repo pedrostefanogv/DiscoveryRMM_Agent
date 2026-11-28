@@ -170,6 +170,7 @@ type AgentConfiguration struct {
 	ZeroTouchEnabled                  *bool  `json:"zeroTouchEnabled"`
 	CloudBootstrapEnabled             *bool  `json:"cloudBootstrapEnabled"`
 	P2PMdnsEnabled                    *bool  `json:"p2pMdnsEnabled"`
+	P2PMtlsMode                       string `json:"p2pMtlsMode"`
 	AppStoreEnabled                   *bool  `json:"appStoreEnabled"`
 	AutomationP2PWingetInstallEnabled *bool  `json:"automationP2pWingetInstallEnabled"`
 	// UpdatesTabEnabled é o kill switch da aba "Atualizações" do painel do
@@ -231,6 +232,7 @@ type ServerConfiguration struct {
 	TpmRecoveryEnabled                *bool  `json:"tpmRecoveryEnabled"`
 	CloudBootstrapEnabled             bool   `json:"cloudBootstrapEnabled"`
 	P2PMdnsEnabled                    *bool  `json:"p2pMdnsEnabled"`
+	P2PMtlsMode                       string `json:"p2pMtlsMode"`
 	SupportEnabled                    bool   `json:"supportEnabled"`
 	ChatAIEnabled                     bool   `json:"chatAIEnabled"`
 	KnowledgeBaseEnabled              bool   `json:"knowledgeBaseEnabled"`

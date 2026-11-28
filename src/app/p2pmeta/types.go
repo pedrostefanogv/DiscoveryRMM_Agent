@@ -184,6 +184,8 @@ type DebugStatus struct {
 	LastError            string   `json:"lastError"`
 	CurrentSeedPlan      SeedPlan `json:"currentSeedPlan"`
 	Metrics              Metrics  `json:"metrics"`
+	MtlsMode             string   `json:"mtlsMode,omitempty"`
+	MtlsVerifiedPeers    int      `json:"mtlsVerifiedPeers,omitempty"`
 }
 
 type PeerView struct {
@@ -282,8 +284,10 @@ type TelemetryPayload struct {
 	CurrentSeedPlan SeedPlan               `json:"currentSeedPlan"`
 	Artifacts       []ArtifactPresenceItem `json:"artifacts,omitempty"`
 	HostLoad        *HostLoad              `json:"hostLoad,omitempty"`
-	KnownPeers      int                    `json:"knownPeers"`
-	ConnectedPeers  int                    `json:"connectedPeers"`
+	KnownPeers        int                    `json:"knownPeers"`
+	ConnectedPeers    int                    `json:"connectedPeers"`
+	MtlsMode          string                 `json:"mtlsMode,omitempty"`
+	MtlsVerifiedPeers int                    `json:"mtlsVerifiedPeers,omitempty"`
 }
 
 type DistributionStatus struct {

@@ -725,6 +725,20 @@ export class Catalog {
              */
             this["generated"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["fetchedAt"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["stale"] = undefined;
+        }
         if (!("count" in $$source)) {
             /**
              * @member
@@ -756,10 +770,10 @@ export class Catalog {
      * @returns {Catalog}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType2;
+        const $$createField5_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("packages" in $$parsedSource) {
-            $$parsedSource["packages"] = $$createField3_0($$parsedSource["packages"]);
+            $$parsedSource["packages"] = $$createField5_0($$parsedSource["packages"]);
         }
         return new Catalog(/** @type {Partial<Catalog>} */($$parsedSource));
     }

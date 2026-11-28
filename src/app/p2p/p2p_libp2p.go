@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"discovery/app/core/tlsutil"
+	"discovery/app/p2pmeta"
 
 	libp2p "github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/control"
@@ -284,7 +285,7 @@ func (p *p2pLibP2PProvider) Start(
 	// Stream handler (responder side): when a peer opens a stream to us,
 	// read their info, respond with ours, validate clientId, then emit onPeer.
 	h.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
-		handleLibP2PHandshakeStream(s, self, p.clientID, p.registry, p.gater, p.coord.getMtlsIdentity(), p.coord.mtlsEnforced(), onPeer, onTrace)
+		handleLibP2PHandshakeStream(s, self, p.clientID, p.registry, p.gater, p.coord.getMtlsIdentity(), p.coord.mtlsMode(), onPeer, onTrace)
 	})
 	// (handler extraído para handleLibP2PHandshakeStream — testável)
 
@@ -528,27 +529,43 @@ func (n *libp2pMDNSNotifee) exchangeWithPeer(pi peer.AddrInfo) {
 		return
 	}
 
-	// mTLS ENTRE AGENTES: em "compat" (default do rollout) o peer sem certificado
-	// válido é ACEITO, mas só quem passa na verificação é marcado como verificado;
-	// em "enforce" ele é rejeitado. Exigir sem cobertura da frota isola o agente
-	// da malha (incidente de rollout 27/11/2026).
+	// mTLS ENTRE AGENTES: em "off" não verifica; em "compat" (default do rollout)
+	// o peer sem certificado válido é ACEITO, mas só quem passa na verificação é
+	// marcado como verificado; em "enforce" ele é rejeitado (fail-closed mesmo se
+	// a identidade local ainda não tiver sido emitida).
+	mtlsMode := p2pmeta.MtlsModeCompat
+	if n.coord != nil {
+		mtlsMode = n.coord.mtlsMode()
+	}
 	mtlsPeerVerified := false
-	if mtlsID != nil && mtlsID.CAPool != nil {
-		certAgentID, _, verErr := tlsutil.VerifyPeerCertAndBinding(
-			remote.CertPEM, remote.CertSig, pi.ID.String(), mtlsID.CAPool, clientID)
-		if verErr != nil || !strings.EqualFold(certAgentID, strings.TrimSpace(remote.AgentID)) {
-			if n.coord != nil && n.coord.mtlsEnforced() {
+	var certExpiresAt time.Time
+	if mtlsMode != p2pmeta.MtlsModeOff {
+		if mtlsID == nil || mtlsID.CAPool == nil {
+			if mtlsMode == p2pmeta.MtlsModeEnforce {
 				if n.onTrace != nil {
-					n.onTrace(fmt.Sprintf("peer rejeitado por mTLS estrito: peer=%s err=%v", remote.AgentID, verErr))
+					n.onTrace(fmt.Sprintf("peer rejeitado por mTLS estrito: identidade mTLS local indisponivel (peer=%s)", remote.AgentID))
 				}
 				_ = n.h.Network().ClosePeer(pi.ID)
 				return
 			}
-			if n.onTrace != nil {
-				n.onTrace(fmt.Sprintf("peer aceito sem mTLS valido (modo compat): peer=%s err=%v", remote.AgentID, verErr))
-			}
 		} else {
-			mtlsPeerVerified = true
+			certAgentID, _, expAt, verErr := tlsutil.VerifyPeerCertAndBinding(
+				remote.CertPEM, remote.CertSig, pi.ID.String(), mtlsID.CAPool, clientID)
+			if verErr != nil || !strings.EqualFold(certAgentID, strings.TrimSpace(remote.AgentID)) {
+				if mtlsMode == p2pmeta.MtlsModeEnforce {
+					if n.onTrace != nil {
+						n.onTrace(fmt.Sprintf("peer rejeitado por mTLS estrito: peer=%s err=%v", remote.AgentID, verErr))
+					}
+					_ = n.h.Network().ClosePeer(pi.ID)
+					return
+				}
+				if n.onTrace != nil {
+					n.onTrace(fmt.Sprintf("peer aceito sem mTLS valido (modo compat): peer=%s err=%v", remote.AgentID, verErr))
+				}
+			} else {
+				mtlsPeerVerified = true
+				certExpiresAt = expAt
+			}
 		}
 	}
 
@@ -608,7 +625,9 @@ func (n *libp2pMDNSNotifee) exchangeWithPeer(pi peer.AddrInfo) {
 			return
 		}
 		if mtlsPeerVerified {
-			n.registry.MarkMtlsVerified(pi.ID)
+			n.registry.MarkMtlsVerified(pi.ID, certExpiresAt)
+		} else {
+			n.registry.ClearMtlsVerified(pi.ID)
 		}
 	}
 	peerHost := strings.TrimSpace(remote.Host)
@@ -641,7 +660,7 @@ func handleLibP2PHandshakeStream(
 	registry *libp2pPeerRegistry,
 	gater *p2pConnectionGater,
 	mtlsID *tlsutil.AgentMtlsIdentity,
-	mtlsEnforced bool,
+	mtlsMode string,
 	onPeer func(p2pDiscoveredPeer),
 	onTrace func(string),
 ) {
@@ -674,25 +693,39 @@ func handleLibP2PHandshakeStream(
 		return
 	}
 
-	// Mesma política do lado outbound: "compat" aceita peer legado (sem marcar
-	// como verificado), "enforce" rejeita.
+	// Mesma política do lado outbound: "off" pula, "compat" aceita peer legado
+	// (sem marcar como verificado), "enforce" rejeita (fail-closed mesmo sem
+	// identidade local).
+	mode := p2pmeta.Config{MtlsMode: mtlsMode}.MtlsModeEffective()
 	mtlsPeerVerified := false
-	if mtlsID != nil && mtlsID.CAPool != nil {
-		certAgentID, _, verErr := tlsutil.VerifyPeerCertAndBinding(
-			remote.CertPEM, remote.CertSig, s.Conn().RemotePeer().String(), mtlsID.CAPool, clientID)
-		if verErr != nil || !strings.EqualFold(certAgentID, strings.TrimSpace(remote.AgentID)) {
-			if mtlsEnforced {
+	var certExpiresAt time.Time
+	if mode != p2pmeta.MtlsModeOff {
+		if mtlsID == nil || mtlsID.CAPool == nil {
+			if mode == p2pmeta.MtlsModeEnforce {
 				if onTrace != nil {
-					onTrace(fmt.Sprintf("peer inbound rejeitado por mTLS estrito: peer=%s err=%v", remote.AgentID, verErr))
+					onTrace(fmt.Sprintf("peer inbound rejeitado por mTLS estrito: identidade mTLS local indisponivel (peer=%s)", remote.AgentID))
 				}
 				_ = s.Reset()
 				return
 			}
-			if onTrace != nil {
-				onTrace(fmt.Sprintf("peer inbound aceito sem mTLS valido (modo compat): peer=%s err=%v", remote.AgentID, verErr))
-			}
 		} else {
-			mtlsPeerVerified = true
+			certAgentID, _, expAt, verErr := tlsutil.VerifyPeerCertAndBinding(
+				remote.CertPEM, remote.CertSig, s.Conn().RemotePeer().String(), mtlsID.CAPool, clientID)
+			if verErr != nil || !strings.EqualFold(certAgentID, strings.TrimSpace(remote.AgentID)) {
+				if mode == p2pmeta.MtlsModeEnforce {
+					if onTrace != nil {
+						onTrace(fmt.Sprintf("peer inbound rejeitado por mTLS estrito: peer=%s err=%v", remote.AgentID, verErr))
+					}
+					_ = s.Reset()
+					return
+				}
+				if onTrace != nil {
+					onTrace(fmt.Sprintf("peer inbound aceito sem mTLS valido (modo compat): peer=%s err=%v", remote.AgentID, verErr))
+				}
+			} else {
+				mtlsPeerVerified = true
+				certExpiresAt = expAt
+			}
 		}
 	}
 
@@ -738,7 +771,9 @@ func handleLibP2PHandshakeStream(
 			return
 		}
 		if mtlsPeerVerified {
-			registry.MarkMtlsVerified(s.Conn().RemotePeer())
+			registry.MarkMtlsVerified(s.Conn().RemotePeer(), certExpiresAt)
+		} else {
+			registry.ClearMtlsVerified(s.Conn().RemotePeer())
 		}
 	}
 	peerHost := strings.TrimSpace(remote.Host)

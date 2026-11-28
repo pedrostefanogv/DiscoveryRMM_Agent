@@ -143,7 +143,7 @@ func (a *App) listAgentFilesLocal(ctx context.Context) ([]AgentFileItem, error) 
 		return nil, fmt.Errorf("app não inicializado")
 	}
 	cfg := a.getDebugConfigInternal()
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.ApiServer), "/")
+	baseURL := resolveAgentFilesAPIBase(cfg)
 	token := strings.TrimSpace(cfg.AuthToken)
 	agentID := strings.TrimSpace(cfg.AgentID)
 	if baseURL == "" || token == "" || agentID == "" {
@@ -344,8 +344,19 @@ func (a *App) streamDownloadAndVerify(
 	}
 
 	if err := os.Rename(tmpPath, targetPath); err != nil {
+		// No Windows, os.Rename falha se o destino já existir (ex.: "Salvar como"
+		// sobrescrevendo um arquivo existente). Remove o destino e tenta novamente.
+		if _, statErr := os.Stat(targetPath); statErr == nil {
+			_ = os.Remove(targetPath)
+			if retryErr := os.Rename(tmpPath, targetPath); retryErr == nil {
+				goto renamed
+			} else {
+				return nil, retryErr
+			}
+		}
 		return nil, err
 	}
+renamed:
 	cleanupTmp = false
 
 	if a != nil && a.app != nil {
@@ -382,6 +393,18 @@ func (a *App) OpenDownloadedFileFolder(filePath string) error {
 	return application.Get().Browser.OpenURL("file://" + filepath.Dir(clean))
 }
 
+func resolveAgentFilesAPIBase(cfg DebugConfig) string {
+	raw := strings.TrimRight(strings.TrimSpace(cfg.ApiServer), "/")
+	if raw == "" {
+		return ""
+	}
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return raw
+	}
+	return cfg.APIScheme() + "://" + raw
+}
+
 func firstNonEmptyString(values ...string) string {
 	for _, v := range values {
 		if strings.TrimSpace(v) != "" {
@@ -397,7 +420,7 @@ func (a *App) requestAgentFileDownloadMetaLocal(ctx context.Context, fileID stri
 		return zero, fmt.Errorf("app não inicializado")
 	}
 	cfg := a.getDebugConfigInternal()
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.ApiServer), "/")
+	baseURL := resolveAgentFilesAPIBase(cfg)
 	token := strings.TrimSpace(cfg.AuthToken)
 	agentID := strings.TrimSpace(cfg.AgentID)
 	if baseURL == "" || token == "" || agentID == "" {

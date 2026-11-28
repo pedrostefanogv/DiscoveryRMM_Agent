@@ -52,6 +52,153 @@ export const APIWorkflowState = supportmeta$0.APIWorkflowState;
  * @typedef {supportmeta$0.APIWorkflowState} APIWorkflowState
  */
 
+export class AgentFileDownloadResult {
+    /**
+     * Creates a new AgentFileDownloadResult instance.
+     * @param {Partial<AgentFileDownloadResult>} [$$source = {}] - The source object to create the AgentFileDownloadResult.
+     */
+    constructor($$source = {}) {
+        if (!("savedPath" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["savedPath"] = "";
+        }
+        if (!("fileName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["fileName"] = "";
+        }
+        if (!("sizeBytes" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["sizeBytes"] = 0;
+        }
+        if (!("sha256" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["sha256"] = "";
+        }
+        if (!("verified" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["verified"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AgentFileDownloadResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {AgentFileDownloadResult}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new AgentFileDownloadResult(/** @type {Partial<AgentFileDownloadResult>} */($$parsedSource));
+    }
+}
+
+export class AgentFileItem {
+    /**
+     * Creates a new AgentFileItem instance.
+     * @param {Partial<AgentFileItem>} [$$source = {}] - The source object to create the AgentFileItem.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("fileName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["fileName"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["description"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["category"] = undefined;
+        }
+        if (!("contentType" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["contentType"] = "";
+        }
+        if (!("sizeBytes" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["sizeBytes"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["sha256"] = undefined;
+        }
+        if (!("scope" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["scope"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["folderPath"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AgentFileItem instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {AgentFileItem}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new AgentFileItem(/** @type {Partial<AgentFileItem>} */($$parsedSource));
+    }
+}
+
 export const AgentInfo = supportmeta$0.AgentInfo;
 
 /**

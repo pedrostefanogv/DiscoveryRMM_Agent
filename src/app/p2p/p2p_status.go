@@ -12,6 +12,11 @@ import (
 
 func (c *Coordinator) GetStatus() P2PDebugStatus {
 	cfg := c.deps.GetP2PConfig()
+	_, registry := c.libp2pHostAndRegistry()
+	verifiedPeers := 0
+	if registry != nil {
+		verifiedPeers = registry.VerifiedPeerCount()
+	}
 	c.mu.RLock()
 	// Active reflete o estado real do coordinator: config habilitada + Run()
 	// em execução (started). Não depende de DebugMode — em produção o P2P
@@ -38,6 +43,8 @@ func (c *Coordinator) GetStatus() P2PDebugStatus {
 		LastError:            c.lastErr,
 		CurrentSeedPlan:      c.currentSeedPlan,
 		Metrics:              c.metrics,
+		MtlsMode:             cfg.MtlsModeEffective(),
+		MtlsVerifiedPeers:    verifiedPeers,
 	}
 }
 

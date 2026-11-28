@@ -514,9 +514,30 @@ func RegisterP2PProtocols(h host.Host, coord *Coordinator, transfer *TransferSer
 	})
 }
 
+// requireMtlsVerifiedPeer aplica o gate fail-closed de mTLS para streams P2P
+// no modo "enforce". Em "off" e "compat" permite a comunicação normal.
+func requireMtlsVerifiedPeer(coord *Coordinator, remotePeer peer.ID) error {
+	if coord == nil || !coord.mtlsEnforced() {
+		return nil
+	}
+	if coord.getMtlsIdentity() == nil {
+		return errors.New("identidade mTLS local indisponivel (modo enforce)")
+	}
+	_, reg := coord.libp2pHostAndRegistry()
+	if reg == nil || !reg.IsMtlsVerified(remotePeer) {
+		return errors.New("peer sem certificado mTLS valido da CA")
+	}
+	return nil
+}
+
 func handleStreamPeers(s network.Stream, coord *Coordinator, transfer *TransferServer) {
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
+
+	if err := requireMtlsVerifiedPeer(coord, s.Conn().RemotePeer()); err != nil {
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error(), Code: p2pErrCodeAuth})
+		return
+	}
 
 	// O gossip de peers não tem artifact associado; ainda assim, quando o peer
 	// envia credencial ela precisa ser válida (defesa contra catálogo servido a
@@ -563,15 +584,16 @@ func handleStreamArtifactAccess(s network.Stream, transfer *TransferServer) {
 	}
 	// Exigir peer verificado só no modo "enforce": em "compat" (default do
 	// rollout) o peer legado, sem certificado, continua servindo/obtendo artefatos.
-	if transfer != nil && transfer.coord != nil && transfer.coord.getMtlsIdentity() != nil && transfer.coord.mtlsEnforced() {
-		_, reg := transfer.coord.libp2pHostAndRegistry()
-		if reg == nil || !reg.IsMtlsVerified(s.Conn().RemotePeer()) {
-			_ = json.NewEncoder(s).Encode(libp2pErrorResponse{
-				Error: "peer sem certificado mTLS valido da CA",
-				Code:  p2pErrCodeAuth,
-			})
-			return
-		}
+	var mtlsCoord *Coordinator
+	if transfer != nil {
+		mtlsCoord = transfer.coord
+	}
+	if err := requireMtlsVerifiedPeer(mtlsCoord, s.Conn().RemotePeer()); err != nil {
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{
+			Error: err.Error(),
+			Code:  p2pErrCodeAuth,
+		})
+		return
 	}
 	if req.RequesterID == "" {
 		req.RequesterID = "peer-anon"
@@ -613,15 +635,16 @@ func handleStreamArtifactManifest(s network.Stream, transfer *TransferServer) {
 	}
 	// Exigir peer verificado só no modo "enforce": em "compat" (default do
 	// rollout) o peer legado, sem certificado, continua servindo/obtendo artefatos.
-	if transfer != nil && transfer.coord != nil && transfer.coord.getMtlsIdentity() != nil && transfer.coord.mtlsEnforced() {
-		_, reg := transfer.coord.libp2pHostAndRegistry()
-		if reg == nil || !reg.IsMtlsVerified(s.Conn().RemotePeer()) {
-			_ = json.NewEncoder(s).Encode(libp2pErrorResponse{
-				Error: "peer sem certificado mTLS valido da CA",
-				Code:  p2pErrCodeAuth,
-			})
-			return
-		}
+	var mtlsCoord *Coordinator
+	if transfer != nil {
+		mtlsCoord = transfer.coord
+	}
+	if err := requireMtlsVerifiedPeer(mtlsCoord, s.Conn().RemotePeer()); err != nil {
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{
+			Error: err.Error(),
+			Code:  p2pErrCodeAuth,
+		})
+		return
 	}
 	if err := validateArtifactAccessToken(transfer, req.ArtifactName, req.RequesterID, req.Token); err != nil {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error(), Code: p2pErrCodeAuth})
@@ -737,15 +760,16 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 	}
 	// Exigir peer verificado só no modo "enforce": em "compat" (default do
 	// rollout) o peer legado, sem certificado, continua servindo/obtendo artefatos.
-	if transfer != nil && transfer.coord != nil && transfer.coord.getMtlsIdentity() != nil && transfer.coord.mtlsEnforced() {
-		_, reg := transfer.coord.libp2pHostAndRegistry()
-		if reg == nil || !reg.IsMtlsVerified(s.Conn().RemotePeer()) {
-			_ = json.NewEncoder(s).Encode(libp2pErrorResponse{
-				Error: "peer sem certificado mTLS valido da CA",
-				Code:  p2pErrCodeAuth,
-			})
-			return
-		}
+	var mtlsCoord *Coordinator
+	if transfer != nil {
+		mtlsCoord = transfer.coord
+	}
+	if err := requireMtlsVerifiedPeer(mtlsCoord, s.Conn().RemotePeer()); err != nil {
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{
+			Error: err.Error(),
+			Code:  p2pErrCodeAuth,
+		})
+		return
 	}
 	if err := validateArtifactAccessToken(transfer, req.ArtifactName, req.RequesterID, req.Token); err != nil {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: err.Error(), Code: p2pErrCodeAuth})

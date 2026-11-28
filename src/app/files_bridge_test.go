@@ -202,3 +202,37 @@ func TestHandleIPCRequest_FilesListAndDownloadURL(t *testing.T) {
 		t.Fatalf("expected files:download_url with empty fileId to fail, got: %+v", badResp)
 	}
 }
+
+func TestResolveAgentFilesAPIBase(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  DebugConfig
+		want string
+	}{
+		{
+			name: "host sem scheme usa https por padrao",
+			cfg:  DebugConfig{ApiServer: "tupa.pstefano.com.br/"},
+			want: "https://tupa.pstefano.com.br",
+		},
+		{
+			name: "host sem scheme com ApiInsecure usa http",
+			cfg:  DebugConfig{ApiServer: "localhost:5000", ApiInsecure: true},
+			want: "http://localhost:5000",
+		},
+		{
+			name: "url ja com scheme eh preservada",
+			cfg:  DebugConfig{ApiServer: "http://127.0.0.1:8080/"},
+			want: "http://127.0.0.1:8080",
+		},
+		{
+			name: "vazio retorna vazio",
+			cfg:  DebugConfig{},
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		if got := resolveAgentFilesAPIBase(tc.cfg); got != tc.want {
+			t.Fatalf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
