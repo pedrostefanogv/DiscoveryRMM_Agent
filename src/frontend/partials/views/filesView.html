@@ -1,4 +1,9 @@
-<section id="filesView" class="tab-view" role="tabpanel" aria-labelledby="tabFiles" hidden>
+<!-- A raiz das views segue o padrão das outras 15: class="page-content hidden".
+     .page-content (base.css) é o container com padding/scroll/flex:1 — sem ela a
+     aba não tinha layout nenhum. O hidden precisa ser a CLASSE (base.css:
+     display:none !important), alternada por setActiveTab; o ATRIBUTO hidden
+     (regra [hidden] da UA) venceria para sempre e a aba nunca aparecia. -->
+<section id="filesView" class="page-content hidden" role="tabpanel" aria-labelledby="tabFiles">
   <header class="view-header">
     <div>
       <h1 data-i18n="files.title">Arquivos</h1>
@@ -14,12 +19,13 @@
   </header>
 
   <div class="toolbar-row" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
-    <input id="filesSearchInput" class="input" type="search" placeholder="Buscar arquivo..." style="flex:1;min-width:180px;" />
+    <input id="filesSearchInput" class="input" type="search" placeholder="Buscar arquivo..."
+      data-i18n-placeholder="files.searchPlaceholder" style="flex:1;min-width:180px;" />
     <select id="filesScopeFilter" class="input" style="width:auto;">
-      <option value="">Todos os escopos</option>
-      <option value="0">Global</option>
-      <option value="1">Cliente</option>
-      <option value="2">Site</option>
+      <option value="" data-i18n="files.scopeAll">Todos os escopos</option>
+      <option value="0" data-i18n="files.scopeGlobal">Global</option>
+      <option value="1" data-i18n="files.scopeClient">Cliente</option>
+      <option value="2" data-i18n="files.scopeSite">Site</option>
     </select>
   </div>
 

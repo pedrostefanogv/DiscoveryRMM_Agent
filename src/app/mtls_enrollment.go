@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -19,7 +20,15 @@ const (
 	mtlsEnrollEndpoint     = "/api/v1/agent-auth/me/mtls/enroll"
 	mtlsEnrollTimeout      = 15 * time.Second
 	mtlsRenewCheckInterval = 6 * time.Hour
+	// mtlsRetryMinInterval é o primeiro intervalo do backoff de retry (dobra
+	// x4 até mtlsRenewCheckInterval) quando o enrollment falha.
+	mtlsRetryMinInterval = time.Minute
 )
+
+// errMtlsNotProvisioned indica agente sem agentId/authToken/apiServer. Não é
+// falha definitiva: o provisionamento pode chegar segundos depois do startup
+// (zero-touch/installer) e o loop deve tentar de novo em pouco tempo.
+var errMtlsNotProvisioned = errors.New("agente ainda nao provisionado (sem agentId/authToken/apiServer)")
 
 type mtlsEnrollRequest struct {
 	CsrPem string `json:"csrPem"`
@@ -38,7 +47,7 @@ func (a *App) LoadCachedAgentMtlsIdentity() {
 	if a == nil {
 		return
 	}
-	debugCfg := a.GetDebugConfig()
+	debugCfg := a.getDebugConfigInternal()
 	agentID := strings.TrimSpace(debugCfg.AgentID)
 	if agentID == "" {
 		return
@@ -60,25 +69,52 @@ func (a *App) LoadCachedAgentMtlsIdentity() {
 
 // StartMtlsEnrollmentLoop garante a identidade mTLS no startup (quando
 // provisionado) e verifica renovação periodicamente.
+//
+// Falha NÃO volta direto para o ciclo de 6h: sem certificado o agente perde
+// toda a API HTTP (401 MTLS_CERT_REQUIRED), então uma falha transitória no
+// startup (API fora, rede, provisionamento tardio) não pode custar 6h de
+// cegueira. O retry começa em 1 min e cresce x4 até o teto de 6h — e zera
+// assim que o enrollment tem sucesso.
 func (a *App) StartMtlsEnrollmentLoop(ctx context.Context) {
 	if a == nil {
 		return
 	}
-	if err := a.EnsureAgentMtlsIdentity(ctx); err != nil {
-		a.Logs.Append("[mtls] enrollment inicial adiado: " + err.Error())
-	}
 	ticker := time.NewTicker(mtlsRenewCheckInterval)
 	defer ticker.Stop()
+
+	retry := mtlsRetryMinInterval
+	if err := a.EnsureAgentMtlsIdentity(ctx); err != nil {
+		a.Logs.Append("[mtls] enrollment inicial adiado: " + err.Error())
+		// O primeiro retry não pode esperar o ciclo de 6h.
+		ticker.Reset(retry)
+		retry = nextMtlsRetry(retry)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := a.EnsureAgentMtlsIdentity(ctx); err != nil {
-				a.Logs.Append("[mtls] renovacao falhou: " + err.Error())
+			if err := a.EnsureAgentMtlsIdentity(ctx); err == nil {
+				retry = mtlsRetryMinInterval
+				ticker.Reset(mtlsRenewCheckInterval)
+				continue
+			} else {
+				a.Logs.Append("[mtls] enrollment falhou: " + err.Error())
 			}
+			ticker.Reset(retry)
+			retry = nextMtlsRetry(retry)
 		}
 	}
+}
+
+// nextMtlsRetry cresce o intervalo de retry x4 até o teto de renovação.
+func nextMtlsRetry(retry time.Duration) time.Duration {
+	next := retry * 4
+	if next > mtlsRenewCheckInterval {
+		return mtlsRenewCheckInterval
+	}
+	return next
 }
 
 // EnsureAgentMtlsIdentity carrega (ou emite/renova via API) o certificado mTLS
@@ -87,12 +123,18 @@ func (a *App) EnsureAgentMtlsIdentity(ctx context.Context) error {
 	if a == nil {
 		return nil
 	}
-	debugCfg := a.GetDebugConfig()
+	// getDebugConfigInternal (e NÃO GetDebugConfig): o acessor público redige o
+	// AuthToken (redactDebugConfig), e o enrollment exige o token do agente.
+	// Usar o acessor redigido fazia esta função cair no early-return abaixo
+	// silenciosamente — sem CSR, sem POST /mtls/enroll e sem nenhum log —
+	// deixando o agente sem certificado cliente enquanto a API exigia mTLS
+	// (401 MTLS_CERT_REQUIRED em toda chamada HTTP).
+	debugCfg := a.getDebugConfigInternal()
 	agentID := strings.TrimSpace(debugCfg.AgentID)
 	authToken := strings.TrimSpace(debugCfg.AuthToken)
 	apiServer := strings.TrimSpace(debugCfg.ApiServer)
 	if agentID == "" || authToken == "" || apiServer == "" {
-		return nil // agente ainda não provisionado
+		return errMtlsNotProvisioned
 	}
 
 	mtlsDir := filepath.Join(a.GetDataDir(), "mtls")

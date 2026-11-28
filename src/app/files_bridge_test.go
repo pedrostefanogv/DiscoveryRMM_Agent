@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	debugsvc "discovery/app/debug"
@@ -76,6 +77,63 @@ func TestAgentFileItem_JsonRoundTrip(t *testing.T) {
 	}
 }
 
+// A API serializa FileScope como string (JsonStringEnumConverter global em
+// Program.cs). Um decode direto em int abortava a listagem inteira da aba
+// Arquivos; este teste fixa o payload REAL do servidor.
+func TestAgentFileItem_DecodesApiStringScopeAndFolderPath(t *testing.T) {
+	raw := []byte(`[
+		{"id":"g1","name":"Global Tool","fileName":"tool.exe","contentType":"application/octet-stream","sizeBytes":10,"scope":"Global","folderPath":"/Utilitarios"},
+		{"id":"c1","name":"Client Tool","fileName":"c.exe","contentType":"application/octet-stream","sizeBytes":20,"scope":"Client","folderPath":"/"},
+		{"id":"s1","name":"Site Tool","fileName":"s.exe","contentType":"application/octet-stream","sizeBytes":30,"scope":"Site"}
+	]`)
+
+	var items []AgentFileItem
+	if err := json.Unmarshal(raw, &items); err != nil {
+		t.Fatalf("unmarshal com scope string: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("esperava 3 itens, veio %d", len(items))
+	}
+	want := []int{0, 1, 2}
+	for i, w := range want {
+		if items[i].Scope != w {
+			t.Fatalf("item %d: scope = %d, esperado %d", i, items[i].Scope, w)
+		}
+	}
+	if items[0].FolderPath != "/Utilitarios" {
+		t.Fatalf("folderPath perdido: %q", items[0].FolderPath)
+	}
+
+	// O frontend compara String(f.scope) com "0"/"1"/"2": o reemitir precisa
+	// continuar numérico mesmo tendo aceitado string na entrada.
+	encoded, err := json.Marshal(items[2])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"scope":2`) {
+		t.Fatalf("scope reemitido nao numerico: %s", encoded)
+	}
+
+	// Escopo desconhecido (enum novo na API) não pode derrubar a listagem inteira:
+	// o item é mantido com 0 (Global), como o frontend já faz no rótulo.
+	var unknown []AgentFileItem
+	if err := json.Unmarshal([]byte(`[{"id":"u1","scope":"Department"},{"id":"u2","scope":"Site"}]`), &unknown); err != nil {
+		t.Fatalf("escopo desconhecido nao pode falhar o decode: %v", err)
+	}
+	if len(unknown) != 2 || unknown[0].Scope != 0 || unknown[1].Scope != 2 {
+		t.Fatalf("escopo desconhecido tratado errado: %+v", unknown)
+	}
+
+	// Compatibilidade: payload numérico (portal/versões antigas) segue valendo.
+	var numeric []AgentFileItem
+	if err := json.Unmarshal([]byte(`[{"id":"n1","scope":1}]`), &numeric); err != nil {
+		t.Fatalf("unmarshal com scope numerico: %v", err)
+	}
+	if numeric[0].Scope != 1 {
+		t.Fatalf("scope numerico = %d, esperado 1", numeric[0].Scope)
+	}
+}
+
 func TestHandleIPCRequest_FilesListAndDownloadURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer mdz_test-token" {
@@ -83,10 +141,10 @@ func TestHandleIPCRequest_FilesListAndDownloadURL(t *testing.T) {
 			return
 		}
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agent-files":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agent-auth/me/files":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[{"id":"file-1","name":"Installer","fileName":"setup.exe","contentType":"application/octet-stream","sizeBytes":1234,"scope":0}]`))
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agent-files/file-1/download-url":
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agent-auth/me/files/file-1/download-url":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"downloadUrl":"https://s3.local/setup.exe","fileName":"setup.exe","sizeBytes":1234,"sha256":"abcd","expiresInSeconds":900}`))
 		default:

@@ -31,6 +31,75 @@ type AgentFileItem struct {
 	SizeBytes   int64  `json:"sizeBytes"`
 	Sha256      string `json:"sha256,omitempty"`
 	Scope       int    `json:"scope"`
+	FolderPath  string `json:"folderPath,omitempty"`
+}
+
+// UnmarshalJSON aceita o campo "scope" tanto como número (0=Global, 1=Cliente,
+// 2=Site) quanto como o NOME do escopo ("Global"/"Client"/"Site").
+//
+// A API registra JsonStringEnumConverter globalmente (Program.cs), então o
+// campo chega como string. Um decode direto em int falhava
+// ("cannot unmarshal string into Go struct field AgentFileItem.scope of type
+// int") e derrubava a listagem INTEIRA da aba Arquivos.
+//
+// A tolerância vive aqui (e não num tipo próprio) de propósito: um tipo novo
+// no struct vazaria para as bindings geradas do Wails como "@typedef {any}",
+// expondo um detalhe interno na API pública do frontend.
+func (i *AgentFileItem) UnmarshalJSON(data []byte) error {
+	type agentFileItemAlias AgentFileItem
+	aux := struct {
+		Scope json.RawMessage `json:"scope"`
+		*agentFileItemAlias
+	}{agentFileItemAlias: (*agentFileItemAlias)(i)}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if len(aux.Scope) == 0 {
+		return nil
+	}
+	scope, err := parseAgentFileScope(aux.Scope)
+	if err != nil {
+		return err
+	}
+	i.Scope = scope
+	return nil
+}
+
+// parseAgentFileScope normaliza o escopo vindo da API para o número que o
+// frontend compara.
+//
+// Um nome de escopo desconhecido NÃO é erro: cai para 0 (Global), igual ao
+// fallback que o frontend já faz (app-files.js: scopeLabels[scope] || "Global").
+// Errar aqui derrubaria a listagem INTEIRA da aba Arquivos — exatamente o modo
+// de falha que este decode tolerante veio corrigir. O rótulo de um item novo
+// pode sair impreciso por um release; a aba ficar vazia para toda a frota é pior.
+func parseAgentFileScope(raw json.RawMessage) (int, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return 0, nil
+	}
+	if trimmed[0] != '"' {
+		var n int
+		if err := json.Unmarshal(raw, &n); err != nil {
+			return 0, err
+		}
+		return n, nil
+	}
+	var name string
+	if err := json.Unmarshal(raw, &name); err != nil {
+		return 0, err
+	}
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", "global":
+		return 0, nil
+	case "client", "cliente":
+		return 1, nil
+	case "site":
+		return 2, nil
+	default:
+		return 0, nil
+	}
 }
 
 type AgentFileDownloadResult struct {
@@ -87,7 +156,7 @@ func (a *App) listAgentFilesLocal(ctx context.Context) ([]AgentFileItem, error) 
 	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, baseURL+"/api/v1/agent-files", nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, baseURL+"/api/v1/agent-auth/me/files", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +410,7 @@ func (a *App) requestAgentFileDownloadMetaLocal(ctx context.Context, fileID stri
 	reqCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, baseURL+"/api/v1/agent-files/"+fileID+"/download-url", nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, baseURL+"/api/v1/agent-auth/me/files/"+fileID+"/download-url", nil)
 	if err != nil {
 		return zero, err
 	}
